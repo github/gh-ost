@@ -5,11 +5,16 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/github/gh-osc/go/binlog"
 	"github.com/outbrain/golib/log"
 )
 
 // main is the application's entry point. It will either spawn a CLI or HTTP itnerfaces.
 func main() {
+	mysqlBasedir := flag.String("mysql-basedir", "", "the --basedir config for MySQL (auto-detected if not given)")
+	mysqlDatadir := flag.String("mysql-datadir", "", "the --datadir config for MySQL (auto-detected if not given)")
+	internalExperiment := flag.Bool("internal-experiment", false, "issue an internal experiment")
+	binlogFile := flag.String("binlog-file", "", "Name of binary log file")
 	quiet := flag.Bool("quiet", false, "quiet")
 	verbose := flag.Bool("verbose", false, "verbose")
 	debug := flag.Bool("debug", false, "debug mode (very verbose)")
@@ -38,4 +43,10 @@ func main() {
 		log.SetLevel(log.ERROR)
 	}
 	log.Info("starting gh-osc")
+
+	if *internalExperiment {
+		log.Debug("starting experiment")
+		binlogReader := binlog.NewMySQLBinlogReader(*mysqlBasedir, *mysqlDatadir)
+		binlogReader.ReadEntries(*binlogFile, 0, 0)
+	}
 }
