@@ -1,5 +1,6 @@
 /*
-  Copyright 2016 GitHub Inc.
+   Copyright 2016 GitHub Inc.
+	 See https://github.com/github/gh-osc/blob/master/LICENSE
 */
 
 package binlog
@@ -26,8 +27,10 @@ var (
 	tokenRegxp                          = regexp.MustCompile("### (WHERE|SET)$")
 )
 
+// BinlogEntryState is a state in the binlog parser automaton / state machine
 type BinlogEntryState string
 
+// States of the state machine
 const (
 	InvalidState                      BinlogEntryState = "InvalidState"
 	SearchForStartPosOrStatementState                  = "SearchForStartPosOrStatementState"
@@ -44,6 +47,7 @@ type MySQLBinlogReader struct {
 	MySQLBinlogBinary string
 }
 
+// NewMySQLBinlogReader creates a new reader that directly parses binlog files from the filesystem
 func NewMySQLBinlogReader(basedir string, datadir string) (mySQLBinlogReader *MySQLBinlogReader) {
 	mySQLBinlogReader = &MySQLBinlogReader{
 		Basedir: basedir,
@@ -89,8 +93,8 @@ func (this *MySQLBinlogReader) ReadEntries(logFile string, startPos uint64, stop
 	return entries, err
 }
 
+// automaton step: accept wither beginning of new entry, or beginning of new statement
 func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEntry, previousEndLogPos uint64) (nextState BinlogEntryState, nextBinlogEntry *BinlogEntry, err error) {
-
 	onStartEntry := func(submatch []string) (BinlogEntryState, *BinlogEntry, error) {
 		startLogPos, _ := strconv.ParseUint(submatch[1], 10, 64)
 
@@ -135,6 +139,7 @@ func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEnt
 	return SearchForStartPosOrStatementState, binlogEntry, nil
 }
 
+// automaton step: expect an end_log_pos line`
 func expectEndLogPos(scanner *bufio.Scanner, binlogEntry *BinlogEntry) (nextState BinlogEntryState, err error) {
 	line := scanner.Text()
 
@@ -146,6 +151,8 @@ func expectEndLogPos(scanner *bufio.Scanner, binlogEntry *BinlogEntry) (nextStat
 	return InvalidState, fmt.Errorf("Expected to find end_log_pos following pos %+v", binlogEntry.LogPos)
 }
 
+// automaton step: a not-strictly-required but good-to-have-around validation that
+// we see an expected token following a statement
 func expectToken(scanner *bufio.Scanner, binlogEntry *BinlogEntry) (nextState BinlogEntryState, err error) {
 	line := scanner.Text()
 	if submatch := tokenRegxp.FindStringSubmatch(line); len(submatch) > 1 {
@@ -154,6 +161,8 @@ func expectToken(scanner *bufio.Scanner, binlogEntry *BinlogEntry) (nextState Bi
 	return InvalidState, fmt.Errorf("Expected to find token following pos %+v", binlogEntry.LogPos)
 }
 
+// parseEntries will parse output of `mysqlbinlog --verbose --base64-output=DECODE-ROWS`
+// It issues an automaton / state machine to do its thang.
 func parseEntries(scanner *bufio.Scanner) (entries [](*BinlogEntry), err error) {
 	binlogEntry := &BinlogEntry{}
 	var state BinlogEntryState = SearchForStartPosOrStatementState

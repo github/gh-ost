@@ -35,8 +35,6 @@ func execCmd(commandText string, arguments ...string) (*exec.Cmd, string, error)
 	shellArguments = append(shellArguments, arguments...)
 	log.Debugf("%+v", shellArguments)
 	return exec.Command("bash", shellArguments...), tmpFile.Name(), nil
-
-	//return exec.Command(commandText, arguments...) , "", nil
 }
 
 // CommandRun executes a command
