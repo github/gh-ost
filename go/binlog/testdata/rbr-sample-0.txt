@@ -1,3 +1,26 @@
+/*
+    these are the statements that were used to execute the RBR log:
+    
+    create table samplet(id int primary key, license int, name varchar(64), unique key license_uidx(license)) engine=innodb;
+    insert into samplet values (1,1,'a');
+    insert into samplet values (2,2,'extended'),(3,3,'extended');
+    begin;
+    insert into samplet values (4,4,'transaction');
+    insert into samplet values (5,5,'transaction');
+    insert into samplet values (6,6,'transaction');
+    commit;
+    update samplet set name='update' where id=5;
+    replace into samplet values (2,4,'replaced 2,4');
+    insert into samplet values (7,7,'7');
+    insert into samplet values (8,8,'8');
+    delete from samplet where id >= 7;
+    insert into samplet values (9,9,'9');
+    begin;
+    update samplet set name='update 9' where id=9;
+    delete from samplet where license=3;
+    insert into samplet values (10,10,'10');
+    commit;
+*/
 /*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
 /*!40019 SET @@session.max_insert_delayed_threads=0*/;
 /*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;

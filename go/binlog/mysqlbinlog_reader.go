@@ -25,6 +25,7 @@ var (
 	endLogPosRegexp                     = regexp.MustCompile("^#[0-9]{6} .*? end_log_pos ([0-9]+)")
 	statementRegxp                      = regexp.MustCompile("### (INSERT INTO|UPDATE|DELETE FROM) `(.*?)`[.]`(.*?)`")
 	tokenRegxp                          = regexp.MustCompile("### (WHERE|SET)$")
+	positionalColumnRegexp              = regexp.MustCompile("###   @([0-9]+)=(.+)$")
 )
 
 // BinlogEntryState is a state in the binlog parser automaton / state machine
@@ -104,7 +105,7 @@ func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEnt
 		nextBinlogEntry = binlogEntry
 		if binlogEntry.LogPos != 0 && binlogEntry.StatementType != "" {
 			// Current entry is already a true entry, with startpos and with statement
-			nextBinlogEntry = &BinlogEntry{}
+			nextBinlogEntry = NewBinlogEntry()
 		}
 
 		nextBinlogEntry.LogPos = startLogPos
@@ -115,7 +116,7 @@ func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEnt
 		nextBinlogEntry = binlogEntry
 		if binlogEntry.LogPos != 0 && binlogEntry.StatementType != "" {
 			// Current entry is already a true entry, with startpos and with statement
-			nextBinlogEntry = &BinlogEntry{LogPos: binlogEntry.LogPos, EndLogPos: binlogEntry.EndLogPos}
+			nextBinlogEntry = binlogEntry.Duplicate()
 		}
 
 		nextBinlogEntry.StatementType = strings.Split(submatch[1], " ")[0]
@@ -123,6 +124,19 @@ func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEnt
 		nextBinlogEntry.TableName = submatch[3]
 
 		return ExpectTokenState, nextBinlogEntry, nil
+	}
+
+	onPositionalColumn := func(submatch []string) (BinlogEntryState, *BinlogEntry, error) {
+		columnIndex, _ := strconv.ParseUint(submatch[1], 10, 64)
+		if _, found := binlogEntry.PositionalColumns[columnIndex]; found {
+			return InvalidState, binlogEntry, fmt.Errorf("Positional column %+v found more than once in %+v, statement=%+v", columnIndex, binlogEntry.LogPos, binlogEntry.StatementType)
+		}
+		columnValue := submatch[2]
+		columnValue = strings.TrimPrefix(columnValue, "'")
+		columnValue = strings.TrimSuffix(columnValue, "'")
+		binlogEntry.PositionalColumns[columnIndex] = columnValue
+
+		return SearchForStartPosOrStatementState, binlogEntry, nil
 	}
 
 	line := scanner.Text()
@@ -134,6 +148,9 @@ func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEnt
 	}
 	if submatch := statementRegxp.FindStringSubmatch(line); len(submatch) > 1 {
 		return onStatementEntry(submatch)
+	}
+	if submatch := positionalColumnRegexp.FindStringSubmatch(line); len(submatch) > 1 {
+		return onPositionalColumn(submatch)
 	}
 	// Haven't found a match
 	return SearchForStartPosOrStatementState, binlogEntry, nil
@@ -164,7 +181,7 @@ func expectToken(scanner *bufio.Scanner, binlogEntry *BinlogEntry) (nextState Bi
 // parseEntries will parse output of `mysqlbinlog --verbose --base64-output=DECODE-ROWS`
 // It issues an automaton / state machine to do its thang.
 func parseEntries(scanner *bufio.Scanner) (entries [](*BinlogEntry), err error) {
-	binlogEntry := &BinlogEntry{}
+	binlogEntry := NewBinlogEntry()
 	var state BinlogEntryState = SearchForStartPosOrStatementState
 	var endLogPos uint64
 
