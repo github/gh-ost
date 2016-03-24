@@ -17,9 +17,10 @@
 package binlog
 
 import (
+	"testing"
+
 	"github.com/outbrain/golib/log"
 	test "github.com/outbrain/golib/tests"
-	"testing"
 )
 
 func init() {

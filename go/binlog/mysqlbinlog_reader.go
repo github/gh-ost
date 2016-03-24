@@ -23,17 +23,17 @@ var (
 	startEntryUnknownTableRegexp        = regexp.MustCompile("^### Row event for unknown table .*? at ([0-9]+)$")
 	endLogPosRegexp                     = regexp.MustCompile("^#[0-9]{6} .*? end_log_pos ([0-9]+)")
 	statementRegxp                      = regexp.MustCompile("### (INSERT INTO|UPDATE|DELETE FROM) `(.*?)`[.]`(.*?)`")
+	tokenRegxp                          = regexp.MustCompile("### (WHERE|SET)$")
 )
 
 type BinlogEntryState string
 
 const (
-	InvalidState                    BinlogEntryState = "InvalidState"
-	SearchForStartPosState                           = "SearchForStartPosState"
-	ExpectEndLogPosState                             = "ExpectEndLogPosState"
-	SearchForStatementState                          = "SearchForStatementState"
-	ExpectTokenState                                 = "ExpectTokenState"
-	PositionalColumnAssignmentState                  = "PositionalColumnAssignmentState"
+	InvalidState                      BinlogEntryState = "InvalidState"
+	SearchForStartPosOrStatementState                  = "SearchForStartPosOrStatementState"
+	ExpectEndLogPosState                               = "ExpectEndLogPosState"
+	ExpectTokenState                                   = "ExpectTokenState"
+	PositionalColumnAssignmentState                    = "PositionalColumnAssignmentState"
 )
 
 // MySQLBinlogReader reads binary log entries by executing the `mysqlbinlog`
@@ -72,7 +72,8 @@ func (this *MySQLBinlogReader) ReadEntries(logFile string, startPos uint64, stop
 		if err != nil {
 			return entries, log.Errore(err)
 		}
-		chunkEntries, err := parseEntries(entriesBytes)
+
+		chunkEntries, err := parseEntries(bufio.NewScanner(bytes.NewReader(entriesBytes)))
 		if err != nil {
 			return entries, log.Errore(err)
 		}
@@ -88,7 +89,7 @@ func (this *MySQLBinlogReader) ReadEntries(logFile string, startPos uint64, stop
 	return entries, err
 }
 
-func searchForStartPos(scanner *bufio.Scanner, binlogEntry *BinlogEntry, previousEndLogPos uint64) (nextState BinlogEntryState, nextBinlogEntry *BinlogEntry, err error) {
+func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEntry, previousEndLogPos uint64) (nextState BinlogEntryState, nextBinlogEntry *BinlogEntry, err error) {
 
 	onStartEntry := func(submatch []string) (BinlogEntryState, *BinlogEntry, error) {
 		startLogPos, _ := strconv.ParseUint(submatch[1], 10, 64)
@@ -106,6 +107,20 @@ func searchForStartPos(scanner *bufio.Scanner, binlogEntry *BinlogEntry, previou
 		return ExpectEndLogPosState, nextBinlogEntry, nil
 	}
 
+	onStatementEntry := func(submatch []string) (BinlogEntryState, *BinlogEntry, error) {
+		nextBinlogEntry = binlogEntry
+		if binlogEntry.LogPos != 0 && binlogEntry.StatementType != "" {
+			// Current entry is already a true entry, with startpos and with statement
+			nextBinlogEntry = &BinlogEntry{LogPos: binlogEntry.LogPos, EndLogPos: binlogEntry.EndLogPos}
+		}
+
+		nextBinlogEntry.StatementType = strings.Split(submatch[1], " ")[0]
+		nextBinlogEntry.DatabaseName = submatch[2]
+		nextBinlogEntry.TableName = submatch[3]
+
+		return ExpectTokenState, nextBinlogEntry, nil
+	}
+
 	line := scanner.Text()
 	if submatch := startEntryRegexp.FindStringSubmatch(line); len(submatch) > 1 {
 		return onStartEntry(submatch)
@@ -113,53 +128,50 @@ func searchForStartPos(scanner *bufio.Scanner, binlogEntry *BinlogEntry, previou
 	if submatch := startEntryUnknownTableRegexp.FindStringSubmatch(line); len(submatch) > 1 {
 		return onStartEntry(submatch)
 	}
-	// Haven't found a start entry
-	return SearchForStartPosState, binlogEntry, nil
+	if submatch := statementRegxp.FindStringSubmatch(line); len(submatch) > 1 {
+		return onStatementEntry(submatch)
+	}
+	// Haven't found a match
+	return SearchForStartPosOrStatementState, binlogEntry, nil
 }
 
 func expectEndLogPos(scanner *bufio.Scanner, binlogEntry *BinlogEntry) (nextState BinlogEntryState, err error) {
 	line := scanner.Text()
 
 	submatch := endLogPosRegexp.FindStringSubmatch(line)
-	if len(submatch) <= 1 {
-		return InvalidState, fmt.Errorf("Expected to find end_log_pos following pos %+v", binlogEntry.LogPos)
+	if len(submatch) > 1 {
+		binlogEntry.EndLogPos, _ = strconv.ParseUint(submatch[1], 10, 64)
+		return SearchForStartPosOrStatementState, nil
 	}
-	binlogEntry.EndLogPos, _ = strconv.ParseUint(submatch[1], 10, 64)
-
-	return SearchForStatementState, nil
+	return InvalidState, fmt.Errorf("Expected to find end_log_pos following pos %+v", binlogEntry.LogPos)
 }
 
-func searchForStatement(scanner *bufio.Scanner, binlogEntry *BinlogEntry) (nextState BinlogEntryState, err error) {
+func expectToken(scanner *bufio.Scanner, binlogEntry *BinlogEntry) (nextState BinlogEntryState, err error) {
 	line := scanner.Text()
-
-	if submatch := statementRegxp.FindStringSubmatch(line); len(submatch) > 1 {
-		binlogEntry.StatementType = strings.Split(submatch[1], " ")[0]
-		binlogEntry.DatabaseName = submatch[2]
-		binlogEntry.TableName = submatch[3]
-
-		return SearchForStartPosState, nil
+	if submatch := tokenRegxp.FindStringSubmatch(line); len(submatch) > 1 {
+		return SearchForStartPosOrStatementState, nil
 	}
-	return SearchForStatementState, nil
+	return InvalidState, fmt.Errorf("Expected to find token following pos %+v", binlogEntry.LogPos)
 }
 
-func parseEntries(entriesBytes []byte) (entries [](*BinlogEntry), err error) {
-	scanner := bufio.NewScanner(bytes.NewReader(entriesBytes))
+func parseEntries(scanner *bufio.Scanner) (entries [](*BinlogEntry), err error) {
 	binlogEntry := &BinlogEntry{}
-	var state BinlogEntryState = SearchForStartPosState
+	var state BinlogEntryState = SearchForStartPosOrStatementState
 	var endLogPos uint64
 
 	appendBinlogEntry := func() {
-		entries = append(entries, binlogEntry)
 		if binlogEntry.StatementType != "" {
+			entries = append(entries, binlogEntry)
 			log.Debugf("entry: %+v", *binlogEntry)
+			//fmt.Println(fmt.Sprintf("%s `%s`.`%s`", binlogEntry.StatementType, binlogEntry.DatabaseName, binlogEntry.TableName))
 		}
 	}
 	for scanner.Scan() {
 		switch state {
-		case SearchForStartPosState:
+		case SearchForStartPosOrStatementState:
 			{
 				var nextBinlogEntry *BinlogEntry
-				state, nextBinlogEntry, err = searchForStartPos(scanner, binlogEntry, endLogPos)
+				state, nextBinlogEntry, err = searchForStartPosOrStatement(scanner, binlogEntry, endLogPos)
 				if nextBinlogEntry != binlogEntry {
 					appendBinlogEntry()
 					binlogEntry = nextBinlogEntry
@@ -169,9 +181,9 @@ func parseEntries(entriesBytes []byte) (entries [](*BinlogEntry), err error) {
 			{
 				state, err = expectEndLogPos(scanner, binlogEntry)
 			}
-		case SearchForStatementState:
+		case ExpectTokenState:
 			{
-				state, err = searchForStatement(scanner, binlogEntry)
+				state, err = expectToken(scanner, binlogEntry)
 			}
 		default:
 			{
