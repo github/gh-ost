@@ -160,11 +160,15 @@ func parseEntries(scanner *bufio.Scanner) (entries [](*BinlogEntry), err error) 
 	var endLogPos uint64
 
 	appendBinlogEntry := func() {
-		if binlogEntry.StatementType != "" {
-			entries = append(entries, binlogEntry)
-			log.Debugf("entry: %+v", *binlogEntry)
-			//fmt.Println(fmt.Sprintf("%s `%s`.`%s`", binlogEntry.StatementType, binlogEntry.DatabaseName, binlogEntry.TableName))
+		if binlogEntry.LogPos == 0 {
+			return
 		}
+		if binlogEntry.StatementType == "" {
+			return
+		}
+		entries = append(entries, binlogEntry)
+		log.Debugf("entry: %+v", *binlogEntry)
+		fmt.Println(fmt.Sprintf("%s `%s`.`%s`", binlogEntry.StatementType, binlogEntry.DatabaseName, binlogEntry.TableName))
 	}
 	for scanner.Scan() {
 		switch state {
@@ -194,8 +198,6 @@ func parseEntries(scanner *bufio.Scanner) (entries [](*BinlogEntry), err error) 
 			return entries, log.Errore(err)
 		}
 	}
-	if binlogEntry.LogPos != 0 {
-		appendBinlogEntry()
-	}
+	appendBinlogEntry()
 	return entries, err
 }
