@@ -1,4 +1,6 @@
 #!/bin/bash
+#
+#
 
 buildpath=/tmp/gh-osc
 target=gh-osc

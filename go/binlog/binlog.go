@@ -1,5 +1,5 @@
 /*
-   Copyright 2015 Shlomi Noach, courtesy Booking.com
+   Copyright 2015 Shlomi Noach
 */
 
 package binlog
@@ -11,8 +11,10 @@ import (
 	"strings"
 )
 
+// BinlogType identifies the type of the log: relay or binary log
 type BinlogType int
 
+// BinaryLog, RelayLog are binlog types
 const (
 	BinaryLog BinlogType = iota
 	RelayLog
