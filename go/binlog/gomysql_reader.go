@@ -88,6 +88,10 @@ func (this *GoMySQLReader) ReadEntries(logFile string, startPos uint64, stopPos 
 			} else {
 				ev.Dump(os.Stdout)
 			}
+			// TODO : convert to entries
+			// need to parse multi-row entries
+			// insert & delete are just one row per db orw
+			// update: where-row_>values-row, repeating
 		}
 	}
 	log.Debugf("done")

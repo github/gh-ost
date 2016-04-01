@@ -18,7 +18,7 @@ func init() {
 	log.SetLevel(log.ERROR)
 }
 
-func TestRBRSample0(t *testing.T) {
+func __TestRBRSample0(t *testing.T) {
 	testFile, err := os.Open("testdata/rbr-sample-0.txt")
 	test.S(t).ExpectNil(err)
 	defer testFile.Close()
