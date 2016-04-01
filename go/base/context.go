@@ -12,3 +12,9 @@ type MigrationContext struct {
 	OriginalTableName string
 	GhostTableName    string
 }
+
+var Context = newMigrationContext()
+
+func newMigrationContext() *MigrationContext {
+	return &MigrationContext{}
+}
