@@ -155,3 +155,24 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 	}
 }
+
+func TestBuildRangeInsertPreparedQuery(t *testing.T) {
+	databaseName := "mydb"
+	originalTableName := "tbl"
+	ghostTableName := "ghost"
+	sharedColumns := []string{"id", "name", "position"}
+	{
+		uniqueKey := "name_position_uidx"
+		uniqueKeyColumns := []string{"name", "position"}
+
+		query, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns)
+		test.S(t).ExpectNil(err)
+		expected := `
+				insert /* gh-osc mydb.tbl */ ignore into mydb.ghost (id, name, position)
+				(select id, name, position from mydb.tbl force index (name_position_uidx)
+				  where (((name > ?) or (((name = ?)) AND (position > ?)) or ((name = ?) and (position = ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?))))
+				)
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+	}
+}

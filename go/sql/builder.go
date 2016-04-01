@@ -136,3 +136,13 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		rangeStartComparison, rangeEndComparison)
 	return query, nil
 }
+
+func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns []string) (string, error) {
+	rangeStartValues := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
+	rangeEndValues := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
+	for i := range uniqueKeyColumns {
+		rangeStartValues[i] = "?"
+		rangeEndValues[i] = "?"
+	}
+	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues)
+}
