@@ -43,3 +43,40 @@ func (this *UniqueKey) IsPrimary() bool {
 func (this *UniqueKey) String() string {
 	return fmt.Sprintf("%s: %s; has nullable: %+v", this.Name, this.Columns, this.HasNullable)
 }
+
+type ColumnValues struct {
+	abstractValues []interface{}
+	ValuesPointers []interface{}
+}
+
+func NewColumnValues(length int) *ColumnValues {
+	result := &ColumnValues{
+		abstractValues: make([]interface{}, length),
+		ValuesPointers: make([]interface{}, length),
+	}
+	for i := 0; i < length; i++ {
+		result.ValuesPointers[i] = &result.abstractValues[i]
+	}
+
+	return result
+}
+
+func (this *ColumnValues) AbstractValues() []interface{} {
+	return this.abstractValues
+}
+
+func (this *ColumnValues) BinaryValues() [][]uint8 {
+	result := make([][]uint8, len(this.abstractValues), len(this.abstractValues))
+	for i, val := range this.abstractValues {
+		result[i] = val.([]uint8)
+	}
+	return result
+}
+
+func (this *ColumnValues) String() string {
+	stringValues := []string{}
+	for _, val := range this.BinaryValues() {
+		stringValues = append(stringValues, string(val))
+	}
+	return strings.Join(stringValues, ",")
+}

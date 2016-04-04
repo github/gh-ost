@@ -11,6 +11,7 @@ import (
 	"github.com/github/gh-osc/go/base"
 	"github.com/github/gh-osc/go/mysql"
 	"github.com/github/gh-osc/go/sql"
+	"reflect"
 
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
@@ -91,5 +92,87 @@ func (this *Applier) AlterGhost() error {
 		return err
 	}
 	log.Infof("Table altered")
+	return nil
+}
+
+// ReadMigrationMinValues
+func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
+	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns)
+	if err != nil {
+		return err
+	}
+	rows, err := this.db.Query(query)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		this.migrationContext.MigrationRangeMinValues = sql.NewColumnValues(len(uniqueKey.Columns))
+		if err = rows.Scan(this.migrationContext.MigrationRangeMinValues.ValuesPointers...); err != nil {
+			return err
+		}
+	}
+	log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
+	return err
+}
+
+// ReadMigrationMinValues
+func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
+	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns)
+	if err != nil {
+		return err
+	}
+	rows, err := this.db.Query(query)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		this.migrationContext.MigrationRangeMaxValues = sql.NewColumnValues(len(uniqueKey.Columns))
+		if err = rows.Scan(this.migrationContext.MigrationRangeMaxValues.ValuesPointers...); err != nil {
+			return err
+		}
+	}
+	log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+	return err
+}
+
+func (this *Applier) ReadMigrationRangeValues(uniqueKey *sql.UniqueKey) error {
+	if err := this.ReadMigrationMinValues(uniqueKey); err != nil {
+		return err
+	}
+	if err := this.ReadMigrationMaxValues(uniqueKey); err != nil {
+		return err
+	}
+	return nil
+}
+
+// IterateTable
+func (this *Applier) IterateTable(uniqueKey *sql.UniqueKey) error {
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns)
+	if err != nil {
+		return err
+	}
+	columnValues := sql.NewColumnValues(len(uniqueKey.Columns))
+
+	rows, err := this.db.Query(query)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		if err = rows.Scan(columnValues.ValuesPointers...); err != nil {
+			return err
+		}
+		for _, val := range columnValues.BinaryValues() {
+			log.Debugf("%s", reflect.TypeOf(val))
+			log.Debugf("%s", string(val))
+		}
+	}
+	log.Debugf("column values: %s", columnValues)
+	query = `insert into test.sample_data_dump (category, ts) values (?, ?)`
+	if _, err := sqlutils.Exec(this.db, query, columnValues.AbstractValues()...); err != nil {
+		return err
+	}
+
 	return nil
 }

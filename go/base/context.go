@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/github/gh-osc/go/mysql"
+	"github.com/github/gh-osc/go/sql"
 )
 
 type RowsEstimateMethod string
@@ -33,6 +34,8 @@ type MigrationContext struct {
 	AllowedRunningOnMaster    bool
 	InspectorConnectionConfig *mysql.ConnectionConfig
 	MasterConnectionConfig    *mysql.ConnectionConfig
+	MigrationRangeMinValues   *sql.ColumnValues
+	MigrationRangeMaxValues   *sql.ColumnValues
 }
 
 var context *MigrationContext
@@ -49,10 +52,12 @@ func newMigrationContext() *MigrationContext {
 	}
 }
 
+// GetMigrationContext
 func GetMigrationContext() *MigrationContext {
 	return context
 }
 
+// GetGhostTableName
 func (this *MigrationContext) GetGhostTableName() string {
 	return fmt.Sprintf("_%s_New", this.OriginalTableName)
 }
@@ -62,7 +67,12 @@ func (this *MigrationContext) RequiresBinlogFormatChange() bool {
 	return this.OriginalBinlogFormat != "ROW"
 }
 
-// RequiresBinlogFormatChange
+// IsRunningOnMaster
 func (this *MigrationContext) IsRunningOnMaster() bool {
 	return this.InspectorConnectionConfig.Equals(this.MasterConnectionConfig)
+}
+
+// HasMigrationRange
+func (this *MigrationContext) HasMigrationRange() bool {
+	return this.MigrationRangeMinValues != nil && MigrationRangeMaxValues != nil
 }

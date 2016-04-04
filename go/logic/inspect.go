@@ -50,6 +50,9 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateTable(); err != nil {
 		return err
 	}
+	if err := this.validateTableForeignKeys(); err != nil {
+		return err
+	}
 	if this.migrationContext.CountTableRows {
 		if err := this.countTableRows(); err != nil {
 			return err
@@ -62,15 +65,15 @@ func (this *Inspector) InitDBConnections() (err error) {
 	return nil
 }
 
-func (this *Inspector) InspectTables() (err error) {
-	uniqueKeys, err := this.getCandidateUniqueKeys(this.migrationContext.OriginalTableName)
+func (this *Inspector) InspectTables() (uniqueKeys [](*sql.UniqueKey), err error) {
+	uniqueKeys, err = this.getCandidateUniqueKeys(this.migrationContext.OriginalTableName)
 	if err != nil {
-		return err
+		return uniqueKeys, err
 	}
 	if len(uniqueKeys) == 0 {
-		return fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
+		return uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
 	}
-	return nil
+	return uniqueKeys, err
 }
 
 // validateConnection issues a simple can-connect to MySQL
@@ -191,6 +194,37 @@ func (this *Inspector) validateTable() error {
 	}
 	log.Infof("Table found. Engine=%s", this.migrationContext.TableEngine)
 	log.Debugf("Estimated number of rows via STATUS: %d", this.migrationContext.RowsEstimate)
+	return nil
+}
+
+func (this *Inspector) validateTableForeignKeys() error {
+	query := `
+		SELECT COUNT(*) AS num_foreign_keys
+		FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+		WHERE
+				REFERENCED_TABLE_NAME IS NOT NULL
+				AND ((TABLE_SCHEMA=? AND TABLE_NAME=?)
+					OR (REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=?)
+				)
+	`
+	numForeignKeys := 0
+	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		numForeignKeys = rowMap.GetInt("num_foreign_keys")
+
+		return nil
+	},
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
+	)
+	if err != nil {
+		return err
+	}
+	if numForeignKeys > 0 {
+		return log.Errorf("Found %d foreign keys on %s.%s. Foreign keys are not supported. Bailing out", numForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	}
+	log.Debugf("Validated no foreign keys exist on table")
 	return nil
 }
 

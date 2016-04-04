@@ -205,3 +205,35 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 	}
 }
+
+func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
+	databaseName := "mydb"
+	originalTableName := "tbl"
+	uniqueKeyColumns := []string{"name", "position"}
+	{
+		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
+		test.S(t).ExpectNil(err)
+		expected := `
+			select /* gh-osc mydb.tbl */ name, position
+			  from
+			    mydb.tbl
+			  order by
+			    name asc, position asc
+			  limit 1
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+	}
+	{
+		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
+		test.S(t).ExpectNil(err)
+		expected := `
+			select /* gh-osc mydb.tbl */ name, position
+			  from
+			    mydb.tbl
+			  order by
+			    name desc, position desc
+			  limit 1
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+	}
+}

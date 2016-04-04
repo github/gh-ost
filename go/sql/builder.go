@@ -163,12 +163,12 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues)
 }
 
-func BuildUniqueKeyRangeEndPreparedQuery(databaseName, originalTableName string, uniqueKeyColumns []string, chunkSize int) (string, error) {
+func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string, chunkSize int) (string, error) {
 	if len(uniqueKeyColumns) == 0 {
-		return "", fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
+		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}
 	databaseName = EscapeName(databaseName)
-	originalTableName = EscapeName(originalTableName)
+	tableName = EscapeName(tableName)
 
 	rangeStartComparison, err := BuildRangePreparedComparison(uniqueKeyColumns, GreaterThanComparisonSign)
 	if err != nil {
@@ -200,11 +200,45 @@ func BuildUniqueKeyRangeEndPreparedQuery(databaseName, originalTableName string,
 			order by
 				%s
 			limit 1
-    `, databaseName, originalTableName, strings.Join(uniqueKeyColumns, ", "),
-		strings.Join(uniqueKeyColumns, ", "), databaseName, originalTableName,
+    `, databaseName, tableName, strings.Join(uniqueKeyColumns, ", "),
+		strings.Join(uniqueKeyColumns, ", "), databaseName, tableName,
 		rangeStartComparison, rangeEndComparison,
 		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
 		strings.Join(uniqueKeyColumnDescending, ", "),
+	)
+	return query, nil
+}
+
+func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "asc")
+}
+
+func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "desc")
+}
+
+func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string, order string) (string, error) {
+	if len(uniqueKeyColumns) == 0 {
+		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+
+	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
+	for i := range uniqueKeyColumns {
+		uniqueKeyColumns[i] = EscapeName(uniqueKeyColumns[i])
+		uniqueKeyColumnOrder[i] = fmt.Sprintf("%s %s", uniqueKeyColumns[i], order)
+	}
+	query := fmt.Sprintf(`
+      select /* gh-osc %s.%s */ %s
+				from
+					%s.%s
+				order by
+					%s
+				limit 1
+    `, databaseName, tableName, strings.Join(uniqueKeyColumns, ", "),
+		databaseName, tableName,
+		strings.Join(uniqueKeyColumnOrder, ", "),
 	)
 	return query, nil
 }
