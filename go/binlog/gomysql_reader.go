@@ -35,7 +35,7 @@ func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *G
 	binlogReader.binlogSyncer = replication.NewBinlogSyncer(serverId, "mysql")
 
 	// Register slave, the MySQL master is at 127.0.0.1:3306, with user root and an empty password
-	err = binlogReader.binlogSyncer.RegisterSlave(connectionConfig.Hostname, uint16(connectionConfig.Port), connectionConfig.User, connectionConfig.Password)
+	err = binlogReader.binlogSyncer.RegisterSlave(connectionConfig.Key.Hostname, uint16(connectionConfig.Key.Port), connectionConfig.User, connectionConfig.Password)
 	if err != nil {
 		return binlogReader, err
 	}

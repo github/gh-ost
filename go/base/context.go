@@ -5,7 +5,11 @@
 
 package base
 
-import ()
+import (
+	"fmt"
+
+	"github.com/github/gh-osc/go/mysql"
+)
 
 type RowsEstimateMethod string
 
@@ -16,17 +20,19 @@ const (
 )
 
 type MigrationContext struct {
-	DatabaseName           string
-	OriginalTableName      string
-	GhostTableName         string
-	AlterStatement         string
-	TableEngine            string
-	CountTableRows         bool
-	RowsEstimate           int64
-	UsedRowsEstimateMethod RowsEstimateMethod
-	ChunkSize              int
-	OriginalBinlogFormat   string
-	OriginalBinlogRowImage string
+	DatabaseName              string
+	OriginalTableName         string
+	AlterStatement            string
+	TableEngine               string
+	CountTableRows            bool
+	RowsEstimate              int64
+	UsedRowsEstimateMethod    RowsEstimateMethod
+	ChunkSize                 int
+	OriginalBinlogFormat      string
+	OriginalBinlogRowImage    string
+	AllowedRunningOnMaster    bool
+	InspectorConnectionConfig *mysql.ConnectionConfig
+	MasterConnectionConfig    *mysql.ConnectionConfig
 }
 
 var context *MigrationContext
@@ -37,7 +43,9 @@ func init() {
 
 func newMigrationContext() *MigrationContext {
 	return &MigrationContext{
-		ChunkSize: 1000,
+		ChunkSize:                 1000,
+		InspectorConnectionConfig: mysql.NewConnectionConfig(),
+		MasterConnectionConfig:    mysql.NewConnectionConfig(),
 	}
 }
 
@@ -45,7 +53,16 @@ func GetMigrationContext() *MigrationContext {
 	return context
 }
 
+func (this *MigrationContext) GetGhostTableName() string {
+	return fmt.Sprintf("_%s_New", this.OriginalTableName)
+}
+
 // RequiresBinlogFormatChange
 func (this *MigrationContext) RequiresBinlogFormatChange() bool {
 	return this.OriginalBinlogFormat != "ROW"
+}
+
+// RequiresBinlogFormatChange
+func (this *MigrationContext) IsRunningOnMaster() bool {
+	return this.InspectorConnectionConfig.Equals(this.MasterConnectionConfig)
 }

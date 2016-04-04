@@ -26,15 +26,15 @@ type Inspector struct {
 	migrationContext *base.MigrationContext
 }
 
-func NewInspector(connectionConfig *mysql.ConnectionConfig) *Inspector {
+func NewInspector() *Inspector {
 	return &Inspector{
-		connectionConfig: connectionConfig,
+		connectionConfig: base.GetMigrationContext().InspectorConnectionConfig,
 		migrationContext: base.GetMigrationContext(),
 	}
 }
 
 func (this *Inspector) InitDBConnections() (err error) {
-	inspectorUri := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", this.connectionConfig.User, this.connectionConfig.Password, this.connectionConfig.Hostname, this.connectionConfig.Port, this.migrationContext.DatabaseName)
+	inspectorUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = sqlutils.GetDB(inspectorUri); err != nil {
 		return err
 	}
@@ -59,7 +59,6 @@ func (this *Inspector) InitDBConnections() (err error) {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -76,15 +75,15 @@ func (this *Inspector) InspectTables() (err error) {
 
 // validateConnection issues a simple can-connect to MySQL
 func (this *Inspector) validateConnection() error {
-	query := `select @@port`
+	query := `select @@global.port`
 	var port int
 	if err := this.db.QueryRow(query).Scan(&port); err != nil {
 		return err
 	}
-	if port != this.connectionConfig.Port {
+	if port != this.connectionConfig.Key.Port {
 		return fmt.Errorf("Unexpected database port reported: %+v", port)
 	}
-	log.Infof("connection validated on port %+v", port)
+	log.Infof("connection validated on %+v", this.connectionConfig.Key)
 	return nil
 }
 
@@ -116,7 +115,7 @@ func (this *Inspector) validateGrants() error {
 		return nil
 	})
 	if err != nil {
-		return log.Errore(err)
+		return err
 	}
 
 	if foundAll {
@@ -138,10 +137,10 @@ func (this *Inspector) validateBinlogs() error {
 		return err
 	}
 	if !hasBinaryLogs {
-		return fmt.Errorf("%s:%d must have binary logs enabled", this.connectionConfig.Hostname, this.connectionConfig.Port)
+		return fmt.Errorf("%s:%d must have binary logs enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	}
 	if !logSlaveUpdates {
-		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Hostname, this.connectionConfig.Port)
+		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	}
 	if this.migrationContext.RequiresBinlogFormatChange() {
 		query := fmt.Sprintf(`show /* gh-osc */ slave hosts`)
@@ -151,12 +150,12 @@ func (this *Inspector) validateBinlogs() error {
 			return nil
 		})
 		if err != nil {
-			return log.Errore(err)
+			return err
 		}
 		if countReplicas > 0 {
-			return fmt.Errorf("%s:%d has %s binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Hostname, this.connectionConfig.Port, this.migrationContext.OriginalBinlogFormat)
+			return fmt.Errorf("%s:%d has %s binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
 		}
-		log.Infof("%s:%d has %s binlog_format. I will change it to ROW for the duration of this migration.", this.connectionConfig.Hostname, this.connectionConfig.Port, this.migrationContext.OriginalBinlogFormat)
+		log.Infof("%s:%d has %s binlog_format. I will change it to ROW for the duration of this migration.", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
 	}
 	query = `select @@global.binlog_row_image`
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.OriginalBinlogRowImage); err != nil {
@@ -164,7 +163,7 @@ func (this *Inspector) validateBinlogs() error {
 		this.migrationContext.OriginalBinlogRowImage = ""
 	}
 
-	log.Infof("binary logs validated on %s:%d", this.connectionConfig.Hostname, this.connectionConfig.Port)
+	log.Infof("binary logs validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	return nil
 }
 
@@ -185,7 +184,7 @@ func (this *Inspector) validateTable() error {
 		return nil
 	})
 	if err != nil {
-		return log.Errore(err)
+		return err
 	}
 	if !tableFound {
 		return log.Errorf("Cannot find table %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -207,7 +206,7 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 		return nil
 	})
 	if err != nil {
-		return log.Errore(err)
+		return err
 	}
 	if !outputFound {
 		return log.Errorf("Cannot run EXPLAIN on %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -308,7 +307,7 @@ func (this *Inspector) getSharedUniqueKeys() (uniqueKeys [](*sql.UniqueKey), err
 	if err != nil {
 		return uniqueKeys, err
 	}
-	ghostUniqueKeys, err := this.getCandidateUniqueKeys(this.migrationContext.GhostTableName)
+	ghostUniqueKeys, err := this.getCandidateUniqueKeys(this.migrationContext.GetGhostTableName())
 	if err != nil {
 		return uniqueKeys, err
 	}
@@ -322,4 +321,45 @@ func (this *Inspector) getSharedUniqueKeys() (uniqueKeys [](*sql.UniqueKey), err
 		}
 	}
 	return uniqueKeys, nil
+}
+
+func (this *Inspector) getMasterConnectionConfig() (masterConfig *mysql.ConnectionConfig, err error) {
+	visitedKeys := mysql.NewInstanceKeyMap()
+	return getMasterConnectionConfigSafe(this.connectionConfig, this.migrationContext.DatabaseName, visitedKeys)
+}
+
+func getMasterConnectionConfigSafe(connectionConfig *mysql.ConnectionConfig, databaseName string, visitedKeys *mysql.InstanceKeyMap) (masterConfig *mysql.ConnectionConfig, err error) {
+	log.Debugf("Looking for master on %+v", connectionConfig.Key)
+
+	currentUri := connectionConfig.GetDBUri(databaseName)
+	db, _, err := sqlutils.GetDB(currentUri)
+	if err != nil {
+		return nil, err
+	}
+
+	hasMaster := false
+	masterConfig = connectionConfig.Duplicate()
+	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
+		masterKey := mysql.InstanceKey{
+			Hostname: rowMap.GetString("Master_Host"),
+			Port:     rowMap.GetInt("Master_Port"),
+		}
+		if masterKey.IsValid() {
+			masterConfig.Key = masterKey
+			hasMaster = true
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if hasMaster {
+		log.Debugf("Master of %+v is %+v", connectionConfig.Key, masterConfig.Key)
+		if visitedKeys.HasKey(masterConfig.Key) {
+			return nil, fmt.Errorf("There seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
+		}
+		visitedKeys.AddKey(masterConfig.Key)
+		return getMasterConnectionConfigSafe(masterConfig, databaseName, visitedKeys)
+	}
+	return masterConfig, nil
 }
