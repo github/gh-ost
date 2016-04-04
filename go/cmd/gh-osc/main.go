@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/github/gh-osc/go/base"
 	"github.com/github/gh-osc/go/binlog"
+	"github.com/github/gh-osc/go/logic"
 	"github.com/github/gh-osc/go/mysql"
 	"github.com/outbrain/golib/log"
 )
@@ -18,6 +20,7 @@ import (
 // main is the application's entry point. It will either spawn a CLI or HTTP itnerfaces.
 func main() {
 	var connectionConfig mysql.ConnectionConfig
+	migrationContext := base.GetMigrationContext()
 
 	// mysqlBasedir := flag.String("mysql-basedir", "", "the --basedir config for MySQL (auto-detected if not given)")
 	// mysqlDatadir := flag.String("mysql-datadir", "", "the --datadir config for MySQL (auto-detected if not given)")
@@ -28,6 +31,11 @@ func main() {
 	flag.IntVar(&connectionConfig.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
 	flag.StringVar(&connectionConfig.User, "user", "root", "MySQL user")
 	flag.StringVar(&connectionConfig.Password, "password", "", "MySQL password")
+
+	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
+	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
+	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
+	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
 
 	quiet := flag.Bool("quiet", false, "quiet")
 	verbose := flag.Bool("verbose", false, "verbose")
@@ -56,6 +64,17 @@ func main() {
 		// Override!!
 		log.SetLevel(log.ERROR)
 	}
+
+	if migrationContext.DatabaseName == "" {
+		log.Fatalf("--database must be provided and database name must not be empty")
+	}
+	if migrationContext.OriginalTableName == "" {
+		log.Fatalf("--table must be provided and table name must not be empty")
+	}
+	if migrationContext.AlterStatement == "" {
+		log.Fatalf("--alter must be provided and statement must not be empty")
+	}
+
 	log.Info("starting gh-osc")
 
 	if *internalExperiment {
@@ -69,5 +88,12 @@ func main() {
 			log.Fatale(err)
 		}
 		binlogReader.ReadEntries(*binlogFile, 0, 0)
+		return
 	}
+	migrator := logic.NewMigrator(&connectionConfig)
+	err := migrator.Migrate()
+	if err != nil {
+		log.Fatale(err)
+	}
+	log.Info("Done")
 }
