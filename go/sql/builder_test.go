@@ -176,3 +176,32 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 	}
 }
+
+func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
+	databaseName := "mydb"
+	originalTableName := "tbl"
+	chunkSize := 500
+	{
+		uniqueKeyColumns := []string{"name", "position"}
+
+		query, err := BuildUniqueKeyRangeEndPreparedQuery(databaseName, originalTableName, uniqueKeyColumns, chunkSize)
+		test.S(t).ExpectNil(err)
+		expected := `
+				select /* gh-osc mydb.tbl */ name, position
+				  from (
+				    select
+				        name, position
+				      from
+				        mydb.tbl
+				      where ((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
+				      order by
+				        name asc, position asc
+				      limit 500
+				  ) select_osc_chunk
+				order by
+				  name desc, position desc
+				limit 1
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+	}
+}

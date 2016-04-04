@@ -113,10 +113,26 @@ func BuildRangeComparison(columns []string, values []string, comparisonSign Valu
 	return result, nil
 }
 
+func BuildRangePreparedComparison(columns []string, comparisonSign ValueComparisonSign) (result string, err error) {
+	values := make([]string, len(columns), len(columns))
+	for i := range columns {
+		values[i] = "?"
+	}
+	return BuildRangeComparison(columns, values, comparisonSign)
+}
+
 func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns, rangeStartValues, rangeEndValues []string) (string, error) {
 	if len(sharedColumns) == 0 {
 		return "", fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
+	databaseName = EscapeName(databaseName)
+	originalTableName = EscapeName(originalTableName)
+	ghostTableName = EscapeName(ghostTableName)
+	for i := range sharedColumns {
+		sharedColumns[i] = EscapeName(sharedColumns[i])
+	}
+	uniqueKey = EscapeName(uniqueKey)
+
 	sharedColumnsListing := strings.Join(sharedColumns, ", ")
 	rangeStartComparison, err := BuildRangeComparison(uniqueKeyColumns, rangeStartValues, GreaterThanOrEqualsComparisonSign)
 	if err != nil {
@@ -145,4 +161,50 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 		rangeEndValues[i] = "?"
 	}
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues)
+}
+
+func BuildUniqueKeyRangeEndPreparedQuery(databaseName, originalTableName string, uniqueKeyColumns []string, chunkSize int) (string, error) {
+	if len(uniqueKeyColumns) == 0 {
+		return "", fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
+	}
+	databaseName = EscapeName(databaseName)
+	originalTableName = EscapeName(originalTableName)
+
+	rangeStartComparison, err := BuildRangePreparedComparison(uniqueKeyColumns, GreaterThanComparisonSign)
+	if err != nil {
+		return "", err
+	}
+	rangeEndComparison, err := BuildRangePreparedComparison(uniqueKeyColumns, LessThanOrEqualsComparisonSign)
+	if err != nil {
+		return "", err
+	}
+	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
+	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
+	for i := range uniqueKeyColumns {
+		uniqueKeyColumns[i] = EscapeName(uniqueKeyColumns[i])
+		uniqueKeyColumnAscending[i] = fmt.Sprintf("%s asc", uniqueKeyColumns[i])
+		uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumns[i])
+	}
+	query := fmt.Sprintf(`
+      select /* gh-osc %s.%s */ %s
+				from (
+					select
+							%s
+						from
+							%s.%s
+						where %s and %s
+						order by
+							%s
+						limit %d
+				) select_osc_chunk
+			order by
+				%s
+			limit 1
+    `, databaseName, originalTableName, strings.Join(uniqueKeyColumns, ", "),
+		strings.Join(uniqueKeyColumns, ", "), databaseName, originalTableName,
+		rangeStartComparison, rangeEndComparison,
+		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
+		strings.Join(uniqueKeyColumnDescending, ", "),
+	)
+	return query, nil
 }
