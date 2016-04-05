@@ -55,9 +55,24 @@ func (this *Migrator) Migrate() (err error) {
 	// 	log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
 	// 	return err
 	// }
-
-	if err := this.applier.ReadMigrationRangeValues(uniqueKeys[0]); err != nil {
+	this.migrationContext.UniqueKey = uniqueKeys[0]
+	this.migrationContext.ChunkSize = 100
+	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
+	}
+	for {
+		log.Debugf("checking if complete")
+		isComplete, err := this.applier.IterationIsComplete()
+		if err != nil {
+			return err
+		}
+		if isComplete {
+			break
+		}
+		err = this.applier.CalculateNextIterationRangeEndValues()
+		if err != nil {
+			return err
+		}
 	}
 	if err := this.applier.IterateTable(uniqueKeys[0]); err != nil {
 		return err

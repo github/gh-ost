@@ -128,7 +128,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartValues := []string{"@v1s"}
 		rangeEndValues := []string{"@v1e"}
 
-		query, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues)
+		query, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-osc mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -144,7 +144,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartValues := []string{"@v1s", "@v2s"}
 		rangeEndValues := []string{"@v1e", "@v2e"}
 
-		query, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues)
+		query, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-osc mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -165,7 +165,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 		uniqueKey := "name_position_uidx"
 		uniqueKeyColumns := []string{"name", "position"}
 
-		query, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns)
+		query, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-osc mydb.tbl */ ignore into mydb.ghost (id, name, position)

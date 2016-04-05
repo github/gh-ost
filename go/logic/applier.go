@@ -137,13 +137,88 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	return err
 }
 
-func (this *Applier) ReadMigrationRangeValues(uniqueKey *sql.UniqueKey) error {
-	if err := this.ReadMigrationMinValues(uniqueKey); err != nil {
+func (this *Applier) ReadMigrationRangeValues() error {
+	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
 		return err
 	}
-	if err := this.ReadMigrationMaxValues(uniqueKey); err != nil {
+	if err := this.ReadMigrationMaxValues(this.migrationContext.UniqueKey); err != nil {
 		return err
 	}
+	return nil
+}
+
+// IterationIsComplete lets us know when the copy-iteration phase is complete, i.e.
+// we've exhausted all rows
+func (this *Applier) IterationIsComplete() (bool, error) {
+	if !this.migrationContext.HasMigrationRange() {
+		return false, nil
+	}
+	if this.migrationContext.MigrationIterationRangeMinValues == nil {
+		return false, nil
+	}
+	compareWithIterationRangeStart, err := sql.BuildRangePreparedComparison(this.migrationContext.UniqueKey.Columns, sql.GreaterThanOrEqualsComparisonSign)
+	if err != nil {
+		return false, err
+	}
+	compareWithRangeEnd, err := sql.BuildRangePreparedComparison(this.migrationContext.UniqueKey.Columns, sql.LessThanComparisonSign)
+	if err != nil {
+		return false, err
+	}
+	args := sqlutils.Args()
+	args = append(args, this.migrationContext.MigrationIterationRangeMinValues.AbstractValues()...)
+	args = append(args, this.migrationContext.MigrationRangeMaxValues.AbstractValues()...)
+	query := fmt.Sprintf(`
+			select /* gh-osc IterationIsComplete */ 1
+				from %s.%s
+				where (%s) and (%s)
+				limit 1
+				`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		compareWithIterationRangeStart,
+		compareWithRangeEnd,
+	)
+	log.Debugf(query)
+
+	moreRowsFound := false
+	err = sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		moreRowsFound = true
+		return nil
+	}, args)
+	if err != nil {
+		return false, err
+	}
+	return !moreRowsFound, nil
+}
+
+func (this *Applier) CalculateNextIterationRangeEndValues() error {
+	query, err := sql.BuildUniqueKeyRangeEndPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.UniqueKey.Columns, this.migrationContext.ChunkSize)
+	if err != nil {
+		return err
+	}
+	startingFromValues := this.migrationContext.MigrationRangeMinValues
+	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
+	if this.migrationContext.MigrationIterationRangeMinValues != nil {
+		startingFromValues = this.migrationContext.MigrationIterationRangeMinValues
+	}
+	rows, err := this.db.Query(query, startingFromValues.AbstractValues()...)
+	if err != nil {
+		return err
+	}
+	iterationRangeMaxValues := sql.NewColumnValues(len(this.migrationContext.UniqueKey.Columns))
+	iterationRangeEndFound := false
+	for rows.Next() {
+		if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
+			return err
+		}
+		iterationRangeEndFound = true
+	}
+	log.Debugf("5")
+	if !iterationRangeEndFound {
+		return fmt.Errorf("Cannot find iteration range end")
+	}
+	this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
+	log.Debugf("column values: %s", this.migrationContext.MigrationIterationRangeMaxValues)
 	return nil
 }
 

@@ -121,7 +121,7 @@ func BuildRangePreparedComparison(columns []string, comparisonSign ValueComparis
 	return BuildRangeComparison(columns, values, comparisonSign)
 }
 
-func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns, rangeStartValues, rangeEndValues []string) (string, error) {
+func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns, rangeStartValues, rangeEndValues []string, includeRangeStartValues bool) (string, error) {
 	if len(sharedColumns) == 0 {
 		return "", fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
@@ -134,7 +134,11 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	uniqueKey = EscapeName(uniqueKey)
 
 	sharedColumnsListing := strings.Join(sharedColumns, ", ")
-	rangeStartComparison, err := BuildRangeComparison(uniqueKeyColumns, rangeStartValues, GreaterThanOrEqualsComparisonSign)
+	var minRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
+	if includeRangeStartValues {
+		minRangeComparisonSign = GreaterThanOrEqualsComparisonSign
+	}
+	rangeStartComparison, err := BuildRangeComparison(uniqueKeyColumns, rangeStartValues, minRangeComparisonSign)
 	if err != nil {
 		return "", err
 	}
@@ -153,14 +157,14 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	return query, nil
 }
 
-func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns []string) (string, error) {
+func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns []string, includeRangeStartValues bool) (string, error) {
 	rangeStartValues := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
 	rangeEndValues := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
 	for i := range uniqueKeyColumns {
 		rangeStartValues[i] = "?"
 		rangeEndValues[i] = "?"
 	}
-	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues)
+	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, includeRangeStartValues)
 }
 
 func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string, chunkSize int) (string, error) {
