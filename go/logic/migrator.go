@@ -56,12 +56,10 @@ func (this *Migrator) Migrate() (err error) {
 	// 	return err
 	// }
 	this.migrationContext.UniqueKey = uniqueKeys[0]
-	this.migrationContext.ChunkSize = 100
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
 	for {
-		log.Debugf("checking if complete")
 		isComplete, err := this.applier.IterationIsComplete()
 		if err != nil {
 			return err
@@ -73,6 +71,7 @@ func (this *Migrator) Migrate() (err error) {
 		if err != nil {
 			return err
 		}
+		this.migrationContext.Iteration++
 	}
 	if err := this.applier.IterateTable(uniqueKeys[0]); err != nil {
 		return err

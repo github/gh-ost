@@ -11,7 +11,6 @@ import (
 	"github.com/github/gh-osc/go/base"
 	"github.com/github/gh-osc/go/mysql"
 	"github.com/github/gh-osc/go/sql"
-	"reflect"
 
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
@@ -156,17 +155,17 @@ func (this *Applier) IterationIsComplete() (bool, error) {
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
 		return false, nil
 	}
-	compareWithIterationRangeStart, err := sql.BuildRangePreparedComparison(this.migrationContext.UniqueKey.Columns, sql.GreaterThanOrEqualsComparisonSign)
-	if err != nil {
-		return false, err
-	}
-	compareWithRangeEnd, err := sql.BuildRangePreparedComparison(this.migrationContext.UniqueKey.Columns, sql.LessThanComparisonSign)
-	if err != nil {
-		return false, err
-	}
 	args := sqlutils.Args()
-	args = append(args, this.migrationContext.MigrationIterationRangeMinValues.AbstractValues()...)
-	args = append(args, this.migrationContext.MigrationRangeMaxValues.AbstractValues()...)
+	compareWithIterationRangeStart, explodedArgs, err := sql.BuildRangePreparedComparison(this.migrationContext.UniqueKey.Columns, this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(), sql.GreaterThanOrEqualsComparisonSign)
+	if err != nil {
+		return false, err
+	}
+	args = append(args, explodedArgs...)
+	compareWithRangeEnd, explodedArgs, err := sql.BuildRangePreparedComparison(this.migrationContext.UniqueKey.Columns, this.migrationContext.MigrationRangeMaxValues.AbstractValues(), sql.LessThanComparisonSign)
+	if err != nil {
+		return false, err
+	}
+	args = append(args, explodedArgs...)
 	query := fmt.Sprintf(`
 			select /* gh-osc IterationIsComplete */ 1
 				from %s.%s
@@ -178,13 +177,12 @@ func (this *Applier) IterationIsComplete() (bool, error) {
 		compareWithIterationRangeStart,
 		compareWithRangeEnd,
 	)
-	log.Debugf(query)
 
 	moreRowsFound := false
 	err = sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 		moreRowsFound = true
 		return nil
-	}, args)
+	}, args...)
 	if err != nil {
 		return false, err
 	}
@@ -192,16 +190,24 @@ func (this *Applier) IterationIsComplete() (bool, error) {
 }
 
 func (this *Applier) CalculateNextIterationRangeEndValues() error {
-	query, err := sql.BuildUniqueKeyRangeEndPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.UniqueKey.Columns, this.migrationContext.ChunkSize)
-	if err != nil {
-		return err
-	}
 	startingFromValues := this.migrationContext.MigrationRangeMinValues
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
 	if this.migrationContext.MigrationIterationRangeMinValues != nil {
 		startingFromValues = this.migrationContext.MigrationIterationRangeMinValues
 	}
-	rows, err := this.db.Query(query, startingFromValues.AbstractValues()...)
+	query, explodedArgs, err := sql.BuildUniqueKeyRangeEndPreparedQuery(
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
+		this.migrationContext.UniqueKey.Columns,
+		startingFromValues.AbstractValues(),
+		this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
+		this.migrationContext.ChunkSize,
+		fmt.Sprintf("iteration:%d", this.migrationContext.Iteration),
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := this.db.Query(query, explodedArgs...)
 	if err != nil {
 		return err
 	}
@@ -213,12 +219,12 @@ func (this *Applier) CalculateNextIterationRangeEndValues() error {
 		}
 		iterationRangeEndFound = true
 	}
-	log.Debugf("5")
 	if !iterationRangeEndFound {
-		return fmt.Errorf("Cannot find iteration range end")
+		log.Debugf("Iteration complete: cannot find iteration end")
+		return nil
 	}
 	this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
-	log.Debugf("column values: %s", this.migrationContext.MigrationIterationRangeMaxValues)
+	log.Debugf("column values: %s; iteration: %d; chunk-size: %d", this.migrationContext.MigrationIterationRangeMaxValues, this.migrationContext.Iteration, this.migrationContext.ChunkSize)
 	return nil
 }
 
@@ -237,10 +243,6 @@ func (this *Applier) IterateTable(uniqueKey *sql.UniqueKey) error {
 	for rows.Next() {
 		if err = rows.Scan(columnValues.ValuesPointers...); err != nil {
 			return err
-		}
-		for _, val := range columnValues.BinaryValues() {
-			log.Debugf("%s", reflect.TypeOf(val))
-			log.Debugf("%s", string(val))
 		}
 	}
 	log.Debugf("column values: %s", columnValues)

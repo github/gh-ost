@@ -65,18 +65,14 @@ func (this *ColumnValues) AbstractValues() []interface{} {
 	return this.abstractValues
 }
 
-func (this *ColumnValues) BinaryValues() [][]uint8 {
-	result := make([][]uint8, len(this.abstractValues), len(this.abstractValues))
-	for i, val := range this.abstractValues {
-		result[i] = val.([]uint8)
-	}
-	return result
-}
-
 func (this *ColumnValues) String() string {
 	stringValues := []string{}
-	for _, val := range this.BinaryValues() {
-		stringValues = append(stringValues, string(val))
+	for _, val := range this.AbstractValues() {
+		if ints, ok := val.([]uint8); ok {
+			stringValues = append(stringValues, string(ints))
+		} else {
+			stringValues = append(stringValues, fmt.Sprintf("%+v", val))
+		}
 	}
 	return strings.Join(stringValues, ",")
 }
