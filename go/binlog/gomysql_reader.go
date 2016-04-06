@@ -7,11 +7,11 @@ package binlog
 
 import (
 	"fmt"
-	"os"
-	"reflect"
 	"strings"
 
 	"github.com/github/gh-osc/go/mysql"
+	"github.com/github/gh-osc/go/sql"
+
 	"github.com/outbrain/golib/log"
 	gomysql "github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/replication"
@@ -24,13 +24,17 @@ const (
 )
 
 type GoMySQLReader struct {
-	connectionConfig *mysql.ConnectionConfig
-	binlogSyncer     *replication.BinlogSyncer
+	connectionConfig   *mysql.ConnectionConfig
+	binlogSyncer       *replication.BinlogSyncer
+	tableMap           map[uint64]string
+	currentCoordinates mysql.BinlogCoordinates
 }
 
 func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *GoMySQLReader, err error) {
 	binlogReader = &GoMySQLReader{
-		connectionConfig: connectionConfig,
+		connectionConfig:   connectionConfig,
+		tableMap:           make(map[uint64]string),
+		currentCoordinates: mysql.BinlogCoordinates{},
 	}
 	binlogReader.binlogSyncer = replication.NewBinlogSyncer(serverId, "mysql")
 
@@ -59,6 +63,7 @@ func (this *GoMySQLReader) isDMLEvent(event *replication.BinlogEvent) bool {
 
 // ReadEntries will read binlog entries from parsed text output of `mysqlbinlog` utility
 func (this *GoMySQLReader) ReadEntries(logFile string, startPos uint64, stopPos uint64) (entries [](*BinlogEntry), err error) {
+	this.currentCoordinates.LogFile = logFile
 	// Start sync with sepcified binlog file and position
 	streamer, err := this.binlogSyncer.StartSync(gomysql.Position{logFile, uint32(startPos)})
 	if err != nil {
@@ -70,28 +75,52 @@ func (this *GoMySQLReader) ReadEntries(logFile string, startPos uint64, stopPos 
 		if err != nil {
 			return entries, err
 		}
-		if rowsEvent, ok := ev.Event.(*replication.RowsEvent); ok {
-			if true {
-				fmt.Println(ev.Header.EventType)
-				fmt.Println(len(rowsEvent.Rows))
-
-				for _, rows := range rowsEvent.Rows {
-					for j, d := range rows {
-						if _, ok := d.([]byte); ok {
-							fmt.Print(fmt.Sprintf("%d:%q, %+v\n", j, d, reflect.TypeOf(d)))
-						} else {
-							fmt.Print(fmt.Sprintf("%d:%#v, %+v\n", j, d, reflect.TypeOf(d)))
-						}
-					}
-					fmt.Println("---")
-				}
-			} else {
-				ev.Dump(os.Stdout)
+		this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
+		log.Infof("at: %+v", this.currentCoordinates)
+		if rotateEvent, ok := ev.Event.(*replication.RotateEvent); ok {
+			this.currentCoordinates.LogFile = string(rotateEvent.NextLogName)
+			log.Infof("rotate to next log name: %s", rotateEvent.NextLogName)
+		} else if tableMapEvent, ok := ev.Event.(*replication.TableMapEvent); ok {
+			// Actually not being used, since Table is available in RowsEvent.
+			// Keeping this here in case I'm wrong about this. Sometime in the near
+			// future I should remove this.
+			this.tableMap[tableMapEvent.TableID] = string(tableMapEvent.Table)
+		} else if rowsEvent, ok := ev.Event.(*replication.RowsEvent); ok {
+			dml := ToEventDML(ev.Header.EventType.String())
+			if dml == NotDML {
+				return entries, fmt.Errorf("Unknown DML type: %s", ev.Header.EventType.String())
 			}
-			// TODO : convert to entries
-			// need to parse multi-row entries
-			// insert & delete are just one row per db orw
-			// update: where-row_>values-row, repeating
+			for i, row := range rowsEvent.Rows {
+				if dml == UpdateDML && i%2 == 1 {
+					// An update has two rows (WHERE+SET)
+					// We do both at the same time
+					continue
+				}
+				binlogEntry := NewBinlogEntryAt(this.currentCoordinates)
+				binlogEntry.dmlEvent = NewBinlogDMLEvent(
+					string(rowsEvent.Table.Schema),
+					string(rowsEvent.Table.Table),
+					dml,
+				)
+				switch dml {
+				case InsertDML:
+					{
+						binlogEntry.dmlEvent.NewColumnValues = sql.ToColumnValues(row)
+						log.Debugf("insert: %+v", binlogEntry.dmlEvent.NewColumnValues)
+					}
+				case UpdateDML:
+					{
+						binlogEntry.dmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+						binlogEntry.dmlEvent.NewColumnValues = sql.ToColumnValues(rowsEvent.Rows[i+1])
+						log.Debugf("update: %+v where %+v", binlogEntry.dmlEvent.NewColumnValues, binlogEntry.dmlEvent.WhereColumnValues)
+					}
+				case DeleteDML:
+					{
+						binlogEntry.dmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+						log.Debugf("delete: %+v", binlogEntry.dmlEvent.WhereColumnValues)
+					}
+				}
+			}
 		}
 	}
 	log.Debugf("done")

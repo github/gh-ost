@@ -9,6 +9,7 @@ import (
 	gosql "database/sql"
 	"fmt"
 	"github.com/github/gh-osc/go/base"
+	"github.com/github/gh-osc/go/binlog"
 	"github.com/github/gh-osc/go/mysql"
 
 	"github.com/outbrain/golib/log"
@@ -19,7 +20,7 @@ type BinlogEventListener struct {
 	async        bool
 	databaseName string
 	tableName    string
-	onEvent      func(event *mysql.BinlogEvent) error
+	onDmlEvent   func(event *binlog.BinlogDMLEvent) error
 }
 
 // EventsStreamer reads data from binary logs and streams it on. It acts as a publisher,
@@ -41,7 +42,7 @@ func NewEventsStreamer() *EventsStreamer {
 }
 
 func (this *EventsStreamer) AddListener(
-	async bool, databaseName string, tableName string, onEvent func(event *mysql.BinlogEvent) error) (err error) {
+	async bool, databaseName string, tableName string, onDmlEvent func(event *binlog.BinlogDMLEvent) error) (err error) {
 	if databaseName == "" {
 		return fmt.Errorf("Empty database name in AddListener")
 	}
@@ -52,13 +53,13 @@ func (this *EventsStreamer) AddListener(
 		async:        async,
 		databaseName: databaseName,
 		tableName:    tableName,
-		onEvent:      onEvent,
+		onDmlEvent:   onDmlEvent,
 	}
 	this.listeners = append(this.listeners, listener)
 	return nil
 }
 
-func (this *EventsStreamer) notifyListeners(binlogEvent *mysql.BinlogEvent) {
+func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) {
 	for _, listener := range this.listeners {
 		if listener.databaseName != binlogEvent.DatabaseName {
 			continue
@@ -66,13 +67,13 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *mysql.BinlogEvent) {
 		if listener.tableName != binlogEvent.TableName {
 			continue
 		}
-		onEvent := listener.onEvent
+		onDmlEvent := listener.onDmlEvent
 		if listener.async {
 			go func() {
-				onEvent(binlogEvent)
+				onDmlEvent(binlogEvent)
 			}()
 		} else {
-			onEvent(binlogEvent)
+			onDmlEvent(binlogEvent)
 		}
 	}
 }

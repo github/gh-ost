@@ -5,27 +5,43 @@
 
 package binlog
 
+import (
+	"fmt"
+	"github.com/github/gh-osc/go/mysql"
+)
+
 // BinlogEntry describes an entry in the binary log
 type BinlogEntry struct {
-	LogPos            uint64
-	EndLogPos         uint64
-	StatementType     string // INSERT, UPDATE, DELETE
-	DatabaseName      string
-	TableName         string
-	PositionalColumns map[uint64]interface{}
+	Coordinates mysql.BinlogCoordinates
+	EndLogPos   uint64
+
+	dmlEvent *BinlogDMLEvent
 }
 
 // NewBinlogEntry creates an empty, ready to go BinlogEntry object
-func NewBinlogEntry() *BinlogEntry {
-	binlogEntry := &BinlogEntry{}
-	binlogEntry.PositionalColumns = make(map[uint64]interface{})
+func NewBinlogEntry(logFile string, logPos uint64) *BinlogEntry {
+	binlogEntry := &BinlogEntry{
+		Coordinates: mysql.BinlogCoordinates{LogFile: logFile, LogPos: int64(logPos)},
+	}
+	return binlogEntry
+}
+
+// NewBinlogEntry creates an empty, ready to go BinlogEntry object
+func NewBinlogEntryAt(coordinates mysql.BinlogCoordinates) *BinlogEntry {
+	binlogEntry := &BinlogEntry{
+		Coordinates: coordinates,
+	}
 	return binlogEntry
 }
 
 // Duplicate creates and returns a new binlog entry, with some of the attributes pre-assigned
 func (this *BinlogEntry) Duplicate() *BinlogEntry {
-	binlogEntry := NewBinlogEntry()
-	binlogEntry.LogPos = this.LogPos
+	binlogEntry := NewBinlogEntry(this.Coordinates.LogFile, uint64(this.Coordinates.LogPos))
 	binlogEntry.EndLogPos = this.EndLogPos
 	return binlogEntry
+}
+
+// Duplicate creates and returns a new binlog entry, with some of the attributes pre-assigned
+func (this *BinlogEntry) String() string {
+	return fmt.Sprintf("[BinlogEntry at %+v; dml:%+v]", this.Coordinates, this.dmlEvent)
 }

@@ -35,7 +35,7 @@ type UniqueKey struct {
 	HasNullable bool
 }
 
-// IsPrimary cehcks if this unique key is primary
+// IsPrimary checks if this unique key is primary
 func (this *UniqueKey) IsPrimary() bool {
 	return this.Name == "PRIMARY"
 }
@@ -55,6 +55,18 @@ func NewColumnValues(length int) *ColumnValues {
 		ValuesPointers: make([]interface{}, length),
 	}
 	for i := 0; i < length; i++ {
+		result.ValuesPointers[i] = &result.abstractValues[i]
+	}
+
+	return result
+}
+
+func ToColumnValues(abstractValues []interface{}) *ColumnValues {
+	result := &ColumnValues{
+		abstractValues: abstractValues,
+		ValuesPointers: make([]interface{}, len(abstractValues)),
+	}
+	for i := 0; i < len(abstractValues); i++ {
 		result.ValuesPointers[i] = &result.abstractValues[i]
 	}
 
