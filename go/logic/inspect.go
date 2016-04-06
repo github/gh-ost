@@ -65,7 +65,7 @@ func (this *Inspector) InitDBConnections() (err error) {
 	return nil
 }
 
-func (this *Inspector) InspectTables() (uniqueKeys [](*sql.UniqueKey), err error) {
+func (this *Inspector) InspectOriginalTable() (uniqueKeys [](*sql.UniqueKey), err error) {
 	uniqueKeys, err = this.getCandidateUniqueKeys(this.migrationContext.OriginalTableName)
 	if err != nil {
 		return uniqueKeys, err
@@ -132,7 +132,7 @@ func (this *Inspector) validateGrants() error {
 	return log.Errorf("User has insufficient privileges for migration.")
 }
 
-// validateConnection issues a simple can-connect to MySQL
+// validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
 	query := `select @@global.log_bin, @@global.log_slave_updates, @@global.binlog_format`
 	var hasBinaryLogs, logSlaveUpdates bool
@@ -258,6 +258,29 @@ func (this *Inspector) countTableRows() error {
 	this.migrationContext.UsedRowsEstimateMethod = base.CountRowsEstimate
 	log.Infof("Exact number of rows via COUNT: %d", this.migrationContext.RowsEstimate)
 	return nil
+}
+
+func (this *Inspector) getTableColumns(databaseName, tableName string) (columns sql.ColumnList, err error) {
+	query := fmt.Sprintf(`
+		show columns from %s.%s
+		`,
+		sql.EscapeName(databaseName),
+		sql.EscapeName(tableName),
+	)
+	err = sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		columns = append(columns, rowMap.GetString("Field"))
+		return nil
+	})
+	if err != nil {
+		return columns, err
+	}
+	if len(columns) == 0 {
+		return columns, log.Errorf("Found 0 columns on %s.%s. Bailing out",
+			sql.EscapeName(databaseName),
+			sql.EscapeName(tableName),
+		)
+	}
+	return columns, nil
 }
 
 // getCandidateUniqueKeys investigates a table and returns the list of unique keys

@@ -190,16 +190,15 @@ func (this *Applier) IterationIsComplete() (bool, error) {
 }
 
 func (this *Applier) CalculateNextIterationRangeEndValues() error {
-	startingFromValues := this.migrationContext.MigrationRangeMinValues
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
-	if this.migrationContext.MigrationIterationRangeMinValues != nil {
-		startingFromValues = this.migrationContext.MigrationIterationRangeMinValues
+	if this.migrationContext.MigrationIterationRangeMinValues == nil {
+		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
 	}
 	query, explodedArgs, err := sql.BuildUniqueKeyRangeEndPreparedQuery(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.UniqueKey.Columns,
-		startingFromValues.AbstractValues(),
+		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 		this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
 		this.migrationContext.ChunkSize,
 		fmt.Sprintf("iteration:%d", this.migrationContext.Iteration),
@@ -224,7 +223,40 @@ func (this *Applier) CalculateNextIterationRangeEndValues() error {
 		return nil
 	}
 	this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
-	log.Debugf("column values: %s; iteration: %d; chunk-size: %d", this.migrationContext.MigrationIterationRangeMaxValues, this.migrationContext.Iteration, this.migrationContext.ChunkSize)
+	log.Debugf(
+		"column values: [%s]..[%s]; iteration: %d; chunk-size: %d",
+		this.migrationContext.MigrationIterationRangeMinValues,
+		this.migrationContext.MigrationIterationRangeMaxValues,
+		this.migrationContext.Iteration,
+		this.migrationContext.ChunkSize,
+	)
+	return nil
+}
+
+func (this *Applier) ApplyIterationInsertQuery() error {
+	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
+		this.migrationContext.GetGhostTableName(),
+		this.migrationContext.UniqueKey.Columns,
+		this.migrationContext.UniqueKey.Name,
+		this.migrationContext.UniqueKey.Columns,
+		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
+		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
+		this.migrationContext.Iteration == 0,
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := sqlutils.Exec(this.db, query, explodedArgs...); err != nil {
+		return err
+	}
+	log.Debugf(
+		"Issued INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
+		this.migrationContext.MigrationIterationRangeMinValues,
+		this.migrationContext.MigrationIterationRangeMaxValues,
+		this.migrationContext.Iteration,
+		this.migrationContext.ChunkSize)
 	return nil
 }
 

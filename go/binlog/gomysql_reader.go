@@ -78,9 +78,9 @@ func (this *GoMySQLReader) ReadEntries(logFile string, startPos uint64, stopPos 
 				for _, rows := range rowsEvent.Rows {
 					for j, d := range rows {
 						if _, ok := d.([]byte); ok {
-							fmt.Print(fmt.Sprintf("yesbin %d:%q, %+v\n", j, d, reflect.TypeOf(d)))
+							fmt.Print(fmt.Sprintf("%d:%q, %+v\n", j, d, reflect.TypeOf(d)))
 						} else {
-							fmt.Print(fmt.Sprintf("notbin %d:%#v, %+v\n", j, d, reflect.TypeOf(d)))
+							fmt.Print(fmt.Sprintf("%d:%#v, %+v\n", j, d, reflect.TypeOf(d)))
 						}
 					}
 					fmt.Println("---")
