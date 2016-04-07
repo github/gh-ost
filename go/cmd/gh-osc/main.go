@@ -11,7 +11,6 @@ import (
 	"os"
 
 	"github.com/github/gh-osc/go/base"
-	"github.com/github/gh-osc/go/binlog"
 	"github.com/github/gh-osc/go/logic"
 	"github.com/outbrain/golib/log"
 )
@@ -79,17 +78,18 @@ func main() {
 	log.Info("starting gh-osc")
 
 	if *internalExperiment {
-		log.Debug("starting experiment")
-		var binlogReader binlog.BinlogReader
-		var err error
+		log.Debug("starting experiment with %+v", *binlogFile)
 
 		//binlogReader = binlog.NewMySQLBinlogReader(*mysqlBasedir, *mysqlDatadir)
-		binlogReader, err = binlog.NewGoMySQLReader(migrationContext.InspectorConnectionConfig)
-		if err != nil {
-			log.Fatale(err)
-		}
-		binlogReader.ReadEntries(*binlogFile, 0, 0)
-		return
+		// binlogReader, err := binlog.NewGoMySQLReader(migrationContext.InspectorConnectionConfig)
+		// if err != nil {
+		// 	log.Fatale(err)
+		// }
+		// if err := binlogReader.ConnectBinlogStreamer(mysql.BinlogCoordinates{LogFile: *binlogFile, LogPos: 0}); err != nil {
+		// 	log.Fatale(err)
+		// }
+		// binlogReader.StreamEvents(func() bool { return false })
+		// return
 	}
 	migrator := logic.NewMigrator()
 	err := migrator.Migrate()

@@ -7,7 +7,6 @@ package binlog
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/github/gh-osc/go/mysql"
 	"github.com/github/gh-osc/go/sql"
@@ -26,6 +25,7 @@ const (
 type GoMySQLReader struct {
 	connectionConfig   *mysql.ConnectionConfig
 	binlogSyncer       *replication.BinlogSyncer
+	binlogStreamer     *replication.BinlogStreamer
 	tableMap           map[uint64]string
 	currentCoordinates mysql.BinlogCoordinates
 }
@@ -35,6 +35,7 @@ func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *G
 		connectionConfig:   connectionConfig,
 		tableMap:           make(map[uint64]string),
 		currentCoordinates: mysql.BinlogCoordinates{},
+		binlogStreamer:     nil,
 	}
 	binlogReader.binlogSyncer = replication.NewBinlogSyncer(serverId, "mysql")
 
@@ -47,18 +48,77 @@ func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *G
 	return binlogReader, err
 }
 
-func (this *GoMySQLReader) isDMLEvent(event *replication.BinlogEvent) bool {
-	eventType := event.Header.EventType.String()
-	if strings.HasPrefix(eventType, "WriteRows") {
-		return true
+// ConnectBinlogStreamer
+func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordinates) (err error) {
+	this.currentCoordinates = coordinates
+	// Start sync with sepcified binlog file and position
+	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{coordinates.LogFile, uint32(coordinates.LogPos)})
+
+	return err
+}
+
+// StreamEvents
+func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChannel chan<- *BinlogEntry) error {
+	for {
+		if canStopStreaming() {
+			break
+		}
+		ev, err := this.binlogStreamer.GetEvent()
+		if err != nil {
+			return err
+		}
+		this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
+		if rotateEvent, ok := ev.Event.(*replication.RotateEvent); ok {
+			this.currentCoordinates.LogFile = string(rotateEvent.NextLogName)
+			log.Infof("rotate to next log name: %s", rotateEvent.NextLogName)
+		} else if tableMapEvent, ok := ev.Event.(*replication.TableMapEvent); ok {
+			// Actually not being used, since Table is available in RowsEvent.
+			// Keeping this here in case I'm wrong about this. Sometime in the near
+			// future I should remove this.
+			this.tableMap[tableMapEvent.TableID] = string(tableMapEvent.Table)
+		} else if rowsEvent, ok := ev.Event.(*replication.RowsEvent); ok {
+			dml := ToEventDML(ev.Header.EventType.String())
+			if dml == NotDML {
+				return fmt.Errorf("Unknown DML type: %s", ev.Header.EventType.String())
+			}
+			for i, row := range rowsEvent.Rows {
+				if dml == UpdateDML && i%2 == 1 {
+					// An update has two rows (WHERE+SET)
+					// We do both at the same time
+					continue
+				}
+				binlogEntry := NewBinlogEntryAt(this.currentCoordinates)
+				binlogEntry.DmlEvent = NewBinlogDMLEvent(
+					string(rowsEvent.Table.Schema),
+					string(rowsEvent.Table.Table),
+					dml,
+				)
+				switch dml {
+				case InsertDML:
+					{
+						binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(row)
+					}
+				case UpdateDML:
+					{
+						binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+						binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(rowsEvent.Rows[i+1])
+					}
+				case DeleteDML:
+					{
+						binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+					}
+				}
+				// The channel will do the throttling. Whoever is reding from the channel
+				// decides whether action is taken sycnhronously (meaning we wait before
+				// next iteration) or asynchronously (we keep pushing more events)
+				// In reality, reads will be synchronous
+				entriesChannel <- binlogEntry
+			}
+		}
 	}
-	if strings.HasPrefix(eventType, "UpdateRows") {
-		return true
-	}
-	if strings.HasPrefix(eventType, "DeleteRows") {
-		return true
-	}
-	return false
+	log.Debugf("done streaming events")
+
+	return nil
 }
 
 // ReadEntries will read binlog entries from parsed text output of `mysqlbinlog` utility
@@ -76,7 +136,6 @@ func (this *GoMySQLReader) ReadEntries(logFile string, startPos uint64, stopPos 
 			return entries, err
 		}
 		this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
-		log.Infof("at: %+v", this.currentCoordinates)
 		if rotateEvent, ok := ev.Event.(*replication.RotateEvent); ok {
 			this.currentCoordinates.LogFile = string(rotateEvent.NextLogName)
 			log.Infof("rotate to next log name: %s", rotateEvent.NextLogName)
@@ -97,7 +156,7 @@ func (this *GoMySQLReader) ReadEntries(logFile string, startPos uint64, stopPos 
 					continue
 				}
 				binlogEntry := NewBinlogEntryAt(this.currentCoordinates)
-				binlogEntry.dmlEvent = NewBinlogDMLEvent(
+				binlogEntry.DmlEvent = NewBinlogDMLEvent(
 					string(rowsEvent.Table.Schema),
 					string(rowsEvent.Table.Table),
 					dml,
@@ -105,19 +164,16 @@ func (this *GoMySQLReader) ReadEntries(logFile string, startPos uint64, stopPos 
 				switch dml {
 				case InsertDML:
 					{
-						binlogEntry.dmlEvent.NewColumnValues = sql.ToColumnValues(row)
-						log.Debugf("insert: %+v", binlogEntry.dmlEvent.NewColumnValues)
+						binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(row)
 					}
 				case UpdateDML:
 					{
-						binlogEntry.dmlEvent.WhereColumnValues = sql.ToColumnValues(row)
-						binlogEntry.dmlEvent.NewColumnValues = sql.ToColumnValues(rowsEvent.Rows[i+1])
-						log.Debugf("update: %+v where %+v", binlogEntry.dmlEvent.NewColumnValues, binlogEntry.dmlEvent.WhereColumnValues)
+						binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+						binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(rowsEvent.Rows[i+1])
 					}
 				case DeleteDML:
 					{
-						binlogEntry.dmlEvent.WhereColumnValues = sql.ToColumnValues(row)
-						log.Debugf("delete: %+v", binlogEntry.dmlEvent.WhereColumnValues)
+						binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
 					}
 				}
 			}

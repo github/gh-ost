@@ -8,6 +8,8 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"strings"
+
 	"github.com/github/gh-osc/go/base"
 	"github.com/github/gh-osc/go/binlog"
 	"github.com/github/gh-osc/go/mysql"
@@ -23,6 +25,10 @@ type BinlogEventListener struct {
 	onDmlEvent   func(event *binlog.BinlogDMLEvent) error
 }
 
+const (
+	EventsChannelBufferSize = 1
+)
+
 // EventsStreamer reads data from binary logs and streams it on. It acts as a publisher,
 // and interested parties may subscribe for per-table events.
 type EventsStreamer struct {
@@ -31,6 +37,8 @@ type EventsStreamer struct {
 	migrationContext      *base.MigrationContext
 	nextBinlogCoordinates *mysql.BinlogCoordinates
 	listeners             [](*BinlogEventListener)
+	eventsChannel         chan *binlog.BinlogEntry
+	binlogReader          binlog.BinlogReader
 }
 
 func NewEventsStreamer() *EventsStreamer {
@@ -38,6 +46,7 @@ func NewEventsStreamer() *EventsStreamer {
 		connectionConfig: base.GetMigrationContext().InspectorConnectionConfig,
 		migrationContext: base.GetMigrationContext(),
 		listeners:        [](*BinlogEventListener){},
+		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
 	}
 }
 
@@ -61,10 +70,10 @@ func (this *EventsStreamer) AddListener(
 
 func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) {
 	for _, listener := range this.listeners {
-		if listener.databaseName != binlogEvent.DatabaseName {
+		if strings.ToLower(listener.databaseName) != strings.ToLower(binlogEvent.DatabaseName) {
 			continue
 		}
-		if listener.tableName != binlogEvent.TableName {
+		if strings.ToLower(listener.tableName) != strings.ToLower(binlogEvent.TableName) {
 			continue
 		}
 		onDmlEvent := listener.onDmlEvent
@@ -89,6 +98,15 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if err := this.readCurrentBinlogCoordinates(); err != nil {
 		return err
 	}
+	goMySQLReader, err := binlog.NewGoMySQLReader(this.migrationContext.InspectorConnectionConfig)
+	if err != nil {
+		return err
+	}
+	if err := goMySQLReader.ConnectBinlogStreamer(*this.nextBinlogCoordinates); err != nil {
+		return err
+	}
+	this.binlogReader = goMySQLReader
+
 	return nil
 }
 
@@ -128,4 +146,17 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	}
 	log.Debugf("Streamer binlog coordinates: %+v", *this.nextBinlogCoordinates)
 	return nil
+}
+
+// StreamEvents will begin streaming events. It will be blocking, so should be
+// executed by a goroutine
+func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
+	go func() {
+		for binlogEntry := range this.eventsChannel {
+			if binlogEntry.DmlEvent != nil {
+				this.notifyListeners(binlogEntry.DmlEvent)
+			}
+		}
+	}()
+	return this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel)
 }

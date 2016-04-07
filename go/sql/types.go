@@ -77,14 +77,18 @@ func (this *ColumnValues) AbstractValues() []interface{} {
 	return this.abstractValues
 }
 
+func (this *ColumnValues) StringColumn(index int) string {
+	val := this.AbstractValues()[index]
+	if ints, ok := val.([]uint8); ok {
+		return string(ints)
+	}
+	return fmt.Sprintf("%+v", val)
+}
+
 func (this *ColumnValues) String() string {
 	stringValues := []string{}
-	for _, val := range this.AbstractValues() {
-		if ints, ok := val.([]uint8); ok {
-			stringValues = append(stringValues, string(ints))
-		} else {
-			stringValues = append(stringValues, fmt.Sprintf("%+v", val))
-		}
+	for i := range this.AbstractValues() {
+		stringValues = append(stringValues, this.StringColumn(i))
 	}
 	return strings.Join(stringValues, ",")
 }

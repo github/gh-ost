@@ -15,7 +15,7 @@ type BinlogEntry struct {
 	Coordinates mysql.BinlogCoordinates
 	EndLogPos   uint64
 
-	dmlEvent *BinlogDMLEvent
+	DmlEvent *BinlogDMLEvent
 }
 
 // NewBinlogEntry creates an empty, ready to go BinlogEntry object
@@ -43,5 +43,5 @@ func (this *BinlogEntry) Duplicate() *BinlogEntry {
 
 // Duplicate creates and returns a new binlog entry, with some of the attributes pre-assigned
 func (this *BinlogEntry) String() string {
-	return fmt.Sprintf("[BinlogEntry at %+v; dml:%+v]", this.Coordinates, this.dmlEvent)
+	return fmt.Sprintf("[BinlogEntry at %+v; dml:%+v]", this.Coordinates, this.DmlEvent)
 }

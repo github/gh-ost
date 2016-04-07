@@ -103,7 +103,7 @@ func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEnt
 			return InvalidState, binlogEntry, fmt.Errorf("Expected startLogPos %+v to equal previous endLogPos %+v", startLogPos, previousEndLogPos)
 		}
 		nextBinlogEntry = binlogEntry
-		if binlogEntry.Coordinates.LogPos != 0 && binlogEntry.dmlEvent != nil {
+		if binlogEntry.Coordinates.LogPos != 0 && binlogEntry.DmlEvent != nil {
 			// Current entry is already a true entry, with startpos and with statement
 			nextBinlogEntry = NewBinlogEntry(binlogEntry.Coordinates.LogFile, startLogPos)
 		}
@@ -112,11 +112,11 @@ func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEnt
 
 	onStatementEntry := func(submatch []string) (BinlogEntryState, *BinlogEntry, error) {
 		nextBinlogEntry = binlogEntry
-		if binlogEntry.Coordinates.LogPos != 0 && binlogEntry.dmlEvent != nil {
+		if binlogEntry.Coordinates.LogPos != 0 && binlogEntry.DmlEvent != nil {
 			// Current entry is already a true entry, with startpos and with statement
 			nextBinlogEntry = binlogEntry.Duplicate()
 		}
-		nextBinlogEntry.dmlEvent = NewBinlogDMLEvent(submatch[2], submatch[3], ToEventDML(submatch[1]))
+		nextBinlogEntry.DmlEvent = NewBinlogDMLEvent(submatch[2], submatch[3], ToEventDML(submatch[1]))
 
 		return ExpectTokenState, nextBinlogEntry, nil
 	}
@@ -126,7 +126,7 @@ func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEnt
 	// onPositionalColumn := func(submatch []string) (BinlogEntryState, *BinlogEntry, error) {
 	// 	columnIndex, _ := strconv.ParseUint(submatch[1], 10, 64)
 	// 	if _, found := binlogEntry.PositionalColumns[columnIndex]; found {
-	// 		return InvalidState, binlogEntry, fmt.Errorf("Positional column %+v found more than once in %+v, statement=%+v", columnIndex, binlogEntry.LogPos, binlogEntry.dmlEvent.DML)
+	// 		return InvalidState, binlogEntry, fmt.Errorf("Positional column %+v found more than once in %+v, statement=%+v", columnIndex, binlogEntry.LogPos, binlogEntry.DmlEvent.DML)
 	// 	}
 	// 	columnValue := submatch[2]
 	// 	columnValue = strings.TrimPrefix(columnValue, "'")
@@ -186,12 +186,12 @@ func parseEntries(scanner *bufio.Scanner, logFile string) (entries [](*BinlogEnt
 		if binlogEntry.Coordinates.LogPos == 0 {
 			return
 		}
-		if binlogEntry.dmlEvent == nil {
+		if binlogEntry.DmlEvent == nil {
 			return
 		}
 		entries = append(entries, binlogEntry)
 		log.Debugf("entry: %+v", *binlogEntry)
-		fmt.Println(fmt.Sprintf("%s `%s`.`%s`", binlogEntry.dmlEvent.DML, binlogEntry.dmlEvent.DatabaseName, binlogEntry.dmlEvent.TableName))
+		fmt.Println(fmt.Sprintf("%s `%s`.`%s`", binlogEntry.DmlEvent.DML, binlogEntry.DmlEvent.DatabaseName, binlogEntry.DmlEvent.TableName))
 	}
 	for scanner.Scan() {
 		switch state {

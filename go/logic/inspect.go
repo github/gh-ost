@@ -47,6 +47,10 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateBinlogs(); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (this *Inspector) ValidateOriginalTable() (err error) {
 	if err := this.validateTable(); err != nil {
 		return err
 	}

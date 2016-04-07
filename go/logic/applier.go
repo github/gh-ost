@@ -8,12 +8,18 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"time"
+
 	"github.com/github/gh-osc/go/base"
 	"github.com/github/gh-osc/go/mysql"
 	"github.com/github/gh-osc/go/sql"
 
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
+)
+
+const (
+	heartbeatIntervalSeconds = 1
 )
 
 // Applier reads data from the read-MySQL-server (typically a replica, but can be the master)
@@ -71,7 +77,7 @@ func (this *Applier) CreateGhostTable() error {
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
-	log.Infof("Table created")
+	log.Infof("Ghost table created")
 	return nil
 }
 
@@ -90,8 +96,111 @@ func (this *Applier) AlterGhost() error {
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
-	log.Infof("Table altered")
+	log.Infof("Ghost table altered")
 	return nil
+}
+
+// CreateChangelogTable creates the changelog table on the master
+func (this *Applier) CreateChangelogTable() error {
+	query := fmt.Sprintf(`create /* gh-osc */ table %s.%s (
+			id int auto_increment,
+			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			hint varchar(64) charset ascii not null,
+			value varchar(64) charset ascii not null,
+			primary key(id),
+			unique key hint_uidx(hint)
+		) auto_increment=2
+		`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+	log.Infof("Creating changelog table %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	log.Infof("Changelog table created")
+	return nil
+}
+
+// DropChangelogTable drops the changelog table on the master
+func (this *Applier) DropChangelogTable() error {
+	query := fmt.Sprintf(`drop /* gh-osc */ table if exists %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+	log.Infof("Droppping changelog table %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	log.Infof("Changelog table dropped")
+	return nil
+}
+
+// WriteChangelog writes a value to the changelog table.
+// It returns the hint as given, for convenience
+func (this *Applier) WriteChangelog(hint, value string) (string, error) {
+	query := fmt.Sprintf(`
+			insert /* gh-osc */ into %s.%s
+				(id, hint, value)
+			values
+				(NULL, ?, ?)
+			on duplicate key update
+				last_update=NOW(),
+				value=VALUES(value)
+		`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+	_, err := sqlutils.Exec(this.db, query, hint, value)
+	return hint, err
+}
+
+// InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
+// This is done asynchronously
+func (this *Applier) InitiateHeartbeat() {
+	go func() {
+		numSuccessiveFailures := 0
+		query := fmt.Sprintf(`
+			insert /* gh-osc */ into %s.%s
+				(id, hint, value)
+			values
+				(1, 'heartbeat', ?)
+			on duplicate key update
+				last_update=NOW(),
+				value=VALUES(value)
+		`,
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+		)
+		injectHeartbeat := func() error {
+			if _, err := sqlutils.ExecNoPrepare(this.db, query, time.Now().Format(time.RFC3339)); err != nil {
+				numSuccessiveFailures++
+				if numSuccessiveFailures > this.migrationContext.MaxRetries() {
+					return log.Errore(err)
+				}
+			} else {
+				numSuccessiveFailures = 0
+			}
+			return nil
+		}
+		injectHeartbeat()
+
+		heartbeatTick := time.Tick(time.Duration(heartbeatIntervalSeconds) * time.Second)
+		for range heartbeatTick {
+			// Generally speaking, we would issue a goroutine, but I'd actually rather
+			// have this blocked rather than spam the master in the event something
+			// goes wrong
+			if err := injectHeartbeat(); err != nil {
+				return
+			}
+		}
+	}()
 }
 
 // ReadMigrationMinValues
