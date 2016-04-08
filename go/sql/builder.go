@@ -128,7 +128,7 @@ func BuildRangePreparedComparison(columns []string, args []interface{}, comparis
 	return BuildRangeComparison(columns, values, args, comparisonSign)
 }
 
-func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool) (result string, explodedArgs []interface{}, err error) {
+func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
 	if len(sharedColumns) == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
@@ -155,28 +155,32 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		return "", explodedArgs, err
 	}
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+	transactionalClause := ""
+	if transactionalTable {
+		transactionalClause = "lock in share mode"
+	}
 	result = fmt.Sprintf(`
       insert /* gh-osc %s.%s */ ignore into %s.%s (%s)
       (select %s from %s.%s force index (%s)
-        where (%s and %s)
+        where (%s and %s) %s
       )
     `, databaseName, originalTableName, databaseName, ghostTableName, sharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
-		rangeStartComparison, rangeEndComparison)
+		rangeStartComparison, rangeEndComparison, transactionalClause)
 	return result, explodedArgs, nil
 }
 
-func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool) (result string, explodedArgs []interface{}, err error) {
+func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
 	rangeStartValues := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
 	rangeEndValues := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
 	for i := range uniqueKeyColumns {
 		rangeStartValues[i] = "?"
 		rangeEndValues[i] = "?"
 	}
-	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues)
+	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
 }
 
-func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int, hint string) (result string, explodedArgs []interface{}, err error) {
+func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, hint string) (result string, explodedArgs []interface{}, err error) {
 	if len(uniqueKeyColumns) == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}

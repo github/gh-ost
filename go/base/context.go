@@ -7,6 +7,8 @@ package base
 
 import (
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/github/gh-osc/go/mysql"
@@ -36,7 +38,7 @@ type MigrationContext struct {
 	CountTableRows                      bool
 	RowsEstimate                        int64
 	UsedRowsEstimateMethod              RowsEstimateMethod
-	ChunkSize                           int
+	ChunkSize                           int64
 	OriginalBinlogFormat                string
 	OriginalBinlogRowImage              string
 	AllowedRunningOnMaster              bool
@@ -52,6 +54,8 @@ type MigrationContext struct {
 	RowCopyStartTime                    time.Time
 	CurrentLag                          int64
 	MaxLagMillisecondsThrottleThreshold int64
+	ThrottleFlagFile                    string
+	TotalRowsCopied                     int64
 
 	IsThrottled      func() bool
 	CanStopStreaming func() bool
@@ -106,4 +110,34 @@ func (this *MigrationContext) HasMigrationRange() bool {
 
 func (this *MigrationContext) MaxRetries() int {
 	return maxRetries
+}
+
+func (this *MigrationContext) IsTransactionalTable() bool {
+	switch strings.ToLower(this.TableEngine) {
+	case "innodb":
+		{
+			return true
+		}
+	case "tokudb":
+		{
+			return true
+		}
+	}
+	return false
+}
+
+// ElapsedTime returns time since very beginning of the process
+func (this *MigrationContext) ElapsedTime() time.Duration {
+	return time.Now().Sub(this.StartTime)
+}
+
+// ElapsedRowCopyTime returns time since starting to copy chunks of rows
+func (this *MigrationContext) ElapsedRowCopyTime() time.Duration {
+	return time.Now().Sub(this.RowCopyStartTime)
+}
+
+// GetTotalRowsCopied returns the accurate number of rows being copied (affected)
+// This is not exactly the same as the rows being iterated via chunks, but potentially close enough
+func (this *MigrationContext) GetTotalRowsCopied() int64 {
+	return atomic.LoadInt64(&this.TotalRowsCopied)
 }

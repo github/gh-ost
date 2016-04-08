@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/github/gh-osc/go/base"
@@ -255,9 +256,9 @@ func (this *Applier) ReadMigrationRangeValues() error {
 	return nil
 }
 
-// IterationIsComplete lets us know when the copy-iteration phase is complete, i.e.
+// __unused_IterationIsComplete lets us know when the copy-iteration phase is complete, i.e.
 // we've exhausted all rows
-func (this *Applier) IterationIsComplete() (bool, error) {
+func (this *Applier) __unused_IterationIsComplete() (bool, error) {
 	if !this.migrationContext.HasMigrationRange() {
 		return false, nil
 	}
@@ -298,7 +299,11 @@ func (this *Applier) IterationIsComplete() (bool, error) {
 	return !moreRowsFound, nil
 }
 
-func (this *Applier) CalculateNextIterationRangeEndValues() error {
+// CalculateNextIterationRangeEndValues reads the next-iteration-range-end unique key values,
+// which will be used for copying the next chunk of rows. Ir returns "false" if there is
+// no further chunk to work through, i.e. we're past the last chunk and are done with
+// itrating the range (and this done with copying row chunks)
+func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
 		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
@@ -313,23 +318,22 @@ func (this *Applier) CalculateNextIterationRangeEndValues() error {
 		fmt.Sprintf("iteration:%d", this.migrationContext.Iteration),
 	)
 	if err != nil {
-		return err
+		return hasFurtherRange, err
 	}
 	rows, err := this.db.Query(query, explodedArgs...)
 	if err != nil {
-		return err
+		return hasFurtherRange, err
 	}
 	iterationRangeMaxValues := sql.NewColumnValues(len(this.migrationContext.UniqueKey.Columns))
-	iterationRangeEndFound := false
 	for rows.Next() {
 		if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
-			return err
+			return hasFurtherRange, err
 		}
-		iterationRangeEndFound = true
+		hasFurtherRange = true
 	}
-	if !iterationRangeEndFound {
+	if !hasFurtherRange {
 		log.Debugf("Iteration complete: cannot find iteration end")
-		return nil
+		return hasFurtherRange, nil
 	}
 	this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
 	log.Debugf(
@@ -339,10 +343,13 @@ func (this *Applier) CalculateNextIterationRangeEndValues() error {
 		this.migrationContext.Iteration,
 		this.migrationContext.ChunkSize,
 	)
-	return nil
+	return hasFurtherRange, nil
 }
 
-func (this *Applier) ApplyIterationInsertQuery() error {
+func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+	startTime := time.Now()
+	chunkSize = atomic.LoadInt64(&this.migrationContext.ChunkSize)
+
 	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
@@ -353,44 +360,55 @@ func (this *Applier) ApplyIterationInsertQuery() error {
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
 		this.migrationContext.Iteration == 0,
+		this.migrationContext.IsTransactionalTable(),
 	)
 	if err != nil {
-		return err
+		return chunkSize, rowsAffected, duration, err
 	}
-	if _, err := sqlutils.Exec(this.db, query, explodedArgs...); err != nil {
-		return err
+	sqlResult, err := sqlutils.Exec(this.db, query, explodedArgs...)
+	if err != nil {
+		return chunkSize, rowsAffected, duration, err
 	}
+	rowsAffected, _ = sqlResult.RowsAffected()
+	duration = time.Now().Sub(startTime)
+	this.WriteChangelog(
+		fmt.Sprintf("copy iteration %d", this.migrationContext.Iteration),
+		fmt.Sprintf("chunk: %d; affected: %d; duration: %d", chunkSize, rowsAffected, duration),
+	)
 	log.Debugf(
 		"Issued INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
 		this.migrationContext.MigrationIterationRangeMinValues,
 		this.migrationContext.MigrationIterationRangeMaxValues,
 		this.migrationContext.Iteration,
-		this.migrationContext.ChunkSize)
+		chunkSize)
+	return chunkSize, rowsAffected, duration, nil
+}
+
+// LockTables
+func (this *Applier) LockTables() error {
+	query := fmt.Sprintf(`lock /* gh-osc */ tables %s.%s write, %s.%s write, %s.%s write`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+	log.Infof("Locking tables")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	log.Infof("Tables locked")
 	return nil
 }
 
-// IterateTable
-func (this *Applier) IterateTable(uniqueKey *sql.UniqueKey) error {
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns)
-	if err != nil {
+// UnlockTables
+func (this *Applier) UnlockTables() error {
+	query := `unlock /* gh-osc */ tables`
+	log.Infof("Unlocking tables")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
-	columnValues := sql.NewColumnValues(len(uniqueKey.Columns))
-
-	rows, err := this.db.Query(query)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		if err = rows.Scan(columnValues.ValuesPointers...); err != nil {
-			return err
-		}
-	}
-	log.Debugf("column values: %s", columnValues)
-	query = `insert into test.sample_data_dump (category, ts) values (?, ?)`
-	if _, err := sqlutils.Exec(this.db, query, columnValues.AbstractValues()...); err != nil {
-		return err
-	}
-
+	log.Infof("Tables unlocked")
 	return nil
 }
