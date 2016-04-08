@@ -399,16 +399,14 @@ func (this *Migrator) iterateChunks() error {
 }
 
 func (this *Migrator) executeWriteFuncs() error {
+	onStartThrottling := func() {
+		log.Debugf("throttling writes")
+	}
+	onEndThrottling := func() {
+		log.Debugf("done throttling writes")
+	}
 	for {
-		this.throttle(
-			func() {
-				log.Debugf("throttling writes")
-			},
-			nil,
-			func() {
-				log.Debugf("done throttling writes")
-			},
-		)
+		this.throttle(onStartThrottling, nil, onEndThrottling)
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
 		select {
