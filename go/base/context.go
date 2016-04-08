@@ -7,6 +7,7 @@ package base
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -44,20 +45,29 @@ type MigrationContext struct {
 	AllowedRunningOnMaster              bool
 	InspectorConnectionConfig           *mysql.ConnectionConfig
 	MasterConnectionConfig              *mysql.ConnectionConfig
-	MigrationRangeMinValues             *sql.ColumnValues
-	MigrationRangeMaxValues             *sql.ColumnValues
-	Iteration                           int64
-	MigrationIterationRangeMinValues    *sql.ColumnValues
-	MigrationIterationRangeMaxValues    *sql.ColumnValues
-	UniqueKey                           *sql.UniqueKey
 	StartTime                           time.Time
 	RowCopyStartTime                    time.Time
 	CurrentLag                          int64
 	MaxLagMillisecondsThrottleThreshold int64
 	ThrottleFlagFile                    string
 	TotalRowsCopied                     int64
+	isThrottled                         int64
+	ThrottleReason                      string
+	MaxLoad                             map[string]int64
 
-	IsThrottled      func() bool
+	OriginalTableColumns             sql.ColumnList
+	OriginalTableColumnsMap          sql.ColumnsMap
+	OriginalTableUniqueKeys          [](*sql.UniqueKey)
+	GhostTableColumns                sql.ColumnList
+	GhostTableUniqueKeys             [](*sql.UniqueKey)
+	UniqueKey                        *sql.UniqueKey
+	SharedColumns                    sql.ColumnList
+	MigrationRangeMinValues          *sql.ColumnValues
+	MigrationRangeMaxValues          *sql.ColumnValues
+	Iteration                        int64
+	MigrationIterationRangeMinValues *sql.ColumnValues
+	MigrationIterationRangeMaxValues *sql.ColumnValues
+
 	CanStopStreaming func() bool
 }
 
@@ -73,6 +83,7 @@ func newMigrationContext() *MigrationContext {
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
 		MasterConnectionConfig:              mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1000,
+		MaxLoad: make(map[string]int64),
 	}
 }
 
@@ -140,4 +151,42 @@ func (this *MigrationContext) ElapsedRowCopyTime() time.Duration {
 // This is not exactly the same as the rows being iterated via chunks, but potentially close enough
 func (this *MigrationContext) GetTotalRowsCopied() int64 {
 	return atomic.LoadInt64(&this.TotalRowsCopied)
+}
+
+func (this *MigrationContext) GetIteration() int64 {
+	return atomic.LoadInt64(&this.Iteration)
+}
+
+func (this *MigrationContext) SetThrottled(throttle bool) {
+	if throttle {
+		atomic.StoreInt64(&this.isThrottled, 1)
+	} else {
+		atomic.StoreInt64(&this.isThrottled, 0)
+	}
+}
+
+func (this *MigrationContext) IsThrottled() bool {
+	return atomic.LoadInt64(&this.isThrottled) != 0
+}
+
+func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
+	if maxLoadList == "" {
+		return nil
+	}
+	maxLoadConditions := strings.Split(maxLoadList, ",")
+	for _, maxLoadCondition := range maxLoadConditions {
+		maxLoadTokens := strings.Split(maxLoadCondition, "=")
+		if len(maxLoadTokens) != 2 {
+			return fmt.Errorf("Error parsing max-load condition: %s", maxLoadCondition)
+		}
+		if maxLoadTokens[0] == "" {
+			return fmt.Errorf("Error parsing status variable in max-load condition: %s", maxLoadCondition)
+		}
+		if n, err := strconv.ParseInt(maxLoadTokens[1], 10, 0); err != nil {
+			return fmt.Errorf("Error parsing numeric value in max-load condition: %s", maxLoadCondition)
+		} else {
+			this.MaxLoad[maxLoadTokens[0]] = n
+		}
+	}
+	return nil
 }

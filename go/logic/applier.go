@@ -104,10 +104,10 @@ func (this *Applier) AlterGhost() error {
 // CreateChangelogTable creates the changelog table on the master
 func (this *Applier) CreateChangelogTable() error {
 	query := fmt.Sprintf(`create /* gh-osc */ table %s.%s (
-			id int auto_increment,
+			id bigint auto_increment,
 			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			hint varchar(64) charset ascii not null,
-			value varchar(64) charset ascii not null,
+			value varchar(255) charset ascii not null,
 			primary key(id),
 			unique key hint_uidx(hint)
 		) auto_increment=2
@@ -160,6 +160,12 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 	)
 	_, err := sqlutils.Exec(this.db, query, hint, value)
 	return hint, err
+}
+
+func (this *Applier) WriteChangelogState(value string) (string, error) {
+	hint := "state"
+	this.WriteChangelog(hint, value)
+	return this.WriteChangelog(fmt.Sprintf("%s at %d", hint, time.Now().UnixNano()), value)
 }
 
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
@@ -315,7 +321,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 		this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
 		this.migrationContext.ChunkSize,
-		fmt.Sprintf("iteration:%d", this.migrationContext.Iteration),
+		fmt.Sprintf("iteration:%d", this.migrationContext.GetIteration()),
 	)
 	if err != nil {
 		return hasFurtherRange, err
@@ -336,13 +342,13 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		return hasFurtherRange, nil
 	}
 	this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
-	log.Debugf(
-		"column values: [%s]..[%s]; iteration: %d; chunk-size: %d",
-		this.migrationContext.MigrationIterationRangeMinValues,
-		this.migrationContext.MigrationIterationRangeMaxValues,
-		this.migrationContext.Iteration,
-		this.migrationContext.ChunkSize,
-	)
+	// log.Debugf(
+	// 	"column values: [%s]..[%s]; iteration: %d; chunk-size: %d",
+	// 	this.migrationContext.MigrationIterationRangeMinValues,
+	// 	this.migrationContext.MigrationIterationRangeMaxValues,
+	// 	this.migrationContext.GetIteration(),
+	// 	this.migrationContext.ChunkSize,
+	// )
 	return hasFurtherRange, nil
 }
 
@@ -354,12 +360,12 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.GetGhostTableName(),
-		this.migrationContext.UniqueKey.Columns,
+		this.migrationContext.SharedColumns,
 		this.migrationContext.UniqueKey.Name,
 		this.migrationContext.UniqueKey.Columns,
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
-		this.migrationContext.Iteration == 0,
+		this.migrationContext.GetIteration() == 0,
 		this.migrationContext.IsTransactionalTable(),
 	)
 	if err != nil {
@@ -371,15 +377,11 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	}
 	rowsAffected, _ = sqlResult.RowsAffected()
 	duration = time.Now().Sub(startTime)
-	this.WriteChangelog(
-		fmt.Sprintf("copy iteration %d", this.migrationContext.Iteration),
-		fmt.Sprintf("chunk: %d; affected: %d; duration: %d", chunkSize, rowsAffected, duration),
-	)
 	log.Debugf(
 		"Issued INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
 		this.migrationContext.MigrationIterationRangeMinValues,
 		this.migrationContext.MigrationIterationRangeMaxValues,
-		this.migrationContext.Iteration,
+		this.migrationContext.GetIteration(),
 		chunkSize)
 	return chunkSize, rowsAffected, duration, nil
 }
@@ -411,4 +413,12 @@ func (this *Applier) UnlockTables() error {
 	}
 	log.Infof("Tables unlocked")
 	return nil
+}
+
+func (this *Applier) ShowStatusVariable(variableName string) (result int64, err error) {
+	query := fmt.Sprintf(`show global status like '%s'`, variableName)
+	if err := this.db.QueryRow(query).Scan(&variableName, &result); err != nil {
+		return 0, err
+	}
+	return result, nil
 }

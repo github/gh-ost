@@ -69,15 +69,50 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 	return nil
 }
 
-func (this *Inspector) InspectOriginalTable() (uniqueKeys [](*sql.UniqueKey), err error) {
-	uniqueKeys, err = this.getCandidateUniqueKeys(this.migrationContext.OriginalTableName)
+func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (columns sql.ColumnList, uniqueKeys [](*sql.UniqueKey), err error) {
+	uniqueKeys, err = this.getCandidateUniqueKeys(tableName)
 	if err != nil {
-		return uniqueKeys, err
+		return columns, uniqueKeys, err
 	}
 	if len(uniqueKeys) == 0 {
-		return uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
+		return columns, uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
 	}
-	return uniqueKeys, err
+	columns, err = this.getTableColumns(this.migrationContext.DatabaseName, tableName)
+	if err != nil {
+		return columns, uniqueKeys, err
+	}
+
+	return columns, uniqueKeys, nil
+}
+
+func (this *Inspector) InspectOriginalTable() (err error) {
+	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
+	if err == nil {
+		return err
+	}
+	this.migrationContext.OriginalTableColumnsMap = sql.NewColumnsMap(this.migrationContext.OriginalTableColumns)
+	return nil
+}
+
+func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
+	this.migrationContext.GhostTableColumns, this.migrationContext.GhostTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.GetGhostTableName())
+	if err != nil {
+		return err
+	}
+	sharedUniqueKeys, err := this.getSharedUniqueKeys(this.migrationContext.OriginalTableUniqueKeys, this.migrationContext.GhostTableUniqueKeys)
+	if err != nil {
+		return err
+	}
+	if len(sharedUniqueKeys) == 0 {
+		return fmt.Errorf("No shared unique key can be found after ALTER! Bailing out")
+	}
+	this.migrationContext.UniqueKey = sharedUniqueKeys[0]
+	log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
+
+	this.migrationContext.SharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns)
+	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
+	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
+	return nil
 }
 
 // validateConnection issues a simple can-connect to MySQL
@@ -361,17 +396,9 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
 	return uniqueKeys, nil
 }
 
-// getCandidateUniqueKeys investigates a table and returns the list of unique keys
-// candidate for chunking
-func (this *Inspector) getSharedUniqueKeys() (uniqueKeys [](*sql.UniqueKey), err error) {
-	originalUniqueKeys, err := this.getCandidateUniqueKeys(this.migrationContext.OriginalTableName)
-	if err != nil {
-		return uniqueKeys, err
-	}
-	ghostUniqueKeys, err := this.getCandidateUniqueKeys(this.migrationContext.GetGhostTableName())
-	if err != nil {
-		return uniqueKeys, err
-	}
+// getSharedUniqueKeys returns the intersection of two given unique keys,
+// testing by list of columns
+func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [](*sql.UniqueKey)) (uniqueKeys [](*sql.UniqueKey), err error) {
 	// We actually do NOT rely on key name, just on the set of columns. This is because maybe
 	// the ALTER is on the name itself...
 	for _, originalUniqueKey := range originalUniqueKeys {
@@ -382,6 +409,20 @@ func (this *Inspector) getSharedUniqueKeys() (uniqueKeys [](*sql.UniqueKey), err
 		}
 	}
 	return uniqueKeys, nil
+}
+
+// getSharedColumns returns the intersection of two lists of columns in same order as the first list
+func (this *Inspector) getSharedColumns(originalColumns, ghostColumns sql.ColumnList) (sharedColumns sql.ColumnList) {
+	columnsInGhost := make(map[string]bool)
+	for _, ghostColumn := range ghostColumns {
+		columnsInGhost[ghostColumn] = true
+	}
+	for _, originalColumn := range originalColumns {
+		if columnsInGhost[originalColumn] {
+			sharedColumns = append(sharedColumns, originalColumn)
+		}
+	}
+	return sharedColumns
 }
 
 func (this *Inspector) getMasterConnectionConfig() (masterConfig *mysql.ConnectionConfig, err error) {

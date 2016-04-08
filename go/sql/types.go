@@ -28,6 +28,17 @@ func (this *ColumnList) Equals(other *ColumnList) bool {
 	return reflect.DeepEqual(*this, *other)
 }
 
+// ColumnsMap maps a column onto its ordinal position
+type ColumnsMap map[string]int
+
+func NewColumnsMap(columnList ColumnList) ColumnsMap {
+	columnsMap := make(map[string]int)
+	for i, column := range columnList {
+		columnsMap[column] = i
+	}
+	return ColumnsMap(columnsMap)
+}
+
 // UniqueKey is the combination of a key's name and columns
 type UniqueKey struct {
 	Name        string
