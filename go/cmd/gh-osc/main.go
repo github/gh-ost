@@ -11,15 +11,12 @@ import (
 	"os"
 
 	"github.com/github/gh-osc/go/base"
-	"github.com/github/gh-osc/go/binlog"
 	"github.com/github/gh-osc/go/logic"
-	"github.com/github/gh-osc/go/mysql"
 	"github.com/outbrain/golib/log"
 )
 
 // main is the application's entry point. It will either spawn a CLI or HTTP itnerfaces.
 func main() {
-	var connectionConfig mysql.ConnectionConfig
 	migrationContext := base.GetMigrationContext()
 
 	// mysqlBasedir := flag.String("mysql-basedir", "", "the --basedir config for MySQL (auto-detected if not given)")
@@ -27,15 +24,19 @@ func main() {
 	internalExperiment := flag.Bool("internal-experiment", false, "issue an internal experiment")
 	binlogFile := flag.String("binlog-file", "", "Name of binary log file")
 
-	flag.StringVar(&connectionConfig.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
-	flag.IntVar(&connectionConfig.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
-	flag.StringVar(&connectionConfig.User, "user", "root", "MySQL user")
-	flag.StringVar(&connectionConfig.Password, "password", "", "MySQL password")
+	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
+	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
+	flag.StringVar(&migrationContext.InspectorConnectionConfig.User, "user", "root", "MySQL user")
+	flag.StringVar(&migrationContext.InspectorConnectionConfig.Password, "password", "", "MySQL password")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
 	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
 	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
+	flag.BoolVar(&migrationContext.AllowedRunningOnMaster, "allow-on-master", false, "allow this migration to run directly on master. Preferably it would run on a replica")
+
+	flag.Int64Var(&migrationContext.ChunkSize, "chunk-size", 1000, "amount of rows to handle in each iteration")
+	flag.StringVar(&migrationContext.ThrottleFlagFile, "throttle-flag-file", "", "operation pauses when this file exists")
 
 	quiet := flag.Bool("quiet", false, "quiet")
 	verbose := flag.Bool("verbose", false, "verbose")
@@ -78,19 +79,20 @@ func main() {
 	log.Info("starting gh-osc")
 
 	if *internalExperiment {
-		log.Debug("starting experiment")
-		var binlogReader binlog.BinlogReader
-		var err error
+		log.Debug("starting experiment with %+v", *binlogFile)
 
 		//binlogReader = binlog.NewMySQLBinlogReader(*mysqlBasedir, *mysqlDatadir)
-		binlogReader, err = binlog.NewGoMySQLReader(&connectionConfig)
-		if err != nil {
-			log.Fatale(err)
-		}
-		binlogReader.ReadEntries(*binlogFile, 0, 0)
-		return
+		// binlogReader, err := binlog.NewGoMySQLReader(migrationContext.InspectorConnectionConfig)
+		// if err != nil {
+		// 	log.Fatale(err)
+		// }
+		// if err := binlogReader.ConnectBinlogStreamer(mysql.BinlogCoordinates{LogFile: *binlogFile, LogPos: 0}); err != nil {
+		// 	log.Fatale(err)
+		// }
+		// binlogReader.StreamEvents(func() bool { return false })
+		// return
 	}
-	migrator := logic.NewMigrator(&connectionConfig)
+	migrator := logic.NewMigrator()
 	err := migrator.Migrate()
 	if err != nil {
 		log.Fatale(err)

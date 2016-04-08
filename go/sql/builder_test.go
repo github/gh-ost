@@ -8,6 +8,7 @@ package sql
 import (
 	"testing"
 
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -71,48 +72,60 @@ func TestBuildRangeComparison(t *testing.T) {
 	{
 		columns := []string{"c1"}
 		values := []string{"@v1"}
-		comparison, err := BuildRangeComparison(columns, values, LessThanComparisonSign)
+		args := []interface{}{3}
+		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanComparisonSign)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` < @v1))")
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3}))
 	}
 	{
 		columns := []string{"c1"}
 		values := []string{"@v1"}
-		comparison, err := BuildRangeComparison(columns, values, LessThanOrEqualsComparisonSign)
+		args := []interface{}{3}
+		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or ((`c1` = @v1)))")
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3}))
 	}
 	{
 		columns := []string{"c1", "c2"}
 		values := []string{"@v1", "@v2"}
-		comparison, err := BuildRangeComparison(columns, values, LessThanComparisonSign)
+		args := []interface{}{3, 17}
+		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanComparisonSign)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)))")
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17}))
 	}
 	{
 		columns := []string{"c1", "c2"}
 		values := []string{"@v1", "@v2"}
-		comparison, err := BuildRangeComparison(columns, values, LessThanOrEqualsComparisonSign)
+		args := []interface{}{3, 17}
+		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)) or ((`c1` = @v1) and (`c2` = @v2)))")
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17}))
 	}
 	{
 		columns := []string{"c1", "c2", "c3"}
 		values := []string{"@v1", "@v2", "@v3"}
-		comparison, err := BuildRangeComparison(columns, values, LessThanOrEqualsComparisonSign)
+		args := []interface{}{3, 17, 22}
+		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)) or (((`c1` = @v1) and (`c2` = @v2)) AND (`c3` < @v3)) or ((`c1` = @v1) and (`c2` = @v2) and (`c3` = @v3)))")
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 22, 3, 17, 22}))
 	}
 	{
 		columns := []string{"c1"}
 		values := []string{"@v1", "@v2"}
-		_, err := BuildRangeComparison(columns, values, LessThanOrEqualsComparisonSign)
+		args := []interface{}{3, 17}
+		_, _, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
 		test.S(t).ExpectNotNil(err)
 	}
 	{
 		columns := []string{}
 		values := []string{}
-		_, err := BuildRangeComparison(columns, values, LessThanOrEqualsComparisonSign)
+		args := []interface{}{}
+		_, _, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
 		test.S(t).ExpectNotNil(err)
 	}
 }
@@ -127,8 +140,10 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		uniqueKeyColumns := []string{"id"}
 		rangeStartValues := []string{"@v1s"}
 		rangeEndValues := []string{"@v1e"}
+		rangeStartArgs := []interface{}{3}
+		rangeEndArgs := []interface{}{103}
 
-		query, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-osc mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -137,14 +152,17 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 				)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
 	}
 	{
 		uniqueKey := "name_position_uidx"
 		uniqueKeyColumns := []string{"name", "position"}
 		rangeStartValues := []string{"@v1s", "@v2s"}
 		rangeEndValues := []string{"@v1e", "@v2e"}
+		rangeStartArgs := []interface{}{3, 17}
+		rangeEndArgs := []interface{}{103, 117}
 
-		query, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-osc mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -153,6 +171,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 				)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
 	}
 }
 
@@ -164,8 +183,10 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 	{
 		uniqueKey := "name_position_uidx"
 		uniqueKeyColumns := []string{"name", "position"}
+		rangeStartArgs := []interface{}{3, 17}
+		rangeEndArgs := []interface{}{103, 117}
 
-		query, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns)
+		query, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-osc mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -174,6 +195,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 				)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
 	}
 }
 
@@ -183,11 +205,13 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 	chunkSize := 500
 	{
 		uniqueKeyColumns := []string{"name", "position"}
+		rangeStartArgs := []interface{}{3, 17}
+		rangeEndArgs := []interface{}{103, 117}
 
-		query, err := BuildUniqueKeyRangeEndPreparedQuery(databaseName, originalTableName, uniqueKeyColumns, chunkSize)
+		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQuery(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, "test")
 		test.S(t).ExpectNil(err)
 		expected := `
-				select /* gh-osc mydb.tbl */ name, position
+				select /* gh-osc mydb.tbl test */ name, position
 				  from (
 				    select
 				        name, position
@@ -201,6 +225,39 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 				order by
 				  name desc, position desc
 				limit 1
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 103, 103, 117, 103, 117}))
+	}
+}
+
+func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
+	databaseName := "mydb"
+	originalTableName := "tbl"
+	uniqueKeyColumns := []string{"name", "position"}
+	{
+		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
+		test.S(t).ExpectNil(err)
+		expected := `
+			select /* gh-osc mydb.tbl */ name, position
+			  from
+			    mydb.tbl
+			  order by
+			    name asc, position asc
+			  limit 1
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+	}
+	{
+		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
+		test.S(t).ExpectNil(err)
+		expected := `
+			select /* gh-osc mydb.tbl */ name, position
+			  from
+			    mydb.tbl
+			  order by
+			    name desc, position desc
+			  limit 1
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 	}

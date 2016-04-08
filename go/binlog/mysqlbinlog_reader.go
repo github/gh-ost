@@ -12,7 +12,7 @@ import (
 	"path"
 	"regexp"
 	"strconv"
-	"strings"
+	//	"strings"
 
 	"github.com/github/gh-osc/go/os"
 	"github.com/outbrain/golib/log"
@@ -78,7 +78,7 @@ func (this *MySQLBinlogReader) ReadEntries(logFile string, startPos uint64, stop
 			return entries, log.Errore(err)
 		}
 
-		chunkEntries, err := parseEntries(bufio.NewScanner(bytes.NewReader(entriesBytes)))
+		chunkEntries, err := parseEntries(bufio.NewScanner(bytes.NewReader(entriesBytes)), logFile)
 		if err != nil {
 			return entries, log.Errore(err)
 		}
@@ -103,41 +103,38 @@ func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEnt
 			return InvalidState, binlogEntry, fmt.Errorf("Expected startLogPos %+v to equal previous endLogPos %+v", startLogPos, previousEndLogPos)
 		}
 		nextBinlogEntry = binlogEntry
-		if binlogEntry.LogPos != 0 && binlogEntry.StatementType != "" {
+		if binlogEntry.Coordinates.LogPos != 0 && binlogEntry.DmlEvent != nil {
 			// Current entry is already a true entry, with startpos and with statement
-			nextBinlogEntry = NewBinlogEntry()
+			nextBinlogEntry = NewBinlogEntry(binlogEntry.Coordinates.LogFile, startLogPos)
 		}
-
-		nextBinlogEntry.LogPos = startLogPos
 		return ExpectEndLogPosState, nextBinlogEntry, nil
 	}
 
 	onStatementEntry := func(submatch []string) (BinlogEntryState, *BinlogEntry, error) {
 		nextBinlogEntry = binlogEntry
-		if binlogEntry.LogPos != 0 && binlogEntry.StatementType != "" {
+		if binlogEntry.Coordinates.LogPos != 0 && binlogEntry.DmlEvent != nil {
 			// Current entry is already a true entry, with startpos and with statement
 			nextBinlogEntry = binlogEntry.Duplicate()
 		}
-
-		nextBinlogEntry.StatementType = strings.Split(submatch[1], " ")[0]
-		nextBinlogEntry.DatabaseName = submatch[2]
-		nextBinlogEntry.TableName = submatch[3]
+		nextBinlogEntry.DmlEvent = NewBinlogDMLEvent(submatch[2], submatch[3], ToEventDML(submatch[1]))
 
 		return ExpectTokenState, nextBinlogEntry, nil
 	}
 
-	onPositionalColumn := func(submatch []string) (BinlogEntryState, *BinlogEntry, error) {
-		columnIndex, _ := strconv.ParseUint(submatch[1], 10, 64)
-		if _, found := binlogEntry.PositionalColumns[columnIndex]; found {
-			return InvalidState, binlogEntry, fmt.Errorf("Positional column %+v found more than once in %+v, statement=%+v", columnIndex, binlogEntry.LogPos, binlogEntry.StatementType)
-		}
-		columnValue := submatch[2]
-		columnValue = strings.TrimPrefix(columnValue, "'")
-		columnValue = strings.TrimSuffix(columnValue, "'")
-		binlogEntry.PositionalColumns[columnIndex] = columnValue
+	// Defuncting the following:
 
-		return SearchForStartPosOrStatementState, binlogEntry, nil
-	}
+	// onPositionalColumn := func(submatch []string) (BinlogEntryState, *BinlogEntry, error) {
+	// 	columnIndex, _ := strconv.ParseUint(submatch[1], 10, 64)
+	// 	if _, found := binlogEntry.PositionalColumns[columnIndex]; found {
+	// 		return InvalidState, binlogEntry, fmt.Errorf("Positional column %+v found more than once in %+v, statement=%+v", columnIndex, binlogEntry.LogPos, binlogEntry.DmlEvent.DML)
+	// 	}
+	// 	columnValue := submatch[2]
+	// 	columnValue = strings.TrimPrefix(columnValue, "'")
+	// 	columnValue = strings.TrimSuffix(columnValue, "'")
+	// 	binlogEntry.PositionalColumns[columnIndex] = columnValue
+	//
+	// 	return SearchForStartPosOrStatementState, binlogEntry, nil
+	// }
 
 	line := scanner.Text()
 	if submatch := startEntryRegexp.FindStringSubmatch(line); len(submatch) > 1 {
@@ -150,7 +147,7 @@ func searchForStartPosOrStatement(scanner *bufio.Scanner, binlogEntry *BinlogEnt
 		return onStatementEntry(submatch)
 	}
 	if submatch := positionalColumnRegexp.FindStringSubmatch(line); len(submatch) > 1 {
-		return onPositionalColumn(submatch)
+		// Defuncting		return onPositionalColumn(submatch)
 	}
 	// Haven't found a match
 	return SearchForStartPosOrStatementState, binlogEntry, nil
@@ -165,7 +162,7 @@ func expectEndLogPos(scanner *bufio.Scanner, binlogEntry *BinlogEntry) (nextStat
 		binlogEntry.EndLogPos, _ = strconv.ParseUint(submatch[1], 10, 64)
 		return SearchForStartPosOrStatementState, nil
 	}
-	return InvalidState, fmt.Errorf("Expected to find end_log_pos following pos %+v", binlogEntry.LogPos)
+	return InvalidState, fmt.Errorf("Expected to find end_log_pos following pos %+v", binlogEntry.Coordinates.LogPos)
 }
 
 // automaton step: a not-strictly-required but good-to-have-around validation that
@@ -175,26 +172,26 @@ func expectToken(scanner *bufio.Scanner, binlogEntry *BinlogEntry) (nextState Bi
 	if submatch := tokenRegxp.FindStringSubmatch(line); len(submatch) > 1 {
 		return SearchForStartPosOrStatementState, nil
 	}
-	return InvalidState, fmt.Errorf("Expected to find token following pos %+v", binlogEntry.LogPos)
+	return InvalidState, fmt.Errorf("Expected to find token following pos %+v", binlogEntry.Coordinates.LogPos)
 }
 
 // parseEntries will parse output of `mysqlbinlog --verbose --base64-output=DECODE-ROWS`
 // It issues an automaton / state machine to do its thang.
-func parseEntries(scanner *bufio.Scanner) (entries [](*BinlogEntry), err error) {
-	binlogEntry := NewBinlogEntry()
+func parseEntries(scanner *bufio.Scanner, logFile string) (entries [](*BinlogEntry), err error) {
+	binlogEntry := NewBinlogEntry(logFile, 0)
 	var state BinlogEntryState = SearchForStartPosOrStatementState
 	var endLogPos uint64
 
 	appendBinlogEntry := func() {
-		if binlogEntry.LogPos == 0 {
+		if binlogEntry.Coordinates.LogPos == 0 {
 			return
 		}
-		if binlogEntry.StatementType == "" {
+		if binlogEntry.DmlEvent == nil {
 			return
 		}
 		entries = append(entries, binlogEntry)
 		log.Debugf("entry: %+v", *binlogEntry)
-		fmt.Println(fmt.Sprintf("%s `%s`.`%s`", binlogEntry.StatementType, binlogEntry.DatabaseName, binlogEntry.TableName))
+		fmt.Println(fmt.Sprintf("%s `%s`.`%s`", binlogEntry.DmlEvent.DML, binlogEntry.DmlEvent.DatabaseName, binlogEntry.DmlEvent.TableName))
 	}
 	for scanner.Scan() {
 		switch state {

@@ -64,12 +64,15 @@ func BuildEqualsComparison(columns []string, values []string) (result string, er
 	return result, nil
 }
 
-func BuildRangeComparison(columns []string, values []string, comparisonSign ValueComparisonSign) (result string, err error) {
+func BuildRangeComparison(columns []string, values []string, args []interface{}, comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
 	if len(columns) == 0 {
-		return "", fmt.Errorf("Got 0 columns in GetRangeComparison")
+		return "", explodedArgs, fmt.Errorf("Got 0 columns in GetRangeComparison")
 	}
 	if len(columns) != len(values) {
-		return "", fmt.Errorf("Got %d columns but %d values in GetEqualsComparison", len(columns), len(values))
+		return "", explodedArgs, fmt.Errorf("Got %d columns but %d values in GetEqualsComparison", len(columns), len(values))
+	}
+	if len(columns) != len(args) {
+		return "", explodedArgs, fmt.Errorf("Got %d columns but %d args in GetEqualsComparison", len(columns), len(args))
 	}
 	includeEquals := false
 	if comparisonSign == LessThanOrEqualsComparisonSign {
@@ -87,43 +90,47 @@ func BuildRangeComparison(columns []string, values []string, comparisonSign Valu
 		value := values[i]
 		rangeComparison, err := BuildValueComparison(column, value, comparisonSign)
 		if err != nil {
-			return "", err
+			return "", explodedArgs, err
 		}
 		if len(columns[0:i]) > 0 {
 			equalitiesComparison, err := BuildEqualsComparison(columns[0:i], values[0:i])
 			if err != nil {
-				return "", err
+				return "", explodedArgs, err
 			}
 			comparison := fmt.Sprintf("(%s AND %s)", equalitiesComparison, rangeComparison)
 			comparisons = append(comparisons, comparison)
+			explodedArgs = append(explodedArgs, args[0:i]...)
+			explodedArgs = append(explodedArgs, args[i])
 		} else {
 			comparisons = append(comparisons, rangeComparison)
+			explodedArgs = append(explodedArgs, args[i])
 		}
 	}
 
 	if includeEquals {
 		comparison, err := BuildEqualsComparison(columns, values)
 		if err != nil {
-			return "", nil
+			return "", explodedArgs, nil
 		}
 		comparisons = append(comparisons, comparison)
+		explodedArgs = append(explodedArgs, args...)
 	}
 	result = strings.Join(comparisons, " or ")
 	result = fmt.Sprintf("(%s)", result)
-	return result, nil
+	return result, explodedArgs, nil
 }
 
-func BuildRangePreparedComparison(columns []string, comparisonSign ValueComparisonSign) (result string, err error) {
+func BuildRangePreparedComparison(columns []string, args []interface{}, comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
 	values := make([]string, len(columns), len(columns))
 	for i := range columns {
 		values[i] = "?"
 	}
-	return BuildRangeComparison(columns, values, comparisonSign)
+	return BuildRangeComparison(columns, values, args, comparisonSign)
 }
 
-func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns, rangeStartValues, rangeEndValues []string) (string, error) {
+func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
 	if len(sharedColumns) == 0 {
-		return "", fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
+		return "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
 	databaseName = EscapeName(databaseName)
 	originalTableName = EscapeName(originalTableName)
@@ -134,50 +141,63 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	uniqueKey = EscapeName(uniqueKey)
 
 	sharedColumnsListing := strings.Join(sharedColumns, ", ")
-	rangeStartComparison, err := BuildRangeComparison(uniqueKeyColumns, rangeStartValues, GreaterThanOrEqualsComparisonSign)
-	if err != nil {
-		return "", err
+	var minRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
+	if includeRangeStartValues {
+		minRangeComparisonSign = GreaterThanOrEqualsComparisonSign
 	}
-	rangeEndComparison, err := BuildRangeComparison(uniqueKeyColumns, rangeEndValues, LessThanOrEqualsComparisonSign)
+	rangeStartComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns, rangeStartValues, rangeStartArgs, minRangeComparisonSign)
 	if err != nil {
-		return "", err
+		return "", explodedArgs, err
 	}
-	query := fmt.Sprintf(`
+	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+	rangeEndComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns, rangeEndValues, rangeEndArgs, LessThanOrEqualsComparisonSign)
+	if err != nil {
+		return "", explodedArgs, err
+	}
+	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+	transactionalClause := ""
+	if transactionalTable {
+		transactionalClause = "lock in share mode"
+	}
+	result = fmt.Sprintf(`
       insert /* gh-osc %s.%s */ ignore into %s.%s (%s)
       (select %s from %s.%s force index (%s)
-        where (%s and %s)
+        where (%s and %s) %s
       )
     `, databaseName, originalTableName, databaseName, ghostTableName, sharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
-		rangeStartComparison, rangeEndComparison)
-	return query, nil
+		rangeStartComparison, rangeEndComparison, transactionalClause)
+	return result, explodedArgs, nil
 }
 
-func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns []string) (string, error) {
+func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
 	rangeStartValues := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
 	rangeEndValues := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
 	for i := range uniqueKeyColumns {
 		rangeStartValues[i] = "?"
 		rangeEndValues[i] = "?"
 	}
-	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues)
+	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
 }
 
-func BuildUniqueKeyRangeEndPreparedQuery(databaseName, originalTableName string, uniqueKeyColumns []string, chunkSize int) (string, error) {
+func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, hint string) (result string, explodedArgs []interface{}, err error) {
 	if len(uniqueKeyColumns) == 0 {
-		return "", fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
+		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}
 	databaseName = EscapeName(databaseName)
-	originalTableName = EscapeName(originalTableName)
+	tableName = EscapeName(tableName)
 
-	rangeStartComparison, err := BuildRangePreparedComparison(uniqueKeyColumns, GreaterThanComparisonSign)
+	rangeStartComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeStartArgs, GreaterThanComparisonSign)
 	if err != nil {
-		return "", err
+		return "", explodedArgs, err
 	}
-	rangeEndComparison, err := BuildRangePreparedComparison(uniqueKeyColumns, LessThanOrEqualsComparisonSign)
+	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+	rangeEndComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeEndArgs, LessThanOrEqualsComparisonSign)
 	if err != nil {
-		return "", err
+		return "", explodedArgs, err
 	}
+	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+
 	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
 	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
 	for i := range uniqueKeyColumns {
@@ -185,8 +205,8 @@ func BuildUniqueKeyRangeEndPreparedQuery(databaseName, originalTableName string,
 		uniqueKeyColumnAscending[i] = fmt.Sprintf("%s asc", uniqueKeyColumns[i])
 		uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumns[i])
 	}
-	query := fmt.Sprintf(`
-      select /* gh-osc %s.%s */ %s
+	result = fmt.Sprintf(`
+      select /* gh-osc %s.%s %s */ %s
 				from (
 					select
 							%s
@@ -200,11 +220,45 @@ func BuildUniqueKeyRangeEndPreparedQuery(databaseName, originalTableName string,
 			order by
 				%s
 			limit 1
-    `, databaseName, originalTableName, strings.Join(uniqueKeyColumns, ", "),
-		strings.Join(uniqueKeyColumns, ", "), databaseName, originalTableName,
+    `, databaseName, tableName, hint, strings.Join(uniqueKeyColumns, ", "),
+		strings.Join(uniqueKeyColumns, ", "), databaseName, tableName,
 		rangeStartComparison, rangeEndComparison,
 		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
 		strings.Join(uniqueKeyColumnDescending, ", "),
+	)
+	return result, explodedArgs, nil
+}
+
+func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "asc")
+}
+
+func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "desc")
+}
+
+func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string, order string) (string, error) {
+	if len(uniqueKeyColumns) == 0 {
+		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+
+	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumns), len(uniqueKeyColumns))
+	for i := range uniqueKeyColumns {
+		uniqueKeyColumns[i] = EscapeName(uniqueKeyColumns[i])
+		uniqueKeyColumnOrder[i] = fmt.Sprintf("%s %s", uniqueKeyColumns[i], order)
+	}
+	query := fmt.Sprintf(`
+      select /* gh-osc %s.%s */ %s
+				from
+					%s.%s
+				order by
+					%s
+				limit 1
+    `, databaseName, tableName, strings.Join(uniqueKeyColumns, ", "),
+		databaseName, tableName,
+		strings.Join(uniqueKeyColumnOrder, ", "),
 	)
 	return query, nil
 }
