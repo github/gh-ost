@@ -8,8 +8,10 @@ package logic
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"regexp"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/github/gh-osc/go/base"
@@ -74,6 +76,21 @@ func prettifyDurationOutput(d time.Duration) string {
 	return result
 }
 
+// acceptSignals registers for OS signals
+func (this *Migrator) acceptSignals() {
+	c := make(chan os.Signal, 1)
+
+	signal.Notify(c, syscall.SIGHUP)
+	go func() {
+		for sig := range c {
+			switch sig {
+			case syscall.SIGHUP:
+				log.Debugf("Received SIGHUP. Reloading configuration")
+			}
+		}
+	}()
+}
+
 func (this *Migrator) shouldThrottle() (result bool, reason string) {
 	lag := atomic.LoadInt64(&this.migrationContext.CurrentLag)
 
@@ -82,7 +99,13 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 	}
 	if this.migrationContext.ThrottleFlagFile != "" {
 		if _, err := os.Stat(this.migrationContext.ThrottleFlagFile); err == nil {
-			//Throttle file defined and exists!
+			// Throttle file defined and exists!
+			return true, "flag-file"
+		}
+	}
+	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
+		if _, err := os.Stat(this.migrationContext.ThrottleAdditionalFlagFile); err == nil {
+			// 2nd Throttle file defined and exists!
 			return true, "flag-file"
 		}
 	}
@@ -100,37 +123,43 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 	return false, ""
 }
 
+func (this *Migrator) initiateThrottler() error {
+	throttlerTick := time.Tick(1 * time.Second)
+
+	throttlerFunction := func() {
+		alreadyThrottling, currentReason := this.migrationContext.IsThrottled()
+		shouldThrottle, throttleReason := this.shouldThrottle()
+		if shouldThrottle && !alreadyThrottling {
+			// New throttling
+			this.applier.WriteAndLogChangelog("throttle", throttleReason)
+		} else if shouldThrottle && alreadyThrottling && (currentReason != throttleReason) {
+			// Change of reason
+			this.applier.WriteAndLogChangelog("throttle", throttleReason)
+		} else if alreadyThrottling && !shouldThrottle {
+			// End of throttling
+			this.applier.WriteAndLogChangelog("throttle", "done throttling")
+		}
+		this.migrationContext.SetThrottled(shouldThrottle, throttleReason)
+	}
+	throttlerFunction()
+	for range throttlerTick {
+		throttlerFunction()
+	}
+
+	return nil
+}
+
 // throttle initiates a throttling event, if need be, updates the Context and
 // calls callback functions, if any
-func (this *Migrator) throttle(
-	onStartThrottling func(),
-	onContinuousThrottling func(),
-	onEndThrottling func(),
-) {
-	hasThrottledYet := false
+func (this *Migrator) throttle(onThrottled func()) {
 	for {
-		shouldThrottle, reason := this.shouldThrottle()
-		if !shouldThrottle {
-			break
+		if shouldThrottle, _ := this.migrationContext.IsThrottled(); !shouldThrottle {
+			return
 		}
-		this.migrationContext.ThrottleReason = reason
-		if !hasThrottledYet {
-			hasThrottledYet = true
-			if onStartThrottling != nil {
-				onStartThrottling()
-			}
-			this.migrationContext.SetThrottled(true)
+		if onThrottled != nil {
+			onThrottled()
 		}
 		time.Sleep(time.Second)
-		if onContinuousThrottling != nil {
-			onContinuousThrottling()
-		}
-	}
-	if hasThrottledYet {
-		if onEndThrottling != nil {
-			onEndThrottling()
-		}
-		this.migrationContext.SetThrottled(false)
 	}
 }
 
@@ -239,6 +268,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
+	go this.initiateThrottler()
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
 	this.migrationContext.RowCopyStartTime = time.Now()
@@ -249,15 +279,9 @@ func (this *Migrator) Migrate() (err error) {
 	log.Debugf("Row copy complete")
 	this.printStatus()
 
-	this.throttle(
-		func() {
-			log.Debugf("throttling before LOCK TABLES")
-		},
-		nil,
-		func() {
-			log.Debugf("done throttling")
-		},
-	)
+	this.throttle(func() {
+		log.Debugf("throttling on LOCK TABLES")
+	})
 	// TODO retries!!
 	this.applier.LockTables()
 	this.applier.WriteChangelogState(string(AllEventsUpToLockProcessed))
@@ -304,8 +328,8 @@ func (this *Migrator) printStatus() {
 	}
 
 	eta := "N/A"
-	if this.migrationContext.IsThrottled() {
-		eta = fmt.Sprintf("throttled, %s", this.migrationContext.ThrottleReason)
+	if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
+		eta = fmt.Sprintf("throttled, %s", throttleReason)
 	}
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Backlog: %d/%d; Elapsed: %+v(copy), %+v(total); ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
@@ -399,14 +423,8 @@ func (this *Migrator) iterateChunks() error {
 }
 
 func (this *Migrator) executeWriteFuncs() error {
-	onStartThrottling := func() {
-		log.Debugf("throttling writes")
-	}
-	onEndThrottling := func() {
-		log.Debugf("done throttling writes")
-	}
 	for {
-		this.throttle(onStartThrottling, nil, onEndThrottling)
+		this.throttle(nil)
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
 		select {

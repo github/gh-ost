@@ -11,32 +11,62 @@ import (
 	"strings"
 )
 
-// ColumnList makes for a named list of columns
-type ColumnList []string
-
-// ParseColumnList parses a comma delimited list of column names
-func ParseColumnList(columns string) *ColumnList {
-	result := ColumnList(strings.Split(columns, ","))
-	return &result
-}
-
-func (this *ColumnList) String() string {
-	return strings.Join(*this, ",")
-}
-
-func (this *ColumnList) Equals(other *ColumnList) bool {
-	return reflect.DeepEqual(*this, *other)
-}
-
 // ColumnsMap maps a column onto its ordinal position
 type ColumnsMap map[string]int
 
-func NewColumnsMap(columnList ColumnList) ColumnsMap {
+func NewColumnsMap(orderedNames []string) ColumnsMap {
 	columnsMap := make(map[string]int)
-	for i, column := range columnList {
+	for i, column := range orderedNames {
 		columnsMap[column] = i
 	}
 	return ColumnsMap(columnsMap)
+}
+
+// ColumnList makes for a named list of columns
+type ColumnList struct {
+	Names    []string
+	Ordinals ColumnsMap
+}
+
+// NewColumnList creates an object given ordered list of column names
+func NewColumnList(names []string) *ColumnList {
+	result := &ColumnList{
+		Names: names,
+	}
+	result.Ordinals = NewColumnsMap(result.Names)
+	return result
+}
+
+// ParseColumnList parses a comma delimited list of column names
+func ParseColumnList(columns string) *ColumnList {
+	result := &ColumnList{
+		Names: strings.Split(columns, ","),
+	}
+	result.Ordinals = NewColumnsMap(result.Names)
+	return result
+}
+
+func (this *ColumnList) String() string {
+	return strings.Join(this.Names, ",")
+}
+
+func (this *ColumnList) Equals(other *ColumnList) bool {
+	return reflect.DeepEqual(this.Names, other.Names)
+}
+
+// IsSubsetOf returns 'true' when column names of this list are a subset of
+// another list, in arbitrary order (order agnostic)
+func (this *ColumnList) IsSubsetOf(other *ColumnList) bool {
+	for _, column := range this.Names {
+		if _, exists := other.Ordinals[column]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func (this *ColumnList) Len() int {
+	return len(this.Names)
 }
 
 // UniqueKey is the combination of a key's name and columns
@@ -49,6 +79,10 @@ type UniqueKey struct {
 // IsPrimary checks if this unique key is primary
 func (this *UniqueKey) IsPrimary() bool {
 	return this.Name == "PRIMARY"
+}
+
+func (this *UniqueKey) Len() int {
+	return this.Columns.Len()
 }
 
 func (this *UniqueKey) String() string {

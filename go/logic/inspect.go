@@ -44,6 +44,9 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateGrants(); err != nil {
 		return err
 	}
+	if err := this.restartReplication(); err != nil {
+		return err
+	}
 	if err := this.validateBinlogs(); err != nil {
 		return err
 	}
@@ -69,7 +72,7 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 	return nil
 }
 
-func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (columns sql.ColumnList, uniqueKeys [](*sql.UniqueKey), err error) {
+func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (columns *sql.ColumnList, uniqueKeys [](*sql.UniqueKey), err error) {
 	uniqueKeys, err = this.getCandidateUniqueKeys(tableName)
 	if err != nil {
 		return columns, uniqueKeys, err
@@ -90,7 +93,6 @@ func (this *Inspector) InspectOriginalTable() (err error) {
 	if err == nil {
 		return err
 	}
-	this.migrationContext.OriginalTableColumnsMap = sql.NewColumnsMap(this.migrationContext.OriginalTableColumns)
 	return nil
 }
 
@@ -108,6 +110,11 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 	}
 	this.migrationContext.UniqueKey = sharedUniqueKeys[0]
 	log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
+	if !this.migrationContext.UniqueKey.IsPrimary() {
+		if this.migrationContext.OriginalBinlogRowImage != "full" {
+			return fmt.Errorf("binlog_row_image is '%s' and chosen key is %s, which is not the primary key. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again")
+		}
+	}
 
 	this.migrationContext.SharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns)
 	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
@@ -169,6 +176,26 @@ func (this *Inspector) validateGrants() error {
 		return nil
 	}
 	return log.Errorf("User has insufficient privileges for migration.")
+}
+
+// restartReplication is required so that we are _certain_ the binlog format and
+// row image settings have actually been applied to the replication thread.
+// It is entriely possible, for example, that the replication is using 'STATEMENT'
+// binlog format even as the variable says 'ROW'
+func (this *Inspector) restartReplication() error {
+	log.Infof("Restarting replication on %s:%d to make sure binlog settings apply to replication thread", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+
+	var stopError, startError error
+	_, stopError = sqlutils.ExecNoPrepare(this.db, `stop slave`)
+	_, startError = sqlutils.ExecNoPrepare(this.db, `start slave`)
+	if stopError != nil {
+		return stopError
+	}
+	if startError != nil {
+		return startError
+	}
+	log.Debugf("Replication restarted")
+	return nil
 }
 
 // validateBinlogs checks that binary log configuration is good to go
@@ -299,27 +326,28 @@ func (this *Inspector) countTableRows() error {
 	return nil
 }
 
-func (this *Inspector) getTableColumns(databaseName, tableName string) (columns sql.ColumnList, err error) {
+func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.ColumnList, error) {
 	query := fmt.Sprintf(`
 		show columns from %s.%s
 		`,
 		sql.EscapeName(databaseName),
 		sql.EscapeName(tableName),
 	)
-	err = sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		columns = append(columns, rowMap.GetString("Field"))
+	columnNames := []string{}
+	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		columnNames = append(columnNames, rowMap.GetString("Field"))
 		return nil
 	})
 	if err != nil {
-		return columns, err
+		return nil, err
 	}
-	if len(columns) == 0 {
-		return columns, log.Errorf("Found 0 columns on %s.%s. Bailing out",
+	if len(columnNames) == 0 {
+		return nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
 			sql.EscapeName(databaseName),
 			sql.EscapeName(tableName),
 		)
 	}
-	return columns, nil
+	return sql.NewColumnList(columnNames), nil
 }
 
 // getCandidateUniqueKeys investigates a table and returns the list of unique keys
@@ -412,17 +440,18 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 }
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
-func (this *Inspector) getSharedColumns(originalColumns, ghostColumns sql.ColumnList) (sharedColumns sql.ColumnList) {
+func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList) *sql.ColumnList {
 	columnsInGhost := make(map[string]bool)
-	for _, ghostColumn := range ghostColumns {
+	for _, ghostColumn := range ghostColumns.Names {
 		columnsInGhost[ghostColumn] = true
 	}
-	for _, originalColumn := range originalColumns {
+	sharedColumnNames := []string{}
+	for _, originalColumn := range originalColumns.Names {
 		if columnsInGhost[originalColumn] {
-			sharedColumns = append(sharedColumns, originalColumn)
+			sharedColumnNames = append(sharedColumnNames, originalColumn)
 		}
 	}
-	return sharedColumns
+	return sql.NewColumnList(sharedColumnNames)
 }
 
 func (this *Inspector) getMasterConnectionConfig() (masterConfig *mysql.ConnectionConfig, err error) {

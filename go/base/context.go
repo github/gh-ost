@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,18 +51,19 @@ type MigrationContext struct {
 	CurrentLag                          int64
 	MaxLagMillisecondsThrottleThreshold int64
 	ThrottleFlagFile                    string
+	ThrottleAdditionalFlagFile          string
 	TotalRowsCopied                     int64
-	isThrottled                         int64
-	ThrottleReason                      string
+	isThrottled                         bool
+	throttleReason                      string
+	throttleMutex                       *sync.Mutex
 	MaxLoad                             map[string]int64
 
-	OriginalTableColumns             sql.ColumnList
-	OriginalTableColumnsMap          sql.ColumnsMap
+	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
-	GhostTableColumns                sql.ColumnList
+	GhostTableColumns                *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
 	UniqueKey                        *sql.UniqueKey
-	SharedColumns                    sql.ColumnList
+	SharedColumns                    *sql.ColumnList
 	MigrationRangeMinValues          *sql.ColumnValues
 	MigrationRangeMaxValues          *sql.ColumnValues
 	Iteration                        int64
@@ -83,7 +85,8 @@ func newMigrationContext() *MigrationContext {
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
 		MasterConnectionConfig:              mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1000,
-		MaxLoad: make(map[string]int64),
+		MaxLoad:       make(map[string]int64),
+		throttleMutex: &sync.Mutex{},
 	}
 }
 
@@ -95,6 +98,11 @@ func GetMigrationContext() *MigrationContext {
 // GetGhostTableName generates the name of ghost table, based on original table name
 func (this *MigrationContext) GetGhostTableName() string {
 	return fmt.Sprintf("_%s_New", this.OriginalTableName)
+}
+
+// GetOldTableName generates the name of the "old" table, into which the original table is renamed.
+func (this *MigrationContext) GetOldTableName() string {
+	return fmt.Sprintf("_%s_Old", this.OriginalTableName)
 }
 
 // GetChangelogTableName generates the name of changelog table, based on original table name
@@ -157,16 +165,17 @@ func (this *MigrationContext) GetIteration() int64 {
 	return atomic.LoadInt64(&this.Iteration)
 }
 
-func (this *MigrationContext) SetThrottled(throttle bool) {
-	if throttle {
-		atomic.StoreInt64(&this.isThrottled, 1)
-	} else {
-		atomic.StoreInt64(&this.isThrottled, 0)
-	}
+func (this *MigrationContext) SetThrottled(throttle bool, reason string) {
+	this.throttleMutex.Lock()
+	defer func() { this.throttleMutex.Unlock() }()
+	this.isThrottled = throttle
+	this.throttleReason = reason
 }
 
-func (this *MigrationContext) IsThrottled() bool {
-	return atomic.LoadInt64(&this.isThrottled) != 0
+func (this *MigrationContext) IsThrottled() (bool, string) {
+	this.throttleMutex.Lock()
+	defer func() { this.throttleMutex.Unlock() }()
+	return this.isThrottled, this.throttleReason
 }
 
 func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
