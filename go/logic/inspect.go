@@ -44,6 +44,9 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateGrants(); err != nil {
 		return err
 	}
+	if err := this.restartReplication(); err != nil {
+		return err
+	}
 	if err := this.validateBinlogs(); err != nil {
 		return err
 	}
@@ -69,15 +72,54 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 	return nil
 }
 
-func (this *Inspector) InspectOriginalTable() (uniqueKeys [](*sql.UniqueKey), err error) {
-	uniqueKeys, err = this.getCandidateUniqueKeys(this.migrationContext.OriginalTableName)
+func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (columns *sql.ColumnList, uniqueKeys [](*sql.UniqueKey), err error) {
+	uniqueKeys, err = this.getCandidateUniqueKeys(tableName)
 	if err != nil {
-		return uniqueKeys, err
+		return columns, uniqueKeys, err
 	}
 	if len(uniqueKeys) == 0 {
-		return uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
+		return columns, uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
 	}
-	return uniqueKeys, err
+	columns, err = this.getTableColumns(this.migrationContext.DatabaseName, tableName)
+	if err != nil {
+		return columns, uniqueKeys, err
+	}
+
+	return columns, uniqueKeys, nil
+}
+
+func (this *Inspector) InspectOriginalTable() (err error) {
+	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
+	if err == nil {
+		return err
+	}
+	return nil
+}
+
+func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
+	this.migrationContext.GhostTableColumns, this.migrationContext.GhostTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.GetGhostTableName())
+	if err != nil {
+		return err
+	}
+	sharedUniqueKeys, err := this.getSharedUniqueKeys(this.migrationContext.OriginalTableUniqueKeys, this.migrationContext.GhostTableUniqueKeys)
+	if err != nil {
+		return err
+	}
+	if len(sharedUniqueKeys) == 0 {
+		return fmt.Errorf("No shared unique key can be found after ALTER! Bailing out")
+	}
+	this.migrationContext.UniqueKey = sharedUniqueKeys[0]
+	log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
+	if !this.migrationContext.UniqueKey.IsPrimary() {
+		if this.migrationContext.OriginalBinlogRowImage != "full" {
+			return fmt.Errorf("binlog_row_image is '%s' and chosen key is %s, which is not the primary key. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again")
+		}
+	}
+
+	this.migrationContext.SharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns)
+	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
+	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
+	return nil
 }
 
 // validateConnection issues a simple can-connect to MySQL
@@ -134,6 +176,32 @@ func (this *Inspector) validateGrants() error {
 		return nil
 	}
 	return log.Errorf("User has insufficient privileges for migration.")
+}
+
+// restartReplication is required so that we are _certain_ the binlog format and
+// row image settings have actually been applied to the replication thread.
+// It is entriely possible, for example, that the replication is using 'STATEMENT'
+// binlog format even as the variable says 'ROW'
+func (this *Inspector) restartReplication() error {
+	log.Infof("Restarting replication on %s:%d to make sure binlog settings apply to replication thread", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+
+	masterKey, _ := getMasterKeyFromSlaveStatus(this.connectionConfig)
+	if masterKey == nil {
+		// This is not a replica
+		return nil
+	}
+
+	var stopError, startError error
+	_, stopError = sqlutils.ExecNoPrepare(this.db, `stop slave`)
+	_, startError = sqlutils.ExecNoPrepare(this.db, `start slave`)
+	if stopError != nil {
+		return stopError
+	}
+	if startError != nil {
+		return startError
+	}
+	log.Debugf("Replication restarted")
+	return nil
 }
 
 // validateBinlogs checks that binary log configuration is good to go
@@ -264,27 +332,28 @@ func (this *Inspector) countTableRows() error {
 	return nil
 }
 
-func (this *Inspector) getTableColumns(databaseName, tableName string) (columns sql.ColumnList, err error) {
+func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.ColumnList, error) {
 	query := fmt.Sprintf(`
 		show columns from %s.%s
 		`,
 		sql.EscapeName(databaseName),
 		sql.EscapeName(tableName),
 	)
-	err = sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		columns = append(columns, rowMap.GetString("Field"))
+	columnNames := []string{}
+	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		columnNames = append(columnNames, rowMap.GetString("Field"))
 		return nil
 	})
 	if err != nil {
-		return columns, err
+		return nil, err
 	}
-	if len(columns) == 0 {
-		return columns, log.Errorf("Found 0 columns on %s.%s. Bailing out",
+	if len(columnNames) == 0 {
+		return nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
 			sql.EscapeName(databaseName),
 			sql.EscapeName(tableName),
 		)
 	}
-	return columns, nil
+	return sql.NewColumnList(columnNames), nil
 }
 
 // getCandidateUniqueKeys investigates a table and returns the list of unique keys
@@ -361,17 +430,9 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
 	return uniqueKeys, nil
 }
 
-// getCandidateUniqueKeys investigates a table and returns the list of unique keys
-// candidate for chunking
-func (this *Inspector) getSharedUniqueKeys() (uniqueKeys [](*sql.UniqueKey), err error) {
-	originalUniqueKeys, err := this.getCandidateUniqueKeys(this.migrationContext.OriginalTableName)
-	if err != nil {
-		return uniqueKeys, err
-	}
-	ghostUniqueKeys, err := this.getCandidateUniqueKeys(this.migrationContext.GetGhostTableName())
-	if err != nil {
-		return uniqueKeys, err
-	}
+// getSharedUniqueKeys returns the intersection of two given unique keys,
+// testing by list of columns
+func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [](*sql.UniqueKey)) (uniqueKeys [](*sql.UniqueKey), err error) {
 	// We actually do NOT rely on key name, just on the set of columns. This is because maybe
 	// the ALTER is on the name itself...
 	for _, originalUniqueKey := range originalUniqueKeys {
@@ -384,43 +445,77 @@ func (this *Inspector) getSharedUniqueKeys() (uniqueKeys [](*sql.UniqueKey), err
 	return uniqueKeys, nil
 }
 
-func (this *Inspector) getMasterConnectionConfig() (masterConfig *mysql.ConnectionConfig, err error) {
-	visitedKeys := mysql.NewInstanceKeyMap()
-	return getMasterConnectionConfigSafe(this.connectionConfig, this.migrationContext.DatabaseName, visitedKeys)
+// getSharedColumns returns the intersection of two lists of columns in same order as the first list
+func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList) *sql.ColumnList {
+	columnsInGhost := make(map[string]bool)
+	for _, ghostColumn := range ghostColumns.Names {
+		columnsInGhost[ghostColumn] = true
+	}
+	sharedColumnNames := []string{}
+	for _, originalColumn := range originalColumns.Names {
+		if columnsInGhost[originalColumn] {
+			sharedColumnNames = append(sharedColumnNames, originalColumn)
+		}
+	}
+	return sql.NewColumnList(sharedColumnNames)
 }
 
-func getMasterConnectionConfigSafe(connectionConfig *mysql.ConnectionConfig, databaseName string, visitedKeys *mysql.InstanceKeyMap) (masterConfig *mysql.ConnectionConfig, err error) {
-	log.Debugf("Looking for master on %+v", connectionConfig.Key)
+func (this *Inspector) readChangelogState() (map[string]string, error) {
+	query := fmt.Sprintf(`
+		select hint, value from %s.%s where id <= 255
+		`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+	result := make(map[string]string)
+	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		result[m.GetString("hint")] = m.GetString("value")
+		return nil
+	})
+	return result, err
+}
 
-	currentUri := connectionConfig.GetDBUri(databaseName)
+func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
+	visitedKeys := mysql.NewInstanceKeyMap()
+	return getMasterConnectionConfigSafe(this.connectionConfig, visitedKeys)
+}
+
+func getMasterKeyFromSlaveStatus(connectionConfig *mysql.ConnectionConfig) (masterKey *mysql.InstanceKey, err error) {
+	currentUri := connectionConfig.GetDBUri("information_schema")
 	db, _, err := sqlutils.GetDB(currentUri)
 	if err != nil {
 		return nil, err
 	}
-
-	hasMaster := false
-	masterConfig = connectionConfig.Duplicate()
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
-		masterKey := mysql.InstanceKey{
+		masterKey = &mysql.InstanceKey{
 			Hostname: rowMap.GetString("Master_Host"),
 			Port:     rowMap.GetInt("Master_Port"),
 		}
-		if masterKey.IsValid() {
-			masterConfig.Key = masterKey
-			hasMaster = true
-		}
 		return nil
 	})
+	return masterKey, err
+}
+
+func getMasterConnectionConfigSafe(connectionConfig *mysql.ConnectionConfig, visitedKeys *mysql.InstanceKeyMap) (masterConfig *mysql.ConnectionConfig, err error) {
+	log.Debugf("Looking for master on %+v", connectionConfig.Key)
+
+	masterKey, err := getMasterKeyFromSlaveStatus(connectionConfig)
 	if err != nil {
 		return nil, err
 	}
-	if hasMaster {
-		log.Debugf("Master of %+v is %+v", connectionConfig.Key, masterConfig.Key)
-		if visitedKeys.HasKey(masterConfig.Key) {
-			return nil, fmt.Errorf("There seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
-		}
-		visitedKeys.AddKey(masterConfig.Key)
-		return getMasterConnectionConfigSafe(masterConfig, databaseName, visitedKeys)
+	if masterKey == nil {
+		return connectionConfig, nil
 	}
-	return masterConfig, nil
+	if !masterKey.IsValid() {
+		return connectionConfig, nil
+	}
+	masterConfig = connectionConfig.Duplicate()
+	masterConfig.Key = *masterKey
+
+	log.Debugf("Master of %+v is %+v", connectionConfig.Key, masterConfig.Key)
+	if visitedKeys.HasKey(masterConfig.Key) {
+		return nil, fmt.Errorf("There seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
+	}
+	visitedKeys.AddKey(masterConfig.Key)
+	return getMasterConnectionConfigSafe(masterConfig, visitedKeys)
 }

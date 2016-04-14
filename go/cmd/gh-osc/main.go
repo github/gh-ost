@@ -19,11 +19,6 @@ import (
 func main() {
 	migrationContext := base.GetMigrationContext()
 
-	// mysqlBasedir := flag.String("mysql-basedir", "", "the --basedir config for MySQL (auto-detected if not given)")
-	// mysqlDatadir := flag.String("mysql-datadir", "", "the --datadir config for MySQL (auto-detected if not given)")
-	internalExperiment := flag.Bool("internal-experiment", false, "issue an internal experiment")
-	binlogFile := flag.String("binlog-file", "", "Name of binary log file")
-
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.User, "user", "root", "MySQL user")
@@ -35,9 +30,20 @@ func main() {
 	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
 	flag.BoolVar(&migrationContext.AllowedRunningOnMaster, "allow-on-master", false, "allow this migration to run directly on master. Preferably it would run on a replica")
 
-	flag.Int64Var(&migrationContext.ChunkSize, "chunk-size", 1000, "amount of rows to handle in each iteration")
-	flag.StringVar(&migrationContext.ThrottleFlagFile, "throttle-flag-file", "", "operation pauses when this file exists")
+	executeFlag := flag.Bool("execute", false, "actually execute the alter & migrate the table. Default is noop: do some tests and exit")
+	flag.BoolVar(&migrationContext.TestOnReplica, "test-on-replica", false, "Have the migration run on a replica, not on the master. At the end of migration tables are not swapped; gh-osc issues `STOP SLAVE` and you can compare the two tables for building trust")
 
+	flag.Int64Var(&migrationContext.ChunkSize, "chunk-size", 1000, "amount of rows to handle in each iteration (allowed range: 100-100,000)")
+	if migrationContext.ChunkSize < 100 {
+		migrationContext.ChunkSize = 100
+	}
+	if migrationContext.ChunkSize > 100000 {
+		migrationContext.ChunkSize = 100000
+	}
+	flag.Int64Var(&migrationContext.MaxLagMillisecondsThrottleThreshold, "max-lag-millis", 1500, "replication lag at which to throttle operation")
+	flag.StringVar(&migrationContext.ThrottleFlagFile, "throttle-flag-file", "", "operation pauses when this file exists; hint: use a file that is specific to the table being altered")
+	flag.StringVar(&migrationContext.ThrottleAdditionalFlagFile, "throttle-additional-flag-file", "/tmp/gh-osc.throttle", "operation pauses when this file exists; hint: keep default, use for throttling multiple gh-osc operations")
+	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'")
 	quiet := flag.Bool("quiet", false, "quiet")
 	verbose := flag.Bool("verbose", false, "verbose")
 	debug := flag.Bool("debug", false, "debug mode (very verbose)")
@@ -75,23 +81,16 @@ func main() {
 	if migrationContext.AlterStatement == "" {
 		log.Fatalf("--alter must be provided and statement must not be empty")
 	}
+	migrationContext.Noop = !(*executeFlag)
+	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {
+		log.Fatalf("--allow-on-master and --test-on-replica are mutually exclusive")
+	}
+	if err := migrationContext.ReadMaxLoad(*maxLoad); err != nil {
+		log.Fatale(err)
+	}
 
 	log.Info("starting gh-osc")
 
-	if *internalExperiment {
-		log.Debug("starting experiment with %+v", *binlogFile)
-
-		//binlogReader = binlog.NewMySQLBinlogReader(*mysqlBasedir, *mysqlDatadir)
-		// binlogReader, err := binlog.NewGoMySQLReader(migrationContext.InspectorConnectionConfig)
-		// if err != nil {
-		// 	log.Fatale(err)
-		// }
-		// if err := binlogReader.ConnectBinlogStreamer(mysql.BinlogCoordinates{LogFile: *binlogFile, LogPos: 0}); err != nil {
-		// 	log.Fatale(err)
-		// }
-		// binlogReader.StreamEvents(func() bool { return false })
-		// return
-	}
 	migrator := logic.NewMigrator()
 	err := migrator.Migrate()
 	if err != nil {

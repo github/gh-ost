@@ -7,7 +7,9 @@ package base
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,9 +33,13 @@ const (
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
-	DatabaseName                        string
-	OriginalTableName                   string
-	AlterStatement                      string
+	DatabaseName      string
+	OriginalTableName string
+	AlterStatement    string
+
+	Noop          bool
+	TestOnReplica bool
+
 	TableEngine                         string
 	CountTableRows                      bool
 	RowsEstimate                        int64
@@ -43,21 +49,31 @@ type MigrationContext struct {
 	OriginalBinlogRowImage              string
 	AllowedRunningOnMaster              bool
 	InspectorConnectionConfig           *mysql.ConnectionConfig
-	MasterConnectionConfig              *mysql.ConnectionConfig
-	MigrationRangeMinValues             *sql.ColumnValues
-	MigrationRangeMaxValues             *sql.ColumnValues
-	Iteration                           int64
-	MigrationIterationRangeMinValues    *sql.ColumnValues
-	MigrationIterationRangeMaxValues    *sql.ColumnValues
-	UniqueKey                           *sql.UniqueKey
+	ApplierConnectionConfig             *mysql.ConnectionConfig
 	StartTime                           time.Time
 	RowCopyStartTime                    time.Time
 	CurrentLag                          int64
 	MaxLagMillisecondsThrottleThreshold int64
 	ThrottleFlagFile                    string
+	ThrottleAdditionalFlagFile          string
 	TotalRowsCopied                     int64
+	isThrottled                         bool
+	throttleReason                      string
+	throttleMutex                       *sync.Mutex
+	MaxLoad                             map[string]int64
 
-	IsThrottled      func() bool
+	OriginalTableColumns             *sql.ColumnList
+	OriginalTableUniqueKeys          [](*sql.UniqueKey)
+	GhostTableColumns                *sql.ColumnList
+	GhostTableUniqueKeys             [](*sql.UniqueKey)
+	UniqueKey                        *sql.UniqueKey
+	SharedColumns                    *sql.ColumnList
+	MigrationRangeMinValues          *sql.ColumnValues
+	MigrationRangeMaxValues          *sql.ColumnValues
+	Iteration                        int64
+	MigrationIterationRangeMinValues *sql.ColumnValues
+	MigrationIterationRangeMaxValues *sql.ColumnValues
+
 	CanStopStreaming func() bool
 }
 
@@ -71,8 +87,10 @@ func newMigrationContext() *MigrationContext {
 	return &MigrationContext{
 		ChunkSize:                           1000,
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
-		MasterConnectionConfig:              mysql.NewConnectionConfig(),
+		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1000,
+		MaxLoad:       make(map[string]int64),
+		throttleMutex: &sync.Mutex{},
 	}
 }
 
@@ -86,6 +104,11 @@ func (this *MigrationContext) GetGhostTableName() string {
 	return fmt.Sprintf("_%s_New", this.OriginalTableName)
 }
 
+// GetOldTableName generates the name of the "old" table, into which the original table is renamed.
+func (this *MigrationContext) GetOldTableName() string {
+	return fmt.Sprintf("_%s_Old", this.OriginalTableName)
+}
+
 // GetChangelogTableName generates the name of changelog table, based on original table name
 func (this *MigrationContext) GetChangelogTableName() string {
 	return fmt.Sprintf("_%s_OSC", this.OriginalTableName)
@@ -96,10 +119,11 @@ func (this *MigrationContext) RequiresBinlogFormatChange() bool {
 	return this.OriginalBinlogFormat != "ROW"
 }
 
-// IsRunningOnMaster is `true` when the app connects directly to the master (typically
-// it should be executed on replica and infer the master)
-func (this *MigrationContext) IsRunningOnMaster() bool {
-	return this.InspectorConnectionConfig.Equals(this.MasterConnectionConfig)
+// InspectorIsAlsoApplier is `true` when the both inspector and applier are the
+// same database instance. This would be true when running directly on master or when
+// testing on replica.
+func (this *MigrationContext) InspectorIsAlsoApplier() bool {
+	return this.InspectorConnectionConfig.Equals(this.ApplierConnectionConfig)
 }
 
 // HasMigrationRange tells us whether there's a range to iterate for copying rows.
@@ -140,4 +164,43 @@ func (this *MigrationContext) ElapsedRowCopyTime() time.Duration {
 // This is not exactly the same as the rows being iterated via chunks, but potentially close enough
 func (this *MigrationContext) GetTotalRowsCopied() int64 {
 	return atomic.LoadInt64(&this.TotalRowsCopied)
+}
+
+func (this *MigrationContext) GetIteration() int64 {
+	return atomic.LoadInt64(&this.Iteration)
+}
+
+func (this *MigrationContext) SetThrottled(throttle bool, reason string) {
+	this.throttleMutex.Lock()
+	defer func() { this.throttleMutex.Unlock() }()
+	this.isThrottled = throttle
+	this.throttleReason = reason
+}
+
+func (this *MigrationContext) IsThrottled() (bool, string) {
+	this.throttleMutex.Lock()
+	defer func() { this.throttleMutex.Unlock() }()
+	return this.isThrottled, this.throttleReason
+}
+
+func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
+	if maxLoadList == "" {
+		return nil
+	}
+	maxLoadConditions := strings.Split(maxLoadList, ",")
+	for _, maxLoadCondition := range maxLoadConditions {
+		maxLoadTokens := strings.Split(maxLoadCondition, "=")
+		if len(maxLoadTokens) != 2 {
+			return fmt.Errorf("Error parsing max-load condition: %s", maxLoadCondition)
+		}
+		if maxLoadTokens[0] == "" {
+			return fmt.Errorf("Error parsing status variable in max-load condition: %s", maxLoadCondition)
+		}
+		if n, err := strconv.ParseInt(maxLoadTokens[1], 10, 0); err != nil {
+			return fmt.Errorf("Error parsing numeric value in max-load condition: %s", maxLoadCondition)
+		} else {
+			this.MaxLoad[maxLoadTokens[0]] = n
+		}
+	}
+	return nil
 }
