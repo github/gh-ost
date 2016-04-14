@@ -185,6 +185,12 @@ func (this *Inspector) validateGrants() error {
 func (this *Inspector) restartReplication() error {
 	log.Infof("Restarting replication on %s:%d to make sure binlog settings apply to replication thread", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 
+	masterKey, _ := getMasterKeyFromSlaveStatus(this.connectionConfig)
+	if masterKey == nil {
+		// This is not a replica
+		return nil
+	}
+
 	var stopError, startError error
 	_, stopError = sqlutils.ExecNoPrepare(this.db, `stop slave`)
 	_, startError = sqlutils.ExecNoPrepare(this.db, `start slave`)
@@ -454,43 +460,62 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 	return sql.NewColumnList(sharedColumnNames)
 }
 
-func (this *Inspector) getMasterConnectionConfig() (masterConfig *mysql.ConnectionConfig, err error) {
-	visitedKeys := mysql.NewInstanceKeyMap()
-	return getMasterConnectionConfigSafe(this.connectionConfig, this.migrationContext.DatabaseName, visitedKeys)
+func (this *Inspector) readChangelogState() (map[string]string, error) {
+	query := fmt.Sprintf(`
+		select hint, value from %s.%s where id <= 255
+		`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+	result := make(map[string]string)
+	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		result[m.GetString("hint")] = m.GetString("value")
+		return nil
+	})
+	return result, err
 }
 
-func getMasterConnectionConfigSafe(connectionConfig *mysql.ConnectionConfig, databaseName string, visitedKeys *mysql.InstanceKeyMap) (masterConfig *mysql.ConnectionConfig, err error) {
-	log.Debugf("Looking for master on %+v", connectionConfig.Key)
+func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
+	visitedKeys := mysql.NewInstanceKeyMap()
+	return getMasterConnectionConfigSafe(this.connectionConfig, visitedKeys)
+}
 
-	currentUri := connectionConfig.GetDBUri(databaseName)
+func getMasterKeyFromSlaveStatus(connectionConfig *mysql.ConnectionConfig) (masterKey *mysql.InstanceKey, err error) {
+	currentUri := connectionConfig.GetDBUri("information_schema")
 	db, _, err := sqlutils.GetDB(currentUri)
 	if err != nil {
 		return nil, err
 	}
-
-	hasMaster := false
-	masterConfig = connectionConfig.Duplicate()
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
-		masterKey := mysql.InstanceKey{
+		masterKey = &mysql.InstanceKey{
 			Hostname: rowMap.GetString("Master_Host"),
 			Port:     rowMap.GetInt("Master_Port"),
 		}
-		if masterKey.IsValid() {
-			masterConfig.Key = masterKey
-			hasMaster = true
-		}
 		return nil
 	})
+	return masterKey, err
+}
+
+func getMasterConnectionConfigSafe(connectionConfig *mysql.ConnectionConfig, visitedKeys *mysql.InstanceKeyMap) (masterConfig *mysql.ConnectionConfig, err error) {
+	log.Debugf("Looking for master on %+v", connectionConfig.Key)
+
+	masterKey, err := getMasterKeyFromSlaveStatus(connectionConfig)
 	if err != nil {
 		return nil, err
 	}
-	if hasMaster {
-		log.Debugf("Master of %+v is %+v", connectionConfig.Key, masterConfig.Key)
-		if visitedKeys.HasKey(masterConfig.Key) {
-			return nil, fmt.Errorf("There seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
-		}
-		visitedKeys.AddKey(masterConfig.Key)
-		return getMasterConnectionConfigSafe(masterConfig, databaseName, visitedKeys)
+	if masterKey == nil {
+		return connectionConfig, nil
 	}
-	return masterConfig, nil
+	if !masterKey.IsValid() {
+		return connectionConfig, nil
+	}
+	masterConfig = connectionConfig.Duplicate()
+	masterConfig.Key = *masterKey
+
+	log.Debugf("Master of %+v is %+v", connectionConfig.Key, masterConfig.Key)
+	if visitedKeys.HasKey(masterConfig.Key) {
+		return nil, fmt.Errorf("There seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
+	}
+	visitedKeys.AddKey(masterConfig.Key)
+	return getMasterConnectionConfigSafe(masterConfig, visitedKeys)
 }

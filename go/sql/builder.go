@@ -83,6 +83,17 @@ func BuildEqualsPreparedComparison(columns []string) (result string, err error) 
 	return BuildEqualsComparison(columns, values)
 }
 
+func BuildSetPreparedClause(columns []string) (result string, err error) {
+	if len(columns) == 0 {
+		return "", fmt.Errorf("Got 0 columns in BuildSetPreparedClause")
+	}
+	setTokens := []string{}
+	for _, column := range columns {
+		setTokens = append(setTokens, fmt.Sprintf("%s=?", EscapeName(column)))
+	}
+	return strings.Join(setTokens, ", "), nil
+}
+
 func BuildRangeComparison(columns []string, values []string, args []interface{}, comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
 	if len(columns) == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in GetRangeComparison")
@@ -278,17 +289,23 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 	return query, nil
 }
 
-func BuildDMLDeleteQuery(databaseName, tableName string, originalTableColumns, uniqueKeyColumns *ColumnList, args []interface{}) (result string, uniqueKeyArgs []interface{}, err error) {
-	if len(args) != originalTableColumns.Len() {
+func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKeyColumns *ColumnList, args []interface{}) (result string, uniqueKeyArgs []interface{}, err error) {
+	if len(args) != tableColumns.Len() {
 		return result, uniqueKeyArgs, fmt.Errorf("args count differs from table column count in BuildDMLDeleteQuery")
 	}
+	if uniqueKeyColumns.Len() == 0 {
+		return result, uniqueKeyArgs, fmt.Errorf("No unique key columns found in BuildDMLDeleteQuery")
+	}
 	for _, column := range uniqueKeyColumns.Names {
-		tableOrdinal := originalTableColumns.Ordinals[column]
+		tableOrdinal := tableColumns.Ordinals[column]
 		uniqueKeyArgs = append(uniqueKeyArgs, args[tableOrdinal])
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names)
+	if err != nil {
+		return result, uniqueKeyArgs, err
+	}
 	result = fmt.Sprintf(`
 			delete /* gh-osc %s.%s */
 				from
@@ -299,14 +316,14 @@ func BuildDMLDeleteQuery(databaseName, tableName string, originalTableColumns, u
 		databaseName, tableName,
 		equalsComparison,
 	)
-	return result, uniqueKeyArgs, err
+	return result, uniqueKeyArgs, nil
 }
 
-func BuildDMLInsertQuery(databaseName, tableName string, originalTableColumns, sharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
-	if len(args) != originalTableColumns.Len() {
+func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
+	if len(args) != tableColumns.Len() {
 		return result, args, fmt.Errorf("args count differs from table column count in BuildDMLInsertQuery")
 	}
-	if !sharedColumns.IsSubsetOf(originalTableColumns) {
+	if !sharedColumns.IsSubsetOf(tableColumns) {
 		return result, args, fmt.Errorf("shared columns is not a subset of table columns in BuildDMLInsertQuery")
 	}
 	if sharedColumns.Len() == 0 {
@@ -316,7 +333,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, originalTableColumns, s
 	tableName = EscapeName(tableName)
 
 	for _, column := range sharedColumns.Names {
-		tableOrdinal := originalTableColumns.Ordinals[column]
+		tableOrdinal := tableColumns.Ordinals[column]
 		sharedArgs = append(sharedArgs, args[tableOrdinal])
 	}
 
@@ -337,5 +354,59 @@ func BuildDMLInsertQuery(databaseName, tableName string, originalTableColumns, s
 		strings.Join(sharedColumnNames, ", "),
 		strings.Join(preparedValues, ", "),
 	)
-	return result, sharedArgs, err
+	return result, sharedArgs, nil
+}
+
+func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedColumns, uniqueKeyColumns *ColumnList, valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {
+	if len(valueArgs) != tableColumns.Len() {
+		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("value args count differs from table column count in BuildDMLUpdateQuery")
+	}
+	if len(whereArgs) != tableColumns.Len() {
+		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("where args count differs from table column count in BuildDMLUpdateQuery")
+	}
+	if !sharedColumns.IsSubsetOf(tableColumns) {
+		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("shared columns is not a subset of table columns in BuildDMLUpdateQuery")
+	}
+	if !uniqueKeyColumns.IsSubsetOf(sharedColumns) {
+		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("unique key columns is not a subset of shared columns in BuildDMLUpdateQuery")
+	}
+	if sharedColumns.Len() == 0 {
+		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("No shared columns found in BuildDMLUpdateQuery")
+	}
+	if uniqueKeyColumns.Len() == 0 {
+		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("No unique key columns found in BuildDMLUpdateQuery")
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+
+	for _, column := range sharedColumns.Names {
+		tableOrdinal := tableColumns.Ordinals[column]
+		sharedArgs = append(sharedArgs, valueArgs[tableOrdinal])
+	}
+
+	for _, column := range uniqueKeyColumns.Names {
+		tableOrdinal := tableColumns.Ordinals[column]
+		uniqueKeyArgs = append(uniqueKeyArgs, whereArgs[tableOrdinal])
+	}
+
+	sharedColumnNames := duplicateNames(sharedColumns.Names)
+	for i := range sharedColumnNames {
+		sharedColumnNames[i] = EscapeName(sharedColumnNames[i])
+	}
+	setClause, err := BuildSetPreparedClause(sharedColumnNames)
+
+	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names)
+	result = fmt.Sprintf(`
+ 			update /* gh-osc %s.%s */
+ 					%s.%s
+				set
+					%s
+				where
+ 					%s
+ 		`, databaseName, tableName,
+		databaseName, tableName,
+		setClause,
+		equalsComparison,
+	)
+	return result, sharedArgs, uniqueKeyArgs, nil
 }

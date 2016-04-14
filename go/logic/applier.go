@@ -20,10 +20,6 @@ import (
 	"github.com/outbrain/golib/sqlutils"
 )
 
-const (
-	heartbeatIntervalSeconds = 1
-)
-
 // Applier reads data from the read-MySQL-server (typically a replica, but can be the master)
 // It is used for gaining initial status and structure, and later also follow up on progress and changelog
 type Applier struct {
@@ -34,7 +30,7 @@ type Applier struct {
 
 func NewApplier() *Applier {
 	return &Applier{
-		connectionConfig: base.GetMigrationContext().MasterConnectionConfig,
+		connectionConfig: base.GetMigrationContext().ApplierConnectionConfig,
 		migrationContext: base.GetMigrationContext(),
 	}
 }
@@ -157,11 +153,20 @@ func (this *Applier) DropGhostTable() error {
 // WriteChangelog writes a value to the changelog table.
 // It returns the hint as given, for convenience
 func (this *Applier) WriteChangelog(hint, value string) (string, error) {
+	explicitId := 0
+	switch hint {
+	case "heartbeat":
+		explicitId = 1
+	case "state":
+		explicitId = 2
+	case "throttle":
+		explicitId = 3
+	}
 	query := fmt.Sprintf(`
 			insert /* gh-osc */ into %s.%s
 				(id, hint, value)
 			values
-				(NULL, ?, ?)
+				(NULLIF(?, 0), ?, ?)
 			on duplicate key update
 				last_update=NOW(),
 				value=VALUES(value)
@@ -169,7 +174,7 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
-	_, err := sqlutils.Exec(this.db, query, hint, value)
+	_, err := sqlutils.Exec(this.db, query, explicitId, hint, value)
 	return hint, err
 }
 
@@ -184,44 +189,30 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
 // This is done asynchronously
-func (this *Applier) InitiateHeartbeat() {
-	go func() {
-		numSuccessiveFailures := 0
-		query := fmt.Sprintf(`
-			insert /* gh-osc */ into %s.%s
-				(id, hint, value)
-			values
-				(1, 'heartbeat', ?)
-			on duplicate key update
-				last_update=NOW(),
-				value=VALUES(value)
-		`,
-			sql.EscapeName(this.migrationContext.DatabaseName),
-			sql.EscapeName(this.migrationContext.GetChangelogTableName()),
-		)
-		injectHeartbeat := func() error {
-			if _, err := sqlutils.ExecNoPrepare(this.db, query, time.Now().Format(time.RFC3339)); err != nil {
-				numSuccessiveFailures++
-				if numSuccessiveFailures > this.migrationContext.MaxRetries() {
-					return log.Errore(err)
-				}
-			} else {
-				numSuccessiveFailures = 0
+func (this *Applier) InitiateHeartbeat(heartbeatIntervalMilliseconds int64) {
+	numSuccessiveFailures := 0
+	injectHeartbeat := func() error {
+		if _, err := this.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339)); err != nil {
+			numSuccessiveFailures++
+			if numSuccessiveFailures > this.migrationContext.MaxRetries() {
+				return log.Errore(err)
 			}
-			return nil
+		} else {
+			numSuccessiveFailures = 0
 		}
-		injectHeartbeat()
+		return nil
+	}
+	injectHeartbeat()
 
-		heartbeatTick := time.Tick(time.Duration(heartbeatIntervalSeconds) * time.Second)
-		for range heartbeatTick {
-			// Generally speaking, we would issue a goroutine, but I'd actually rather
-			// have this blocked rather than spam the master in the event something
-			// goes wrong
-			if err := injectHeartbeat(); err != nil {
-				return
-			}
+	heartbeatTick := time.Tick(time.Duration(heartbeatIntervalMilliseconds) * time.Millisecond)
+	for range heartbeatTick {
+		// Generally speaking, we would issue a goroutine, but I'd actually rather
+		// have this blocked rather than spam the master in the event something
+		// goes wrong
+		if err := injectHeartbeat(); err != nil {
+			return
 		}
-	}()
+	}
 }
 
 // ReadMigrationMinValues
@@ -352,17 +343,10 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		hasFurtherRange = true
 	}
 	if !hasFurtherRange {
-		log.Debugf("Iteration complete: cannot find iteration end")
+		log.Debugf("Iteration complete: no further range to iterate")
 		return hasFurtherRange, nil
 	}
 	this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
-	// log.Debugf(
-	// 	"column values: [%s]..[%s]; iteration: %d; chunk-size: %d",
-	// 	this.migrationContext.MigrationIterationRangeMinValues,
-	// 	this.migrationContext.MigrationIterationRangeMaxValues,
-	// 	this.migrationContext.GetIteration(),
-	// 	this.migrationContext.ChunkSize,
-	// )
 	return hasFurtherRange, nil
 }
 
@@ -402,6 +386,11 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 
 // LockTables
 func (this *Applier) LockTables() error {
+	if this.migrationContext.Noop {
+		log.Debugf("Noop operation; not really locking tables")
+		return nil
+	}
+
 	query := fmt.Sprintf(`lock /* gh-osc */ tables %s.%s write, %s.%s write, %s.%s write`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
@@ -437,11 +426,35 @@ func (this *Applier) ShowStatusVariable(variableName string) (result int64, err 
 	return result, nil
 }
 
-func (this *Applier) BuildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result string, err error) {
+func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query string, args []interface{}, err error) {
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
 		{
+			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
+			return query, uniqueKeyArgs, err
+		}
+	case binlog.InsertDML:
+		{
+			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, dmlEvent.NewColumnValues.AbstractValues())
+			return query, sharedArgs, err
+		}
+	case binlog.UpdateDML:
+		{
+			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			args = append(args, sharedArgs...)
+			args = append(args, uniqueKeyArgs...)
+			return query, args, err
 		}
 	}
-	return result, err
+	return "", args, fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)
+}
+
+func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
+	query, args, err := this.buildDMLEventQuery(dmlEvent)
+	if err != nil {
+		return err
+	}
+	log.Errorf(query)
+	_, err = sqlutils.Exec(this.db, query, args...)
+	return err
 }

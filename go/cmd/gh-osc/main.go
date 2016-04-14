@@ -30,6 +30,9 @@ func main() {
 	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
 	flag.BoolVar(&migrationContext.AllowedRunningOnMaster, "allow-on-master", false, "allow this migration to run directly on master. Preferably it would run on a replica")
 
+	executeFlag := flag.Bool("execute", false, "actually execute the alter & migrate the table. Default is noop: do some tests and exit")
+	flag.BoolVar(&migrationContext.TestOnReplica, "test-on-replica", false, "Have the migration run on a replica, not on the master. At the end of migration tables are not swapped; gh-osc issues `STOP SLAVE` and you can compare the two tables for building trust")
+
 	flag.Int64Var(&migrationContext.ChunkSize, "chunk-size", 1000, "amount of rows to handle in each iteration (allowed range: 100-100,000)")
 	if migrationContext.ChunkSize < 100 {
 		migrationContext.ChunkSize = 100
@@ -37,7 +40,7 @@ func main() {
 	if migrationContext.ChunkSize > 100000 {
 		migrationContext.ChunkSize = 100000
 	}
-	flag.Int64Var(&migrationContext.MaxLagMillisecondsThrottleThreshold, "max-lag-millis", 1000, "replication lag at which to throttle operation")
+	flag.Int64Var(&migrationContext.MaxLagMillisecondsThrottleThreshold, "max-lag-millis", 1500, "replication lag at which to throttle operation")
 	flag.StringVar(&migrationContext.ThrottleFlagFile, "throttle-flag-file", "", "operation pauses when this file exists; hint: use a file that is specific to the table being altered")
 	flag.StringVar(&migrationContext.ThrottleAdditionalFlagFile, "throttle-additional-flag-file", "/tmp/gh-osc.throttle", "operation pauses when this file exists; hint: keep default, use for throttling multiple gh-osc operations")
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'")
@@ -77,6 +80,10 @@ func main() {
 	}
 	if migrationContext.AlterStatement == "" {
 		log.Fatalf("--alter must be provided and statement must not be empty")
+	}
+	migrationContext.Noop = !(*executeFlag)
+	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {
+		log.Fatalf("--allow-on-master and --test-on-replica are mutually exclusive")
 	}
 	if err := migrationContext.ReadMaxLoad(*maxLoad); err != nil {
 		log.Fatale(err)

@@ -30,7 +30,8 @@ const (
 type tableWriteFunc func() error
 
 const (
-	applyEventsQueueBuffer = 100
+	applyEventsQueueBuffer        = 100
+	heartbeatIntervalMilliseconds = 1000
 )
 
 var (
@@ -52,6 +53,8 @@ type Migrator struct {
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
 	applyEventsQueue chan tableWriteFunc
+
+	handledChangelogStates map[string]bool
 }
 
 func NewMigrator() *Migrator {
@@ -61,8 +64,9 @@ func NewMigrator() *Migrator {
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan bool),
 
-		copyRowsQueue:    make(chan tableWriteFunc),
-		applyEventsQueue: make(chan tableWriteFunc, applyEventsQueueBuffer),
+		copyRowsQueue:          make(chan tableWriteFunc),
+		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
+		handledChangelogStates: make(map[string]bool),
 	}
 	return migrator
 }
@@ -185,12 +189,13 @@ func (this *Migrator) canStopStreaming() bool {
 	return false
 }
 
-func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
-	// Hey, I created the changlog table, I know the type of columns it has!
-	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
+func (this *Migrator) onChangelogState(stateValue string) (err error) {
+	if this.handledChangelogStates[stateValue] {
 		return
 	}
-	changelogState := ChangelogState(dmlEvent.NewColumnValues.StringColumn(3))
+	this.handledChangelogStates[stateValue] = true
+
+	changelogState := ChangelogState(stateValue)
 	switch changelogState {
 	case TablesInPlace:
 		{
@@ -209,12 +214,8 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	return nil
 }
 
-func (this *Migrator) onChangelogHeartbeatEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
-	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "heartbeat" {
-		return nil
-	}
-	value := dmlEvent.NewColumnValues.StringColumn(3)
-	heartbeatTime, err := time.Parse(time.RFC3339, value)
+func (this *Migrator) onChangelogHeartbeat(heartbeatValue string) (err error) {
+	heartbeatTime, err := time.Parse(time.RFC3339, heartbeatValue)
 	if err != nil {
 		return log.Errore(err)
 	}
@@ -239,13 +240,25 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	// So far so good, table is accessible and valid.
-	if this.migrationContext.MasterConnectionConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
+	// Let's get master connection config
+	if this.migrationContext.ApplierConnectionConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
 		return err
 	}
-	if this.migrationContext.IsRunningOnMaster() && !this.migrationContext.AllowedRunningOnMaster {
+	if this.migrationContext.TestOnReplica {
+		if this.migrationContext.InspectorIsAlsoApplier() {
+			return fmt.Errorf("Instructed to --test-on-replica, but the server we connect to doesn't seem to be a replica")
+		}
+		log.Infof("--test-on-replica given. Will not execute on master %+v but rather on replica %+v itself",
+			this.migrationContext.ApplierConnectionConfig.Key, this.migrationContext.InspectorConnectionConfig.Key,
+		)
+		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.Duplicate()
+	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
 		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master")
 	}
-	log.Infof("Master found to be %+v", this.migrationContext.MasterConnectionConfig.Key)
+
+	log.Infof("Master found to be %+v", this.migrationContext.ApplierConnectionConfig.Key)
+
+	go this.initiateChangelogListener()
 
 	if err := this.initiateStreaming(); err != nil {
 		return err
@@ -344,27 +357,54 @@ func (this *Migrator) printStatus() {
 	fmt.Println(status)
 }
 
+func (this *Migrator) initiateChangelogListener() {
+	ticker := time.Tick((heartbeatIntervalMilliseconds * time.Millisecond) / 2)
+	for range ticker {
+		go func() error {
+			changelogState, err := this.inspector.readChangelogState()
+			if err != nil {
+				return log.Errore(err)
+			}
+			for hint, value := range changelogState {
+				switch hint {
+				case "state":
+					{
+						this.onChangelogState(value)
+					}
+				case "heartbeat":
+					{
+						this.onChangelogHeartbeat(value)
+					}
+				}
+			}
+			return nil
+		}()
+	}
+}
+
+// initiateStreaming begins treaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
 	this.eventsStreamer = NewEventsStreamer()
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
+	if this.migrationContext.Noop {
+		log.Debugf("Noop operation; not really listening on binlog events")
+		return nil
+	}
 	this.eventsStreamer.AddListener(
-		false,
+		true,
 		this.migrationContext.DatabaseName,
-		this.migrationContext.GetChangelogTableName(),
+		this.migrationContext.OriginalTableName,
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			return this.onChangelogStateEvent(dmlEvent)
+			applyEventFunc := func() error {
+				return this.applier.ApplyDMLEventQuery(dmlEvent)
+			}
+			this.applyEventsQueue <- applyEventFunc
+			return nil
 		},
 	)
-	this.eventsStreamer.AddListener(
-		false,
-		this.migrationContext.DatabaseName,
-		this.migrationContext.GetChangelogTableName(),
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			return this.onChangelogHeartbeatEvent(dmlEvent)
-		},
-	)
+
 	go func() {
 		log.Debugf("Beginning streaming")
 		this.eventsStreamer.StreamEvents(func() bool { return this.canStopStreaming() })
@@ -391,7 +431,7 @@ func (this *Migrator) initiateApplier() error {
 	}
 
 	this.applier.WriteChangelogState(string(TablesInPlace))
-	this.applier.InitiateHeartbeat()
+	go this.applier.InitiateHeartbeat(heartbeatIntervalMilliseconds)
 	return nil
 }
 
@@ -399,6 +439,14 @@ func (this *Migrator) iterateChunks() error {
 	terminateRowIteration := func(err error) error {
 		this.rowCopyComplete <- true
 		return log.Errore(err)
+	}
+	if this.migrationContext.Noop {
+		log.Debugf("Noop operation; not really copying data")
+		return terminateRowIteration(nil)
+	}
+	if this.migrationContext.MigrationRangeMinValues == nil {
+		log.Debugf("No rows found in table. Rowcopy will be implicitly empty")
+		return terminateRowIteration(nil)
 	}
 	for {
 		copyRowsFunc := func() error {
@@ -423,6 +471,10 @@ func (this *Migrator) iterateChunks() error {
 }
 
 func (this *Migrator) executeWriteFuncs() error {
+	if this.migrationContext.Noop {
+		log.Debugf("Noop operation; not really doing writes")
+		return nil
+	}
 	for {
 		this.throttle(nil)
 		// We give higher priority to event processing, then secondary priority to

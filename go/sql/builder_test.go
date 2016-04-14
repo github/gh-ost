@@ -77,6 +77,26 @@ func TestBuildEqualsPreparedComparison(t *testing.T) {
 	}
 }
 
+func TestBuildSetPreparedClause(t *testing.T) {
+	{
+		columns := []string{"c1"}
+		clause, err := BuildSetPreparedClause(columns)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(clause, "`c1`=?")
+	}
+	{
+		columns := []string{"c1", "c2"}
+		clause, err := BuildSetPreparedClause(columns)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(clause, "`c1`=?, `c2`=?")
+	}
+	{
+		columns := []string{}
+		_, err := BuildSetPreparedClause(columns)
+		test.S(t).ExpectNotNil(err)
+	}
+}
+
 func TestBuildRangeComparison(t *testing.T) {
 	{
 		columns := []string{"c1"}
@@ -372,6 +392,90 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{})
 		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, args)
+		test.S(t).ExpectNotNil(err)
+	}
+}
+
+func TestBuildDMLUpdateQuery(t *testing.T) {
+	databaseName := "mydb"
+	tableName := "tbl"
+	tableColumns := NewColumnList([]string{"id", "name", "rank", "position", "age"})
+	valueArgs := []interface{}{3, "testname", "newval", 17, 23}
+	whereArgs := []interface{}{3, "testname", "findme", 17, 56}
+	{
+		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
+		uniqueKeyColumns := NewColumnList([]string{"position"})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		test.S(t).ExpectNil(err)
+		expected := `
+			update /* gh-osc mydb.tbl */
+			  mydb.tbl
+					set id=?, name=?, position=?, age=?
+				where
+					((position = ?))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17}))
+	}
+	{
+		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
+		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		test.S(t).ExpectNil(err)
+		expected := `
+			update /* gh-osc mydb.tbl */
+			  mydb.tbl
+					set id=?, name=?, position=?, age=?
+				where
+					((position = ?) and (name = ?))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17, "testname"}))
+	}
+	{
+		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
+		uniqueKeyColumns := NewColumnList([]string{"age"})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		test.S(t).ExpectNil(err)
+		expected := `
+			update /* gh-osc mydb.tbl */
+			  mydb.tbl
+					set id=?, name=?, position=?, age=?
+				where
+					((age = ?))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{56}))
+	}
+	{
+		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
+		uniqueKeyColumns := NewColumnList([]string{"age", "position", "id", "name"})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		test.S(t).ExpectNil(err)
+		expected := `
+			update /* gh-osc mydb.tbl */
+			  mydb.tbl
+					set id=?, name=?, position=?, age=?
+				where
+					((age = ?) and (position = ?) and (id = ?) and (name = ?))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{56, 17, 3, "testname"}))
+	}
+	{
+		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
+		uniqueKeyColumns := NewColumnList([]string{"age", "surprise"})
+		_, _, _, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		test.S(t).ExpectNotNil(err)
+	}
+	{
+		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
+		uniqueKeyColumns := NewColumnList([]string{})
+		_, _, _, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNotNil(err)
 	}
 }
