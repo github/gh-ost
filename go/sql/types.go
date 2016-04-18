@@ -71,9 +71,10 @@ func (this *ColumnList) Len() int {
 
 // UniqueKey is the combination of a key's name and columns
 type UniqueKey struct {
-	Name        string
-	Columns     ColumnList
-	HasNullable bool
+	Name            string
+	Columns         ColumnList
+	HasNullable     bool
+	IsAutoIncrement bool
 }
 
 // IsPrimary checks if this unique key is primary
@@ -86,7 +87,11 @@ func (this *UniqueKey) Len() int {
 }
 
 func (this *UniqueKey) String() string {
-	return fmt.Sprintf("%s: %s; has nullable: %+v", this.Name, this.Columns, this.HasNullable)
+	description := this.Name
+	if this.IsAutoIncrement {
+		description = fmt.Sprintf("%s (auto_incrmenet)", description)
+	}
+	return fmt.Sprintf("%s: %s; has nullable: %+v", description, this.Columns.Names, this.HasNullable)
 }
 
 type ColumnValues struct {

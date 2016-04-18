@@ -44,10 +44,13 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateGrants(); err != nil {
 		return err
 	}
-	if err := this.restartReplication(); err != nil {
+	// if err := this.restartReplication(); err != nil {
+	// 	return err
+	// }
+	if err := this.validateBinlogs(); err != nil {
 		return err
 	}
-	if err := this.validateBinlogs(); err != nil {
+	if err := this.applyBinlogFormat(); err != nil {
 		return err
 	}
 	return nil
@@ -204,6 +207,24 @@ func (this *Inspector) restartReplication() error {
 	return nil
 }
 
+// applyBinlogFormat sets ROW binlog format and restarts replication to make
+// the replication thread apply it.
+func (this *Inspector) applyBinlogFormat() error {
+	if this.migrationContext.RequiresBinlogFormatChange() {
+		if _, err := sqlutils.ExecNoPrepare(this.db, `set global binlog_format='ROW'`); err != nil {
+			return err
+		}
+		if _, err := sqlutils.ExecNoPrepare(this.db, `set session binlog_format='ROW'`); err != nil {
+			return err
+		}
+		log.Debugf("'ROW' binlog format applied")
+	}
+	if err := this.restartReplication(); err != nil {
+		return err
+	}
+	return nil
+}
+
 // validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
 	query := `select @@global.log_bin, @@global.log_slave_updates, @@global.binlog_format`
@@ -218,6 +239,9 @@ func (this *Inspector) validateBinlogs() error {
 		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	}
 	if this.migrationContext.RequiresBinlogFormatChange() {
+		if !this.migrationContext.SwitchToRowBinlogFormat {
+			return fmt.Errorf("You must be using ROW binlog format. I can switch it for you, provided --switch-to-rbr and that %s:%d doesn't have replicas", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		}
 		query := fmt.Sprintf(`show /* gh-osc */ slave hosts`)
 		countReplicas := 0
 		err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
@@ -230,7 +254,7 @@ func (this *Inspector) validateBinlogs() error {
 		if countReplicas > 0 {
 			return fmt.Errorf("%s:%d has %s binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
 		}
-		log.Infof("%s:%d has %s binlog_format. I will change it to ROW for the duration of this migration.", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
+		log.Infof("%s:%d has %s binlog_format. I will change it to ROW, and will NOT change it back, even in the event of failure.", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
 	}
 	query = `select @@global.binlog_row_image`
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.OriginalBinlogRowImage); err != nil {
@@ -369,6 +393,7 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
       UNIQUES.COUNT_COLUMN_IN_INDEX,
       COLUMNS.DATA_TYPE,
       COLUMNS.CHARACTER_SET_NAME,
+			LOCATE('auto_increment', EXTRA) > 0 as is_auto_increment,
       has_nullable
     FROM INFORMATION_SCHEMA.COLUMNS INNER JOIN (
       SELECT
@@ -414,11 +439,12 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
       END,
       COUNT_COLUMN_IN_INDEX
   `
-	err = sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+	err = sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		uniqueKey := &sql.UniqueKey{
-			Name:        rowMap.GetString("INDEX_NAME"),
-			Columns:     *sql.ParseColumnList(rowMap.GetString("COLUMN_NAMES")),
-			HasNullable: rowMap.GetBool("has_nullable"),
+			Name:            m.GetString("INDEX_NAME"),
+			Columns:         *sql.ParseColumnList(m.GetString("COLUMN_NAMES")),
+			HasNullable:     m.GetBool("has_nullable"),
+			IsAutoIncrement: m.GetBool("is_auto_increment"),
 		}
 		uniqueKeys = append(uniqueKeys, uniqueKey)
 		return nil
@@ -426,7 +452,7 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
 	if err != nil {
 		return uniqueKeys, err
 	}
-	log.Debugf("Potential unique keys: %+v", uniqueKeys)
+	log.Debugf("Potential unique keys in %+v: %+v", tableName, uniqueKeys)
 	return uniqueKeys, nil
 }
 
