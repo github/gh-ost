@@ -25,6 +25,7 @@ import (
 type Applier struct {
 	connectionConfig *mysql.ConnectionConfig
 	db               *gosql.DB
+	singletonDB      *gosql.DB
 	migrationContext *base.MigrationContext
 }
 
@@ -36,21 +37,29 @@ func NewApplier() *Applier {
 }
 
 func (this *Applier) InitDBConnections() (err error) {
-	ApplierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = sqlutils.GetDB(ApplierUri); err != nil {
+	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
+	if this.db, _, err = sqlutils.GetDB(applierUri); err != nil {
 		return err
 	}
-	if err := this.validateConnection(); err != nil {
+	singletonApplierUri := fmt.Sprintf("%s?timeout=0", applierUri)
+	if this.singletonDB, _, err = sqlutils.GetDB(singletonApplierUri); err != nil {
+		return err
+	}
+	this.singletonDB.SetMaxOpenConns(1)
+	if err := this.validateConnection(this.db); err != nil {
+		return err
+	}
+	if err := this.validateConnection(this.singletonDB); err != nil {
 		return err
 	}
 	return nil
 }
 
 // validateConnection issues a simple can-connect to MySQL
-func (this *Applier) validateConnection() error {
+func (this *Applier) validateConnection(db *gosql.DB) error {
 	query := `select @@global.port`
 	var port int
-	if err := this.db.QueryRow(query).Scan(&port); err != nil {
+	if err := db.QueryRow(query).Scan(&port); err != nil {
 		return err
 	}
 	if port != this.connectionConfig.Key.Port {
@@ -125,6 +134,10 @@ func (this *Applier) CreateChangelogTable() error {
 
 // dropTable drops a given table on the applied host
 func (this *Applier) dropTable(tableName string) error {
+	if this.migrationContext.Noop {
+		log.Debugf("Noop operation; not really dropping table %s", sql.EscapeName(tableName))
+		return nil
+	}
 	query := fmt.Sprintf(`drop /* gh-osc */ table if exists %s.%s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
@@ -192,7 +205,7 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 func (this *Applier) InitiateHeartbeat(heartbeatIntervalMilliseconds int64) {
 	numSuccessiveFailures := 0
 	injectHeartbeat := func() error {
-		if _, err := this.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339)); err != nil {
+		if _, err := this.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339Nano)); err != nil {
 			numSuccessiveFailures++
 			if numSuccessiveFailures > this.migrationContext.MaxRetries() {
 				return log.Errore(err)
@@ -391,16 +404,21 @@ func (this *Applier) LockTables() error {
 		return nil
 	}
 
-	query := fmt.Sprintf(`lock /* gh-osc */ tables %s.%s write, %s.%s write, %s.%s write`,
+	// query := fmt.Sprintf(`lock /* gh-osc */ tables %s.%s write, %s.%s write, %s.%s write`,
+	// 	sql.EscapeName(this.migrationContext.DatabaseName),
+	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
+	// 	sql.EscapeName(this.migrationContext.DatabaseName),
+	// 	sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	// 	sql.EscapeName(this.migrationContext.DatabaseName),
+	// 	sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	// )
+	query := fmt.Sprintf(`lock /* gh-osc */ tables %s.%s write`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
 	log.Infof("Locking tables")
-	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+	this.migrationContext.LockTablesStartTime = time.Now()
+	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
 		return err
 	}
 	log.Infof("Tables locked")
@@ -411,10 +429,67 @@ func (this *Applier) LockTables() error {
 func (this *Applier) UnlockTables() error {
 	query := `unlock /* gh-osc */ tables`
 	log.Infof("Unlocking tables")
-	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
 		return err
 	}
 	log.Infof("Tables unlocked")
+	return nil
+}
+
+// LockTables
+func (this *Applier) SwapTables() error {
+	if this.migrationContext.Noop {
+		log.Debugf("Noop operation; not really swapping tables")
+		return nil
+	}
+
+	// query := fmt.Sprintf(`rename /* gh-osc */ table %s.%s to %s.%s, %s.%s to %s.%s`,
+	// 	sql.EscapeName(this.migrationContext.DatabaseName),
+	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
+	// 	sql.EscapeName(this.migrationContext.DatabaseName),
+	// 	sql.EscapeName(this.migrationContext.GetOldTableName()),
+	// 	sql.EscapeName(this.migrationContext.DatabaseName),
+	// 	sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	// 	sql.EscapeName(this.migrationContext.DatabaseName),
+	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
+	// )
+	// log.Infof("Renaming tables")
+	// if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
+	// 	return err
+	// }
+	query := fmt.Sprintf(`alter /* gh-osc */ table %s.%s rename %s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.GetOldTableName()),
+	)
+	log.Infof("Renaming original table")
+	this.migrationContext.RenameTablesStartTime = time.Now()
+	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
+		return err
+	}
+	query = fmt.Sprintf(`alter /* gh-osc */ table %s.%s rename %s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	log.Infof("Renaming ghost table")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	this.migrationContext.RenameTablesEndTime = time.Now()
+
+	log.Infof("Tables renamed")
+	return nil
+}
+
+// StopSlaveIOThread is applicable with --test-on-replica; it stops the IO thread
+func (this *Applier) StopSlaveIOThread() error {
+	query := `stop /* gh-osc */ slave io_thread`
+	log.Infof("Stopping replication")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	log.Infof("Replication stopped")
 	return nil
 }
 

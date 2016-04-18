@@ -37,30 +37,37 @@ type MigrationContext struct {
 	OriginalTableName string
 	AlterStatement    string
 
-	Noop          bool
-	TestOnReplica bool
+	CountTableRows          bool
+	AllowedRunningOnMaster  bool
+	SwitchToRowBinlogFormat bool
 
-	TableEngine                         string
-	CountTableRows                      bool
-	RowsEstimate                        int64
-	UsedRowsEstimateMethod              RowsEstimateMethod
 	ChunkSize                           int64
-	OriginalBinlogFormat                string
-	OriginalBinlogRowImage              string
-	AllowedRunningOnMaster              bool
-	InspectorConnectionConfig           *mysql.ConnectionConfig
-	ApplierConnectionConfig             *mysql.ConnectionConfig
-	StartTime                           time.Time
-	RowCopyStartTime                    time.Time
-	CurrentLag                          int64
 	MaxLagMillisecondsThrottleThreshold int64
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
-	TotalRowsCopied                     int64
-	isThrottled                         bool
-	throttleReason                      string
-	throttleMutex                       *sync.Mutex
 	MaxLoad                             map[string]int64
+
+	Noop          bool
+	TestOnReplica bool
+	OkToDropTable bool
+
+	TableEngine               string
+	RowsEstimate              int64
+	UsedRowsEstimateMethod    RowsEstimateMethod
+	OriginalBinlogFormat      string
+	OriginalBinlogRowImage    string
+	InspectorConnectionConfig *mysql.ConnectionConfig
+	ApplierConnectionConfig   *mysql.ConnectionConfig
+	StartTime                 time.Time
+	RowCopyStartTime          time.Time
+	LockTablesStartTime       time.Time
+	RenameTablesStartTime     time.Time
+	RenameTablesEndTime       time.Time
+	CurrentLag                int64
+	TotalRowsCopied           int64
+	isThrottled               bool
+	throttleReason            string
+	throttleMutex             *sync.Mutex
 
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)

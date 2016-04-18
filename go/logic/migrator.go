@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"regexp"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/github/gh-osc/go/base"
 	"github.com/github/gh-osc/go/binlog"
+	"github.com/github/gh-osc/go/sql"
 
 	"github.com/outbrain/golib/log"
 )
@@ -34,10 +34,6 @@ const (
 	heartbeatIntervalMilliseconds = 1000
 )
 
-var (
-	prettifyDurationRegexp = regexp.MustCompile("([.][0-9]+)")
-)
-
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
 	inspector        *Inspector
@@ -48,6 +44,7 @@ type Migrator struct {
 	tablesInPlace              chan bool
 	rowCopyComplete            chan bool
 	allEventsUpToLockProcessed chan bool
+	panicAbort                 chan error
 
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
@@ -63,21 +60,13 @@ func NewMigrator() *Migrator {
 		tablesInPlace:              make(chan bool),
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan bool),
+		panicAbort:                 make(chan error),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
 		handledChangelogStates: make(map[string]bool),
 	}
 	return migrator
-}
-
-func prettifyDurationOutput(d time.Duration) string {
-	if d < time.Second {
-		return "0s"
-	}
-	result := fmt.Sprintf("%s", d)
-	result = prettifyDurationRegexp.ReplaceAllString(result, "")
-	return result
 }
 
 // acceptSignals registers for OS signals
@@ -182,6 +171,7 @@ func (this *Migrator) retryOperation(operation func() error) (err error) {
 		}
 		// there's an error. Let's try again.
 	}
+	this.panicAbort <- err
 	return err
 }
 
@@ -189,9 +179,34 @@ func (this *Migrator) canStopStreaming() bool {
 	return false
 }
 
+func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+	// Hey, I created the changlog table, I know the type of columns it has!
+	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
+		return nil
+	}
+	changelogState := ChangelogState(dmlEvent.NewColumnValues.StringColumn(3))
+	switch changelogState {
+	case TablesInPlace:
+		{
+			this.tablesInPlace <- true
+		}
+	case AllEventsUpToLockProcessed:
+		{
+			this.allEventsUpToLockProcessed <- true
+		}
+	default:
+		{
+			return fmt.Errorf("Unknown changelog state: %+v", changelogState)
+		}
+	}
+	log.Debugf("Received state %+v", changelogState)
+	return nil
+}
+
 func (this *Migrator) onChangelogState(stateValue string) (err error) {
+	log.Fatalf("I shouldn't be here")
 	if this.handledChangelogStates[stateValue] {
-		return
+		return nil
 	}
 	this.handledChangelogStates[stateValue] = true
 
@@ -215,7 +230,7 @@ func (this *Migrator) onChangelogState(stateValue string) (err error) {
 }
 
 func (this *Migrator) onChangelogHeartbeat(heartbeatValue string) (err error) {
-	heartbeatTime, err := time.Parse(time.RFC3339, heartbeatValue)
+	heartbeatTime, err := time.Parse(time.RFC3339Nano, heartbeatValue)
 	if err != nil {
 		return log.Errore(err)
 	}
@@ -226,9 +241,105 @@ func (this *Migrator) onChangelogHeartbeat(heartbeatValue string) (err error) {
 	return nil
 }
 
+//
+func (this *Migrator) listenOnPanicAbort() {
+	err := <-this.panicAbort
+	log.Fatale(err)
+}
+
 func (this *Migrator) Migrate() (err error) {
 	this.migrationContext.StartTime = time.Now()
 
+	go this.listenOnPanicAbort()
+	if err := this.initiateInspector(); err != nil {
+		return err
+	}
+
+	if err := this.initiateStreaming(); err != nil {
+		return err
+	}
+	if err := this.initiateApplier(); err != nil {
+		return err
+	}
+
+	log.Debugf("Waiting for tables to be in place")
+	<-this.tablesInPlace
+	log.Debugf("Tables are in place")
+	// Yay! We now know the Ghost and Changelog tables are good to examine!
+	// When running on replica, this means the replica has those tables. When running
+	// on master this is always true, of course, and yet it also implies this knowledge
+	// is in the binlogs.
+	if err := this.inspector.InspectOriginalAndGhostTables(); err != nil {
+		return err
+	}
+	go this.initiateHeartbeatListener()
+
+	if err := this.applier.ReadMigrationRangeValues(); err != nil {
+		return err
+	}
+	go this.initiateThrottler()
+	go this.executeWriteFuncs()
+	go this.iterateChunks()
+	this.migrationContext.RowCopyStartTime = time.Now()
+	go this.initiateStatus()
+
+	log.Debugf("Operating until row copy is complete")
+	<-this.rowCopyComplete
+	log.Debugf("Row copy complete")
+	this.printStatus()
+
+	this.stopWritesAndCompleteMigration()
+
+	return nil
+}
+
+func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
+	this.throttle(func() {
+		log.Debugf("throttling before LOCK TABLES")
+	})
+
+	if this.migrationContext.TestOnReplica {
+		log.Debugf("testing on replica. Instead of LOCK tables I will STOP SLAVE")
+		if err := this.retryOperation(this.applier.StopSlaveIOThread); err != nil {
+			return err
+		}
+	} else {
+		if err := this.retryOperation(this.applier.LockTables); err != nil {
+			return err
+		}
+	}
+	this.applier.WriteChangelogState(string(AllEventsUpToLockProcessed))
+	log.Debugf("Waiting for events up to lock")
+	<-this.allEventsUpToLockProcessed
+	log.Debugf("Done waiting for events up to lock")
+
+	if this.migrationContext.TestOnReplica {
+		log.Info("Table duplicated with new schema. Am not touching the original table. You may now compare the two tables to gain trust into this tool's operation")
+	} else {
+		if err := this.retryOperation(this.applier.SwapTables); err != nil {
+			return err
+		}
+		// Unlock
+		if err := this.retryOperation(this.applier.UnlockTables); err != nil {
+			return err
+		}
+		// Drop old table
+		if this.migrationContext.OkToDropTable {
+			dropTableFunc := func() error {
+				return this.applier.dropTable(this.migrationContext.GetOldTableName())
+			}
+			if err := this.retryOperation(dropTableFunc); err != nil {
+				return err
+			}
+		}
+	}
+	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
+	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
+	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	return nil
+}
+
+func (this *Migrator) initiateInspector() (err error) {
 	this.inspector = NewInspector()
 	if err := this.inspector.InitDBConnections(); err != nil {
 		return err
@@ -257,53 +368,6 @@ func (this *Migrator) Migrate() (err error) {
 	}
 
 	log.Infof("Master found to be %+v", this.migrationContext.ApplierConnectionConfig.Key)
-
-	go this.initiateChangelogListener()
-
-	if err := this.initiateStreaming(); err != nil {
-		return err
-	}
-	if err := this.initiateApplier(); err != nil {
-		return err
-	}
-
-	log.Debugf("Waiting for tables to be in place")
-	<-this.tablesInPlace
-	log.Debugf("Tables are in place")
-	// Yay! We now know the Ghost and Changelog tables are good to examine!
-	// When running on replica, this means the replica has those tables. When running
-	// on master this is always true, of course, and yet it also implies this knowledge
-	// is in the binlogs.
-	if err := this.inspector.InspectOriginalAndGhostTables(); err != nil {
-		return err
-	}
-
-	if err := this.applier.ReadMigrationRangeValues(); err != nil {
-		return err
-	}
-	go this.initiateThrottler()
-	go this.executeWriteFuncs()
-	go this.iterateChunks()
-	this.migrationContext.RowCopyStartTime = time.Now()
-	go this.initiateStatus()
-
-	log.Debugf("Operating until row copy is complete")
-	<-this.rowCopyComplete
-	log.Debugf("Row copy complete")
-	this.printStatus()
-
-	this.throttle(func() {
-		log.Debugf("throttling on LOCK TABLES")
-	})
-	// TODO retries!!
-	this.applier.LockTables()
-	this.applier.WriteChangelogState(string(AllEventsUpToLockProcessed))
-	log.Debugf("Waiting for events up to lock")
-	<-this.allEventsUpToLockProcessed
-	log.Debugf("Done waiting for events up to lock")
-	// TODO retries!!
-	this.applier.UnlockTables()
-
 	return nil
 }
 
@@ -347,7 +411,7 @@ func (this *Migrator) printStatus() {
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Backlog: %d/%d; Elapsed: %+v(copy), %+v(total); ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
-		prettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()), prettifyDurationOutput(elapsedTime),
+		base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()), base.PrettifyDurationOutput(elapsedTime),
 		eta,
 	)
 	this.applier.WriteChangelog(
@@ -357,7 +421,7 @@ func (this *Migrator) printStatus() {
 	fmt.Println(status)
 }
 
-func (this *Migrator) initiateChangelogListener() {
+func (this *Migrator) initiateHeartbeatListener() {
 	ticker := time.Tick((heartbeatIntervalMilliseconds * time.Millisecond) / 2)
 	for range ticker {
 		go func() error {
@@ -367,10 +431,6 @@ func (this *Migrator) initiateChangelogListener() {
 			}
 			for hint, value := range changelogState {
 				switch hint {
-				case "state":
-					{
-						this.onChangelogState(value)
-					}
 				case "heartbeat":
 					{
 						this.onChangelogHeartbeat(value)
@@ -392,6 +452,14 @@ func (this *Migrator) initiateStreaming() error {
 		log.Debugf("Noop operation; not really listening on binlog events")
 		return nil
 	}
+	this.eventsStreamer.AddListener(
+		false,
+		this.migrationContext.DatabaseName,
+		this.migrationContext.GetChangelogTableName(),
+		func(dmlEvent *binlog.BinlogDMLEvent) error {
+			return this.onChangelogStateEvent(dmlEvent)
+		},
+	)
 	this.eventsStreamer.AddListener(
 		true,
 		this.migrationContext.DatabaseName,
