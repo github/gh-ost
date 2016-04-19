@@ -134,10 +134,6 @@ func (this *Applier) CreateChangelogTable() error {
 
 // dropTable drops a given table on the applied host
 func (this *Applier) dropTable(tableName string) error {
-	if this.migrationContext.Noop {
-		log.Debugf("Noop operation; not really dropping table %s", sql.EscapeName(tableName))
-		return nil
-	}
 	query := fmt.Sprintf(`drop /* gh-osc */ table if exists %s.%s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
@@ -399,11 +395,6 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 
 // LockTables
 func (this *Applier) LockTables() error {
-	if this.migrationContext.Noop {
-		log.Debugf("Noop operation; not really locking tables")
-		return nil
-	}
-
 	// query := fmt.Sprintf(`lock /* gh-osc */ tables %s.%s write, %s.%s write, %s.%s write`,
 	// 	sql.EscapeName(this.migrationContext.DatabaseName),
 	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
@@ -438,11 +429,6 @@ func (this *Applier) UnlockTables() error {
 
 // LockTables
 func (this *Applier) SwapTables() error {
-	if this.migrationContext.Noop {
-		log.Debugf("Noop operation; not really swapping tables")
-		return nil
-	}
-
 	// query := fmt.Sprintf(`rename /* gh-osc */ table %s.%s to %s.%s, %s.%s to %s.%s`,
 	// 	sql.EscapeName(this.migrationContext.DatabaseName),
 	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
@@ -529,7 +515,9 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 	if err != nil {
 		return err
 	}
-	log.Errorf(query)
 	_, err = sqlutils.Exec(this.db, query, args...)
+	if err == nil {
+		atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
+	}
 	return err
 }

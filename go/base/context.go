@@ -65,6 +65,7 @@ type MigrationContext struct {
 	RenameTablesEndTime       time.Time
 	CurrentLag                int64
 	TotalRowsCopied           int64
+	TotalDMLEventsApplied     int64
 	isThrottled               bool
 	throttleReason            string
 	throttleMutex             *sync.Mutex
