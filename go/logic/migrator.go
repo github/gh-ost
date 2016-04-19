@@ -294,6 +294,10 @@ func (this *Migrator) Migrate() (err error) {
 }
 
 func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
+	if this.migrationContext.Noop {
+		log.Debugf("Noop operation; not really swapping tables")
+		return nil
+	}
 	this.throttle(func() {
 		log.Debugf("throttling before LOCK TABLES")
 	})
@@ -319,11 +323,9 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 		if err := this.retryOperation(this.applier.SwapTables); err != nil {
 			return err
 		}
-		// Unlock
 		if err := this.retryOperation(this.applier.UnlockTables); err != nil {
 			return err
 		}
-		// Drop old table
 		if this.migrationContext.OkToDropTable {
 			dropTableFunc := func() error {
 				return this.applier.dropTable(this.migrationContext.GetOldTableName())
@@ -408,8 +410,9 @@ func (this *Migrator) printStatus() {
 	if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
 		eta = fmt.Sprintf("throttled, %s", throttleReason)
 	}
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Backlog: %d/%d; Elapsed: %+v(copy), %+v(total); ETA: %s",
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Elapsed: %+v(copy), %+v(total); ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
+		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
 		base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()), base.PrettifyDurationOutput(elapsedTime),
 		eta,
@@ -447,10 +450,6 @@ func (this *Migrator) initiateStreaming() error {
 	this.eventsStreamer = NewEventsStreamer()
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
-	}
-	if this.migrationContext.Noop {
-		log.Debugf("Noop operation; not really listening on binlog events")
-		return nil
 	}
 	this.eventsStreamer.AddListener(
 		false,
@@ -540,7 +539,7 @@ func (this *Migrator) iterateChunks() error {
 
 func (this *Migrator) executeWriteFuncs() error {
 	if this.migrationContext.Noop {
-		log.Debugf("Noop operation; not really doing writes")
+		log.Debugf("Noop operation; not really executing write funcs")
 		return nil
 	}
 	for {
