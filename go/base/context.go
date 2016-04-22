@@ -123,6 +123,12 @@ func (this *MigrationContext) GetChangelogTableName() string {
 	return fmt.Sprintf("_%s_OSC", this.OriginalTableName)
 }
 
+// GetVoluntaryLockName returns a name of a voluntary lock to be used throughout
+// the swap-tables process.
+func (this *MigrationContext) GetVoluntaryLockName() string {
+	return fmt.Sprintf("%s.%s.lock", this.DatabaseName, this.OriginalTableName)
+}
+
 // RequiresBinlogFormatChange is `true` when the original binlog format isn't `ROW`
 func (this *MigrationContext) RequiresBinlogFormatChange() bool {
 	return this.OriginalBinlogFormat != "ROW"

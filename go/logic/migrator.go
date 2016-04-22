@@ -322,7 +322,7 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnMasterQuickAndBumpy() (err
 	<-this.allEventsUpToLockProcessed
 	log.Debugf("Done waiting for events up to lock")
 
-	if err := this.retryOperation(this.applier.SwapTables); err != nil {
+	if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
 		return err
 	}
 	if err := this.retryOperation(this.applier.UnlockTables); err != nil {
@@ -353,7 +353,7 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnMasterViaLock() (err error
 	<-this.allEventsUpToLockProcessed
 	log.Debugf("Done waiting for events up to lock")
 
-	if err := this.retryOperation(this.applier.SwapTables); err != nil {
+	if err := this.retryOperation(this.applier.SwapTablesAtomic); err != nil {
 		return err
 	}
 	if err := this.retryOperation(this.applier.UnlockTables); err != nil {

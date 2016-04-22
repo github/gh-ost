@@ -427,8 +427,8 @@ func (this *Applier) UnlockTables() error {
 	return nil
 }
 
-// LockTables
-func (this *Applier) SwapTables() error {
+// SwapTablesQuickAndBumpy
+func (this *Applier) SwapTablesQuickAndBumpy() error {
 	// query := fmt.Sprintf(`rename /* gh-osc */ table %s.%s to %s.%s, %s.%s to %s.%s`,
 	// 	sql.EscapeName(this.migrationContext.DatabaseName),
 	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
@@ -464,6 +464,26 @@ func (this *Applier) SwapTables() error {
 	}
 	this.migrationContext.RenameTablesEndTime = time.Now()
 
+	log.Infof("Tables renamed")
+	return nil
+}
+
+// SwapTablesQuickAndBumpy
+func (this *Applier) SwapTablesAtomic() error {
+	query := fmt.Sprintf(`rename /* gh-osc */ table %s.%s to %s.%s, %s.%s to %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetOldTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	log.Infof("Renaming tables")
+	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
+		return err
+	}
 	log.Infof("Tables renamed")
 	return nil
 }
