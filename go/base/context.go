@@ -47,9 +47,10 @@ type MigrationContext struct {
 	ThrottleAdditionalFlagFile          string
 	MaxLoad                             map[string]int64
 
-	Noop          bool
-	TestOnReplica bool
-	OkToDropTable bool
+	Noop                    bool
+	TestOnReplica           bool
+	OkToDropTable           bool
+	QuickAndBumpySwapTables bool
 
 	TableEngine               string
 	RowsEstimate              int64

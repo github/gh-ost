@@ -299,45 +299,93 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 		return nil
 	}
 	this.throttle(func() {
-		log.Debugf("throttling before LOCK TABLES")
+		log.Debugf("throttling before swapping tables")
 	})
 
 	if this.migrationContext.TestOnReplica {
-		log.Debugf("testing on replica. Instead of LOCK tables I will STOP SLAVE")
-		if err := this.retryOperation(this.applier.StopSlaveIOThread); err != nil {
-			return err
-		}
-	} else {
-		if err := this.retryOperation(this.applier.LockTables); err != nil {
-			return err
-		}
+		return this.stopWritesAndCompleteMigrationOnReplica()
 	}
+	// Running on master
+	if this.migrationContext.QuickAndBumpySwapTables {
+		return this.stopWritesAndCompleteMigrationOnMasterQuickAndBumpy()
+	}
+	return this.stopWritesAndCompleteMigrationOnMasterViaLock()
+}
+
+func (this *Migrator) stopWritesAndCompleteMigrationOnMasterQuickAndBumpy() (err error) {
+	if err := this.retryOperation(this.applier.LockTables); err != nil {
+		return err
+	}
+
 	this.applier.WriteChangelogState(string(AllEventsUpToLockProcessed))
 	log.Debugf("Waiting for events up to lock")
 	<-this.allEventsUpToLockProcessed
 	log.Debugf("Done waiting for events up to lock")
 
-	if this.migrationContext.TestOnReplica {
-		log.Info("Table duplicated with new schema. Am not touching the original table. You may now compare the two tables to gain trust into this tool's operation")
-	} else {
-		if err := this.retryOperation(this.applier.SwapTables); err != nil {
-			return err
+	if err := this.retryOperation(this.applier.SwapTables); err != nil {
+		return err
+	}
+	if err := this.retryOperation(this.applier.UnlockTables); err != nil {
+		return err
+	}
+	if this.migrationContext.OkToDropTable {
+		dropTableFunc := func() error {
+			return this.applier.dropTable(this.migrationContext.GetOldTableName())
 		}
-		if err := this.retryOperation(this.applier.UnlockTables); err != nil {
+		if err := this.retryOperation(dropTableFunc); err != nil {
 			return err
-		}
-		if this.migrationContext.OkToDropTable {
-			dropTableFunc := func() error {
-				return this.applier.dropTable(this.migrationContext.GetOldTableName())
-			}
-			if err := this.retryOperation(dropTableFunc); err != nil {
-				return err
-			}
 		}
 	}
+
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
 	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
 	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	return nil
+}
+
+func (this *Migrator) stopWritesAndCompleteMigrationOnMasterViaLock() (err error) {
+	if err := this.retryOperation(this.applier.LockTables); err != nil {
+		return err
+	}
+
+	this.applier.WriteChangelogState(string(AllEventsUpToLockProcessed))
+	log.Debugf("Waiting for events up to lock")
+	<-this.allEventsUpToLockProcessed
+	log.Debugf("Done waiting for events up to lock")
+
+	if err := this.retryOperation(this.applier.SwapTables); err != nil {
+		return err
+	}
+	if err := this.retryOperation(this.applier.UnlockTables); err != nil {
+		return err
+	}
+	if this.migrationContext.OkToDropTable {
+		dropTableFunc := func() error {
+			return this.applier.dropTable(this.migrationContext.GetOldTableName())
+		}
+		if err := this.retryOperation(dropTableFunc); err != nil {
+			return err
+		}
+	}
+
+	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
+	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
+	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	return nil
+}
+
+func (this *Migrator) stopWritesAndCompleteMigrationOnReplica() (err error) {
+	log.Debugf("testing on replica. Instead of LOCK tables I will STOP SLAVE")
+	if err := this.retryOperation(this.applier.StopSlaveIOThread); err != nil {
+		return err
+	}
+
+	this.applier.WriteChangelogState(string(AllEventsUpToLockProcessed))
+	log.Debugf("Waiting for events up to lock")
+	<-this.allEventsUpToLockProcessed
+	log.Debugf("Done waiting for events up to lock")
+
+	log.Info("Table duplicated with new schema. Am not touching the original table. Replication is stopped. You may now compare the two tables to gain trust into this tool's operation")
 	return nil
 }
 
