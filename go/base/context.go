@@ -46,6 +46,7 @@ type MigrationContext struct {
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
 	MaxLoad                             map[string]int64
+	SwapTablesTimeoutSeconds            int64
 
 	Noop                    bool
 	TestOnReplica           bool
@@ -98,8 +99,9 @@ func newMigrationContext() *MigrationContext {
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1000,
-		MaxLoad:       make(map[string]int64),
-		throttleMutex: &sync.Mutex{},
+		SwapTablesTimeoutSeconds:            3,
+		MaxLoad:                             make(map[string]int64),
+		throttleMutex:                       &sync.Mutex{},
 	}
 }
 
