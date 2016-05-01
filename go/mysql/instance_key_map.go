@@ -17,6 +17,10 @@ func NewInstanceKeyMap() *InstanceKeyMap {
 	return &InstanceKeyMap{}
 }
 
+func (this *InstanceKeyMap) Len() int {
+	return len(*this)
+}
+
 // AddKey adds a single key to this map
 func (this *InstanceKeyMap) AddKey(key InstanceKey) {
 	(*this)[key] = true
@@ -83,6 +87,9 @@ func (this *InstanceKeyMap) ReadJson(jsonString string) error {
 
 // ReadJson unmarshalls a json into this map
 func (this *InstanceKeyMap) ReadCommaDelimitedList(list string) error {
+	if list == "" {
+		return nil
+	}
 	tokens := strings.Split(list, ",")
 	for _, token := range tokens {
 		key, err := ParseRawInstanceKeyLoose(token)

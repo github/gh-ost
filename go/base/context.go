@@ -43,6 +43,8 @@ type MigrationContext struct {
 
 	ChunkSize                           int64
 	MaxLagMillisecondsThrottleThreshold int64
+	ReplictionLagQuery                  string
+	ThrottleControlReplicaKeys          *mysql.InstanceKeyMap
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
 	MaxLoad                             map[string]int64
@@ -102,6 +104,7 @@ func newMigrationContext() *MigrationContext {
 		SwapTablesTimeoutSeconds:            3,
 		MaxLoad:                             make(map[string]int64),
 		throttleMutex:                       &sync.Mutex{},
+		ThrottleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 	}
 }
 

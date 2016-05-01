@@ -15,6 +15,7 @@ import (
 
 	"github.com/github/gh-osc/go/base"
 	"github.com/github/gh-osc/go/binlog"
+	"github.com/github/gh-osc/go/mysql"
 	"github.com/github/gh-osc/go/sql"
 
 	"github.com/outbrain/golib/log"
@@ -87,11 +88,7 @@ func (this *Migrator) acceptSignals() {
 }
 
 func (this *Migrator) shouldThrottle() (result bool, reason string) {
-	lag := atomic.LoadInt64(&this.migrationContext.CurrentLag)
-
-	if time.Duration(lag) > time.Duration(this.migrationContext.MaxLagMillisecondsThrottleThreshold)*time.Millisecond {
-		return true, fmt.Sprintf("lag=%fs", time.Duration(lag).Seconds())
-	}
+	// User-based throttle
 	if this.migrationContext.ThrottleFlagFile != "" {
 		if _, err := os.Stat(this.migrationContext.ThrottleFlagFile); err == nil {
 			// Throttle file defined and exists!
@@ -102,6 +99,20 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 		if _, err := os.Stat(this.migrationContext.ThrottleAdditionalFlagFile); err == nil {
 			// 2nd Throttle file defined and exists!
 			return true, "flag-file"
+		}
+	}
+	// Replication lag throttle
+	lag := atomic.LoadInt64(&this.migrationContext.CurrentLag)
+	if time.Duration(lag) > time.Duration(this.migrationContext.MaxLagMillisecondsThrottleThreshold)*time.Millisecond {
+		return true, fmt.Sprintf("lag=%fs", time.Duration(lag).Seconds())
+	}
+	if this.migrationContext.TestOnReplica {
+		replicationLag, err := mysql.GetMaxReplicationLag(this.migrationContext.InspectorConnectionConfig, this.migrationContext.ThrottleControlReplicaKeys, this.migrationContext.ReplictionLagQuery)
+		if err != nil {
+			return true, err.Error()
+		}
+		if replicationLag > time.Duration(this.migrationContext.MaxLagMillisecondsThrottleThreshold)*time.Millisecond {
+			return true, fmt.Sprintf("replica-lag=%fs", replicationLag.Seconds())
 		}
 	}
 
@@ -307,6 +318,8 @@ func (this *Migrator) Migrate() (err error) {
 	return nil
 }
 
+// stopWritesAndCompleteMigration performs the final step of migration, based on migration
+// type (on replica? bumpy? safe?)
 func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really swapping tables")
@@ -335,6 +348,10 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 	return
 }
 
+// stopWritesAndCompleteMigrationOnMasterQuickAndBumpy will lock down the original table, execute
+// what's left of last DML entries, and **non-atomically** swap original->old, then new->original.
+// There is a point in time where the "original" table does not exist and queries are non-blocked
+// and failing.
 func (this *Migrator) stopWritesAndCompleteMigrationOnMasterQuickAndBumpy() (err error) {
 	if err := this.retryOperation(this.applier.LockTables); err != nil {
 		return err
@@ -366,6 +383,8 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnMasterQuickAndBumpy() (err
 	return nil
 }
 
+// stopWritesAndCompleteMigrationOnMasterViaLock will lock down the original table, execute
+// what's left of last DML entries, and atomically swap & unlock (original->old && new->original)
 func (this *Migrator) stopWritesAndCompleteMigrationOnMasterViaLock() (err error) {
 	lockGrabbed := make(chan error, 1)
 	okToReleaseLock := make(chan bool, 1)
@@ -430,6 +449,10 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnMasterViaLock() (err error
 	return nil
 }
 
+// stopWritesAndCompleteMigrationOnReplica will stop replication IO thread, apply
+// what DML events are left, and that's it.
+// This only applies in --test-on-replica. It leaves replication stopped, with both tables
+// in sync. There is no table swap.
 func (this *Migrator) stopWritesAndCompleteMigrationOnReplica() (err error) {
 	log.Debugf("testing on replica. Instead of LOCK tables I will STOP SLAVE")
 	if err := this.retryOperation(this.applier.StopSlaveIOThread); err != nil {
@@ -469,6 +492,9 @@ func (this *Migrator) initiateInspector() (err error) {
 			this.migrationContext.ApplierConnectionConfig.Key, this.migrationContext.InspectorConnectionConfig.Key,
 		)
 		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.Duplicate()
+		if this.migrationContext.ThrottleControlReplicaKeys.Len() == 0 {
+			this.migrationContext.ThrottleControlReplicaKeys.AddKey(this.migrationContext.InspectorConnectionConfig.Key)
+		}
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
 		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master")
 	}
