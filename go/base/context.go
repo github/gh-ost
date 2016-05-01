@@ -46,10 +46,12 @@ type MigrationContext struct {
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
 	MaxLoad                             map[string]int64
+	SwapTablesTimeoutSeconds            int64
 
-	Noop          bool
-	TestOnReplica bool
-	OkToDropTable bool
+	Noop                    bool
+	TestOnReplica           bool
+	OkToDropTable           bool
+	QuickAndBumpySwapTables bool
 
 	TableEngine               string
 	RowsEstimate              int64
@@ -97,8 +99,9 @@ func newMigrationContext() *MigrationContext {
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1000,
-		MaxLoad:       make(map[string]int64),
-		throttleMutex: &sync.Mutex{},
+		SwapTablesTimeoutSeconds:            3,
+		MaxLoad:                             make(map[string]int64),
+		throttleMutex:                       &sync.Mutex{},
 	}
 }
 
@@ -120,6 +123,12 @@ func (this *MigrationContext) GetOldTableName() string {
 // GetChangelogTableName generates the name of changelog table, based on original table name
 func (this *MigrationContext) GetChangelogTableName() string {
 	return fmt.Sprintf("_%s_OSC", this.OriginalTableName)
+}
+
+// GetVoluntaryLockName returns a name of a voluntary lock to be used throughout
+// the swap-tables process.
+func (this *MigrationContext) GetVoluntaryLockName() string {
+	return fmt.Sprintf("%s.%s.lock", this.DatabaseName, this.OriginalTableName)
 }
 
 // RequiresBinlogFormatChange is `true` when the original binlog format isn't `ROW`

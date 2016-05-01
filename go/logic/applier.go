@@ -427,22 +427,8 @@ func (this *Applier) UnlockTables() error {
 	return nil
 }
 
-// LockTables
-func (this *Applier) SwapTables() error {
-	// query := fmt.Sprintf(`rename /* gh-osc */ table %s.%s to %s.%s, %s.%s to %s.%s`,
-	// 	sql.EscapeName(this.migrationContext.DatabaseName),
-	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
-	// 	sql.EscapeName(this.migrationContext.DatabaseName),
-	// 	sql.EscapeName(this.migrationContext.GetOldTableName()),
-	// 	sql.EscapeName(this.migrationContext.DatabaseName),
-	// 	sql.EscapeName(this.migrationContext.GetGhostTableName()),
-	// 	sql.EscapeName(this.migrationContext.DatabaseName),
-	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
-	// )
-	// log.Infof("Renaming tables")
-	// if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
-	// 	return err
-	// }
+// SwapTablesQuickAndBumpy
+func (this *Applier) SwapTablesQuickAndBumpy() error {
 	query := fmt.Sprintf(`alter /* gh-osc */ table %s.%s rename %s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
@@ -468,7 +454,51 @@ func (this *Applier) SwapTables() error {
 	return nil
 }
 
-// StopSlaveIOThread is applicable with --test-on-replica; it stops the IO thread
+// SwapTablesAtomic issues a single two-table RENAME statement to swap ghost table
+// into original's place
+func (this *Applier) SwapTablesAtomic(sessionIdChan chan int64) error {
+
+	tx, err := this.db.Begin()
+	if err != nil {
+		return err
+	}
+	log.Infof("Setting timeout for RENAME for %d seconds", this.migrationContext.SwapTablesTimeoutSeconds)
+	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.SwapTablesTimeoutSeconds)
+	if _, err := tx.Exec(query); err != nil {
+		return err
+	}
+
+	var sessionId int64
+	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
+		return err
+	}
+	sessionIdChan <- sessionId
+
+	query = fmt.Sprintf(`rename /* gh-osc */ table %s.%s to %s.%s, %s.%s to %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetOldTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	log.Infof("Renaming tables")
+
+	this.migrationContext.RenameTablesStartTime = time.Now()
+	if _, err := tx.Exec(query); err != nil {
+		return err
+	}
+	this.migrationContext.RenameTablesEndTime = time.Now()
+	tx.Commit()
+	log.Infof("Tables renamed")
+	return nil
+}
+
+// StopSlaveIOThread is applicable with --test-on-replica; it stops the IO thread, duh.
+// We need to keep the SQL thread active so as to complete processing received events,
+// and have them written to the binary log, so that we can then read them via streamer
 func (this *Applier) StopSlaveIOThread() error {
 	query := `stop /* gh-osc */ slave io_thread`
 	log.Infof("Stopping replication")
@@ -476,6 +506,116 @@ func (this *Applier) StopSlaveIOThread() error {
 		return err
 	}
 	log.Infof("Replication stopped")
+	return nil
+}
+
+// GrabVoluntaryLock gets a named lock (`GET_LOCK`) and listens
+// on a okToRelease in order to release it
+func (this *Applier) GrabVoluntaryLock(lockGrabbed chan<- error, okToRelease <-chan bool) error {
+	lockName := this.migrationContext.GetVoluntaryLockName()
+
+	tx, err := this.db.Begin()
+	if err != nil {
+		lockGrabbed <- err
+		return err
+	}
+	// Grab
+	query := `select get_lock(?, 0)`
+	lockResult := 0
+	log.Infof("Grabbing voluntary lock: %s", lockName)
+	if err := tx.QueryRow(query, lockName).Scan(&lockResult); err != nil {
+		lockGrabbed <- err
+		return err
+	}
+	if lockResult != 1 {
+		err := fmt.Errorf("Lock was not acquired")
+		lockGrabbed <- err
+		return err
+	}
+	log.Infof("Voluntary lock grabbed")
+	lockGrabbed <- nil // No error.
+
+	// Listeners on the above will proceed to submit the "all queries till lock have been found"
+	// We will wait here till we're told to. This will happen once all DML events up till lock
+	// have been appleid on the ghost table
+	<-okToRelease
+	// Release
+	query = `select ifnull(release_lock(?),0)`
+	log.Infof("Releasing voluntary lock")
+	if err := tx.QueryRow(query, lockName).Scan(&lockResult); err != nil {
+		return log.Errore(err)
+	}
+	if lockResult != 1 {
+		// Generally speaking we should never get this.
+		return log.Errorf("release_lock result was %+v", lockResult)
+	}
+	tx.Rollback()
+
+	log.Infof("Voluntary lock released")
+	return nil
+
+}
+
+// IssueBlockingQueryOnVoluntaryLock will SELECT on the original table using a
+// conditional on a known to be occupied lock. This query is expected to block,
+// and will further block the followup RENAME statement
+func (this *Applier) IssueBlockingQueryOnVoluntaryLock(sessionIdChan chan int64) error {
+	lockName := this.migrationContext.GetVoluntaryLockName()
+
+	tx, err := this.db.Begin()
+	if err != nil {
+		return err
+	}
+	var sessionId int64
+	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
+		return err
+	}
+	sessionIdChan <- sessionId
+
+	// Grab
+	query := fmt.Sprintf(`
+			select /* gh-osc blocking-query-%s */
+					release_lock(?)
+				from %s.%s
+				where
+					get_lock(?, 86400) >= 0
+				limit 1
+				`,
+		lockName,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+
+	dummyResult := 0
+	log.Infof("Issuing blocking query")
+	this.migrationContext.LockTablesStartTime = time.Now()
+	tx.QueryRow(query, lockName, lockName).Scan(&dummyResult)
+	tx.Rollback()
+	log.Infof("Blocking query released")
+	return nil
+}
+
+func (this *Applier) ExpectProcess(sessionId int64, stateHint, infoHint string) error {
+	found := false
+	query := `
+		select id
+			from information_schema.processlist
+			where
+				id != connection_id()
+				and ? in (0, id)
+				and state like concat('%', ?, '%')
+				and info  like concat('%', ?, '%')
+	`
+	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		found = true
+		return nil
+	}, sessionId, stateHint, infoHint)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("Cannot find process. Hints: %s, %s", stateHint, infoHint)
+	}
 	return nil
 }
 
