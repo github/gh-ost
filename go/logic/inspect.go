@@ -188,7 +188,7 @@ func (this *Inspector) validateGrants() error {
 func (this *Inspector) restartReplication() error {
 	log.Infof("Restarting replication on %s:%d to make sure binlog settings apply to replication thread", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 
-	masterKey, _ := getMasterKeyFromSlaveStatus(this.connectionConfig)
+	masterKey, _ := mysql.GetMasterKeyFromSlaveStatus(this.connectionConfig)
 	if masterKey == nil {
 		// This is not a replica
 		return nil
@@ -503,45 +503,5 @@ func (this *Inspector) readChangelogState() (map[string]string, error) {
 
 func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
 	visitedKeys := mysql.NewInstanceKeyMap()
-	return getMasterConnectionConfigSafe(this.connectionConfig, visitedKeys)
-}
-
-func getMasterKeyFromSlaveStatus(connectionConfig *mysql.ConnectionConfig) (masterKey *mysql.InstanceKey, err error) {
-	currentUri := connectionConfig.GetDBUri("information_schema")
-	db, _, err := sqlutils.GetDB(currentUri)
-	if err != nil {
-		return nil, err
-	}
-	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
-		masterKey = &mysql.InstanceKey{
-			Hostname: rowMap.GetString("Master_Host"),
-			Port:     rowMap.GetInt("Master_Port"),
-		}
-		return nil
-	})
-	return masterKey, err
-}
-
-func getMasterConnectionConfigSafe(connectionConfig *mysql.ConnectionConfig, visitedKeys *mysql.InstanceKeyMap) (masterConfig *mysql.ConnectionConfig, err error) {
-	log.Debugf("Looking for master on %+v", connectionConfig.Key)
-
-	masterKey, err := getMasterKeyFromSlaveStatus(connectionConfig)
-	if err != nil {
-		return nil, err
-	}
-	if masterKey == nil {
-		return connectionConfig, nil
-	}
-	if !masterKey.IsValid() {
-		return connectionConfig, nil
-	}
-	masterConfig = connectionConfig.Duplicate()
-	masterConfig.Key = *masterKey
-
-	log.Debugf("Master of %+v is %+v", connectionConfig.Key, masterConfig.Key)
-	if visitedKeys.HasKey(masterConfig.Key) {
-		return nil, fmt.Errorf("There seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
-	}
-	visitedKeys.AddKey(masterConfig.Key)
-	return getMasterConnectionConfigSafe(masterConfig, visitedKeys)
+	return mysql.GetMasterConnectionConfigSafe(this.connectionConfig, visitedKeys)
 }
