@@ -58,6 +58,8 @@ type MigrationContext struct {
 	TestOnReplica           bool
 	OkToDropTable           bool
 	QuickAndBumpySwapTables bool
+	InitiallyDropOldTable   bool
+	InitiallyDropGhostTable bool
 
 	TableEngine               string
 	RowsEstimate              int64
