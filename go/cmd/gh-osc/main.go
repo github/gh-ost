@@ -23,6 +23,7 @@ func main() {
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.User, "user", "root", "MySQL user")
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Password, "password", "", "MySQL password")
+	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
@@ -92,6 +93,9 @@ func main() {
 	}
 	if migrationContext.QuickAndBumpySwapTables && migrationContext.TestOnReplica {
 		log.Fatalf("--quick-and-bumpy-swap-tables and --test-on-replica are mutually exclusive (the former implies migrating on master)")
+	}
+	if err := migrationContext.ReadConfigFile(); err != nil {
+		log.Fatale(err)
 	}
 	if err := migrationContext.ThrottleControlReplicaKeys.ReadCommaDelimitedList(*throttleControlReplicas); err != nil {
 		log.Fatale(err)

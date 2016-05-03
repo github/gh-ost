@@ -15,6 +15,8 @@ import (
 
 	"github.com/github/gh-osc/go/mysql"
 	"github.com/github/gh-osc/go/sql"
+
+	"gopkg.in/gcfg.v1"
 )
 
 // RowsEstimateMethod is the type of row number estimation
@@ -40,6 +42,8 @@ type MigrationContext struct {
 	CountTableRows          bool
 	AllowedRunningOnMaster  bool
 	SwitchToRowBinlogFormat bool
+
+	ConfigFile string
 
 	ChunkSize                           int64
 	MaxLagMillisecondsThrottleThreshold int64
@@ -222,5 +226,34 @@ func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
 			this.MaxLoad[maxLoadTokens[0]] = n
 		}
 	}
+	return nil
+}
+
+func (this *MigrationContext) ReadConfigFile() error {
+	if this.ConfigFile == "" {
+		return nil
+	}
+	conf := struct {
+		Client struct {
+			User     string
+			Password string
+		}
+		Osc struct {
+			Chunk_Size            int64
+			Max_Lag_Millis        int64
+			Replication_Lag_Query string
+			Max_Load              string
+		}
+	}{}
+	if err := gcfg.ReadFileInto(&conf, this.ConfigFile); err != nil {
+		return err
+	}
+	if this.InspectorConnectionConfig.User == "" {
+		this.InspectorConnectionConfig.User = conf.Client.User
+	}
+	if this.InspectorConnectionConfig.Password == "" {
+		this.InspectorConnectionConfig.Password = conf.Client.Password
+	}
+
 	return nil
 }
