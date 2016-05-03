@@ -344,8 +344,24 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 		}); err != nil {
 		return err
 	}
+	if err := this.dropOldTableIfRequired(); err != nil {
+		return err
+	}
 
 	return
+}
+
+func (this *Migrator) dropOldTableIfRequired() (err error) {
+	if !this.migrationContext.OkToDropTable {
+		return nil
+	}
+	dropTableFunc := func() error {
+		return this.applier.dropTable(this.migrationContext.GetOldTableName())
+	}
+	if err := this.retryOperation(dropTableFunc); err != nil {
+		return err
+	}
+	return nil
 }
 
 // stopWritesAndCompleteMigrationOnMasterQuickAndBumpy will lock down the original table, execute
@@ -368,13 +384,8 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnMasterQuickAndBumpy() (err
 	if err := this.retryOperation(this.applier.UnlockTables); err != nil {
 		return err
 	}
-	if this.migrationContext.OkToDropTable {
-		dropTableFunc := func() error {
-			return this.applier.dropTable(this.migrationContext.GetOldTableName())
-		}
-		if err := this.retryOperation(dropTableFunc); err != nil {
-			return err
-		}
+	if err := this.dropOldTableIfRequired(); err != nil {
+		return err
 	}
 
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
@@ -612,6 +623,9 @@ func (this *Migrator) initiateStreaming() error {
 func (this *Migrator) initiateApplier() error {
 	this.applier = NewApplier()
 	if err := this.applier.InitDBConnections(); err != nil {
+		return err
+	}
+	if err := this.applier.ValidateOrDropExistingTables(); err != nil {
 		return err
 	}
 	if err := this.applier.CreateGhostTable(); err != nil {

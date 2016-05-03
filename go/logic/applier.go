@@ -69,6 +69,37 @@ func (this *Applier) validateConnection(db *gosql.DB) error {
 	return nil
 }
 
+func (this *Applier) tableExists(tableName string) (tableFound bool) {
+	query := fmt.Sprintf(`show /* gh-osc */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), tableName)
+
+	sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		tableFound = true
+		return nil
+	})
+	return tableFound
+}
+
+func (this *Applier) ValidateOrDropExistingTables() error {
+	if this.migrationContext.InitiallyDropGhostTable {
+		if err := this.DropGhostTable(); err != nil {
+			return err
+		}
+	}
+	if this.tableExists(this.migrationContext.GetGhostTableName()) {
+		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-ghost-table to force dropping it", sql.EscapeName(this.migrationContext.GetGhostTableName()))
+	}
+	if this.migrationContext.InitiallyDropOldTable {
+		if err := this.DropOldTable(); err != nil {
+			return err
+		}
+	}
+	if this.tableExists(this.migrationContext.GetOldTableName()) {
+		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-old-table to force dropping it", sql.EscapeName(this.migrationContext.GetOldTableName()))
+	}
+
+	return nil
+}
+
 // CreateGhostTable creates the ghost table on the applier host
 func (this *Applier) CreateGhostTable() error {
 	query := fmt.Sprintf(`create /* gh-osc */ table %s.%s like %s.%s`,
@@ -109,6 +140,9 @@ func (this *Applier) AlterGhost() error {
 
 // CreateChangelogTable creates the changelog table on the applier host
 func (this *Applier) CreateChangelogTable() error {
+	if err := this.DropChangelogTable(); err != nil {
+		return err
+	}
 	query := fmt.Sprintf(`create /* gh-osc */ table %s.%s (
 			id bigint auto_increment,
 			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -152,6 +186,11 @@ func (this *Applier) dropTable(tableName string) error {
 // DropChangelogTable drops the changelog table on the applier host
 func (this *Applier) DropChangelogTable() error {
 	return this.dropTable(this.migrationContext.GetChangelogTableName())
+}
+
+// DropOldTable drops the _Old table on the applier host
+func (this *Applier) DropOldTable() error {
+	return this.dropTable(this.migrationContext.GetOldTableName())
 }
 
 // DropGhostTable drops the ghost table on the applier host
