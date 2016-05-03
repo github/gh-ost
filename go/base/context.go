@@ -252,7 +252,7 @@ func (this *MigrationContext) ReadConfigFile() error {
 		this.InspectorConnectionConfig.User = conf.Client.User
 	}
 	if this.InspectorConnectionConfig.Password == "" {
-		this.InspectorConnectionConfig.User = conf.Client.Password
+		this.InspectorConnectionConfig.Password = conf.Client.Password
 	}
 
 	return nil
