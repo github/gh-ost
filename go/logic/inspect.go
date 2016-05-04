@@ -405,7 +405,10 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
         SUBSTRING_INDEX(GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX ASC), ',', 1) AS FIRST_COLUMN_NAME,
         SUM(NULLABLE='YES') > 0 AS has_nullable
       FROM INFORMATION_SCHEMA.STATISTICS
-      WHERE NON_UNIQUE=0
+      WHERE
+				NON_UNIQUE=0
+				AND TABLE_SCHEMA = ?
+      	AND TABLE_NAME = ?
       GROUP BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME
     ) AS UNIQUES
     ON (
@@ -448,7 +451,7 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
 		}
 		uniqueKeys = append(uniqueKeys, uniqueKey)
 		return nil
-	}, this.migrationContext.DatabaseName, tableName)
+	}, this.migrationContext.DatabaseName, tableName, this.migrationContext.DatabaseName, tableName)
 	if err != nil {
 		return uniqueKeys, err
 	}
