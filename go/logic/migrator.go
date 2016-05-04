@@ -528,7 +528,7 @@ func (this *Migrator) printStatus() {
 	elapsedTime := this.migrationContext.ElapsedTime()
 	elapsedSeconds := int64(elapsedTime.Seconds())
 	totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
-	rowsEstimate := this.migrationContext.RowsEstimate
+	rowsEstimate := atomic.LoadInt64(&this.migrationContext.RowsEstimate)
 	progressPct := 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
 
 	shouldPrintStatus := false
