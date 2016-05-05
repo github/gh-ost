@@ -550,6 +550,18 @@ func (this *Migrator) printStatus() {
 	eta := "N/A"
 	if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
 		eta = fmt.Sprintf("throttled, %s", throttleReason)
+	} else if progressPct > 100.0 {
+		eta = "Due"
+	} else if progressPct >= 2.0 {
+		elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
+		totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
+		etaSeconds := totalExpectedSeconds - elapsedRowCopySeconds
+		etaDuration := time.Duration(etaSeconds) * time.Second
+		if etaDuration >= 0 {
+			eta = base.PrettifyDurationOutput(etaDuration)
+		} else {
+			eta = "Due"
+		}
 	}
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Elapsed: %+v(copy), %+v(total); ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
