@@ -613,7 +613,7 @@ func (this *Migrator) initiateStreaming() error {
 		},
 	)
 	this.eventsStreamer.AddListener(
-		true,
+		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
