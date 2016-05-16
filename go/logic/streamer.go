@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-osc/blob/master/LICENSE
+	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package logic
@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/github/gh-osc/go/base"
-	"github.com/github/gh-osc/go/binlog"
-	"github.com/github/gh-osc/go/mysql"
+	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/mysql"
 
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
@@ -137,7 +137,7 @@ func (this *EventsStreamer) validateConnection() error {
 // validateGrants verifies the user by which we're executing has necessary grants
 // to do its thang.
 func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
-	query := `show /* gh-osc readCurrentBinlogCoordinates */ master status`
+	query := `show /* gh-ost readCurrentBinlogCoordinates */ master status`
 	foundMasterStatus := false
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		this.nextBinlogCoordinates = &mysql.BinlogCoordinates{

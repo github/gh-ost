@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-osc/blob/master/LICENSE
+	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package logic
@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/github/gh-osc/go/base"
-	"github.com/github/gh-osc/go/mysql"
-	"github.com/github/gh-osc/go/sql"
+	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/mysql"
+	"github.com/github/gh-ost/go/sql"
 
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
@@ -142,7 +142,7 @@ func (this *Inspector) validateConnection() error {
 // validateGrants verifies the user by which we're executing has necessary grants
 // to do its thang.
 func (this *Inspector) validateGrants() error {
-	query := `show /* gh-osc */ grants for current_user()`
+	query := `show /* gh-ost */ grants for current_user()`
 	foundAll := false
 	foundSuper := false
 	foundReplicationSlave := false
@@ -242,7 +242,7 @@ func (this *Inspector) validateBinlogs() error {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
 			return fmt.Errorf("You must be using ROW binlog format. I can switch it for you, provided --switch-to-rbr and that %s:%d doesn't have replicas", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 		}
-		query := fmt.Sprintf(`show /* gh-osc */ slave hosts`)
+		query := fmt.Sprintf(`show /* gh-ost */ slave hosts`)
 		countReplicas := 0
 		err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 			countReplicas++
@@ -268,7 +268,7 @@ func (this *Inspector) validateBinlogs() error {
 
 // validateTable makes sure the table we need to operate on actually exists
 func (this *Inspector) validateTable() error {
-	query := fmt.Sprintf(`show /* gh-osc */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), this.migrationContext.OriginalTableName)
+	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), this.migrationContext.OriginalTableName)
 
 	tableFound := false
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
@@ -325,7 +325,7 @@ func (this *Inspector) validateTableForeignKeys() error {
 }
 
 func (this *Inspector) estimateTableRowsViaExplain() error {
-	query := fmt.Sprintf(`explain select /* gh-osc */ * from %s.%s where 1=1`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	query := fmt.Sprintf(`explain select /* gh-ost */ * from %s.%s where 1=1`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 
 	outputFound := false
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
@@ -347,7 +347,7 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 
 func (this *Inspector) countTableRows() error {
 	log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
-	query := fmt.Sprintf(`select /* gh-osc */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.RowsEstimate); err != nil {
 		return err
 	}

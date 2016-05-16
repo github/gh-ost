@@ -25,7 +25,7 @@ import (
 
 func execCmd(commandText string, arguments ...string) (*exec.Cmd, string, error) {
 	commandBytes := []byte(commandText)
-	tmpFile, err := ioutil.TempFile("", "gh-osc-process-cmd-")
+	tmpFile, err := ioutil.TempFile("", "gh-ost-process-cmd-")
 	if err != nil {
 		return nil, "", log.Errore(err)
 	}
