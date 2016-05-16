@@ -9,6 +9,7 @@ import (
 	gosql "database/sql"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/github/gh-osc/go/base"
 	"github.com/github/gh-osc/go/binlog"
@@ -37,6 +38,7 @@ type EventsStreamer struct {
 	migrationContext      *base.MigrationContext
 	nextBinlogCoordinates *mysql.BinlogCoordinates
 	listeners             [](*BinlogEventListener)
+	listenersMutex        *sync.Mutex
 	eventsChannel         chan *binlog.BinlogEntry
 	binlogReader          binlog.BinlogReader
 }
@@ -46,12 +48,17 @@ func NewEventsStreamer() *EventsStreamer {
 		connectionConfig: base.GetMigrationContext().InspectorConnectionConfig,
 		migrationContext: base.GetMigrationContext(),
 		listeners:        [](*BinlogEventListener){},
+		listenersMutex:   &sync.Mutex{},
 		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
 	}
 }
 
 func (this *EventsStreamer) AddListener(
 	async bool, databaseName string, tableName string, onDmlEvent func(event *binlog.BinlogDMLEvent) error) (err error) {
+
+	this.listenersMutex.Lock()
+	defer this.listenersMutex.Unlock()
+
 	if databaseName == "" {
 		return fmt.Errorf("Empty database name in AddListener")
 	}
@@ -69,6 +76,9 @@ func (this *EventsStreamer) AddListener(
 }
 
 func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) {
+	this.listenersMutex.Lock()
+	defer this.listenersMutex.Unlock()
+
 	for _, listener := range this.listeners {
 		if strings.ToLower(listener.databaseName) != strings.ToLower(binlogEvent.DatabaseName) {
 			continue
