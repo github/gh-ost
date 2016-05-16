@@ -1,6 +1,6 @@
 /*
    Copyright 2015 Shlomi Noach, courtesy Booking.com
-	 See https://github.com/github/gh-osc/blob/master/LICENSE
+	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package mysql

@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-osc/blob/master/LICENSE
+	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package sql
@@ -175,7 +175,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
-				insert /* gh-osc mydb.tbl */ ignore into mydb.ghost (id, name, position)
+				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
 				(select id, name, position from mydb.tbl force index (PRIMARY)
 					where (((id > @v1s) or ((id = @v1s))) and ((id < @v1e) or ((id = @v1e))))
 				)
@@ -194,7 +194,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
-				insert /* gh-osc mydb.tbl */ ignore into mydb.ghost (id, name, position)
+				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
 				(select id, name, position from mydb.tbl force index (name_position_uidx)
 				  where (((name > @v1s) or (((name = @v1s)) AND (position > @v2s)) or ((name = @v1s) and (position = @v2s))) and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e)) or ((name = @v1e) and (position = @v2e))))
 				)
@@ -218,7 +218,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 		query, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true, true)
 		test.S(t).ExpectNil(err)
 		expected := `
-				insert /* gh-osc mydb.tbl */ ignore into mydb.ghost (id, name, position)
+				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
 				(select id, name, position from mydb.tbl force index (name_position_uidx)
 				  where (((name > ?) or (((name = ?)) AND (position > ?)) or ((name = ?) and (position = ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?))))
 				lock in share mode )
@@ -240,7 +240,7 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQuery(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, "test")
 		test.S(t).ExpectNil(err)
 		expected := `
-				select /* gh-osc mydb.tbl test */ name, position
+				select /* gh-ost mydb.tbl test */ name, position
 				  from (
 				    select
 				        name, position
@@ -268,7 +268,7 @@ func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
 		test.S(t).ExpectNil(err)
 		expected := `
-			select /* gh-osc mydb.tbl */ name, position
+			select /* gh-ost mydb.tbl */ name, position
 			  from
 			    mydb.tbl
 			  order by
@@ -281,7 +281,7 @@ func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
 		test.S(t).ExpectNil(err)
 		expected := `
-			select /* gh-osc mydb.tbl */ name, position
+			select /* gh-ost mydb.tbl */ name, position
 			  from
 			    mydb.tbl
 			  order by
@@ -303,7 +303,7 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
 		test.S(t).ExpectNil(err)
 		expected := `
-			delete /* gh-osc mydb.tbl */
+			delete /* gh-ost mydb.tbl */
 				from
 					mydb.tbl
 				where
@@ -318,7 +318,7 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
 		test.S(t).ExpectNil(err)
 		expected := `
-			delete /* gh-osc mydb.tbl */
+			delete /* gh-ost mydb.tbl */
 				from
 					mydb.tbl
 				where
@@ -333,7 +333,7 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
 		test.S(t).ExpectNil(err)
 		expected := `
-			delete /* gh-osc mydb.tbl */
+			delete /* gh-ost mydb.tbl */
 				from
 					mydb.tbl
 				where
@@ -361,7 +361,7 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, args)
 		test.S(t).ExpectNil(err)
 		expected := `
-			replace /* gh-osc mydb.tbl */
+			replace /* gh-ost mydb.tbl */
 				into mydb.tbl
 					(id, name, position, age)
 				values
@@ -375,7 +375,7 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, args)
 		test.S(t).ExpectNil(err)
 		expected := `
-			replace /* gh-osc mydb.tbl */
+			replace /* gh-ost mydb.tbl */
 				into mydb.tbl
 					(position, name, age, id)
 				values
@@ -408,7 +408,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
-			update /* gh-osc mydb.tbl */
+			update /* gh-ost mydb.tbl */
 			  mydb.tbl
 					set id=?, name=?, position=?, age=?
 				where
@@ -424,7 +424,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
-			update /* gh-osc mydb.tbl */
+			update /* gh-ost mydb.tbl */
 			  mydb.tbl
 					set id=?, name=?, position=?, age=?
 				where
@@ -440,7 +440,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
-			update /* gh-osc mydb.tbl */
+			update /* gh-ost mydb.tbl */
 			  mydb.tbl
 					set id=?, name=?, position=?, age=?
 				where
@@ -456,7 +456,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
-			update /* gh-osc mydb.tbl */
+			update /* gh-ost mydb.tbl */
 			  mydb.tbl
 					set id=?, name=?, position=?, age=?
 				where

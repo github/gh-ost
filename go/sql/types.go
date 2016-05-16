@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-osc/blob/master/LICENSE
+	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package sql

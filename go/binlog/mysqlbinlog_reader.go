@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-osc/blob/master/LICENSE
+	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package binlog
@@ -14,7 +14,7 @@ import (
 	"strconv"
 	//	"strings"
 
-	"github.com/github/gh-osc/go/os"
+	"github.com/github/gh-ost/go/os"
 	"github.com/outbrain/golib/log"
 )
 

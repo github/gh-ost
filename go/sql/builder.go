@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-osc/blob/master/LICENSE
+	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package sql
@@ -188,7 +188,7 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		transactionalClause = "lock in share mode"
 	}
 	result = fmt.Sprintf(`
-      insert /* gh-osc %s.%s */ ignore into %s.%s (%s)
+      insert /* gh-ost %s.%s */ ignore into %s.%s (%s)
       (select %s from %s.%s force index (%s)
         where (%s and %s) %s
       )
@@ -231,7 +231,7 @@ func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueK
 		uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumns[i])
 	}
 	result = fmt.Sprintf(`
-      select /* gh-osc %s.%s %s */ %s
+      select /* gh-ost %s.%s %s */ %s
 				from (
 					select
 							%s
@@ -276,7 +276,7 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 		uniqueKeyColumnOrder[i] = fmt.Sprintf("%s %s", uniqueKeyColumns[i], order)
 	}
 	query := fmt.Sprintf(`
-      select /* gh-osc %s.%s */ %s
+      select /* gh-ost %s.%s */ %s
 				from
 					%s.%s
 				order by
@@ -307,7 +307,7 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 		return result, uniqueKeyArgs, err
 	}
 	result = fmt.Sprintf(`
-			delete /* gh-osc %s.%s */
+			delete /* gh-ost %s.%s */
 				from
 					%s.%s
 				where
@@ -344,7 +344,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	preparedValues := buildPreparedValues(sharedColumns.Len())
 
 	result = fmt.Sprintf(`
-			replace /* gh-osc %s.%s */ into
+			replace /* gh-ost %s.%s */ into
 				%s.%s
 					(%s)
 				values
@@ -397,7 +397,7 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names)
 	result = fmt.Sprintf(`
- 			update /* gh-osc %s.%s */
+ 			update /* gh-ost %s.%s */
  					%s.%s
 				set
 					%s

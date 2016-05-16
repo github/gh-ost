@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-osc/blob/master/LICENSE
+	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package logic
@@ -11,10 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/github/gh-osc/go/base"
-	"github.com/github/gh-osc/go/binlog"
-	"github.com/github/gh-osc/go/mysql"
-	"github.com/github/gh-osc/go/sql"
+	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/mysql"
+	"github.com/github/gh-ost/go/sql"
 
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
@@ -70,7 +70,7 @@ func (this *Applier) validateConnection(db *gosql.DB) error {
 }
 
 func (this *Applier) tableExists(tableName string) (tableFound bool) {
-	query := fmt.Sprintf(`show /* gh-osc */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), tableName)
+	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), tableName)
 
 	sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		tableFound = true
@@ -102,7 +102,7 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 
 // CreateGhostTable creates the ghost table on the applier host
 func (this *Applier) CreateGhostTable() error {
-	query := fmt.Sprintf(`create /* gh-osc */ table %s.%s like %s.%s`,
+	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s like %s.%s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -121,7 +121,7 @@ func (this *Applier) CreateGhostTable() error {
 
 // AlterGhost applies `alter` statement on ghost table
 func (this *Applier) AlterGhost() error {
-	query := fmt.Sprintf(`alter /* gh-osc */ table %s.%s %s`,
+	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s %s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 		this.migrationContext.AlterStatement,
@@ -143,7 +143,7 @@ func (this *Applier) CreateChangelogTable() error {
 	if err := this.DropChangelogTable(); err != nil {
 		return err
 	}
-	query := fmt.Sprintf(`create /* gh-osc */ table %s.%s (
+	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s (
 			id bigint auto_increment,
 			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			hint varchar(64) charset ascii not null,
@@ -168,7 +168,7 @@ func (this *Applier) CreateChangelogTable() error {
 
 // dropTable drops a given table on the applied host
 func (this *Applier) dropTable(tableName string) error {
-	query := fmt.Sprintf(`drop /* gh-osc */ table if exists %s.%s`,
+	query := fmt.Sprintf(`drop /* gh-ost */ table if exists %s.%s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
@@ -211,7 +211,7 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 		explicitId = 3
 	}
 	query := fmt.Sprintf(`
-			insert /* gh-osc */ into %s.%s
+			insert /* gh-ost */ into %s.%s
 				(id, hint, value)
 			values
 				(NULLIF(?, 0), ?, ?)
@@ -336,7 +336,7 @@ func (this *Applier) __unused_IterationIsComplete() (bool, error) {
 	}
 	args = append(args, explodedArgs...)
 	query := fmt.Sprintf(`
-			select /* gh-osc IterationIsComplete */ 1
+			select /* gh-ost IterationIsComplete */ 1
 				from %s.%s
 				where (%s) and (%s)
 				limit 1
@@ -434,7 +434,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 
 // LockTables
 func (this *Applier) LockTables() error {
-	// query := fmt.Sprintf(`lock /* gh-osc */ tables %s.%s write, %s.%s write, %s.%s write`,
+	// query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write, %s.%s write, %s.%s write`,
 	// 	sql.EscapeName(this.migrationContext.DatabaseName),
 	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
 	// 	sql.EscapeName(this.migrationContext.DatabaseName),
@@ -442,7 +442,7 @@ func (this *Applier) LockTables() error {
 	// 	sql.EscapeName(this.migrationContext.DatabaseName),
 	// 	sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	// )
-	query := fmt.Sprintf(`lock /* gh-osc */ tables %s.%s write`,
+	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 	)
@@ -457,7 +457,7 @@ func (this *Applier) LockTables() error {
 
 // UnlockTables
 func (this *Applier) UnlockTables() error {
-	query := `unlock /* gh-osc */ tables`
+	query := `unlock /* gh-ost */ tables`
 	log.Infof("Unlocking tables")
 	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
 		return err
@@ -468,7 +468,7 @@ func (this *Applier) UnlockTables() error {
 
 // SwapTablesQuickAndBumpy
 func (this *Applier) SwapTablesQuickAndBumpy() error {
-	query := fmt.Sprintf(`alter /* gh-osc */ table %s.%s rename %s`,
+	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 		sql.EscapeName(this.migrationContext.GetOldTableName()),
@@ -478,7 +478,7 @@ func (this *Applier) SwapTablesQuickAndBumpy() error {
 	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
 		return err
 	}
-	query = fmt.Sprintf(`alter /* gh-osc */ table %s.%s rename %s`,
+	query = fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
@@ -513,7 +513,7 @@ func (this *Applier) SwapTablesAtomic(sessionIdChan chan int64) error {
 	}
 	sessionIdChan <- sessionId
 
-	query = fmt.Sprintf(`rename /* gh-osc */ table %s.%s to %s.%s, %s.%s to %s.%s`,
+	query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s, %s.%s to %s.%s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -539,7 +539,7 @@ func (this *Applier) SwapTablesAtomic(sessionIdChan chan int64) error {
 // We need to keep the SQL thread active so as to complete processing received events,
 // and have them written to the binary log, so that we can then read them via streamer
 func (this *Applier) StopSlaveIOThread() error {
-	query := `stop /* gh-osc */ slave io_thread`
+	query := `stop /* gh-ost */ slave io_thread`
 	log.Infof("Stopping replication")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
@@ -646,7 +646,7 @@ func (this *Applier) IssueBlockingQueryOnVoluntaryLock(sessionIdChan chan int64)
 
 	// Grab
 	query := fmt.Sprintf(`
-			select /* gh-osc blocking-query-%s */
+			select /* gh-ost blocking-query-%s */
 					release_lock(?)
 				from %s.%s
 				where
