@@ -548,6 +548,39 @@ func (this *Applier) StopSlaveIOThread() error {
 	return nil
 }
 
+// MasterPosWait is applicable with --test-on-replica
+func (this *Applier) MasterPosWait(binlogCoordinates *mysql.BinlogCoordinates) error {
+	var appliedRows int64
+	if err := this.db.QueryRow(`select master_pos_wait(?, ?, ?)`, binlogCoordinates.LogFile, binlogCoordinates.LogPos, 1).Scan(&appliedRows); err != nil {
+		return err
+	}
+	if appliedRows < 0 {
+		return fmt.Errorf("Timeout waiting on master_pos_wait()")
+	}
+	return nil
+}
+
+func (this *Applier) StopSlaveNicely() error {
+	if err := this.StopSlaveIOThread(); err != nil {
+		return err
+	}
+	binlogCoordinates, err := mysql.GetReadBinlogCoordinates(this.db)
+	if err != nil {
+		return err
+	}
+	log.Debugf("Replication stopped at %+v. Will wait for SQL thread to apply", *binlogCoordinates)
+	if err := this.MasterPosWait(binlogCoordinates); err != nil {
+		return err
+	}
+	log.Debugf("Replication SQL thread applied all events")
+	if selfBinlogCoordinates, err := mysql.GetSelfBinlogCoordinates(this.db); err != nil {
+		return err
+	} else {
+		log.Debugf("Self binlog coordinates: %+v", *selfBinlogCoordinates)
+	}
+	return nil
+}
+
 // GrabVoluntaryLock gets a named lock (`GET_LOCK`) and listens
 // on a okToRelease in order to release it
 func (this *Applier) GrabVoluntaryLock(lockGrabbed chan<- error, okToRelease <-chan bool) error {

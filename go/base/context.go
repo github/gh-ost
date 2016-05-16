@@ -121,17 +121,17 @@ func GetMigrationContext() *MigrationContext {
 
 // GetGhostTableName generates the name of ghost table, based on original table name
 func (this *MigrationContext) GetGhostTableName() string {
-	return fmt.Sprintf("_%s_New", this.OriginalTableName)
+	return fmt.Sprintf("_%s_gst", this.OriginalTableName)
 }
 
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (this *MigrationContext) GetOldTableName() string {
-	return fmt.Sprintf("_%s_Old", this.OriginalTableName)
+	return fmt.Sprintf("_%s_old", this.OriginalTableName)
 }
 
 // GetChangelogTableName generates the name of changelog table, based on original table name
 func (this *MigrationContext) GetChangelogTableName() string {
-	return fmt.Sprintf("_%s_OSC", this.OriginalTableName)
+	return fmt.Sprintf("_%s_osc", this.OriginalTableName)
 }
 
 // GetVoluntaryLockName returns a name of a voluntary lock to be used throughout
