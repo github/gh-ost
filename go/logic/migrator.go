@@ -48,7 +48,8 @@ type Migrator struct {
 	voluntaryLockAcquired      chan bool
 	panicAbort                 chan error
 
-	allEventsUpToLockProcessedFlag int64
+	rowCopyCompleteFlag                    int64
+	allEventsUpToLockProcessedInjectedFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
@@ -66,7 +67,7 @@ func NewMigrator() *Migrator {
 		voluntaryLockAcquired:      make(chan bool, 1),
 		panicAbort:                 make(chan error),
 
-		allEventsUpToLockProcessedFlag: 0,
+		allEventsUpToLockProcessedInjectedFlag: 0,
 
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
@@ -93,13 +94,13 @@ func (this *Migrator) acceptSignals() {
 func (this *Migrator) shouldThrottle() (result bool, reason string) {
 	// User-based throttle
 	if this.migrationContext.ThrottleFlagFile != "" {
-		if _, err := os.Stat(this.migrationContext.ThrottleFlagFile); err == nil {
+		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
 			// Throttle file defined and exists!
 			return true, "flag-file"
 		}
 	}
 	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
-		if _, err := os.Stat(this.migrationContext.ThrottleAdditionalFlagFile); err == nil {
+		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
 			// 2nd Throttle file defined and exists!
 			return true, "flag-file"
 		}
@@ -109,7 +110,7 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 	if time.Duration(lag) > time.Duration(this.migrationContext.MaxLagMillisecondsThrottleThreshold)*time.Millisecond {
 		return true, fmt.Sprintf("lag=%fs", time.Duration(lag).Seconds())
 	}
-	if this.migrationContext.TestOnReplica && (atomic.LoadInt64(&this.allEventsUpToLockProcessedFlag) == 0) {
+	if this.migrationContext.TestOnReplica && (atomic.LoadInt64(&this.allEventsUpToLockProcessedInjectedFlag) == 0) {
 		replicationLag, err := mysql.GetMaxReplicationLag(this.migrationContext.InspectorConnectionConfig, this.migrationContext.ThrottleControlReplicaKeys, this.migrationContext.ReplictionLagQuery)
 		if err != nil {
 			return true, err.Error()
@@ -172,6 +173,21 @@ func (this *Migrator) throttle(onThrottled func()) {
 	}
 }
 
+// sleepWhileTrue sleeps indefinitely until the given function returns 'false'
+// (or fails with error)
+func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
+	for {
+		shouldSleep, err := operation()
+		if err != nil {
+			return err
+		}
+		if !shouldSleep {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 // retryOperation attempts up to `count` attempts at running given function,
 // exiting as soon as it returns with non-error.
 func (this *Migrator) retryOperation(operation func() error) (err error) {
@@ -205,6 +221,7 @@ func (this *Migrator) executeAndThrottleOnError(operation func() error) (err err
 // consumers and drops any further incoming events that may be left hanging.
 func (this *Migrator) consumeRowCopyComplete() {
 	<-this.rowCopyComplete
+	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
 	go func() {
 		for <-this.rowCopyComplete {
 		}
@@ -330,6 +347,20 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 		log.Debugf("throttling before swapping tables")
 	})
 
+	this.sleepWhileTrue(
+		func() (bool, error) {
+			if this.migrationContext.PostponeSwapTablesFlagFile == "" {
+				return false, nil
+			}
+			if base.FileExists(this.migrationContext.PostponeSwapTablesFlagFile) {
+				// Throttle file defined and exists!
+				log.Debugf("Postponing final table swap as flag file exists: %+v", this.migrationContext.PostponeSwapTablesFlagFile)
+				return true, nil
+			}
+			return false, nil
+		},
+	)
+
 	if this.migrationContext.TestOnReplica {
 		return this.stopWritesAndCompleteMigrationOnReplica()
 	}
@@ -374,8 +405,8 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 		return err
 	}
 	log.Debugf("Waiting for events up to lock")
+	atomic.StoreInt64(&this.allEventsUpToLockProcessedInjectedFlag, 1)
 	<-this.allEventsUpToLockProcessed
-	atomic.StoreInt64(&this.allEventsUpToLockProcessedFlag, 1)
 	log.Debugf("Done waiting for events up to lock")
 	this.printStatus()
 
@@ -687,6 +718,10 @@ func (this *Migrator) iterateChunks() error {
 		return terminateRowIteration(nil)
 	}
 	for {
+		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+			// Done
+			return nil
+		}
 		copyRowsFunc := func() error {
 			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
 			if err != nil {
