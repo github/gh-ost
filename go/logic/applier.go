@@ -568,15 +568,15 @@ func (this *Applier) StopSlaveNicely() error {
 	if err != nil {
 		return err
 	}
-	log.Debugf("Replication stopped at %+v. Will wait for SQL thread to apply", *binlogCoordinates)
+	log.Infof("Replication stopped at %+v. Will wait for SQL thread to apply", *binlogCoordinates)
 	if err := this.MasterPosWait(binlogCoordinates); err != nil {
 		return err
 	}
-	log.Debugf("Replication SQL thread applied all events")
+	log.Infof("Replication SQL thread applied all events")
 	if selfBinlogCoordinates, err := mysql.GetSelfBinlogCoordinates(this.db); err != nil {
 		return err
 	} else {
-		log.Debugf("Self binlog coordinates: %+v", *selfBinlogCoordinates)
+		log.Infof("Self binlog coordinates: %+v", *selfBinlogCoordinates)
 	}
 	return nil
 }
