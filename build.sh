@@ -1,12 +1,14 @@
 #!/bin/bash
 #
 #
+RELEASE_VERSION="0.7.2"
 
 buildpath=/tmp/gh-ost
 target=gh-ost
 timestamp=$(date "+%Y%m%d%H%M%S")
 mkdir -p ${buildpath}
-gobuild="go build -o $buildpath/$target go/cmd/gh-ost/main.go"
+ldflags="-X main.AppVersion=${RELEASE_VERSION}"
+gobuild="go build -ldflags \"$ldflags\" -o $buildpath/$target go/cmd/gh-ost/main.go"
 
 echo "Building OS/X binary"
 echo "GO15VENDOREXPERIMENT=1 GOOS=darwin GOARCH=amd64 $gobuild" | bash
