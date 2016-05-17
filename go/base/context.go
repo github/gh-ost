@@ -43,7 +43,11 @@ type MigrationContext struct {
 	AllowedRunningOnMaster  bool
 	SwitchToRowBinlogFormat bool
 
-	ConfigFile string
+	config      ContextConfig
+	configMutex *sync.Mutex
+	ConfigFile  string
+	CliUser     string
+	CliPassword string
 
 	ChunkSize                           int64
 	MaxLagMillisecondsThrottleThreshold int64
@@ -96,6 +100,19 @@ type MigrationContext struct {
 	CanStopStreaming func() bool
 }
 
+type ContextConfig struct {
+	Client struct {
+		User     string
+		Password string
+	}
+	Osc struct {
+		Chunk_Size            int64
+		Max_Lag_Millis        int64
+		Replication_Lag_Query string
+		Max_Load              string
+	}
+}
+
 var context *MigrationContext
 
 func init() {
@@ -112,6 +129,7 @@ func newMigrationContext() *MigrationContext {
 		MaxLoad:                             make(map[string]int64),
 		throttleMutex:                       &sync.Mutex{},
 		ThrottleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
+		configMutex:                         &sync.Mutex{},
 	}
 }
 
@@ -210,6 +228,8 @@ func (this *MigrationContext) IsThrottled() (bool, string) {
 	return this.isThrottled, this.throttleReason
 }
 
+// ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
+// such as: 'Threads_running=100,Threads_connected=500'
 func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
 	if maxLoadList == "" {
 		return nil
@@ -232,31 +252,37 @@ func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
 	return nil
 }
 
+// ApplyCredentials sorts out the credentials between the config file and the CLI flags
+func (this *MigrationContext) ApplyCredentials() {
+	this.configMutex.Lock()
+	defer this.configMutex.Unlock()
+
+	if this.config.Client.User != "" {
+		this.InspectorConnectionConfig.User = this.config.Client.User
+	}
+	if this.CliUser != "" {
+		// Override
+		this.InspectorConnectionConfig.User = this.CliUser
+	}
+	if this.config.Client.Password != "" {
+		this.InspectorConnectionConfig.Password = this.config.Client.Password
+	}
+	if this.CliPassword != "" {
+		// Override
+		this.InspectorConnectionConfig.Password = this.CliPassword
+	}
+}
+
+// ReadConfigFile attempts to read the config file, if it exists
 func (this *MigrationContext) ReadConfigFile() error {
+	this.configMutex.Lock()
+	defer this.configMutex.Unlock()
+
 	if this.ConfigFile == "" {
 		return nil
 	}
-	conf := struct {
-		Client struct {
-			User     string
-			Password string
-		}
-		Osc struct {
-			Chunk_Size            int64
-			Max_Lag_Millis        int64
-			Replication_Lag_Query string
-			Max_Load              string
-		}
-	}{}
-	if err := gcfg.ReadFileInto(&conf, this.ConfigFile); err != nil {
+	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
 		return err
 	}
-	if this.InspectorConnectionConfig.User == "" {
-		this.InspectorConnectionConfig.User = conf.Client.User
-	}
-	if this.InspectorConnectionConfig.Password == "" {
-		this.InspectorConnectionConfig.Password = conf.Client.Password
-	}
-
 	return nil
 }
