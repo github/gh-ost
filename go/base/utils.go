@@ -7,6 +7,7 @@ package base
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"time"
 )
@@ -22,4 +23,11 @@ func PrettifyDurationOutput(d time.Duration) string {
 	result := fmt.Sprintf("%s", d)
 	result = prettifyDurationRegexp.ReplaceAllString(result, "")
 	return result
+}
+
+func FileExists(fileName string) bool {
+	if _, err := os.Stat(fileName); err == nil {
+		return true
+	}
+	return false
 }
