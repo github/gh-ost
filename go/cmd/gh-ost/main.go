@@ -23,8 +23,8 @@ func main() {
 
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
-	flag.StringVar(&migrationContext.InspectorConnectionConfig.User, "user", "root", "MySQL user")
-	flag.StringVar(&migrationContext.InspectorConnectionConfig.Password, "password", "", "MySQL password")
+	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
+	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
@@ -118,6 +118,7 @@ func main() {
 	if err := migrationContext.ReadMaxLoad(*maxLoad); err != nil {
 		log.Fatale(err)
 	}
+	migrationContext.ApplyCredentials()
 
 	log.Infof("starting gh-ost %+v", AppVersion)
 
