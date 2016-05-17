@@ -15,6 +15,8 @@ import (
 	"github.com/outbrain/golib/log"
 )
 
+var AppVersion string
+
 // main is the application's entry point. It will either spawn a CLI or HTTP itnerfaces.
 func main() {
 	migrationContext := base.GetMigrationContext()
@@ -57,11 +59,20 @@ func main() {
 	debug := flag.Bool("debug", false, "debug mode (very verbose)")
 	stack := flag.Bool("stack", false, "add stack trace upon error")
 	help := flag.Bool("help", false, "Display usage")
+	version := flag.Bool("version", false, "Print version & exit")
 	flag.Parse()
 
 	if *help {
 		fmt.Fprintf(os.Stderr, "Usage of gh-ost:\n")
 		flag.PrintDefaults()
+		return
+	}
+	if *version {
+		appVersion := AppVersion
+		if appVersion == "" {
+			appVersion = "unversioned"
+		}
+		fmt.Println(appVersion)
 		return
 	}
 
@@ -106,7 +117,7 @@ func main() {
 		log.Fatale(err)
 	}
 
-	log.Info("starting gh-ost")
+	log.Info("starting gh-ost %+v", AppVersion)
 
 	migrator := logic.NewMigrator()
 	err := migrator.Migrate()
