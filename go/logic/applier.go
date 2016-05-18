@@ -552,7 +552,7 @@ func (this *Applier) StopSlaveIOThread() error {
 // MasterPosWait is applicable with --test-on-replica
 func (this *Applier) MasterPosWait(binlogCoordinates *mysql.BinlogCoordinates) error {
 	var appliedRows int64
-	if err := this.db.QueryRow(`select master_pos_wait(?, ?, ?)`, binlogCoordinates.LogFile, binlogCoordinates.LogPos, 1).Scan(&appliedRows); err != nil {
+	if err := this.db.QueryRow(`select ifnull(master_pos_wait(?, ?, ?), 0)`, binlogCoordinates.LogFile, binlogCoordinates.LogPos, 1).Scan(&appliedRows); err != nil {
 		return err
 	}
 	if appliedRows < 0 {
