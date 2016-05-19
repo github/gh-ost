@@ -33,14 +33,14 @@ const (
 // EventsStreamer reads data from binary logs and streams it on. It acts as a publisher,
 // and interested parties may subscribe for per-table events.
 type EventsStreamer struct {
-	connectionConfig      *mysql.ConnectionConfig
-	db                    *gosql.DB
-	migrationContext      *base.MigrationContext
-	nextBinlogCoordinates *mysql.BinlogCoordinates
-	listeners             [](*BinlogEventListener)
-	listenersMutex        *sync.Mutex
-	eventsChannel         chan *binlog.BinlogEntry
-	binlogReader          binlog.BinlogReader
+	connectionConfig         *mysql.ConnectionConfig
+	db                       *gosql.DB
+	migrationContext         *base.MigrationContext
+	initialBinlogCoordinates *mysql.BinlogCoordinates
+	listeners                [](*BinlogEventListener)
+	listenersMutex           *sync.Mutex
+	eventsChannel            chan *binlog.BinlogEntry
+	binlogReader             binlog.BinlogReader
 }
 
 func NewEventsStreamer() *EventsStreamer {
@@ -80,19 +80,19 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 	defer this.listenersMutex.Unlock()
 
 	for _, listener := range this.listeners {
+		listener := listener
 		if strings.ToLower(listener.databaseName) != strings.ToLower(binlogEvent.DatabaseName) {
 			continue
 		}
 		if strings.ToLower(listener.tableName) != strings.ToLower(binlogEvent.TableName) {
 			continue
 		}
-		onDmlEvent := listener.onDmlEvent
 		if listener.async {
 			go func() {
-				onDmlEvent(binlogEvent)
+				listener.onDmlEvent(binlogEvent)
 			}()
 		} else {
-			onDmlEvent(binlogEvent)
+			listener.onDmlEvent(binlogEvent)
 		}
 	}
 }
@@ -112,7 +112,7 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if err != nil {
 		return err
 	}
-	if err := goMySQLReader.ConnectBinlogStreamer(*this.nextBinlogCoordinates); err != nil {
+	if err := goMySQLReader.ConnectBinlogStreamer(*this.initialBinlogCoordinates); err != nil {
 		return err
 	}
 	this.binlogReader = goMySQLReader
@@ -134,13 +134,17 @@ func (this *EventsStreamer) validateConnection() error {
 	return nil
 }
 
+func (this *EventsStreamer) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinates {
+	return this.binlogReader.GetCurrentBinlogCoordinates()
+}
+
 // validateGrants verifies the user by which we're executing has necessary grants
 // to do its thang.
 func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	query := `show /* gh-ost readCurrentBinlogCoordinates */ master status`
 	foundMasterStatus := false
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
-		this.nextBinlogCoordinates = &mysql.BinlogCoordinates{
+		this.initialBinlogCoordinates = &mysql.BinlogCoordinates{
 			LogFile: m.GetString("File"),
 			LogPos:  m.GetInt64("Position"),
 		}
@@ -154,7 +158,7 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	if !foundMasterStatus {
 		return fmt.Errorf("Got no results from SHOW MASTER STATUS. Bailing out")
 	}
-	log.Debugf("Streamer binlog coordinates: %+v", *this.nextBinlogCoordinates)
+	log.Debugf("Streamer binlog coordinates: %+v", *this.initialBinlogCoordinates)
 	return nil
 }
 
@@ -168,5 +172,15 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			}
 		}
 	}()
-	return this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel)
+	// The next should block and execute forever, unless there's a serious error
+	for {
+		if err := this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel); err != nil {
+			// Reposition at same coordinates. Single attempt (TODO: make multiple attempts?)
+			log.Infof("StreamEvents encountered unexpected error: %+v", err)
+			err = this.binlogReader.Reconnect()
+			if err != nil {
+				return err
+			}
+		}
+	}
 }

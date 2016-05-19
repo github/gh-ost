@@ -108,15 +108,19 @@ func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKe
 	return GetMasterConnectionConfigSafe(masterConfig, visitedKeys)
 }
 
-func GetReadBinlogCoordinates(db *gosql.DB) (readBinlogCoordinates *BinlogCoordinates, err error) {
+func GetReplicationBinlogCoordinates(db *gosql.DB) (readBinlogCoordinates *BinlogCoordinates, executeBinlogCoordinates *BinlogCoordinates, err error) {
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
 		readBinlogCoordinates = &BinlogCoordinates{
 			LogFile: m.GetString("Master_Log_File"),
 			LogPos:  m.GetInt64("Read_Master_Log_Pos"),
 		}
+		executeBinlogCoordinates = &BinlogCoordinates{
+			LogFile: m.GetString("Relay_Master_Log_File"),
+			LogPos:  m.GetInt64("Exec_Master_Log_Pos"),
+		}
 		return nil
 	})
-	return readBinlogCoordinates, err
+	return readBinlogCoordinates, executeBinlogCoordinates, err
 }
 
 func GetSelfBinlogCoordinates(db *gosql.DB) (selfBinlogCoordinates *BinlogCoordinates, err error) {

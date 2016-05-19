@@ -7,6 +7,7 @@ package logic
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -286,6 +287,7 @@ func (this *Migrator) listenOnPanicAbort() {
 }
 
 func (this *Migrator) Migrate() (err error) {
+	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	this.migrationContext.StartTime = time.Now()
 
 	go this.listenOnPanicAbort()
@@ -326,13 +328,14 @@ func (this *Migrator) Migrate() (err error) {
 
 	log.Debugf("Operating until row copy is complete")
 	this.consumeRowCopyComplete()
-	log.Debugf("Row copy complete")
+	log.Infof("Row copy complete")
 	this.printStatus()
 
 	if err := this.stopWritesAndCompleteMigration(); err != nil {
 		return err
 	}
 
+	log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
@@ -401,13 +404,14 @@ func (this *Migrator) dropOldTableIfRequired() (err error) {
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
 func (this *Migrator) waitForEventsUpToLock() (err error) {
+	log.Infof("Writing changelog state: %+v", AllEventsUpToLockProcessed)
 	if _, err := this.applier.WriteChangelogState(string(AllEventsUpToLockProcessed)); err != nil {
 		return err
 	}
-	log.Debugf("Waiting for events up to lock")
+	log.Infof("Waiting for events up to lock")
 	atomic.StoreInt64(&this.allEventsUpToLockProcessedInjectedFlag, 1)
 	<-this.allEventsUpToLockProcessed
-	log.Debugf("Done waiting for events up to lock")
+	log.Infof("Done waiting for events up to lock")
 	this.printStatus()
 
 	return nil
@@ -570,16 +574,37 @@ func (this *Migrator) printStatus() {
 	elapsedSeconds := int64(elapsedTime.Seconds())
 	totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
 	rowsEstimate := atomic.LoadInt64(&this.migrationContext.RowsEstimate)
-	progressPct := 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
+	var progressPct float64
+	if rowsEstimate > 0 {
+		progressPct = 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
+	}
+	var etaSeconds float64 = math.MaxFloat64
+
+	eta := "N/A"
+	if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
+		eta = fmt.Sprintf("throttled, %s", throttleReason)
+	} else if progressPct > 100.0 {
+		eta = "Due"
+	} else if progressPct >= 1.0 {
+		elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
+		totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
+		etaSeconds = totalExpectedSeconds - elapsedRowCopySeconds
+		if etaSeconds >= 0 {
+			etaDuration := time.Duration(etaSeconds) * time.Second
+			eta = base.PrettifyDurationOutput(etaDuration)
+		} else {
+			eta = "Due"
+		}
+	}
 
 	shouldPrintStatus := false
 	if elapsedSeconds <= 60 {
 		shouldPrintStatus = true
-	} else if progressPct >= 99.0 {
+	} else if etaSeconds <= 60 {
 		shouldPrintStatus = true
-	} else if progressPct >= 95.0 {
+	} else if etaSeconds <= 180 {
 		shouldPrintStatus = (elapsedSeconds%5 == 0)
-	} else if elapsedSeconds <= 120 {
+	} else if elapsedSeconds <= 180 {
 		shouldPrintStatus = (elapsedSeconds%5 == 0)
 	} else {
 		shouldPrintStatus = (elapsedSeconds%30 == 0)
@@ -588,27 +613,14 @@ func (this *Migrator) printStatus() {
 		return
 	}
 
-	eta := "N/A"
-	if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
-		eta = fmt.Sprintf("throttled, %s", throttleReason)
-	} else if progressPct > 100.0 {
-		eta = "Due"
-	} else if progressPct >= 2.0 {
-		elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
-		totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
-		etaSeconds := totalExpectedSeconds - elapsedRowCopySeconds
-		etaDuration := time.Duration(etaSeconds) * time.Second
-		if etaDuration >= 0 {
-			eta = base.PrettifyDurationOutput(etaDuration)
-		} else {
-			eta = "Due"
-		}
-	}
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Elapsed: %+v(copy), %+v(total); ETA: %s",
+	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
+
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Elapsed: %+v(copy), %+v(total); streamer: %+v; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
 		base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()), base.PrettifyDurationOutput(elapsedTime),
+		currentBinlogCoordinates,
 		eta,
 	)
 	this.applier.WriteChangelog(
@@ -656,7 +668,11 @@ func (this *Migrator) initiateStreaming() error {
 
 	go func() {
 		log.Debugf("Beginning streaming")
-		this.eventsStreamer.StreamEvents(func() bool { return this.canStopStreaming() })
+		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
+		if err != nil {
+			this.panicAbort <- err
+		}
+		log.Debugf("Done streaming")
 	}()
 	return nil
 }
