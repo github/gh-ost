@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -27,7 +28,8 @@ type BinlogEventListener struct {
 }
 
 const (
-	EventsChannelBufferSize = 1
+	EventsChannelBufferSize       = 1
+	ReconnectStreamerSleepSeconds = 5
 )
 
 // EventsStreamer reads data from binary logs and streams it on. It acts as a publisher,
@@ -177,6 +179,8 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 		if err := this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel); err != nil {
 			// Reposition at same coordinates. Single attempt (TODO: make multiple attempts?)
 			log.Infof("StreamEvents encountered unexpected error: %+v", err)
+			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
+			log.Infof("Reconnecting...")
 			err = this.binlogReader.Reconnect()
 			if err != nil {
 				return err

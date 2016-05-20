@@ -113,9 +113,16 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 	}
 	this.migrationContext.UniqueKey = sharedUniqueKeys[0]
 	log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
+	if this.migrationContext.UniqueKey.HasNullable {
+		if this.migrationContext.NullableUniqueKeyAllowed {
+			log.Warningf("Chosen key (%s) has nullable columns. You have supplied with --allow-nullable-unique-key and so this migration proceeds. As long as there aren't NULL values in this key's column, migration should be fine. NULL values will corrupt migration's data", this.migrationContext.UniqueKey)
+		} else {
+			return fmt.Errorf("Chosen key (%s) has nullable columns. Bailing out. To force this operation to continue, supply --allow-nullable-unique-key flag. Only do so if you are certain there are no actual NULL values in this key. As long as there aren't, migration should be fine. NULL values in columns of this key will corrupt migration's data", this.migrationContext.UniqueKey)
+		}
+	}
 	if !this.migrationContext.UniqueKey.IsPrimary() {
-		if this.migrationContext.OriginalBinlogRowImage != "full" {
-			return fmt.Errorf("binlog_row_image is '%s' and chosen key is %s, which is not the primary key. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again")
+		if this.migrationContext.OriginalBinlogRowImage != "FULL" {
+			return fmt.Errorf("binlog_row_image is '%s' and chosen key is %s, which is not the primary key. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again", this.migrationContext.OriginalBinlogRowImage, this.migrationContext.UniqueKey)
 		}
 	}
 
@@ -261,6 +268,7 @@ func (this *Inspector) validateBinlogs() error {
 		// Only as of 5.6. We wish to support 5.5 as well
 		this.migrationContext.OriginalBinlogRowImage = ""
 	}
+	this.migrationContext.OriginalBinlogRowImage = strings.ToUpper(this.migrationContext.OriginalBinlogRowImage)
 
 	log.Infof("binary logs validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	return nil

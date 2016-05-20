@@ -549,6 +549,17 @@ func (this *Applier) StopSlaveIOThread() error {
 	return nil
 }
 
+// StartSlaveSQLThread is applicable with --test-on-replica
+func (this *Applier) StartSlaveSQLThread() error {
+	query := `start /* gh-ost */ slave sql_thread`
+	log.Infof("Verifying SQL thread is running")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	log.Infof("SQL thread started")
+	return nil
+}
+
 // MasterPosWait is applicable with --test-on-replica
 func (this *Applier) MasterPosWait(binlogCoordinates *mysql.BinlogCoordinates) error {
 	var appliedRows int64
@@ -565,22 +576,14 @@ func (this *Applier) StopSlaveNicely() error {
 	if err := this.StopSlaveIOThread(); err != nil {
 		return err
 	}
+	if err := this.StartSlaveSQLThread(); err != nil {
+		return err
+	}
 	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.db)
 	if err != nil {
 		return err
 	}
 	log.Infof("Replication IO thread at %+v. SQL thread is at %+v", *readBinlogCoordinates, *executeBinlogCoordinates)
-	log.Infof("Will wait for SQL thread to catch up with IO thread")
-	if err := this.MasterPosWait(readBinlogCoordinates); err != nil {
-		log.Errorf("Error waiting for SQL thread to catch up. Replication IO thread at %+v. SQL thread is at %+v", *readBinlogCoordinates, *executeBinlogCoordinates)
-		return err
-	}
-	log.Infof("Replication SQL thread applied all events up to %+v", *readBinlogCoordinates)
-	if selfBinlogCoordinates, err := mysql.GetSelfBinlogCoordinates(this.db); err != nil {
-		return err
-	} else {
-		log.Infof("Self binlog coordinates: %+v", *selfBinlogCoordinates)
-	}
 	return nil
 }
 
