@@ -17,3 +17,8 @@ The magic is that your master can still produce SRB, but if you have a replica w
 - If you supply `--switch-to-rbr`, `gh-ost` will convert the binlog format for you, and restart replication to make sure this takes effect.
 - If your replica is an intermediate master, i.e. further serves as a master to other replicas, `gh-ost` will not convert the `binlog_format`.
 - At any case, `gh-ost` **will not** convert back to `STATEMENT` (SBR). This is because you may be running multiple migrations concurrently. Being able to run concurrent migrations is one of the design goals of this tool. It's your own responsibility to switch back to SBR once all pending migrations are complete.
+
+### Summary
+
+- If you're already using RBR, all is well for you
+- If not, convert one of your replicas to `binlog_format='ROW'`, or let `gh-ost` do this for you.
