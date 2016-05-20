@@ -82,8 +82,12 @@ In the above, `gh-ost` found replication to be caught up and began operation. We
   - `40000/4467001 0.9%`
   - You can also observe that the number of rows changes. This is implied by the flag `--exact-rowcount`, where we try and keep an updated amount of rows were are going to process throughout the migration, even as new rows are added and old rows deleted. This is not an exact number, but turns out to be a pretty good estimate.
 - `Elapsed: 23s(copy), 29s(total)`: `total` stands for total time from executing of `gh-ost`. `copy` stands for the time elapsed since `gh-ost` finished making preparations and was good to go with copy.
+- `streamer: mysql-bin.002587:393017028` tells us which binary log entry is `gh-ost` processing at this time.
+- `ETA`: Estimated Time of Arrival, is still `N/A` since `gh-ost` has not collected enough data to make an estimate.
+
+Some time later, we will have:
+
 ```
-Copy: 40000/4467001 0.9%; Applied: 4582; Backlog: 3/100; Elapsed: 23s(copy), 29s(total); streamer: mysql-bin.002587:393017028; ETA: N/A
 Copy: 50000/4467001 1.1%; Applied: 4620; Backlog: 6/100; Elapsed: 24s(copy), 30s(total); streamer: mysql-bin.002587:396414283; ETA: 35m20s
 Copy: 62500/4467002 1.4%; Applied: 4671; Backlog: 3/100; Elapsed: 25s(copy), 31s(total); streamer: mysql-bin.002587:402582372; ETA: 29m21s
 Copy: 75000/4467003 1.7%; Applied: 4703; Backlog: 3/100; Elapsed: 26s(copy), 32s(total); streamer: mysql-bin.002587:407864888; ETA: 25m22s
@@ -91,29 +95,23 @@ Copy: 87500/4467004 2.0%; Applied: 4751; Backlog: 6/100; Elapsed: 27s(copy), 33s
 Copy: 100000/4467004 2.2%; Applied: 4795; Backlog: 6/100; Elapsed: 28s(copy), 34s(total); streamer: mysql-bin.002587:418380729; ETA: 20m22s
 Copy: 112500/4467005 2.5%; Applied: 4835; Backlog: 1/100; Elapsed: 29s(copy), 35s(total); streamer: mysql-bin.002587:423592450; ETA: 18m42s
 ```
+And `gh-ost` progressively provides an ETA.
+
+Status frequency:
+- In the first `60` seconds `gh-ost` emits a status entry every `1` second.
+- Then, up till `3` miinutes into operation, status shows every `5` seconds.
+- It then drops down to once per `30` seconds
+- But goes into once-per-`5`-seconds again when it estimates < `3` minutes ETA
+- And once per `1` second when it estimates < `1` minute ETA
 
 ```
 Copy: 602500/4467053 13.5%; Applied: 6770; Backlog: 0/100; Elapsed: 1m14s(copy), 1m20s(total); streamer: mysql-bin.002587:630949369; ETA: 7m54s
 Copy: 655000/4467060 14.7%; Applied: 6985; Backlog: 6/100; Elapsed: 1m19s(copy), 1m25s(total); streamer: mysql-bin.002587:652696032; ETA: 7m39s
 Copy: 707500/4467066 15.8%; Applied: 7207; Backlog: 0/100; Elapsed: 1m24s(copy), 1m30s(total); streamer: mysql-bin.002587:674577141; ETA: 7m26s
-Copy: 760000/4467075 17.0%; Applied: 7400; Backlog: 4/100; Elapsed: 1m29s(copy), 1m35s(total); streamer: mysql-bin.002587:696383305; ETA: 7m14s
-Copy: 812500/4467083 18.2%; Applied: 7614; Backlog: 4/100; Elapsed: 1m34s(copy), 1m40s(total); streamer: mysql-bin.002587:718075114; ETA: 7m2s
-Copy: 867500/4467089 19.4%; Applied: 7836; Backlog: 3/100; Elapsed: 1m39s(copy), 1m45s(total); streamer: mysql-bin.002587:740812984; ETA: 6m50s
-```
-
-```
+...
 Copy: 1975000/4466798 44.2%; Applied: 12919; Backlog: 2/100; Elapsed: 3m24s(copy), 3m30s(total); streamer: mysql-bin.002588:119901391; ETA: 4m17s
 Copy: 2285000/4466855 51.2%; Applied: 14234; Backlog: 13/100; Elapsed: 3m54s(copy), 4m0s(total); streamer: mysql-bin.002588:243346615; ETA: 3m43s
-```
-
-```
-Copy: 4320000/4467220 96.7%; Applied: 22716; Backlog: 4/100; Elapsed: 7m4s(copy), 7m10s(total); streamer: mysql-bin.002588:1034380840; ETA: 14s
-Copy: 4332500/4467220 97.0%; Applied: 22760; Backlog: 0/100; Elapsed: 7m5s(copy), 7m11s(total); streamer: mysql-bin.002588:1038716298; ETA: 13s
-Copy: 4342500/4467221 97.2%; Applied: 22800; Backlog: 8/100; Elapsed: 7m6s(copy), 7m12s(total); streamer: mysql-bin.002588:1043083347; ETA: 12s
-Copy: 4352500/4467222 97.4%; Applied: 22841; Backlog: 3/100; Elapsed: 7m7s(copy), 7m13s(total); streamer: mysql-bin.002588:1046885242; ETA: 11s
-Copy: 4365000/4467224 97.7%; Applied: 22878; Backlog: 3/100; Elapsed: 7m8s(copy), 7m14s(total); streamer: mysql-bin.002588:1051545604; ETA: 10s
-Copy: 4377500/4467224 98.0%; Applied: 22915; Backlog: 0/100; Elapsed: 7m9s(copy), 7m15s(total); streamer: mysql-bin.002588:1055784141; ETA: 8s
-Copy: 4387500/4467225 98.2%; Applied: 22949; Backlog: 6/100; Elapsed: 7m10s(copy), 7m16s(total); streamer: mysql-bin.002588:1060089849; ETA: 7s
+...
 Copy: 4397500/4467226 98.4%; Applied: 22996; Backlog: 8/100; Elapsed: 7m11s(copy), 7m17s(total); streamer: mysql-bin.002588:1063945589; ETA: 6s
 Copy: 4410000/4467227 98.7%; Applied: 23045; Backlog: 5/100; Elapsed: 7m12s(copy), 7m18s(total); streamer: mysql-bin.002588:1068763841; ETA: 5s
 Copy: 4420000/4467229 98.9%; Applied: 23086; Backlog: 5/100; Elapsed: 7m13s(copy), 7m19s(total); streamer: mysql-bin.002588:1072751966; ETA: 4s
@@ -136,3 +134,5 @@ Copy: 4466492/4467235 100.0%; Applied: 23309; Backlog: 1/100; Elapsed: 7m18s(cop
 2016-05-19 18:04:30 INFO Done waiting for events up to lock
 Copy: 4466492/4467235 100.0%; Applied: 23309; Backlog: 0/100; Elapsed: 7m18s(copy), 7m25s(total); streamer: mysql-bin.002589:17703056; ETA: 0s
 ```
+This migration took, till this point, `7m25s`, had applied `23309` events from the binary log and has copied `4466492` rows onto the ghost table.
+ 
