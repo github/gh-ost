@@ -9,7 +9,8 @@ Test on replica if you:
 
 ## What testing on replica means
 
-`gh-ost` will make all changes
+TL;DR `gh-ost` will make all changes on a replica and leave both original and ghost tables for you to compare.
+
 ## Issuing a test drive
 
 Apply `--test-on-replica --host=<a.replica>`.
@@ -35,7 +36,6 @@ You now have the time to verify the tool works correctly. You may checksum the e
   `mysql -e 'select * from mydb._mytable_gst order by id' | md5sum`
 - or of course only select the shared columns before/after the migration
 - We use the trivial `engine=innodb` for `alter` when testing. This way the resulting ghost table is identical in structure to the original table (including indexes) and we expect data to be completely identical. We use `md5sum` on the entire dataset to confirm the test result.
-
 
 ### Cleanup
 
