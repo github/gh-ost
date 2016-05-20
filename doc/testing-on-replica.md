@@ -7,7 +7,10 @@ Test on replica if you:
 - Just want to experiment with a real migration without affecting production (maybe measure migration time?)
 - Wish to observe data change impact
 
-### What testing on replica means
+## What testing on replica means
+
+`gh-ost` will make all changes
+## Issuing a test drive
 
 Apply `--test-on-replica --host=<a.replica>`.
 - `gh-ost` would connect to the indicated server
@@ -28,8 +31,11 @@ You are now left with the original table **and** the ghost table. They _should_ 
 
 You now have the time to verify the tool works correctly. You may checksum the entire table data if you like.
 - e.g.
-`mysql -e 'select * from mydb.mytable' | md5sum`
-`mysql -e 'select * from mydb._mytable_gst' | md5sum`
+  `mysql -e 'select * from mydb.mytable order by id' | md5sum`
+  `mysql -e 'select * from mydb._mytable_gst order by id' | md5sum`
+- or of course only select the shared columns before/after the migration
+- We use the trivial `engine=innodb` for `alter` when testing. This way the resulting ghost table is identical in structure to the original table (including indexes) and we expect data to be completely identical. We use `md5sum` on the entire dataset to confirm the test result.
+
 
 ### Cleanup
 
