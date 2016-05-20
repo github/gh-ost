@@ -39,9 +39,10 @@ type MigrationContext struct {
 	OriginalTableName string
 	AlterStatement    string
 
-	CountTableRows          bool
-	AllowedRunningOnMaster  bool
-	SwitchToRowBinlogFormat bool
+	CountTableRows           bool
+	AllowedRunningOnMaster   bool
+	SwitchToRowBinlogFormat  bool
+	NullableUniqueKeyAllowed bool
 
 	config      ContextConfig
 	configMutex *sync.Mutex
