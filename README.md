@@ -1,4 +1,5 @@
-# gh-ost: GitHub's online schema migration for MySQL
+# gh-ost
+#### GitHub's online schema migration for MySQL
 
 `gh-ost` allows for online schema migrations in MySQL
 
