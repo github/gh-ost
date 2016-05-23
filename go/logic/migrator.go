@@ -606,6 +606,8 @@ func (this *Migrator) printStatus() {
 		shouldPrintStatus = (elapsedSeconds%5 == 0)
 	} else if elapsedSeconds <= 180 {
 		shouldPrintStatus = (elapsedSeconds%5 == 0)
+	} else if this.migrationContext.TimeSincePointOfInterest() <= 60 {
+		shouldPrintStatus = (elapsedSeconds%5 == 0)
 	} else {
 		shouldPrintStatus = (elapsedSeconds%30 == 0)
 	}
