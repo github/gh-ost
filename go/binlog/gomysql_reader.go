@@ -7,6 +7,7 @@ package binlog
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
@@ -23,20 +24,21 @@ const (
 )
 
 type GoMySQLReader struct {
-	connectionConfig       *mysql.ConnectionConfig
-	binlogSyncer           *replication.BinlogSyncer
-	binlogStreamer         *replication.BinlogStreamer
-	tableMap               map[uint64]string
-	currentCoordinates     mysql.BinlogCoordinates
-	lastHandledCoordinates mysql.BinlogCoordinates
+	connectionConfig         *mysql.ConnectionConfig
+	binlogSyncer             *replication.BinlogSyncer
+	binlogStreamer           *replication.BinlogStreamer
+	currentCoordinates       mysql.BinlogCoordinates
+	currentCoordinatesMutex  *sync.Mutex
+	LastAppliedRowsEventHint mysql.BinlogCoordinates
 }
 
 func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *GoMySQLReader, err error) {
 	binlogReader = &GoMySQLReader{
-		connectionConfig:   connectionConfig,
-		tableMap:           make(map[uint64]string),
-		currentCoordinates: mysql.BinlogCoordinates{},
-		binlogStreamer:     nil,
+		connectionConfig:        connectionConfig,
+		currentCoordinates:      mysql.BinlogCoordinates{},
+		currentCoordinatesMutex: &sync.Mutex{},
+		binlogSyncer:            nil,
+		binlogStreamer:          nil,
 	}
 	binlogReader.binlogSyncer = replication.NewBinlogSyncer(serverId, "mysql")
 
@@ -63,11 +65,7 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 
 func (this *GoMySQLReader) Reconnect() error {
 	this.binlogSyncer.Close()
-
-	connectCoordinates := &this.lastHandledCoordinates
-	if connectCoordinates.IsEmpty() {
-		connectCoordinates = &this.currentCoordinates
-	}
+	connectCoordinates := &mysql.BinlogCoordinates{LogFile: this.currentCoordinates.LogFile, LogPos: 4}
 	if err := this.ConnectBinlogStreamer(*connectCoordinates); err != nil {
 		return err
 	}
@@ -75,13 +73,16 @@ func (this *GoMySQLReader) Reconnect() error {
 }
 
 func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinates {
-	return &this.currentCoordinates
+	this.currentCoordinatesMutex.Lock()
+	defer this.currentCoordinatesMutex.Unlock()
+	returnCoordinates := this.currentCoordinates
+	return &returnCoordinates
 }
 
 // StreamEvents
 func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
-	if this.currentCoordinates.SmallerThanOrEquals(&this.lastHandledCoordinates) && !this.lastHandledCoordinates.IsEmpty() {
-		log.Infof("Skipping handled query at %+v", this.currentCoordinates)
+	if this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
+		log.Debugf("Skipping handled query at %+v", this.currentCoordinates)
 		return nil
 	}
 
@@ -122,6 +123,7 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 		// In reality, reads will be synchronous
 		entriesChannel <- binlogEntry
 	}
+	this.LastAppliedRowsEventHint = this.currentCoordinates
 	return nil
 }
 
@@ -135,21 +137,33 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 		if err != nil {
 			return err
 		}
-		this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
+		// if rand.Intn(1000) == 0 {
+		// 	this.binlogSyncer.Close()
+		// 	log.Debugf("current: %+v, hint: %+v", this.currentCoordinates, this.LastAppliedRowsEventHint)
+		// 	return log.Errorf(".............haha got random error")
+		// }
+		//		log.Debugf("0001 ........ currentCoordinates: %+v", this.currentCoordinates) //TODO
+		func() {
+			this.currentCoordinatesMutex.Lock()
+			defer this.currentCoordinatesMutex.Unlock()
+			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
+		}()
 		if rotateEvent, ok := ev.Event.(*replication.RotateEvent); ok {
-			this.currentCoordinates.LogFile = string(rotateEvent.NextLogName)
+			// log.Debugf("0008 ........ currentCoordinates: %+v", this.currentCoordinates) //TODO
+			// ev.Dump(os.Stdout)
+			func() {
+				this.currentCoordinatesMutex.Lock()
+				defer this.currentCoordinatesMutex.Unlock()
+				this.currentCoordinates.LogFile = string(rotateEvent.NextLogName)
+			}()
+			// log.Debugf("0001 ........ currentCoordinates: %+v", this.currentCoordinates) //TODO
 			log.Infof("rotate to next log name: %s", rotateEvent.NextLogName)
-		} else if tableMapEvent, ok := ev.Event.(*replication.TableMapEvent); ok {
-			// Actually not being used, since Table is available in RowsEvent.
-			// Keeping this here in case I'm wrong about this. Sometime in the near
-			// future I should remove this.
-			this.tableMap[tableMapEvent.TableID] = string(tableMapEvent.Table)
 		} else if rowsEvent, ok := ev.Event.(*replication.RowsEvent); ok {
 			if err := this.handleRowsEvent(ev, rowsEvent, entriesChannel); err != nil {
 				return err
 			}
 		}
-		this.lastHandledCoordinates = this.currentCoordinates
+		// log.Debugf("TODO ........ currentCoordinates: %+v", this.currentCoordinates) //TODO
 	}
 	log.Debugf("done streaming events")
 
