@@ -42,3 +42,18 @@ You now have the time to verify the tool works correctly. You may checksum the e
 It's your job to:
 - Drop the ghost table (at your leisure, you should be aware that a `DROP` can be a lengthy operation)
 - Start replication back (via `START SLAVE`)
+
+### Examples
+
+Simple:
+```shell
+$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --initially-drop-ghost-table --initially-drop-old-table --test-on-replica --verbose --execute
+```
+
+Elaborate:
+```shell
+$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --switch-to-rbr --initially-drop-ghost-table --initially-drop-old-table --test-on-replica --postpone-swap-tables-flag-file=/tmp/ghost-postpone.flag --exact-rowcount --allow-nullable-unique-key --verbose --execute
+```
+- Count exact number of rows (makes ETA estimation very good). This goes at the expense of paying the time for issuing a `SELECT COUNT(*)` on your table. We use this lovingly.
+- Automatically switch to `RBR` if replica is configured as `SBR`. See also: [migrating with SBR](migrating-with-sbr.md)
+- allow iterating on a `UNIQUE KEY` that has `NULL`able columns (at your own risk)
