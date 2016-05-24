@@ -42,7 +42,7 @@ type EventsStreamer struct {
 	listeners                [](*BinlogEventListener)
 	listenersMutex           *sync.Mutex
 	eventsChannel            chan *binlog.BinlogEntry
-	binlogReader             binlog.BinlogReader
+	binlogReader             *binlog.GoMySQLReader
 }
 
 func NewEventsStreamer() *EventsStreamer {
@@ -110,15 +110,22 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if err := this.readCurrentBinlogCoordinates(); err != nil {
 		return err
 	}
+	if err := this.initBinlogReader(this.initialBinlogCoordinates); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (this *EventsStreamer) initBinlogReader(binlogCoordinates *mysql.BinlogCoordinates) error {
 	goMySQLReader, err := binlog.NewGoMySQLReader(this.migrationContext.InspectorConnectionConfig)
 	if err != nil {
 		return err
 	}
-	if err := goMySQLReader.ConnectBinlogStreamer(*this.initialBinlogCoordinates); err != nil {
+	if err := goMySQLReader.ConnectBinlogStreamer(*binlogCoordinates); err != nil {
 		return err
 	}
 	this.binlogReader = goMySQLReader
-
 	return nil
 }
 
@@ -138,6 +145,10 @@ func (this *EventsStreamer) validateConnection() error {
 
 func (this *EventsStreamer) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinates {
 	return this.binlogReader.GetCurrentBinlogCoordinates()
+}
+
+func (this *EventsStreamer) GetReconnectBinlogCoordinates() *mysql.BinlogCoordinates {
+	return &mysql.BinlogCoordinates{LogFile: this.GetCurrentBinlogCoordinates().LogFile, LogPos: 4}
 }
 
 // validateGrants verifies the user by which we're executing has necessary grants
@@ -177,14 +188,19 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	// The next should block and execute forever, unless there's a serious error
 	for {
 		if err := this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel); err != nil {
-			// Reposition at same coordinates. Single attempt (TODO: make multiple attempts?)
 			log.Infof("StreamEvents encountered unexpected error: %+v", err)
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
-			log.Infof("Reconnecting...")
-			err = this.binlogReader.Reconnect()
-			if err != nil {
+
+			// Reposition at same binlog file. Single attempt (TODO: make multiple attempts?)
+			lastAppliedRowsEventHint := this.binlogReader.LastAppliedRowsEventHint
+			log.Infof("Reconnecting... Will resume at %+v", lastAppliedRowsEventHint)
+			// if err := this.binlogReader.Reconnect(); err != nil {
+			// 	return err
+			// }
+			if err := this.initBinlogReader(this.GetReconnectBinlogCoordinates()); err != nil {
 				return err
 			}
+			this.binlogReader.LastAppliedRowsEventHint = lastAppliedRowsEventHint
 		}
 	}
 }
