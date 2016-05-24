@@ -79,6 +79,8 @@ type MigrationContext struct {
 	LockTablesStartTime       time.Time
 	RenameTablesStartTime     time.Time
 	RenameTablesEndTime       time.Time
+	pointOfInterestTime       time.Time
+	pointOfInterestTimeMutex  *sync.Mutex
 	CurrentLag                int64
 	TotalRowsCopied           int64
 	TotalDMLEventsApplied     int64
@@ -131,6 +133,7 @@ func newMigrationContext() *MigrationContext {
 		throttleMutex:                       &sync.Mutex{},
 		ThrottleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
+		pointOfInterestTimeMutex:            &sync.Mutex{},
 	}
 }
 
@@ -216,16 +219,31 @@ func (this *MigrationContext) GetIteration() int64 {
 	return atomic.LoadInt64(&this.Iteration)
 }
 
+func (this *MigrationContext) MarkPointOfInterest() int64 {
+	this.pointOfInterestTimeMutex.Lock()
+	defer this.pointOfInterestTimeMutex.Unlock()
+
+	this.pointOfInterestTime = time.Now()
+	return atomic.LoadInt64(&this.Iteration)
+}
+
+func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
+	this.pointOfInterestTimeMutex.Lock()
+	defer this.pointOfInterestTimeMutex.Unlock()
+
+	return time.Now().Sub(this.pointOfInterestTime)
+}
+
 func (this *MigrationContext) SetThrottled(throttle bool, reason string) {
 	this.throttleMutex.Lock()
-	defer func() { this.throttleMutex.Unlock() }()
+	defer this.throttleMutex.Unlock()
 	this.isThrottled = throttle
 	this.throttleReason = reason
 }
 
 func (this *MigrationContext) IsThrottled() (bool, string) {
 	this.throttleMutex.Lock()
-	defer func() { this.throttleMutex.Unlock() }()
+	defer this.throttleMutex.Unlock()
 	return this.isThrottled, this.throttleReason
 }
 
