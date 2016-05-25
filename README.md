@@ -23,7 +23,7 @@ But then a rare genetic mutation happened, and the `s` transformed into `t`. And
 
 ## Authors
 
-`gh-ost` was designed, authored, reviewed and tested by the database infrastructure team at GitHub:
+`gh-ost` is designed, authored, reviewed and tested by the database infrastructure team at GitHub:
 - [@jonahberquist](https://github.com/jonahberquist)
 - [@ggunson](https://github.com/ggunson)
 - [@tomkrouper](https://github.com/tomkrouper)
