@@ -9,6 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
@@ -16,6 +18,26 @@ import (
 )
 
 var AppVersion string
+
+// acceptSignals registers for OS signals
+func acceptSignals(migrationContext *base.MigrationContext) {
+	c := make(chan os.Signal, 1)
+
+	signal.Notify(c, syscall.SIGHUP)
+	go func() {
+		for sig := range c {
+			switch sig {
+			case syscall.SIGHUP:
+				log.Infof("Received SIGHUP. Reloading configuration")
+				if err := migrationContext.ReadConfigFile(); err != nil {
+					log.Errore(err)
+				} else {
+					migrationContext.MarkPointOfInterest()
+				}
+			}
+		}
+	}()
+}
 
 // main is the application's entry point. It will either spawn a CLI or HTTP itnerfaces.
 func main() {
@@ -122,6 +144,7 @@ func main() {
 	migrationContext.ApplyCredentials()
 
 	log.Infof("starting gh-ost %+v", AppVersion)
+	acceptSignals(migrationContext)
 
 	migrator := logic.NewMigrator()
 	err := migrator.Migrate()
