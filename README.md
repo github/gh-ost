@@ -1,8 +1,18 @@
 # gh-ost
+
 #### GitHub's online schema migration for MySQL
 
-`gh-ost` allows for online schema migrations in MySQL
+`gh-ost` allows for online schema migrations in MySQL which are:
+- Triggerless
+- Testable
+- Pausable
+- Operations-friendly
 
+## How?
+
+WORK IN PROGRESS
+
+Please meanwhile refer to the [docs](doc) for more information.
 
 ## What's in a name?
 
@@ -14,7 +24,7 @@ But then a rare genetic mutation happened, and the `s` transformed into `t`. And
 ## Authors
 
 `gh-ost` was designed, authored, reviewed and tested by the database infrastructure team at GitHub:
-- @jonahberquist
-- @ggunson
-- @tomkrouper
-- @shlomi-noach
+- [@jonahberquist](https://github.com/jonahberquist)
+- [@ggunson](https://github.com/ggunson)
+- [@tomkrouper](https://github.com/tomkrouper)
+- [@shlomi-noach](https://github.com/shlomi-noach)
