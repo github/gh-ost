@@ -59,7 +59,7 @@ In the above we're mostly interested to see that `ETA: throttled, replica-lag=65
 
 However another thing catches the eye: `Backlog: 0/100` transitions into `Backlog: 100/100`
 
-- `Backlog` is the binlog events queue. A queue of events read from the binary log which are relevant for the migration. The queue gets emptied as events are applied onto the ghost table. Typically we want to see that queue empty or almost empty. However, due to the fact we're not throttled it makes perfect sense that the queue is full: htrottling means we do not apply events onto the ghost table, hence we do not purge the queue.
+- `Backlog` is the binlog events queue. A queue of events read from the binary log which are relevant for the migration. The queue gets emptied as events are applied onto the ghost table. Typically we want to see that queue empty or almost empty. However, due to the fact we're not throttled it makes perfect sense that the queue is full: throttling means we do not apply events onto the ghost table, hence we do not purge the queue.
 
 ```
 ...
@@ -99,7 +99,7 @@ And `gh-ost` progressively provides an ETA.
 
 Status frequency:
 - In the first `60` seconds `gh-ost` emits a status entry every `1` second.
-- Then, up till `3` miinutes into operation, status shows every `5` seconds.
+- Then, up till `3` minutes into operation, status shows every `5` seconds.
 - It then drops down to once per `30` seconds
 - But goes into once-per-`5`-seconds again when it estimates < `3` minutes ETA
 - And once per `1` second when it estimates < `1` minute ETA
