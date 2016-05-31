@@ -578,8 +578,21 @@ func (this *Migrator) printStatus() {
 	if rowsEstimate > 0 {
 		progressPct = 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
 	}
-	var etaSeconds float64 = math.MaxFloat64
 
+	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
+	shouldPrintCourtesyReminder := (elapsedSeconds%600 == 0)
+	if shouldPrintCourtesyReminder {
+		courtesyReminder := fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s; migration started at %+v",
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.OriginalTableName),
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+			this.migrationContext.StartTime.Format(time.RubyDate),
+		)
+		fmt.Println(courtesyReminder)
+	}
+
+	var etaSeconds float64 = math.MaxFloat64
 	eta := "N/A"
 	if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
 		eta = fmt.Sprintf("throttled, %s", throttleReason)
@@ -606,7 +619,7 @@ func (this *Migrator) printStatus() {
 		shouldPrintStatus = (elapsedSeconds%5 == 0)
 	} else if elapsedSeconds <= 180 {
 		shouldPrintStatus = (elapsedSeconds%5 == 0)
-	} else if this.migrationContext.TimeSincePointOfInterest() <= 60 {
+	} else if this.migrationContext.TimeSincePointOfInterest().Seconds() <= 60 {
 		shouldPrintStatus = (elapsedSeconds%5 == 0)
 	} else {
 		shouldPrintStatus = (elapsedSeconds%30 == 0)

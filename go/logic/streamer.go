@@ -189,6 +189,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	for {
 		if err := this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel); err != nil {
 			log.Infof("StreamEvents encountered unexpected error: %+v", err)
+			this.migrationContext.MarkPointOfInterest()
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
 
 			// Reposition at same binlog file. Single attempt (TODO: make multiple attempts?)
