@@ -580,7 +580,7 @@ func (this *Migrator) printStatus() {
 	}
 
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
-	shouldPrintCourtesyReminder := (elapsedSeconds%120 == 0)
+	shouldPrintCourtesyReminder := (elapsedSeconds%600 == 0)
 	if shouldPrintCourtesyReminder {
 		courtesyReminder := fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s; migration started at %+v",
 			sql.EscapeName(this.migrationContext.DatabaseName),
