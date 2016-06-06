@@ -134,5 +134,15 @@ Copy: 4466492/4467235 100.0%; Applied: 23309; Backlog: 1/100; Elapsed: 7m18s(cop
 2016-05-19 18:04:30 INFO Done waiting for events up to lock
 Copy: 4466492/4467235 100.0%; Applied: 23309; Backlog: 0/100; Elapsed: 7m18s(copy), 7m25s(total); streamer: mysql-bin.002589:17703056; ETA: 0s
 ```
-This migration took, till this point, `7m25s`, had applied `23309` events from the binary log and has copied `4466492` rows onto the ghost table.
- 
+This migration - insofar - took `7m25s`, has applied `23309` events from the binary log and has copied `4466492` rows onto the ghost table.
+
+## Status hint
+
+In addition, once every `10` minutes, a friendly reminder is printed, in the following form:
+
+```
+# Migrating `mydb`.`mytable`; Ghost table is `mydb`.`_mytable_gst`
+# Migration started at Mon Jun 06 03:45:08 -0700 2016
+# chunk-size: 2500; max lag: 1500ms; max-load: map[Threads_connected:30]
+# Throttle additional flag file: /tmp/gh-ost.throttle
+```

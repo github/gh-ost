@@ -12,7 +12,22 @@
 
 WORK IN PROGRESS
 
-Please meanwhile refer to the [docs](doc) for more information.
+Please meanwhile refer to the [docs](doc) for more information. No, really, go to the [docs](doc). 
+
+## Usage
+
+#### Testing on replica
+
+```
+gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_connected=30 --switch-to-rbr --chunk-size=2500 --cut-over=two-step --exact-rowcount --test-on-replica --verbose
+```
+Please read more on [testing on replica](testing-on-replica.md)
+
+#### Executing on master
+
+```
+gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_connected=30 --switch-to-rbr --chunk-size=2500 --cut-over=two-step --exact-rowcount --verbose
+```
 
 ## What's in a name?
 

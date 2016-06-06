@@ -47,12 +47,12 @@ It's your job to:
 
 Simple:
 ```shell
-$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --initially-drop-ghost-table --initially-drop-old-table --test-on-replica --verbose --execute
+$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --initially-drop-ghost-table --initially-drop-old-table --cut-over=voluntary-lock --test-on-replica --verbose --execute
 ```
 
 Elaborate:
 ```shell
-$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --switch-to-rbr --initially-drop-ghost-table --initially-drop-old-table --test-on-replica --postpone-swap-tables-flag-file=/tmp/ghost-postpone.flag --exact-rowcount --allow-nullable-unique-key --verbose --execute
+$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --switch-to-rbr --initially-drop-ghost-table --initially-drop-old-table --cut-over=voluntary-lock --test-on-replica --postpone-swap-tables-flag-file=/tmp/ghost-postpone.flag --exact-rowcount --allow-nullable-unique-key --verbose --execute
 ```
 - Count exact number of rows (makes ETA estimation very good). This goes at the expense of paying the time for issuing a `SELECT COUNT(*)` on your table. We use this lovingly.
 - Automatically switch to `RBR` if replica is configured as `SBR`. See also: [migrating with SBR](migrating-with-sbr.md)
