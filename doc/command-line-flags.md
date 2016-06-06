@@ -2,6 +2,10 @@
 
 A more in-depth discussion of various `gh-ost` command line flags: implementation, implication, use cases.
 
+##### cut-over
+
+Required. You are asked to explicitly state which cut-over algorithm you wish to use. Please see more discussion on [cut-over](cut-over.md)
+
 ##### exact-rowcount
 
 A `gh-ost` execution need to copy whatever rows you have in your existing table onto the ghost table. This can, and often be, a large number. Exactly what that number is?
@@ -14,3 +18,11 @@ A `gh-ost` execution need to copy whatever rows you have in your existing table 
   We heuristically update the number of rows based on the queries we process from the binlogs.
 
 While the ongoing estimated number of rows is still heuristic, it's almost exact, such that the reported  [ETA](understanding-output.md) or percentage progress is typically accurate to the second throughout a multiple-hour operation.
+
+##### noop
+
+Do cheks; create ghost table and verify migration would be valid, but do not actually migrate and do not touch data.
+
+##### test-on-replica
+
+Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [test-on-replica](test-on-replica.md)
