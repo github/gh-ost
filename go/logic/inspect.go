@@ -63,14 +63,8 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 	if err := this.validateTableForeignKeys(); err != nil {
 		return err
 	}
-	if this.migrationContext.CountTableRows {
-		if err := this.countTableRows(); err != nil {
-			return err
-		}
-	} else {
-		if err := this.estimateTableRowsViaExplain(); err != nil {
-			return err
-		}
+	if err := this.estimateTableRowsViaExplain(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -99,6 +93,8 @@ func (this *Inspector) InspectOriginalTable() (err error) {
 	return nil
 }
 
+// InspectOriginalAndGhostTables compares original and ghost tables to see whether the migration
+// makes sense and is valid. It extracts the list of shared columns and the chosen migration unique key
 func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 	this.migrationContext.GhostTableColumns, this.migrationContext.GhostTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.GetGhostTableName())
 	if err != nil {
@@ -353,7 +349,7 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 	return nil
 }
 
-func (this *Inspector) countTableRows() error {
+func (this *Inspector) CountTableRows() error {
 	log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.RowsEstimate); err != nil {
