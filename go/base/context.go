@@ -28,6 +28,14 @@ const (
 	CountRowsEstimate                          = "CountRowsEstimate"
 )
 
+type CutOver int
+
+const (
+	CutOverTwoStep CutOver = 1
+	CutOverVoluntaryLock
+	CutOverUdfWait
+)
+
 const (
 	maxRetries = 10
 )
@@ -63,9 +71,9 @@ type MigrationContext struct {
 	Noop                    bool
 	TestOnReplica           bool
 	OkToDropTable           bool
-	QuickAndBumpySwapTables bool
 	InitiallyDropOldTable   bool
 	InitiallyDropGhostTable bool
+	CutOverType             CutOver
 
 	TableEngine               string
 	RowsEstimate              int64

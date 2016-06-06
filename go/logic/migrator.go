@@ -51,6 +51,7 @@ type Migrator struct {
 
 	rowCopyCompleteFlag                    int64
 	allEventsUpToLockProcessedInjectedFlag int64
+	cleanupImminentFlag                    int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
@@ -312,6 +313,14 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.inspector.InspectOriginalAndGhostTables(); err != nil {
 		return err
 	}
+	if this.migrationContext.CountTableRows {
+		if this.migrationContext.Noop {
+			log.Debugf("Noop operation; not really counting table rows")
+		} else if err := this.inspector.CountTableRows(); err != nil {
+			return err
+		}
+	}
+
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
@@ -371,7 +380,7 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 		return this.stopWritesAndCompleteMigrationOnReplica()
 	}
 	// Running on master
-	if this.migrationContext.QuickAndBumpySwapTables {
+	if this.migrationContext.CutOverType == base.CutOverTwoStep {
 		return this.stopWritesAndCompleteMigrationOnMasterQuickAndBumpy()
 	}
 
@@ -555,14 +564,30 @@ func (this *Migrator) initiateStatus() error {
 }
 
 func (this *Migrator) printMigrationStatusHint() {
-	hint := fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s; migration started at %+v",
+	fmt.Println(fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	))
+	fmt.Println(fmt.Sprintf("# Migration started at %+v",
 		this.migrationContext.StartTime.Format(time.RubyDate),
-	)
-	fmt.Println(hint)
+	))
+	fmt.Println(fmt.Sprintf("# chunk-size: %+v; max lag: %+vms; max-load: %+v",
+		atomic.LoadInt64(&this.migrationContext.ChunkSize),
+		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
+		this.migrationContext.MaxLoad,
+	))
+	if this.migrationContext.ThrottleFlagFile != "" {
+		fmt.Println(fmt.Sprintf("# Throttle flag file: %+v",
+			this.migrationContext.ThrottleFlagFile,
+		))
+	}
+	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
+		fmt.Println(fmt.Sprintf("# Throttle additional flag file: %+v",
+			this.migrationContext.ThrottleAdditionalFlagFile,
+		))
+	}
 }
 
 func (this *Migrator) printStatus() {
@@ -638,6 +663,9 @@ func (this *Migrator) initiateHeartbeatListener() {
 	ticker := time.Tick((heartbeatIntervalMilliseconds * time.Millisecond) / 2)
 	for range ticker {
 		go func() error {
+			if atomic.LoadInt64(&this.cleanupImminentFlag) > 0 {
+				return nil
+			}
 			changelogState, err := this.inspector.readChangelogState()
 			if err != nil {
 				return log.Errore(err)
@@ -808,6 +836,7 @@ func (this *Migrator) executeWriteFuncs() error {
 
 // finalCleanup takes actions at very end of migration, dropping tables etc.
 func (this *Migrator) finalCleanup() error {
+	atomic.StoreInt64(&this.cleanupImminentFlag, 1)
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
 		return err
 	}
