@@ -30,6 +30,8 @@ It is still OK to connect `gh-ost` directly on master; you will need to confirm 
 
 #### Testing on replica
 
+Newcomer? We think you would enjoy building trust with this tool. You can ask `gh-ost` to simulate a migration on a replica -- this will not affect data on master and will not actually do a complete migration. It will operate on a replica, and end up with two tables: the original (untouched), and the migrated. You will have your chance to compare the two and verify the tool works to your satisfaction.
+
 ```
 gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_connected=30 --switch-to-rbr --chunk-size=2500 --cut-over=two-step --exact-rowcount --test-on-replica --verbose
 ```
@@ -41,9 +43,23 @@ Please read more on [testing on replica](testing-on-replica.md)
 gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_connected=30 --switch-to-rbr --chunk-size=2500 --cut-over=two-step --exact-rowcount --verbose
 ```
 
-#### Recommended parameters
+Note: "executing on master" does not mean you need to _connect_ to the master. `gh-ost` is happy if you connect to a replica; it then figures out the identity of the master and makes the connection itself.
+
+#### Notable parameters
 
 Run `gh-ost --help` to get full list of parameters. We like the following:
+
+- `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
+
+  ```
+[client]
+user=gromit
+password=123456
+  ```
+
+- `--user`, `--password`: alternatively, supply these as arguments
+
+- `--host`, `--port`: where to connect to. `gh-ost` prefers to connect to a replica, see above.
 
 - `--exact-rowcount`: actually `select count(*)` from your table prior to migration, and heuristically maintain the updating table size while migrating. This makes for quite accurate assumption on progress. When `gh-ost` says it's `99.8%` done, it really there or very closely there.
 

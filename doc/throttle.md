@@ -57,7 +57,9 @@ In addition to the above, you are able to take control and throttle the operatio
 
 - `throttle` command via [interactive interface](interactive-commands.md).
 
-  Example: ```
+  Example:
+
+  ```
     echo throttle | nc -U /tmp/gh-ost.test.sample_data_0.sock
     echo no-throttle | nc -U /tmp/gh-ost.test.sample_data_0.sock
   ```
@@ -73,6 +75,7 @@ The first check to suggest throttling stops the search; the status message will 
 ### Throttle status
 
 The throttle status is printed as part of the periodic [status message](understanding-output.md):
+
 ```
 Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 41s(copy), 41s(total); streamer: mysql-bin.000551:47983; ETA: throttled, flag-file
 Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 42s(copy), 42s(total); streamer: mysql-bin.000551:49370; ETA: throttled, commanded by user

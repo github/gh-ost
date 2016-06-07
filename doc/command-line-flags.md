@@ -2,6 +2,16 @@
 
 A more in-depth discussion of various `gh-ost` command line flags: implementation, implication, use cases.
 
+##### conf
+
+`--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
+
+  ```
+[client]
+user=gromit
+password=123456
+  ```
+
 ##### cut-over
 
 Required. You are asked to explicitly state which cut-over algorithm you wish to use. Please see more discussion on [cut-over](cut-over.md)
@@ -19,9 +29,19 @@ A `gh-ost` execution need to copy whatever rows you have in your existing table 
 
 While the ongoing estimated number of rows is still heuristic, it's almost exact, such that the reported  [ETA](understanding-output.md) or percentage progress is typically accurate to the second throughout a multiple-hour operation.
 
-##### noop
+##### execute
 
-Do cheks; create ghost table and verify migration would be valid, but do not actually migrate and do not touch data.
+Without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
+
+##### initially-drop-ghost-table
+
+`gh-ost` maintains two tables while migrating: the _ghost_ table (which is synced from your original table and finally replaces it) and a changelog table, which is used internally for bookkeeping. By default, it panics and aborts if it sees those tables upon startup. Provide `--initially-drop-ghost-table` and `--initially-drop-old-table` to let `gh-ost` know it's OK to drop them beforehand.
+
+We think `gh-ost` should not take chances or make assumptions about the user's tables. Dropping tables can be a dangerous, locking operation. We let the user explicitly approve such operations.
+
+##### initially-drop-old-table
+
+See #initially-drop-ghost-table
 
 ##### test-on-replica
 
