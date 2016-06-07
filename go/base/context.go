@@ -64,9 +64,13 @@ type MigrationContext struct {
 	ThrottleControlReplicaKeys          *mysql.InstanceKeyMap
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
+	ThrottleCommandedByUser             int64
 	MaxLoad                             map[string]int64
 	PostponeSwapTablesFlagFile          string
 	SwapTablesTimeoutSeconds            int64
+
+	ServeSocketFile string
+	ServeTCPPort    int64
 
 	Noop                    bool
 	TestOnReplica           bool
@@ -240,6 +244,16 @@ func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
 	defer this.pointOfInterestTimeMutex.Unlock()
 
 	return time.Now().Sub(this.pointOfInterestTime)
+}
+
+func (this *MigrationContext) SetChunkSize(chunkSize int64) {
+	if chunkSize < 100 {
+		chunkSize = 100
+	}
+	if chunkSize > 100000 {
+		chunkSize = 100000
+	}
+	atomic.StoreInt64(&this.ChunkSize, chunkSize)
 }
 
 func (this *MigrationContext) SetThrottled(throttle bool, reason string) {

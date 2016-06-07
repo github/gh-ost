@@ -6,10 +6,14 @@
 package logic
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -41,6 +45,7 @@ type Migrator struct {
 	inspector        *Inspector
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
+	server           *Server
 	migrationContext *base.MigrationContext
 
 	tablesInPlace              chan bool
@@ -95,6 +100,9 @@ func (this *Migrator) acceptSignals() {
 
 func (this *Migrator) shouldThrottle() (result bool, reason string) {
 	// User-based throttle
+	if atomic.LoadInt64(&this.migrationContext.ThrottleCommandedByUser) > 0 {
+		return true, "commanded by user"
+	}
 	if this.migrationContext.ThrottleFlagFile != "" {
 		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
 			// Throttle file defined and exists!
@@ -321,6 +329,9 @@ func (this *Migrator) Migrate() (err error) {
 		}
 	}
 
+	if err := this.initiateServer(); err != nil {
+		return err
+	}
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
@@ -518,6 +529,64 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnReplica() (err error) {
 	return nil
 }
 
+func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err error) {
+	tokens := strings.Split(command, "=")
+	command = strings.TrimSpace(tokens[0])
+	arg := ""
+	if len(tokens) > 1 {
+		arg = strings.TrimSpace(tokens[1])
+	}
+	switch command {
+	case "help":
+		{
+			fmt.Fprintln(writer, `available commands:
+  status               # Print a status message
+  chunk-size=<newsize> # Set a new chunk-size
+  throttle             # Force throttling
+  no-throttle          # End forced throttling (other throttling may still apply)
+  help                 # This message
+`)
+		}
+	case "info", "status":
+		this.printMigrationStatusHint(writer)
+		this.printStatus(writer)
+	case "chunk-size":
+		{
+			if chunkSize, err := strconv.Atoi(arg); err != nil {
+				return log.Errore(err)
+			} else {
+				this.migrationContext.SetChunkSize(int64(chunkSize))
+				this.printMigrationStatusHint(writer)
+			}
+		}
+	case "throttle", "pause", "suspend":
+		{
+			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
+		}
+	case "no-throttle", "unthrottle", "resume", "continue":
+		{
+			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 0)
+		}
+	default:
+		return fmt.Errorf("Unknown command: %s", command)
+	}
+	writer.Flush()
+	return nil
+}
+
+func (this *Migrator) initiateServer() (err error) {
+	this.server = NewServer(this.onServerCommand)
+	if err := this.server.BindSocketFile(); err != nil {
+		return err
+	}
+	if err := this.server.BindTCPPort(); err != nil {
+		return err
+	}
+
+	go this.server.Serve()
+	return nil
+}
+
 func (this *Migrator) initiateInspector() (err error) {
 	this.inspector = NewInspector()
 	if err := this.inspector.InitDBConnections(); err != nil {
@@ -563,34 +632,42 @@ func (this *Migrator) initiateStatus() error {
 	return nil
 }
 
-func (this *Migrator) printMigrationStatusHint() {
-	fmt.Println(fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s",
+func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
+	writers = append(writers, os.Stdout)
+	w := io.MultiWriter(writers...)
+	fmt.Fprintln(w, fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	))
-	fmt.Println(fmt.Sprintf("# Migration started at %+v",
+	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v",
 		this.migrationContext.StartTime.Format(time.RubyDate),
 	))
-	fmt.Println(fmt.Sprintf("# chunk-size: %+v; max lag: %+vms; max-load: %+v",
+	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max lag: %+vms; max-load: %+v",
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
 		this.migrationContext.MaxLoad,
 	))
 	if this.migrationContext.ThrottleFlagFile != "" {
-		fmt.Println(fmt.Sprintf("# Throttle flag file: %+v",
+		fmt.Fprintln(w, fmt.Sprintf("# Throttle flag file: %+v",
 			this.migrationContext.ThrottleFlagFile,
 		))
 	}
 	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
-		fmt.Println(fmt.Sprintf("# Throttle additional flag file: %+v",
+		fmt.Fprintln(w, fmt.Sprintf("# Throttle additional flag file: %+v",
 			this.migrationContext.ThrottleAdditionalFlagFile,
 		))
 	}
+	fmt.Fprintln(w, fmt.Sprintf("# Serving on unix socket: %+v",
+		this.migrationContext.ServeSocketFile,
+	))
+	if this.migrationContext.ServeTCPPort != 0 {
+		fmt.Fprintln(w, fmt.Sprintf("# Serving on TCP port: %+v", this.migrationContext.ServeTCPPort))
+	}
 }
 
-func (this *Migrator) printStatus() {
+func (this *Migrator) printStatus(writers ...io.Writer) {
 	elapsedTime := this.migrationContext.ElapsedTime()
 	elapsedSeconds := int64(elapsedTime.Seconds())
 	totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
@@ -656,7 +733,9 @@ func (this *Migrator) printStatus() {
 		fmt.Sprintf("copy iteration %d at %d", this.migrationContext.GetIteration(), time.Now().Unix()),
 		status,
 	)
-	fmt.Println(status)
+	writers = append(writers, os.Stdout)
+	w := io.MultiWriter(writers...)
+	fmt.Fprintln(w, status)
 }
 
 func (this *Migrator) initiateHeartbeatListener() {
