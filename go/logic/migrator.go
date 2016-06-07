@@ -375,12 +375,12 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 
 	this.sleepWhileTrue(
 		func() (bool, error) {
-			if this.migrationContext.PostponeSwapTablesFlagFile == "" {
+			if this.migrationContext.PostponeCutOverFlagFile == "" {
 				return false, nil
 			}
-			if base.FileExists(this.migrationContext.PostponeSwapTablesFlagFile) {
+			if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
 				// Throttle file defined and exists!
-				log.Debugf("Postponing final table swap as flag file exists: %+v", this.migrationContext.PostponeSwapTablesFlagFile)
+				log.Debugf("Postponing final table swap as flag file exists: %+v", this.migrationContext.PostponeCutOverFlagFile)
 				return true, nil
 			}
 			return false, nil

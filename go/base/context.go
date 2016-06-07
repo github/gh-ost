@@ -66,7 +66,7 @@ type MigrationContext struct {
 	ThrottleAdditionalFlagFile          string
 	ThrottleCommandedByUser             int64
 	MaxLoad                             map[string]int64
-	PostponeSwapTablesFlagFile          string
+	PostponeCutOverFlagFile             string
 	SwapTablesTimeoutSeconds            int64
 
 	ServeSocketFile string
