@@ -373,7 +373,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		this.migrationContext.UniqueKey.Columns.Names,
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 		this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
-		this.migrationContext.ChunkSize,
+		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		this.migrationContext.GetIteration() == 0,
 		fmt.Sprintf("iteration:%d", this.migrationContext.GetIteration()),
 	)
