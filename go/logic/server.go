@@ -70,6 +70,9 @@ func (this *Server) Serve() (err error) {
 		}
 	}()
 	go func() {
+		if this.tcpListener == nil {
+			return
+		}
 		for {
 			conn, err := this.tcpListener.Accept()
 			if err != nil {
