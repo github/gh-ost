@@ -14,6 +14,15 @@ WORK IN PROGRESS
 
 Please meanwhile refer to the [docs](doc) for more information. No, really, go to the [docs](doc).
 
+- [Why triggerless](doc/why-triggerless.md)
+- [Cut over phase](doc/cut-over.md)
+- [Testing on replica](doc/testing-on-replica.md)
+- [Throttle](doc/throttle.md)
+- [Migrating with Statement Based Replication](doc/migrating-with-sbr.md)
+- [Understanding output](doc/understanding-output.md)
+- [Interactive commands](doc/interactive-commands.md)
+- [Command line flags](doc/command-line-flags.md)
+
 ## Usage
 
 #### Where to execute
