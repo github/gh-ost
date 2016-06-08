@@ -80,3 +80,15 @@ The throttle status is printed as part of the periodic [status message](understa
 Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 41s(copy), 41s(total); streamer: mysql-bin.000551:47983; ETA: throttled, flag-file
 Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 42s(copy), 42s(total); streamer: mysql-bin.000551:49370; ETA: throttled, commanded by user
 ```
+
+### How long can you throttle for?
+
+Throttling time is limited by the availability of the binary logs. When throttling begins, `gh-ost` suspends reading the binary logs, and expects to resume reading from same binary log where it paused.
+
+Your availability of binary logs is typically determined by the [expire_logs_days](dev.mysql.com/doc/refman/5.6/en/server-system-variables.html#sysvar_expire_logs_days) variable. If you have `expire_logs_days = 10` (or check `select @@global.expire_logs_days`), then you should be able to throttle for up to `10` days.
+
+Having said that, throttling for so long is far fetching, in that the `gh-ost` process itself must be kept alive during that time; and the amount of binary logs to process once it resumes will potentially take days to replay.
+
+It is worth mentioning that some deployments have external scheduled scripts that purge binary logs, regardless of the `expire_logs_days` configuration. Please verify your own deployment configuration.
+
+To clarify, you only need to keep binary logs on the single server `gh-ost` connects to.
