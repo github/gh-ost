@@ -130,7 +130,8 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 		}
 	}
 
-	for variableName, threshold := range this.migrationContext.MaxLoad {
+	maxLoad := this.migrationContext.GetMaxLoad()
+	for variableName, threshold := range maxLoad {
 		value, err := this.applier.ShowStatusVariable(variableName)
 		if err != nil {
 			return true, fmt.Sprintf("%s %s", variableName, err)
@@ -530,7 +531,9 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnReplica() (err error) {
 }
 
 func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err error) {
-	tokens := strings.Split(command, "=")
+	defer writer.Flush()
+
+	tokens := strings.SplitN(command, "=", 2)
 	command = strings.TrimSpace(tokens[0])
 	arg := ""
 	if len(tokens) > 1 {
@@ -553,11 +556,20 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 	case "chunk-size":
 		{
 			if chunkSize, err := strconv.Atoi(arg); err != nil {
+				fmt.Fprintf(writer, "%s\n", err.Error())
 				return log.Errore(err)
 			} else {
 				this.migrationContext.SetChunkSize(int64(chunkSize))
 				this.printMigrationStatusHint(writer)
 			}
+		}
+	case "max-load":
+		{
+			if err := this.migrationContext.ReadMaxLoad(arg); err != nil {
+				fmt.Fprintf(writer, "%s\n", err.Error())
+				return log.Errore(err)
+			}
+			this.printMigrationStatusHint(writer)
 		}
 	case "throttle", "pause", "suspend":
 		{
@@ -568,9 +580,10 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 0)
 		}
 	default:
-		return fmt.Errorf("Unknown command: %s", command)
+		err = fmt.Errorf("Unknown command: %s", command)
+		fmt.Fprintf(writer, "%s\n", err.Error())
+		return err
 	}
-	writer.Flush()
 	return nil
 }
 
@@ -644,10 +657,11 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v",
 		this.migrationContext.StartTime.Format(time.RubyDate),
 	))
+	maxLoad := this.migrationContext.GetMaxLoad()
 	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max lag: %+vms; max-load: %+v",
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
-		this.migrationContext.MaxLoad,
+		maxLoad,
 	))
 	if this.migrationContext.ThrottleFlagFile != "" {
 		fmt.Fprintln(w, fmt.Sprintf("# Throttle flag file: %+v",

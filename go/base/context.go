@@ -65,7 +65,8 @@ type MigrationContext struct {
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
 	ThrottleCommandedByUser             int64
-	MaxLoad                             map[string]int64
+	maxLoad                             map[string]int64
+	maxLoadMutex                        *sync.Mutex
 	PostponeCutOverFlagFile             string
 	SwapTablesTimeoutSeconds            int64
 
@@ -141,7 +142,8 @@ func newMigrationContext() *MigrationContext {
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1000,
 		SwapTablesTimeoutSeconds:            3,
-		MaxLoad:                             make(map[string]int64),
+		maxLoad:                             make(map[string]int64),
+		maxLoadMutex:                        &sync.Mutex{},
 		throttleMutex:                       &sync.Mutex{},
 		ThrottleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
@@ -269,12 +271,29 @@ func (this *MigrationContext) IsThrottled() (bool, string) {
 	return this.isThrottled, this.throttleReason
 }
 
+func (this *MigrationContext) GetMaxLoad() map[string]int64 {
+	this.maxLoadMutex.Lock()
+	defer this.maxLoadMutex.Unlock()
+
+	tmpMaxLoadMap := make(map[string]int64)
+	for k, v := range this.maxLoad {
+		tmpMaxLoadMap[k] = v
+	}
+	return tmpMaxLoadMap
+}
+
 // ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
 // such as: 'Threads_running=100,Threads_connected=500'
+// It only applies changes in case there's no parsing error.
 func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
 	if maxLoadList == "" {
 		return nil
 	}
+	this.maxLoadMutex.Lock()
+	defer this.maxLoadMutex.Unlock()
+
+	tmpMaxLoadMap := make(map[string]int64)
+
 	maxLoadConditions := strings.Split(maxLoadList, ",")
 	for _, maxLoadCondition := range maxLoadConditions {
 		maxLoadTokens := strings.Split(maxLoadCondition, "=")
@@ -287,9 +306,11 @@ func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
 		if n, err := strconv.ParseInt(maxLoadTokens[1], 10, 0); err != nil {
 			return fmt.Errorf("Error parsing numeric value in max-load condition: %s", maxLoadCondition)
 		} else {
-			this.MaxLoad[maxLoadTokens[0]] = n
+			tmpMaxLoadMap[maxLoadTokens[0]] = n
 		}
 	}
+
+	this.maxLoad = tmpMaxLoadMap
 	return nil
 }
 

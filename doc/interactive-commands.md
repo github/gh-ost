@@ -19,6 +19,8 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `throttle`: force migration suspend
 - `no-throttle`: cancel forced suspension (though other throttling reasons may still apply)
 - `chunk-size=<newsize>`: modify the `chunk-size`; applies on next running copy-iteration
+- `max-load=<max-load-thresholds>`: modify the `max-load` config; applies on next running copy-iteration
+  The `max-load` format must be: `some_status=<numeric-threshold>[,some_status=<numeric-threshold>...]`. For example: `Threads_running=50,threads_connected=1000`, and you would then write/echo `max-load=Threads_running=50,threads_connected=1000` to the socket.
 
 ### Examples
 

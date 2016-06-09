@@ -45,6 +45,10 @@ Thus, triggers must keep operating. On busy servers, we have seen that even as t
 
 Read more about [`gh-ost` throttling](throttle.md)
 
+### Triggers, multiple migrations
+
+We are interested in being able to run multiple concurrent migrations (not on the same table, of course). Given all the above, we do not have trust that running multiple trigger-based migrations is a safe operation. In our current, past and shared experiences we have never done so; we are unaware of anyone who is doing so.
+
 ### Trigger based migration, no reliable production test
 
 We sometimes wish to experiment with a migration, or know in advance how much time it would take. A trigger-based solution allows us to run a migration on a replica, provided it uses Statement Based Replication.
