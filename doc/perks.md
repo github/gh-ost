@@ -12,13 +12,22 @@ You started with a `chunk-size=5000` but you find out it's too much. You want to
 $ echo "chunk-size=250" | nc -U /tmp/gh-ost.test.sample_data_0.sock
 ```
 
+Likewise, you can change the `max-load` configuration:
+
+```shell
+$ echo "max-load=Threads_running=50,threads_connected=1000" | nc -U /tmp/gh-ost.test.sample_data_0.sock
+```
+
+The `max-load` format must be: `some_status=<numeric-threshold>[,some_status=<numeric-threshold>...]`.
+In case of parsing error the command is ignored.
+
 Read more about [interactive commands](interactive-commands.md)
 
 ### What's the status?
 
 You do not have to have access to the `screen` where the migration is issued. You have two ways to get current status:
 
-0. Use [interactive commands](interactive-commands.md). Via unix socket file or via `TCP` you can get current status:
+1. Use [interactive commands](interactive-commands.md). Via unix socket file or via `TCP` you can get current status:
 
 ```shell
 $ echo status | nc -U /tmp/gh-ost.test.sample_data_0.sock
@@ -31,7 +40,7 @@ $ echo status | nc -U /tmp/gh-ost.test.sample_data_0.sock
 Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 40s(copy), 41s(total); streamer: mysql-bin.000550:49942; ETA: throttled, flag-file
 ```
 
-0. `gh-ost` creates and uses a changelog table for internal bookkeeping. This table has the `_osc` suffix (the tool creates and announces this table upon startup) If you like, you can SQL your status:
+2. `gh-ost` creates and uses a changelog table for internal bookkeeping. This table has the `_osc` suffix (the tool creates and announces this table upon startup) If you like, you can SQL your status:
 
 ```
 > select * from _sample_data_0_osc order by id desc limit 1 \G
