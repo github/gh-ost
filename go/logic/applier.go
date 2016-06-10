@@ -536,6 +536,31 @@ func (this *Applier) SwapTablesAtomic(sessionIdChan chan int64) error {
 	return nil
 }
 
+func (this *Applier) RenameTablesRollback() (renameError error) {
+
+	query := fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	)
+	log.Infof("Renaming back to ghost table")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		renameError = err
+	}
+	query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetOldTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	log.Infof("Renaming back to original table")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		renameError = err
+	}
+	return log.Errore(renameError)
+}
+
 // StopSlaveIOThread is applicable with --test-on-replica; it stops the IO thread, duh.
 // We need to keep the SQL thread active so as to complete processing received events,
 // and have them written to the binary log, so that we can then read them via streamer

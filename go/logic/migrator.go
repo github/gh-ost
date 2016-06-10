@@ -389,14 +389,25 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 	)
 
 	if this.migrationContext.TestOnReplica {
-		return this.stopWritesAndCompleteMigrationOnReplica()
+		// return this.stopWritesAndCompleteMigrationOnReplica()
+
+		// With `--test-on-replica` we stop replication thread, and then proceed to use
+		// the same cut-over phase as the master would use. That means we take locks
+		// and swap the tables.
+		// The difference is that we will later swap the tables back.
+		log.Debugf("testing on replica. Stopping replication IO thread")
+		if err := this.retryOperation(this.applier.StopSlaveNicely); err != nil {
+			return err
+		}
+		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
+		defer this.applier.RenameTablesRollback()
 	}
-	// Running on master
+
 	if this.migrationContext.CutOverType == base.CutOverTwoStep {
 		return this.stopWritesAndCompleteMigrationOnMasterQuickAndBumpy()
 	}
 
-	{
+	if this.migrationContext.CutOverType == base.CutOverVoluntaryLock {
 		// Lock-based solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
 		if err := this.retryOperation(
