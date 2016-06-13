@@ -100,6 +100,7 @@ type MigrationContext struct {
 	isThrottled               bool
 	throttleReason            string
 	throttleMutex             *sync.Mutex
+	IsPostponingCutOver       int64
 
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)

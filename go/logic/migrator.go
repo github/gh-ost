@@ -381,12 +381,14 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 			}
 			if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
 				// Throttle file defined and exists!
+				atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 1)
 				log.Debugf("Postponing final table swap as flag file exists: %+v", this.migrationContext.PostponeCutOverFlagFile)
 				return true, nil
 			}
 			return false, nil
 		},
 	)
+	atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 0)
 
 	if this.migrationContext.TestOnReplica {
 		return this.stopWritesAndCompleteMigrationOnReplica()
@@ -699,7 +701,9 @@ func (this *Migrator) printStatus(writers ...io.Writer) {
 
 	var etaSeconds float64 = math.MaxFloat64
 	eta := "N/A"
-	if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
+	if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
+		eta = "postponing cut-over"
+	} else if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
 		eta = fmt.Sprintf("throttled, %s", throttleReason)
 	} else if progressPct > 100.0 {
 		eta = "Due"
