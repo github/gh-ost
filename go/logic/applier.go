@@ -433,26 +433,21 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	return chunkSize, rowsAffected, duration, nil
 }
 
-// LockTables
-func (this *Applier) LockTables() error {
-	// query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write, %s.%s write, %s.%s write`,
-	// 	sql.EscapeName(this.migrationContext.DatabaseName),
-	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
-	// 	sql.EscapeName(this.migrationContext.DatabaseName),
-	// 	sql.EscapeName(this.migrationContext.GetGhostTableName()),
-	// 	sql.EscapeName(this.migrationContext.DatabaseName),
-	// 	sql.EscapeName(this.migrationContext.GetChangelogTableName()),
-	// )
+// LockOriginalTable places a write lock on the original table
+func (this *Applier) LockOriginalTable() error {
 	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 	)
-	log.Infof("Locking tables")
+	log.Infof("Locking %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
 	this.migrationContext.LockTablesStartTime = time.Now()
 	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
 		return err
 	}
-	log.Infof("Tables locked")
+	log.Infof("Table locked")
 	return nil
 }
 
@@ -491,6 +486,21 @@ func (this *Applier) SwapTablesQuickAndBumpy() error {
 	this.migrationContext.RenameTablesEndTime = time.Now()
 
 	log.Infof("Tables renamed")
+	return nil
+}
+
+func (this *Applier) RenameTable(fromName, toName string) (err error) {
+	query := fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(fromName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(toName),
+	)
+	log.Infof("Renaming %s to %s", fromName, toName)
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return log.Errore(err)
+	}
+	log.Infof("Table renamed")
 	return nil
 }
 
@@ -587,6 +597,144 @@ func (this *Applier) StopSlaveNicely() error {
 	return nil
 }
 
+func (this *Applier) GetSessionLockName(sessionId int64) string {
+	return fmt.Sprintf("gh-ost.%d.lock", sessionId)
+}
+
+// LockOriginalTableAndWait locks the original table, notifies the lock is in
+// place, and awaits further instruction
+func (this *Applier) LockOriginalTableAndWait(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
+	tx, err := this.db.Begin()
+	if err != nil {
+		tableLocked <- err
+		return err
+	}
+	defer func() {
+		tx.Rollback()
+	}()
+
+	var sessionId int64
+	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
+		return err
+	}
+	sessionIdChan <- sessionId
+
+	query := `select get_lock(?, 0)`
+	lockResult := 0
+	lockName := this.GetSessionLockName(sessionId)
+	log.Infof("Grabbing voluntary lock: %s", lockName)
+	if err := tx.QueryRow(query, lockName).Scan(&lockResult); err != nil || lockResult != 1 {
+		return fmt.Errorf("Unable to acquire lock %s", lockName)
+	}
+
+	query = fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	log.Infof("Locking %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	this.migrationContext.LockTablesStartTime = time.Now()
+	if _, err := tx.Exec(query); err != nil {
+		tableLocked <- err
+		return err
+	}
+	log.Infof("Table locked")
+	tableLocked <- nil // No error.
+
+	// The cut-over phase will proceed to apply remaining backlon onto ghost table,
+	// and issue RENAMEs. We wait here until told to proceed.
+	<-okToUnlockTable
+	// Release
+	query = `unlock tables`
+	log.Infof("Releasing lock from %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	if _, err := tx.Exec(query); err != nil {
+		tableUnlocked <- err
+		return log.Errore(err)
+	}
+	log.Infof("Table unlocked")
+	tableUnlocked <- nil
+	return nil
+}
+
+// RenameOriginalTable will attempt renaming the original table into _old
+func (this *Applier) RenameOriginalTable(sessionIdChan chan int64, originalTableRenamed chan<- error) error {
+	tx, err := this.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tx.Rollback()
+		originalTableRenamed <- nil
+	}()
+	var sessionId int64
+	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
+		return err
+	}
+	sessionIdChan <- sessionId
+
+	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.SwapTablesTimeoutSeconds)
+	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.SwapTablesTimeoutSeconds)
+	if _, err := tx.Exec(query); err != nil {
+		return err
+	}
+
+	query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetOldTableName()),
+	)
+	log.Infof("Issuing and expecting this to block: %s", query)
+	if _, err := tx.Exec(query); err != nil {
+		return log.Errore(err)
+	}
+	log.Infof("Original table renamed")
+	return nil
+}
+
+// RenameGhostTable will attempt renaming the ghost table into original
+func (this *Applier) RenameGhostTable(sessionIdChan chan int64, ghostTableRenamed chan<- error) error {
+	tx, err := this.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tx.Rollback()
+	}()
+	var sessionId int64
+	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
+		return err
+	}
+	sessionIdChan <- sessionId
+
+	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.SwapTablesTimeoutSeconds)
+	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.SwapTablesTimeoutSeconds)
+	if _, err := tx.Exec(query); err != nil {
+		return err
+	}
+
+	query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	log.Infof("Issuing and expecting this to block: %s", query)
+	if _, err := tx.Exec(query); err != nil {
+		ghostTableRenamed <- err
+		return log.Errore(err)
+	}
+	log.Infof("Ghost table renamed")
+	ghostTableRenamed <- nil
+
+	return nil
+}
+
 // GrabVoluntaryLock gets a named lock (`GET_LOCK`) and listens
 // on a okToRelease in order to release it
 func (this *Applier) GrabVoluntaryLock(lockGrabbed chan<- error, okToRelease <-chan bool) error {
@@ -670,6 +818,17 @@ func (this *Applier) IssueBlockingQueryOnVoluntaryLock(sessionIdChan chan int64)
 	tx.QueryRow(query, lockName, lockName).Scan(&dummyResult)
 	tx.Rollback()
 	log.Infof("Blocking query released")
+	return nil
+}
+
+func (this *Applier) ExpectUsedLock(sessionId int64) error {
+	var result int64
+	query := `select is_used_lock(?)`
+	lockName := this.GetSessionLockName(sessionId)
+	log.Infof("Checking session lock: %s", lockName)
+	if err := this.db.QueryRow(query, lockName).Scan(&result); err != nil || result != sessionId {
+		return fmt.Errorf("Session lock %s expected to be found but wasn't", lockName)
+	}
 	return nil
 }
 
