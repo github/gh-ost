@@ -31,9 +31,9 @@ const (
 type CutOver int
 
 const (
-	CutOverTwoStep CutOver = 1
-	CutOverVoluntaryLock
-	CutOverUdfWait
+	CutOverTwoStep       CutOver = iota
+	CutOverVoluntaryLock         = iota
+	CutOverUdfWait               = iota
 )
 
 const (
