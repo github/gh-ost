@@ -559,6 +559,17 @@ func (this *Applier) StopSlaveIOThread() error {
 }
 
 // StartSlaveSQLThread is applicable with --test-on-replica
+func (this *Applier) StopSlaveSQLThread() error {
+	query := `stop /* gh-ost */ slave sql_thread`
+	log.Infof("Verifying SQL thread is stopped")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	log.Infof("SQL thread stopped")
+	return nil
+}
+
+// StartSlaveSQLThread is applicable with --test-on-replica
 func (this *Applier) StartSlaveSQLThread() error {
 	query := `start /* gh-ost */ slave sql_thread`
 	log.Infof("Verifying SQL thread is running")
@@ -573,7 +584,7 @@ func (this *Applier) StopSlaveNicely() error {
 	if err := this.StopSlaveIOThread(); err != nil {
 		return err
 	}
-	if err := this.StartSlaveSQLThread(); err != nil {
+	if err := this.StopSlaveSQLThread(); err != nil {
 		return err
 	}
 	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.db)
