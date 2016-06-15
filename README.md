@@ -43,14 +43,14 @@ It is still OK to connect `gh-ost` directly on master; you will need to confirm 
 Newcomer? We think you would enjoy building trust with this tool. You can ask `gh-ost` to simulate a migration on a replica -- this will not affect data on master and will not actually do a complete migration. It will operate on a replica, and end up with two tables: the original (untouched), and the migrated. You will have your chance to compare the two and verify the tool works to your satisfaction.
 
 ```
-gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_connected=30 --switch-to-rbr --chunk-size=2500 --cut-over=two-step --exact-rowcount --test-on-replica --verbose
+gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_connected=30 --switch-to-rbr --chunk-size=2500 --exact-rowcount --test-on-replica --verbose
 ```
 Please read more on [testing on replica](testing-on-replica.md)
 
 #### Executing on master
 
 ```
-gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_connected=30 --switch-to-rbr --chunk-size=2500 --cut-over=two-step --exact-rowcount --verbose
+gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_connected=30 --switch-to-rbr --chunk-size=2500 --exact-rowcount --verbose
 ```
 
 Note: "executing on master" does not mean you need to _connect_ to the master. `gh-ost` is happy if you connect to a replica; it then figures out the identity of the master and makes the connection itself.
