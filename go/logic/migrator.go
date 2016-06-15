@@ -350,7 +350,7 @@ func (this *Migrator) Migrate() (err error) {
 	log.Infof("Row copy complete")
 	this.printStatus()
 
-	if err := this.stopWritesAndCompleteMigration(); err != nil {
+	if err := this.cutOver(); err != nil {
 		return err
 	}
 
@@ -361,9 +361,9 @@ func (this *Migrator) Migrate() (err error) {
 	return nil
 }
 
-// stopWritesAndCompleteMigration performs the final step of migration, based on migration
+// cutOver performs the final step of migration, based on migration
 // type (on replica? bumpy? safe?)
-func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
+func (this *Migrator) cutOver() (err error) {
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really swapping tables")
 		return nil
@@ -432,6 +432,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	waitForEventsUpToLockDuration := time.Now().Sub(waitForEventsUpToLockStartTime)
 
 	log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
+	this.printMigrationStatusHint()
 	this.printStatus()
 
 	return nil
@@ -575,7 +576,6 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnReplica() (err error) {
 
 	this.waitForEventsUpToLock()
 
-	this.printMigrationStatusHint()
 	log.Info("Table duplicated with new schema. Am not touching the original table. Replication is stopped. You may now compare the two tables to gain trust into this tool's operation")
 	return nil
 }
