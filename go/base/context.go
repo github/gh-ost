@@ -74,6 +74,7 @@ type MigrationContext struct {
 
 	Noop                    bool
 	TestOnReplica           bool
+	MigrateOnReplica        bool
 	OkToDropTable           bool
 	InitiallyDropOldTable   bool
 	InitiallyDropGhostTable bool

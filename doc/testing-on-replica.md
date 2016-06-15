@@ -24,11 +24,12 @@ Apply `--test-on-replica --host=<a.replica>`.
   - So... everything
 
 `gh-ost` will sync the ghost table with the original table.
-- When it is satisfied, it will issue a `STOP SLAVE IO_THREAD`, effectively stopping replication
+- When it is satisfied, it will issue a `STOP SLAVE`, stopping replication
 - Will finalize last few statements
-- Will terminate. No table swap takes place. No table is dropped.
+- Will swap tables via normal [cut-over](cut-over.md), and immediately revert the swap.
+- Will terminate. No table is dropped.
 
-You are now left with the original table **and** the ghost table. They _should_ be identical.
+You are now left with the original table **and** the ghost table. When using a trivial `alter` statement, such as `engine-innodb`, both tables _should_ be identical.
 
 You now have the time to verify the tool works correctly. You may checksum the entire table data if you like.
 - e.g.
@@ -36,6 +37,7 @@ You now have the time to verify the tool works correctly. You may checksum the e
   `mysql -e 'select * from mydb._mytable_gst order by id' | md5sum`
 - or of course only select the shared columns before/after the migration
 - We use the trivial `engine=innodb` for `alter` when testing. This way the resulting ghost table is identical in structure to the original table (including indexes) and we expect data to be completely identical. We use `md5sum` on the entire dataset to confirm the test result.
+- When adding/dropping columns, you will want to use the explicit list of shared columns before/after migration. This list is printed by `gh-ost` at the beginning of the migration.
 
 ### Cleanup
 
@@ -47,13 +49,17 @@ It's your job to:
 
 Simple:
 ```shell
-$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --initially-drop-ghost-table --initially-drop-old-table --cut-over=voluntary-lock --test-on-replica --verbose --execute
+$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --initially-drop-ghost-table --initially-drop-old-table --test-on-replica --verbose --execute
 ```
 
 Elaborate:
 ```shell
-$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --switch-to-rbr --initially-drop-ghost-table --initially-drop-old-table --cut-over=voluntary-lock --test-on-replica --postpone-cut-over-flag-file=/tmp/ghost-postpone.flag --exact-rowcount --allow-nullable-unique-key --verbose --execute
+$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --switch-to-rbr --initially-drop-ghost-table --initially-drop-old-table --test-on-replica --postpone-cut-over-flag-file=/tmp/ghost-postpone.flag --exact-rowcount --allow-nullable-unique-key --verbose --execute
 ```
 - Count exact number of rows (makes ETA estimation very good). This goes at the expense of paying the time for issuing a `SELECT COUNT(*)` on your table. We use this lovingly.
 - Automatically switch to `RBR` if replica is configured as `SBR`. See also: [migrating with SBR](migrating-with-sbr.md)
 - allow iterating on a `UNIQUE KEY` that has `NULL`able columns (at your own risk)
+
+### Further notes
+
+Do not confuse `--test-on-replica` with `--migrate-on-replica`; the latter performs the migration and _keeps it that way_ (does not revert the table swap nor stops replication)

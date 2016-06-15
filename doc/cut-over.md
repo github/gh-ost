@@ -8,7 +8,9 @@ The [facebook OSC](https://www.facebook.com/notes/mysql-at-facebook/online-schem
 
 `gh-ost` supports various types of cut-over options:
 
+- `--cut-over=safe` - this is the default value if not specified otherwise. The "safe" cut-over algorithm is depicted [here](https://github.com/github/gh-ost/issues/65). It is essentially a multi-step, locking solution, where queries block until table swapping is complete -- when all operates normally. If, for some reason, connections participating in the cut-over are killed throughout the process, the worst-case scenario is a table-outage: a brief moment where the table ceases to exist, followed by an immediate rollback.
 - `--cut-over=two-step` - this method is similar to the one taken by the facebook OSC. It's non-blocking but also non-atomic. The original table is first renames and pushed aside, then the ghost table is renamed to take its place. In between the two renames there's a brief period of time where your table just does not exist, and queries will fail.
-- `--cut-over=voluntary-lock` - as depicted in [Solving the Facebook-OSC non-atomic table swap problem](http://code.openark.org/blog/mysql/solving-the-facebook-osc-non-atomic-table-swap-problem), this solution uses voluntary MySQL locks, and makes for a blocking swap, where your queries do not fail, but block until operation is complete. This effect is desired. There is danger in this solution, since connection failure of the two sessions involved in creating the lock, would result in a premature swap of the tables, hence with potentially corrupted data.
-- We are working at this time on a blocking, safe, atomic solution, using wait conditions and via User Defined Functions which will need to be dynamically loaded onto your MySQL server. See [udf-ghost-wait-condition](https://github.com/openark/udf-ghost-wait-condition)
-- With [`--test-on-replica`](testing-on-replica.md) there is no table swap (**NOTE**: this is going to change. We will do cut-over on replica in exact same way as on master so as to invoke exact flow)
+
+Also note:
+- With `--migrate-on-replica` the cut-over is executed in exactly the same way as on master.
+- With `--test-on-replica` the replication is first stopped; then the cut-over is executed just as on master, but then reverted (tables rename forth then back again).

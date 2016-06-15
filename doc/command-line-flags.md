@@ -14,7 +14,7 @@ password=123456
 
 ##### cut-over
 
-Required. You are asked to explicitly state which cut-over algorithm you wish to use. Please see more discussion on [cut-over](cut-over.md)
+Optional. Default is `safe`. See more discussion in [cut-over](cut-over.md)
 
 ##### exact-rowcount
 
