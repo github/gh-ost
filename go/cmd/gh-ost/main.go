@@ -57,7 +57,9 @@ func main() {
 	flag.BoolVar(&migrationContext.NullableUniqueKeyAllowed, "allow-nullable-unique-key", false, "allow gh-ost to migrate based on a unique key with nullable columns. As long as no NULL values exist, this should be OK. If NULL values exist in chosen key, data may be corrupted. Use at your own risk!")
 
 	executeFlag := flag.Bool("execute", false, "actually execute the alter & migrate the table. Default is noop: do some tests and exit")
-	flag.BoolVar(&migrationContext.TestOnReplica, "test-on-replica", false, "Have the migration run on a replica, not on the master. At the end of migration tables are not swapped; gh-ost issues `STOP SLAVE` and you can compare the two tables for building trust")
+	flag.BoolVar(&migrationContext.TestOnReplica, "test-on-replica", false, "Have the migration run on a replica, not on the master. At the end of migration replication is stopped, and tables are swapped and immediately swap-revert. Replication remains stopped and you can compare the two tables for building trust")
+	flag.BoolVar(&migrationContext.MigrateOnReplica, "migrate-on-replica", false, "Have the migration run on a replica, not on the master. This will do the full migration on the replica including cut-over (as opposed to --test-on-replica)")
+
 	flag.BoolVar(&migrationContext.OkToDropTable, "ok-to-drop-table", false, "Shall the tool drop the old table at end of operation. DROPping tables can be a long locking operation, which is why I'm not doing it by default. I'm an online tool, yes?")
 	flag.BoolVar(&migrationContext.InitiallyDropOldTable, "initially-drop-old-table", false, "Drop a possibly existing OLD table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists")
 	flag.BoolVar(&migrationContext.InitiallyDropGhostTable, "initially-drop-ghost-table", false, "Drop a possibly existing Ghost table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists")
@@ -127,6 +129,13 @@ func main() {
 	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {
 		log.Fatalf("--allow-on-master and --test-on-replica are mutually exclusive")
 	}
+	if migrationContext.AllowedRunningOnMaster && migrationContext.MigrateOnReplica {
+		log.Fatalf("--allow-on-master and --migrate-on-replica are mutually exclusive")
+	}
+	if migrationContext.MigrateOnReplica && migrationContext.TestOnReplica {
+		log.Fatalf("--migrate-on-replica and --test-on-replica are mutually exclusive")
+	}
+
 	switch *cutOver {
 	case "safe", "default", "":
 		migrationContext.CutOverType = base.CutOverSafe
