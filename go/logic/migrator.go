@@ -51,7 +51,6 @@ type Migrator struct {
 	tablesInPlace              chan bool
 	rowCopyComplete            chan bool
 	allEventsUpToLockProcessed chan bool
-	voluntaryLockAcquired      chan bool
 	panicAbort                 chan error
 
 	rowCopyCompleteFlag                    int64
@@ -71,7 +70,6 @@ func NewMigrator() *Migrator {
 		tablesInPlace:              make(chan bool),
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan bool),
-		voluntaryLockAcquired:      make(chan bool, 1),
 		panicAbort:                 make(chan error),
 
 		allEventsUpToLockProcessedInjectedFlag: 0,
@@ -352,7 +350,7 @@ func (this *Migrator) Migrate() (err error) {
 	log.Infof("Row copy complete")
 	this.printStatus()
 
-	if err := this.stopWritesAndCompleteMigration(); err != nil {
+	if err := this.cutOver(); err != nil {
 		return err
 	}
 
@@ -363,9 +361,9 @@ func (this *Migrator) Migrate() (err error) {
 	return nil
 }
 
-// stopWritesAndCompleteMigration performs the final step of migration, based on migration
+// cutOver performs the final step of migration, based on migration
 // type (on replica? bumpy? safe?)
-func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
+func (this *Migrator) cutOver() (err error) {
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really swapping tables")
 		return nil
@@ -381,16 +379,16 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 			}
 			if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
 				// Throttle file defined and exists!
+				atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 1)
 				log.Debugf("Postponing final table swap as flag file exists: %+v", this.migrationContext.PostponeCutOverFlagFile)
 				return true, nil
 			}
 			return false, nil
 		},
 	)
+	atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 0)
 
 	if this.migrationContext.TestOnReplica {
-		// return this.stopWritesAndCompleteMigrationOnReplica()
-
 		// With `--test-on-replica` we stop replication thread, and then proceed to use
 		// the same cut-over phase as the master would use. That means we take locks
 		// and swap the tables.
@@ -402,27 +400,28 @@ func (this *Migrator) stopWritesAndCompleteMigration() (err error) {
 		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
 		defer this.applier.RenameTablesRollback()
 	}
-
-	if this.migrationContext.CutOverType == base.CutOverTwoStep {
-		return this.stopWritesAndCompleteMigrationOnMasterQuickAndBumpy()
-	}
-
-	if this.migrationContext.CutOverType == base.CutOverVoluntaryLock {
+	if this.migrationContext.CutOverType == base.CutOverSafe {
 		// Lock-based solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
-		if err := this.retryOperation(
+		err := this.retryOperation(
 			func() error {
-				return this.executeAndThrottleOnError(this.stopWritesAndCompleteMigrationOnMasterViaLock)
-			}); err != nil {
-			return err
-		}
+				return this.executeAndThrottleOnError(this.safeCutOver)
+			},
+		)
+		return err
 	}
-	return
+	if this.migrationContext.CutOverType == base.CutOverTwoStep {
+		err := this.retryOperation(this.cutOverTwoStep)
+		return err
+	}
+	return nil
 }
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
 func (this *Migrator) waitForEventsUpToLock() (err error) {
+	waitForEventsUpToLockStartTime := time.Now()
+
 	log.Infof("Writing changelog state: %+v", AllEventsUpToLockProcessed)
 	if _, err := this.applier.WriteChangelogState(string(AllEventsUpToLockProcessed)); err != nil {
 		return err
@@ -430,18 +429,21 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	log.Infof("Waiting for events up to lock")
 	atomic.StoreInt64(&this.allEventsUpToLockProcessedInjectedFlag, 1)
 	<-this.allEventsUpToLockProcessed
-	log.Infof("Done waiting for events up to lock")
+	waitForEventsUpToLockDuration := time.Now().Sub(waitForEventsUpToLockStartTime)
+
+	log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
+	this.printMigrationStatusHint()
 	this.printStatus()
 
 	return nil
 }
 
-// stopWritesAndCompleteMigrationOnMasterQuickAndBumpy will lock down the original table, execute
+// cutOverTwoStep will lock down the original table, execute
 // what's left of last DML entries, and **non-atomically** swap original->old, then new->original.
 // There is a point in time where the "original" table does not exist and queries are non-blocked
 // and failing.
-func (this *Migrator) stopWritesAndCompleteMigrationOnMasterQuickAndBumpy() (err error) {
-	if err := this.retryOperation(this.applier.LockTables); err != nil {
+func (this *Migrator) cutOverTwoStep() (err error) {
+	if err := this.retryOperation(this.applier.LockOriginalTable); err != nil {
 		return err
 	}
 
@@ -461,66 +463,104 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnMasterQuickAndBumpy() (err
 	return nil
 }
 
-// stopWritesAndCompleteMigrationOnMasterViaLock will lock down the original table, execute
-// what's left of last DML entries, and atomically swap & unlock (original->old && new->original)
-func (this *Migrator) stopWritesAndCompleteMigrationOnMasterViaLock() (err error) {
-	lockGrabbed := make(chan error, 1)
-	okToReleaseLock := make(chan bool, 1)
-	swapResult := make(chan error, 1)
-	go func() {
-		if err := this.applier.GrabVoluntaryLock(lockGrabbed, okToReleaseLock); err != nil {
+// cutOverSafe performs a safe cut over, where normally (no failure) the original table
+// is being locked until swapped, hence DML queries being locked and unaware of the cut-over.
+// In the worst case, there will ba a minor outage, where the original table would not exist.
+func (this *Migrator) safeCutOver() (err error) {
+	okToUnlockTable := make(chan bool, 2)
+	originalTableRenamed := make(chan error, 1)
+	defer func() {
+		// The following is to make sure we unlock the table no-matter-what!
+		// There's enough buffer in the channel to support a redundant write here.
+		okToUnlockTable <- true
+		// We need to make sure we wait for the original-rename, successful or not,
+		// so as to be able to rollback in case the ghost-rename fails.
+		<-originalTableRenamed
+
+		// Rollback operation
+		if !this.applier.tableExists(this.migrationContext.OriginalTableName) {
+			log.Infof("Cannot find %s, rolling back", this.migrationContext.OriginalTableName)
+			err := this.applier.RenameTable(this.migrationContext.GetOldTableName(), this.migrationContext.OriginalTableName)
 			log.Errore(err)
 		}
 	}()
-	if err := <-lockGrabbed; err != nil {
+	lockOriginalSessionIdChan := make(chan int64, 1)
+	tableLocked := make(chan error, 1)
+	tableUnlocked := make(chan error, 1)
+	go func() {
+		if err := this.applier.LockOriginalTableAndWait(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
+			log.Errore(err)
+		}
+	}()
+	if err := <-tableLocked; err != nil {
 		return log.Errore(err)
 	}
-	blockingQuerySessionIdChan := make(chan int64, 1)
-	go func() {
-		this.applier.IssueBlockingQueryOnVoluntaryLock(blockingQuerySessionIdChan)
-	}()
-	blockingQuerySessionId := <-blockingQuerySessionIdChan
-	log.Infof("Intentional blocking query connection id is %+v", blockingQuerySessionId)
-
-	if err := this.retryOperation(
-		func() error {
-			return this.applier.ExpectProcess(blockingQuerySessionId, "User lock", this.migrationContext.GetVoluntaryLockName())
-		}); err != nil {
-		return err
-	}
-	log.Infof("Found blocking query to be executing")
-	swapSessionIdChan := make(chan int64, 1)
-	go func() {
-		swapResult <- this.applier.SwapTablesAtomic(swapSessionIdChan)
-	}()
-
-	swapSessionId := <-swapSessionIdChan
-	log.Infof("RENAME connection id is %+v", swapSessionId)
-	if err := this.retryOperation(
-		func() error {
-			return this.applier.ExpectProcess(swapSessionId, "metadata lock", "rename")
-		}); err != nil {
-		return err
-	}
-	log.Infof("Found RENAME to be executing")
-
-	// OK, at this time we know any newly incoming DML on original table is blocked.
+	lockOriginalSessionId := <-lockOriginalSessionIdChan
+	log.Infof("Session locking original table is %+v", lockOriginalSessionId)
+	// At this point we know the table is locked.
+	// We know any newly incoming DML on original table is blocked.
 	this.waitForEventsUpToLock()
 
-	okToReleaseLock <- true
-	// BAM: voluntary lock is released, blocking query is released, rename is released.
-	// We now check RENAME result. We have lock_wait_timeout. We put it on purpose, to avoid
-	// locking the tables for too long. If lock time exceeds said timeout, the RENAME fails
-	// and returns a non-nil error, in which case tables have not been swapped, and we are
-	// not really done. We are, however, good to go for more retries.
-	if err := <-swapResult; err != nil {
-		// Bummer. We shall rest a while and try again
+	// Step 2
+	// We now attempt a RENAME on the original table, and expect it to block
+	renameOriginalSessionIdChan := make(chan int64, 1)
+	this.migrationContext.RenameTablesStartTime = time.Now()
+	go func() {
+		this.applier.RenameOriginalTable(renameOriginalSessionIdChan, originalTableRenamed)
+	}()
+	renameOriginalSessionId := <-renameOriginalSessionIdChan
+	log.Infof("Session renaming original table is %+v", renameOriginalSessionId)
+
+	if err := this.retryOperation(
+		func() error {
+			return this.applier.ExpectProcess(renameOriginalSessionId, "metadata lock", "rename")
+		}); err != nil {
 		return err
 	}
+	log.Infof("Found RENAME on original table to be blocking, as expected. Double checking original is still being locked")
+	if err := this.applier.ExpectUsedLock(lockOriginalSessionId); err != nil {
+		// Abort operation; but make sure to unlock table!
+		return log.Errore(err)
+	}
+	log.Infof("Connection holding lock on original table still exists")
+
+	// Now that we've found the RENAME blocking, AND the locking connection still alive,
+	// we know it is safe to proceed to renaming ghost table.
+
+	// Step 3
+	// We now attempt a RENAME on the ghost table, and expect it to block
+	renameGhostSessionIdChan := make(chan int64, 1)
+	ghostTableRenamed := make(chan error, 1)
+	go func() {
+		this.applier.RenameGhostTable(renameGhostSessionIdChan, ghostTableRenamed)
+	}()
+	renameGhostSessionId := <-renameGhostSessionIdChan
+	log.Infof("Session renaming ghost table is %+v", renameGhostSessionId)
+
+	if err := this.retryOperation(
+		func() error {
+			return this.applier.ExpectProcess(renameGhostSessionId, "metadata lock", "rename")
+		}); err != nil {
+		return err
+	}
+	log.Infof("Found RENAME on ghost table to be blocking, as expected. Will next release lock on original table")
+
+	// Step 4
+	okToUnlockTable <- true
+	// BAM! original table lock is released, RENAME original->old released,
+	// RENAME ghost->original is released, queries on original are unblocked.
+	// (that is, assuming all went well)
+	if err := <-tableUnlocked; err != nil {
+		return log.Errore(err)
+	}
+	if err := <-ghostTableRenamed; err != nil {
+		return log.Errore(err)
+	}
+	this.migrationContext.RenameTablesEndTime = time.Now()
+
 	// ooh nice! We're actually truly and thankfully done
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
-	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
-	log.Debugf("Lock & rename duration: %s. Of this, rename time was %s. During rename time, queries on %s were blocked", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	log.Infof("Lock & rename duration: %s. During this time, queries on %s were blocked", lockAndRenameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
@@ -536,7 +576,6 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnReplica() (err error) {
 
 	this.waitForEventsUpToLock()
 
-	this.printMigrationStatusHint()
 	log.Info("Table duplicated with new schema. Am not touching the original table. Replication is stopped. You may now compare the two tables to gain trust into this tool's operation")
 	return nil
 }
@@ -710,7 +749,9 @@ func (this *Migrator) printStatus(writers ...io.Writer) {
 
 	var etaSeconds float64 = math.MaxFloat64
 	eta := "N/A"
-	if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
+	if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
+		eta = "postponing cut-over"
+	} else if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
 		eta = fmt.Sprintf("throttled, %s", throttleReason)
 	} else if progressPct > 100.0 {
 		eta = "Due"
@@ -838,16 +879,16 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.ValidateOrDropExistingTables(); err != nil {
 		return err
 	}
+	if err := this.applier.CreateChangelogTable(); err != nil {
+		log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+		return err
+	}
 	if err := this.applier.CreateGhostTable(); err != nil {
 		log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
 		return err
 	}
 	if err := this.applier.AlterGhost(); err != nil {
 		log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
-		return err
-	}
-	if err := this.applier.CreateChangelogTable(); err != nil {
-		log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
 		return err
 	}
 

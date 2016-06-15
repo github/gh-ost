@@ -31,9 +31,8 @@ const (
 type CutOver int
 
 const (
-	CutOverTwoStep       CutOver = iota
-	CutOverVoluntaryLock         = iota
-	CutOverUdfWait               = iota
+	CutOverSafe    CutOver = iota
+	CutOverTwoStep         = iota
 )
 
 const (
@@ -100,6 +99,7 @@ type MigrationContext struct {
 	isThrottled               bool
 	throttleReason            string
 	throttleMutex             *sync.Mutex
+	IsPostponingCutOver       int64
 
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)

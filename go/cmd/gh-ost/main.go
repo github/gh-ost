@@ -128,12 +128,10 @@ func main() {
 		log.Fatalf("--allow-on-master and --test-on-replica are mutually exclusive")
 	}
 	switch *cutOver {
+	case "safe", "default", "":
+		migrationContext.CutOverType = base.CutOverSafe
 	case "two-step":
 		migrationContext.CutOverType = base.CutOverTwoStep
-	case "voluntary-lock":
-		migrationContext.CutOverType = base.CutOverVoluntaryLock
-	case "":
-		log.Fatalf("--cut-over must be specified")
 	default:
 		log.Fatalf("Unknown cut-over: %s", *cutOver)
 	}
