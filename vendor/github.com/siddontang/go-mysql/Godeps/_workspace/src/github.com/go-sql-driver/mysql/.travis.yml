@@ -1,4 +1,0 @@
-language: go
-
-before_script:
-  - mysql -e 'create database gotest;'
