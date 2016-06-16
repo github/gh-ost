@@ -1,0 +1,51 @@
+{
+	"ImportPath": "github.com/siddontang/go-mysql",
+	"GoVersion": "go1.5.2",
+	"Packages": [
+		"./..."
+	],
+	"Deps": [
+		{
+			"ImportPath": "github.com/BurntSushi/toml",
+			"Rev": "2ceedfee35ad3848e49308ab0c9a4f640cfb5fb2"
+		},
+		{
+			"ImportPath": "github.com/go-sql-driver/mysql",
+			"Comment": "v1.0.1",
+			"Rev": "75bb76ec381d160c6b119bd8004a12979b0f2008"
+		},
+		{
+			"ImportPath": "github.com/jmoiron/sqlx",
+			"Comment": "sqlx-v1.0-58-gac7070c",
+			"Rev": "ac7070c8a115e759a26e524fd299efdac81b7e86"
+		},
+		{
+			"ImportPath": "github.com/juju/errors",
+			"Rev": "1b5e39b83d1835fa480e0c2ddefb040ee82d58b3"
+		},
+		{
+			"ImportPath": "github.com/satori/go.uuid",
+			"Rev": "a07c134f8289edd9ac6ee6f0aa5f3d345f4aaf27"
+		},
+		{
+			"ImportPath": "github.com/siddontang/go/hack",
+			"Rev": "530a23162549a31baa14dfa3b647a9eccee8878f"
+		},
+		{
+			"ImportPath": "github.com/siddontang/go/ioutil2",
+			"Rev": "530a23162549a31baa14dfa3b647a9eccee8878f"
+		},
+		{
+			"ImportPath": "github.com/siddontang/go/log",
+			"Rev": "530a23162549a31baa14dfa3b647a9eccee8878f"
+		},
+		{
+			"ImportPath": "github.com/siddontang/go/sync2",
+			"Rev": "530a23162549a31baa14dfa3b647a9eccee8878f"
+		},
+		{
+			"ImportPath": "gopkg.in/check.v1",
+			"Rev": "64131543e7896d5bcc6bd5a76287eb75ea96c673"
+		}
+	]
+}
