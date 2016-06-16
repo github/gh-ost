@@ -145,6 +145,21 @@ func (this *Inspector) validateConnection() error {
 // validateGrants verifies the user by which we're executing has necessary grants
 // to do its thang.
 func (this *Inspector) validateGrants() error {
+	stringContainsAll := func(s string, substrings ...string) bool {
+		nonEmptyStringsFound := false
+		for _, substring := range substrings {
+			if s == "" {
+				continue
+			}
+			if strings.Contains(s, substring) {
+				nonEmptyStringsFound = true
+			} else {
+				// Immediate failure
+				return false
+			}
+		}
+		return nonEmptyStringsFound
+	}
 	query := `show /* gh-ost */ grants for current_user()`
 	foundAll := false
 	foundSuper := false
@@ -164,6 +179,12 @@ func (this *Inspector) validateGrants() error {
 				foundReplicationSlave = true
 			}
 			if strings.Contains(grant, fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.*", this.migrationContext.DatabaseName)) {
+				foundDBAll = true
+			}
+			if stringContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`, ` ON *.*`) {
+				foundDBAll = true
+			}
+			if stringContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`, fmt.Sprintf(" ON `%s`.*", this.migrationContext.DatabaseName)) {
 				foundDBAll = true
 			}
 		}
