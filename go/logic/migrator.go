@@ -42,6 +42,7 @@ const (
 
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
+	parser           *sql.Parser
 	inspector        *Inspector
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
@@ -67,6 +68,7 @@ type Migrator struct {
 func NewMigrator() *Migrator {
 	migrator := &Migrator{
 		migrationContext:           base.GetMigrationContext(),
+		parser:                     sql.NewParser(),
 		tablesInPlace:              make(chan bool),
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan bool),
@@ -293,16 +295,31 @@ func (this *Migrator) listenOnPanicAbort() {
 	err := <-this.panicAbort
 	log.Fatale(err)
 }
+func (this *Migrator) validateStatement() (err error) {
+	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
+		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
+		if !this.migrationContext.ApproveRenamedColumns {
+			return fmt.Errorf("Alter statement has column(s) renamed. gh-ost suspects the following renames: %v; but to proceed you must approve via `--approve-renamed-columns` (or you can skip renamed columns via `--skip-renamed-columns`)", this.parser.GetNonTrivialRenames())
+		}
+	}
+	return nil
+}
 
 func (this *Migrator) Migrate() (err error) {
 	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	this.migrationContext.StartTime = time.Now()
 
 	go this.listenOnPanicAbort()
+
+	if err := this.parser.ParseAlterStatement(this.migrationContext.AlterStatement); err != nil {
+		return err
+	}
+	if err := this.validateStatement(); err != nil {
+		return err
+	}
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
-
 	if err := this.initiateStreaming(); err != nil {
 		return err
 	}
