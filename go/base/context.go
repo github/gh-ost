@@ -70,6 +70,7 @@ type MigrationContext struct {
 	maxLoadMutex                        *sync.Mutex
 	PostponeCutOverFlagFile             string
 	SwapTablesTimeoutSeconds            int64
+	PanicFlagFile                       string
 
 	ServeSocketFile string
 	ServeTCPPort    int64
