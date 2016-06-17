@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -30,4 +31,20 @@ func FileExists(fileName string) bool {
 		return true
 	}
 	return false
+}
+
+func StringContainsAll(s string, substrings ...string) bool {
+	nonEmptyStringsFound := false
+	for _, substring := range substrings {
+		if s == "" {
+			continue
+		}
+		if strings.Contains(s, substring) {
+			nonEmptyStringsFound = true
+		} else {
+			// Immediate failure
+			return false
+		}
+	}
+	return nonEmptyStringsFound
 }

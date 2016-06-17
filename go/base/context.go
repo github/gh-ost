@@ -36,7 +36,7 @@ const (
 )
 
 const (
-	maxRetries = 10
+	maxRetries = 60
 )
 
 // MigrationContext has the general, global state of migration. It is used by
@@ -50,6 +50,8 @@ type MigrationContext struct {
 	AllowedRunningOnMaster   bool
 	SwitchToRowBinlogFormat  bool
 	NullableUniqueKeyAllowed bool
+	ApproveRenamedColumns    bool
+	SkipRenamedColumns       bool
 
 	config      ContextConfig
 	configMutex *sync.Mutex
@@ -108,6 +110,8 @@ type MigrationContext struct {
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
 	UniqueKey                        *sql.UniqueKey
 	SharedColumns                    *sql.ColumnList
+	ColumnRenameMap                  map[string]string
+	MappedSharedColumns              *sql.ColumnList
 	MigrationRangeMinValues          *sql.ColumnValues
 	MigrationRangeMaxValues          *sql.ColumnValues
 	Iteration                        int64
@@ -149,6 +153,7 @@ func newMigrationContext() *MigrationContext {
 		ThrottleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
+		ColumnRenameMap:                     make(map[string]string),
 	}
 }
 

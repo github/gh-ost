@@ -122,7 +122,7 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 		}
 	}
 
-	this.migrationContext.SharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns)
+	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.ColumnRenameMap)
 	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
 	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
 	return nil
@@ -145,21 +145,6 @@ func (this *Inspector) validateConnection() error {
 // validateGrants verifies the user by which we're executing has necessary grants
 // to do its thang.
 func (this *Inspector) validateGrants() error {
-	stringContainsAll := func(s string, substrings ...string) bool {
-		nonEmptyStringsFound := false
-		for _, substring := range substrings {
-			if s == "" {
-				continue
-			}
-			if strings.Contains(s, substring) {
-				nonEmptyStringsFound = true
-			} else {
-				// Immediate failure
-				return false
-			}
-		}
-		return nonEmptyStringsFound
-	}
 	query := `show /* gh-ost */ grants for current_user()`
 	foundAll := false
 	foundSuper := false
@@ -181,10 +166,10 @@ func (this *Inspector) validateGrants() error {
 			if strings.Contains(grant, fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.*", this.migrationContext.DatabaseName)) {
 				foundDBAll = true
 			}
-			if stringContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`, ` ON *.*`) {
+			if base.StringContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`, ` ON *.*`) {
 				foundDBAll = true
 			}
-			if stringContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`, fmt.Sprintf(" ON `%s`.*", this.migrationContext.DatabaseName)) {
+			if base.StringContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`, fmt.Sprintf(" ON `%s`.*", this.migrationContext.DatabaseName)) {
 				foundDBAll = true
 			}
 		}
@@ -500,18 +485,26 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 }
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
-func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList) *sql.ColumnList {
+func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
 	columnsInGhost := make(map[string]bool)
 	for _, ghostColumn := range ghostColumns.Names {
 		columnsInGhost[ghostColumn] = true
 	}
 	sharedColumnNames := []string{}
 	for _, originalColumn := range originalColumns.Names {
-		if columnsInGhost[originalColumn] {
+		if columnsInGhost[originalColumn] || columnsInGhost[columnRenameMap[originalColumn]] {
 			sharedColumnNames = append(sharedColumnNames, originalColumn)
 		}
 	}
-	return sql.NewColumnList(sharedColumnNames)
+	mappedSharedColumnNames := []string{}
+	for _, columnName := range sharedColumnNames {
+		if mapped, ok := columnRenameMap[columnName]; ok {
+			mappedSharedColumnNames = append(mappedSharedColumnNames, mapped)
+		} else {
+			mappedSharedColumnNames = append(mappedSharedColumnNames, columnName)
+		}
+	}
+	return sql.NewColumnList(sharedColumnNames), sql.NewColumnList(mappedSharedColumnNames)
 }
 
 func (this *Inspector) readChangelogState() (map[string]string, error) {
