@@ -623,7 +623,7 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 			fmt.Fprintln(writer, `available commands:
   status               # Print a status message
   chunk-size=<newsize> # Set a new chunk-size
-	max-load=<maxload>   # Set a new set of max-load thresholds
+  max-load=<maxload>   # Set a new set of max-load thresholds
   throttle             # Force throttling
   no-throttle          # End forced throttling (other throttling may still apply)
   help                 # This message
