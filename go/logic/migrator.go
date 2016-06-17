@@ -99,6 +99,15 @@ func (this *Migrator) acceptSignals() {
 }
 
 func (this *Migrator) shouldThrottle() (result bool, reason string) {
+
+	// Regardless of throttle, we take opportunity to check for panic-abort
+	if this.migrationContext.PanicFlagFile != "" {
+		if base.FileExists(this.migrationContext.PanicFlagFile) {
+			this.panicAbort <- fmt.Errorf("Found panic-file %s. Aborting without cleanup", this.migrationContext.PanicFlagFile)
+		}
+	}
+	// Back to throttle considerations
+
 	// User-based throttle
 	if atomic.LoadInt64(&this.migrationContext.ThrottleCommandedByUser) > 0 {
 		return true, "commanded by user"
@@ -295,6 +304,7 @@ func (this *Migrator) listenOnPanicAbort() {
 	err := <-this.panicAbort
 	log.Fatale(err)
 }
+
 func (this *Migrator) validateStatement() (err error) {
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
@@ -606,12 +616,14 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 	if len(tokens) > 1 {
 		arg = strings.TrimSpace(tokens[1])
 	}
+
 	switch command {
 	case "help":
 		{
 			fmt.Fprintln(writer, `available commands:
   status               # Print a status message
   chunk-size=<newsize> # Set a new chunk-size
+	max-load=<maxload>   # Set a new set of max-load thresholds
   throttle             # Force throttling
   no-throttle          # End forced throttling (other throttling may still apply)
   help                 # This message
@@ -738,6 +750,16 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
 		fmt.Fprintln(w, fmt.Sprintf("# Throttle additional flag file: %+v",
 			this.migrationContext.ThrottleAdditionalFlagFile,
+		))
+	}
+	if this.migrationContext.PostponeCutOverFlagFile != "" {
+		fmt.Fprintln(w, fmt.Sprintf("# Postpone cut-over flag file: %+v",
+			this.migrationContext.PostponeCutOverFlagFile,
+		))
+	}
+	if this.migrationContext.PanicFlagFile != "" {
+		fmt.Fprintln(w, fmt.Sprintf("# Panic flag file: %+v",
+			this.migrationContext.PanicFlagFile,
 		))
 	}
 	fmt.Fprintln(w, fmt.Sprintf("# Serving on unix socket: %+v",
