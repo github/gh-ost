@@ -3,7 +3,7 @@
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
-package binlog
+package mysql
 
 import (
 	"testing"
