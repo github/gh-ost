@@ -34,10 +34,6 @@ const (
 	CutOverTwoStep         = iota
 )
 
-const (
-	maxRetries = 60
-)
-
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
@@ -58,6 +54,7 @@ type MigrationContext struct {
 	CliUser     string
 	CliPassword string
 
+	defaultNumRetries                   int64
 	ChunkSize                           int64
 	MaxLagMillisecondsThrottleThreshold int64
 	ReplictionLagQuery                  string
@@ -92,6 +89,7 @@ type MigrationContext struct {
 	ApplierConnectionConfig   *mysql.ConnectionConfig
 	StartTime                 time.Time
 	RowCopyStartTime          time.Time
+	RowCopyEndTime            time.Time
 	LockTablesStartTime       time.Time
 	RenameTablesStartTime     time.Time
 	RenameTablesEndTime       time.Time
@@ -143,6 +141,7 @@ func init() {
 
 func newMigrationContext() *MigrationContext {
 	return &MigrationContext{
+		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
@@ -202,8 +201,18 @@ func (this *MigrationContext) HasMigrationRange() bool {
 	return this.MigrationRangeMinValues != nil && this.MigrationRangeMaxValues != nil
 }
 
-func (this *MigrationContext) MaxRetries() int {
-	return maxRetries
+func (this *MigrationContext) SetDefaultNumRetries(retries int64) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	if retries > 0 {
+		this.defaultNumRetries = retries
+	}
+}
+func (this *MigrationContext) MaxRetries() int64 {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	retries := this.defaultNumRetries
+	return retries
 }
 
 func (this *MigrationContext) IsTransactionalTable() bool {
@@ -227,7 +236,20 @@ func (this *MigrationContext) ElapsedTime() time.Duration {
 
 // ElapsedRowCopyTime returns time since starting to copy chunks of rows
 func (this *MigrationContext) ElapsedRowCopyTime() time.Duration {
-	return time.Now().Sub(this.RowCopyStartTime)
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	if this.RowCopyEndTime.IsZero() {
+		return time.Now().Sub(this.RowCopyStartTime)
+	}
+	return this.RowCopyEndTime.Sub(this.RowCopyStartTime)
+}
+
+// ElapsedRowCopyTime returns time since starting to copy chunks of rows
+func (this *MigrationContext) MarkRowCopyEndTime() {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.RowCopyEndTime = time.Now()
 }
 
 // GetTotalRowsCopied returns the accurate number of rows being copied (affected)

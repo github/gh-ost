@@ -59,6 +59,7 @@ func (this *Server) BindTCPPort() (err error) {
 	return nil
 }
 
+// Serve begins listening & serving on whichever device was configured
 func (this *Server) Serve() (err error) {
 	go func() {
 		for {

@@ -56,6 +56,7 @@ type Migrator struct {
 	eventsStreamer   *EventsStreamer
 	server           *Server
 	migrationContext *base.MigrationContext
+	hostname         string
 
 	tablesInPlace              chan bool
 	rowCopyComplete            chan bool
@@ -106,8 +107,9 @@ func (this *Migrator) acceptSignals() {
 	}()
 }
 
+// shouldThrottle performs checks to see whether we should currently be throttling.
+// It also checks for critical-load and panic aborts.
 func (this *Migrator) shouldThrottle() (result bool, reason string) {
-
 	// Regardless of throttle, we take opportunity to check for panic-abort
 	if this.migrationContext.PanicFlagFile != "" {
 		if base.FileExists(this.migrationContext.PanicFlagFile) {
@@ -177,6 +179,7 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 	return false, ""
 }
 
+// initiateThrottler initiates the throttle ticker and sets the basic behavior of throttling.
 func (this *Migrator) initiateThrottler() error {
 	throttlerTick := time.Tick(1 * time.Second)
 
@@ -235,7 +238,7 @@ func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 // retryOperation attempts up to `count` attempts at running given function,
 // exiting as soon as it returns with non-error.
 func (this *Migrator) retryOperation(operation func() error) (err error) {
-	maxRetries := this.migrationContext.MaxRetries()
+	maxRetries := int(this.migrationContext.MaxRetries())
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
 			// sleep after previous iteration
@@ -266,6 +269,7 @@ func (this *Migrator) executeAndThrottleOnError(operation func() error) (err err
 func (this *Migrator) consumeRowCopyComplete() {
 	<-this.rowCopyComplete
 	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
+	this.migrationContext.MarkRowCopyEndTime()
 	go func() {
 		for <-this.rowCopyComplete {
 		}
@@ -276,6 +280,7 @@ func (this *Migrator) canStopStreaming() bool {
 	return false
 }
 
+// onChangelogStateEvent is called when a binlog event operation on the changelog table is intercepted.
 func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
 	// Hey, I created the changlog table, I know the type of columns it has!
 	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
@@ -311,6 +316,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	return nil
 }
 
+// onChangelogHeartbeat is called when a heartbeat event is intercepted
 func (this *Migrator) onChangelogHeartbeat(heartbeatValue string) (err error) {
 	heartbeatTime, err := time.Parse(time.RFC3339Nano, heartbeatValue)
 	if err != nil {
@@ -323,12 +329,15 @@ func (this *Migrator) onChangelogHeartbeat(heartbeatValue string) (err error) {
 	return nil
 }
 
-//
+// listenOnPanicAbort aborts on abort request
 func (this *Migrator) listenOnPanicAbort() {
 	err := <-this.panicAbort
 	log.Fatale(err)
 }
 
+// validateStatement validates the `alter` statement meets criteria.
+// At this time this means:
+// - column renames are approved
 func (this *Migrator) validateStatement() (err error) {
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
@@ -340,9 +349,13 @@ func (this *Migrator) validateStatement() (err error) {
 	return nil
 }
 
+// Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
 	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	this.migrationContext.StartTime = time.Now()
+	if this.hostname, err = os.Hostname(); err != nil {
+		return err
+	}
 
 	go this.listenOnPanicAbort()
 
@@ -432,7 +445,7 @@ func (this *Migrator) cutOver() (err error) {
 			if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
 				// Throttle file defined and exists!
 				atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 1)
-				log.Debugf("Postponing final table swap as flag file exists: %+v", this.migrationContext.PostponeCutOverFlagFile)
+				//log.Debugf("Postponing final table swap as flag file exists: %+v", this.migrationContext.PostponeCutOverFlagFile)
 				return true, nil
 			}
 			return false, nil
@@ -446,7 +459,7 @@ func (this *Migrator) cutOver() (err error) {
 		// and swap the tables.
 		// The difference is that we will later swap the tables back.
 		log.Debugf("testing on replica. Stopping replication IO thread")
-		if err := this.retryOperation(this.applier.StopSlaveNicely); err != nil {
+		if err := this.retryOperation(this.applier.StopReplication); err != nil {
 			return err
 		}
 		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
@@ -621,7 +634,7 @@ func (this *Migrator) safeCutOver() (err error) {
 // in sync. There is no table swap.
 func (this *Migrator) stopWritesAndCompleteMigrationOnReplica() (err error) {
 	log.Debugf("testing on replica. Instead of LOCK tables I will STOP SLAVE")
-	if err := this.retryOperation(this.applier.StopSlaveNicely); err != nil {
+	if err := this.retryOperation(this.applier.StopReplication); err != nil {
 		return err
 	}
 
@@ -631,6 +644,7 @@ func (this *Migrator) stopWritesAndCompleteMigrationOnReplica() (err error) {
 	return nil
 }
 
+// onServerCommand responds to a user's interactive command
 func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err error) {
 	defer writer.Flush()
 
@@ -704,6 +718,7 @@ help                   # This message
 	return nil
 }
 
+// initiateServer begins listening on unix socket/tcp for incoming interactive commands
 func (this *Migrator) initiateServer() (err error) {
 	this.server = NewServer(this.onServerCommand)
 	if err := this.server.BindSocketFile(); err != nil {
@@ -717,6 +732,13 @@ func (this *Migrator) initiateServer() (err error) {
 	return nil
 }
 
+// initiateInspector connects, validates and inspects the "inspector" server.
+// The "inspector" server is typically a replica; it is where we issue some
+// queries such as:
+// - table row count
+// - schema validation
+// - heartbeat
+// When `--allow-on-master` is supplied, the inspector is actually the master.
 func (this *Migrator) initiateInspector() (err error) {
 	this.inspector = NewInspector()
 	if err := this.inspector.InitDBConnections(); err != nil {
@@ -738,7 +760,7 @@ func (this *Migrator) initiateInspector() (err error) {
 			return fmt.Errorf("Instructed to --test-on-replica or --migrate-on-replica, but the server we connect to doesn't seem to be a replica")
 		}
 		log.Infof("--test-on-replica or --migrate-on-replica given. Will not execute on master %+v but rather on replica %+v itself",
-			this.migrationContext.ApplierConnectionConfig.Key, this.migrationContext.InspectorConnectionConfig.Key,
+			*this.migrationContext.ApplierConnectionConfig.ImpliedKey, *this.migrationContext.InspectorConnectionConfig.ImpliedKey,
 		)
 		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.Duplicate()
 		if this.migrationContext.ThrottleControlReplicaKeys.Len() == 0 {
@@ -748,10 +770,11 @@ func (this *Migrator) initiateInspector() (err error) {
 		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master")
 	}
 
-	log.Infof("Master found to be %+v", this.migrationContext.ApplierConnectionConfig.Key)
+	log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	return nil
 }
 
+// initiateStatus sets and activates the printStatus() ticker
 func (this *Migrator) initiateStatus() error {
 	this.printStatus(ForcePrintStatusAndHint)
 	statusTick := time.Tick(1 * time.Second)
@@ -762,6 +785,10 @@ func (this *Migrator) initiateStatus() error {
 	return nil
 }
 
+// printMigrationStatusHint prints a detailed configuration dump, that is useful
+// to keep in mind; such as the name of migrated table, throttle params etc.
+// This gets printed at beginning and end of migration, every 10 minutes throughout
+// migration, and as reponse to the "status" interactive command.
 func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s",
@@ -769,6 +796,11 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	))
+	fmt.Fprintln(w, fmt.Sprintf("# Migrating %+v; inspecting %+v; executing on %+v",
+		*this.applier.connectionConfig.ImpliedKey,
+		*this.inspector.connectionConfig.ImpliedKey,
+		this.hostname,
 	))
 	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v",
 		this.migrationContext.StartTime.Format(time.RubyDate),
@@ -814,6 +846,11 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	}
 }
 
+// printStatus prints the prgoress status, and optionally additionally detailed
+// dump of configuration.
+// `rule` indicates the type of output expected.
+// By default the status is written to standard output, but other writers can
+// be used as well.
 func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	writers = append(writers, os.Stdout)
 
@@ -878,11 +915,11 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Elapsed: %+v(copy), %+v(total); streamer: %+v; ETA: %s",
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
-		base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()), base.PrettifyDurationOutput(elapsedTime),
+		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
 		eta,
 	)
@@ -894,6 +931,9 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	fmt.Fprintln(w, status)
 }
 
+// initiateHeartbeatListener listens for heartbeat events. gh-ost implements its own
+// heartbeat mechanism, whether your DB has or hasn't an existing heartbeat solution.
+// Heartbeat is supplied via the changelog table
 func (this *Migrator) initiateHeartbeatListener() {
 	ticker := time.Tick((heartbeatIntervalMilliseconds * time.Millisecond) / 2)
 	for range ticker {
@@ -944,13 +984,15 @@ func (this *Migrator) initiateStreaming() error {
 	return nil
 }
 
-// addDMLEventsListener
+// addDMLEventsListener begins listening for binlog events on the original table,
+// and creates & enqueues a write task per such event.
 func (this *Migrator) addDMLEventsListener() error {
 	err := this.eventsStreamer.AddListener(
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
+			// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 			applyEventFunc := func() error {
 				return this.applier.ApplyDMLEventQuery(dmlEvent)
 			}
@@ -987,6 +1029,8 @@ func (this *Migrator) initiateApplier() error {
 	return nil
 }
 
+// iterateChunks iterates the existing table rows, and generates a copy task of
+// a chunk of rows onto the ghost table.
 func (this *Migrator) iterateChunks() error {
 	terminateRowIteration := func(err error) error {
 		this.rowCopyComplete <- true
@@ -1000,6 +1044,7 @@ func (this *Migrator) iterateChunks() error {
 		log.Debugf("No rows found in table. Rowcopy will be implicitly empty")
 		return terminateRowIteration(nil)
 	}
+	// Iterate per chunk:
 	for {
 		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
 			// Done
@@ -1013,6 +1058,7 @@ func (this *Migrator) iterateChunks() error {
 			if !hasFurtherRange {
 				return terminateRowIteration(nil)
 			}
+			// Copy task:
 			applyCopyRowsFunc := func() error {
 				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
@@ -1024,11 +1070,15 @@ func (this *Migrator) iterateChunks() error {
 			}
 			return this.retryOperation(applyCopyRowsFunc)
 		}
+		// Enqueue copy operation; to be executed by executeWriteFuncs()
 		this.copyRowsQueue <- copyRowsFunc
 	}
 	return nil
 }
 
+// executeWriteFuncs writes data via applier: both the rowcopy and the events backlog.
+// This is where the ghost table gets the data. The function fills the data single-threaded.
+// Both event backlog and rowcopy events are polled; the backlog events have precedence.
 func (this *Migrator) executeWriteFuncs() error {
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really executing write funcs")

@@ -11,15 +11,17 @@ import (
 
 // ConnectionConfig is the minimal configuration required to connect to a MySQL server
 type ConnectionConfig struct {
-	Key      InstanceKey
-	User     string
-	Password string
+	Key        InstanceKey
+	User       string
+	Password   string
+	ImpliedKey *InstanceKey
 }
 
 func NewConnectionConfig() *ConnectionConfig {
 	config := &ConnectionConfig{
 		Key: InstanceKey{},
 	}
+	config.ImpliedKey = &config.Key
 	return config
 }
 
@@ -32,6 +34,7 @@ func (this *ConnectionConfig) Duplicate() *ConnectionConfig {
 		User:     this.User,
 		Password: this.Password,
 	}
+	config.ImpliedKey = &config.Key
 	return config
 }
 
@@ -40,7 +43,7 @@ func (this *ConnectionConfig) String() string {
 }
 
 func (this *ConnectionConfig) Equals(other *ConnectionConfig) bool {
-	return this.Key.Equals(&other.Key)
+	return this.Key.Equals(&other.Key) || this.ImpliedKey.Equals(other.ImpliedKey)
 }
 
 func (this *ConnectionConfig) GetDBUri(databaseName string) string {

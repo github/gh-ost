@@ -133,3 +133,10 @@ func GetSelfBinlogCoordinates(db *gosql.DB) (selfBinlogCoordinates *BinlogCoordi
 	})
 	return selfBinlogCoordinates, err
 }
+
+// GetInstanceKey reads hostname and port on given DB
+func GetInstanceKey(db *gosql.DB) (instanceKey *InstanceKey, err error) {
+	instanceKey = &InstanceKey{}
+	err = db.QueryRow(`select @@global.hostname, @@global.port`).Scan(&instanceKey.Hostname, &instanceKey.Port)
+	return instanceKey, err
+}
