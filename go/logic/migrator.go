@@ -666,6 +666,7 @@ max-load=<load>        # Set a new set of max-load thresholds
 throttle-query=<query> # Set a new throttle-query
 throttle               # Force throttling
 no-throttle            # End forced throttling (other throttling may still apply)
+panic                  # panic and quit without cleanup
 help                   # This message
 `)
 		}
@@ -709,6 +710,12 @@ help                   # This message
 	case "no-throttle", "unthrottle", "resume", "continue":
 		{
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 0)
+		}
+	case "panic":
+		{
+			err := fmt.Errorf("User commanded 'panic'. I will now panic, without cleanup. PANIC!")
+			fmt.Fprintf(writer, "%s\n", err.Error())
+			this.panicAbort <- err
 		}
 	default:
 		err = fmt.Errorf("Unknown command: %s", command)
