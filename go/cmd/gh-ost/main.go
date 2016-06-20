@@ -153,7 +153,7 @@ func main() {
 	if err := migrationContext.ReadConfigFile(); err != nil {
 		log.Fatale(err)
 	}
-	if err := migrationContext.ThrottleControlReplicaKeys.ReadCommaDelimitedList(*throttleControlReplicas); err != nil {
+	if err := migrationContext.ReadThrottleControlReplicaKeys(*throttleControlReplicas); err != nil {
 		log.Fatale(err)
 	}
 	if err := migrationContext.ReadMaxLoad(*maxLoad); err != nil {

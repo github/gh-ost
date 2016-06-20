@@ -659,15 +659,16 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 	case "help":
 		{
 			fmt.Fprintln(writer, `available commands:
-status                 # Print a status message
-chunk-size=<newsize>   # Set a new chunk-size
-critical-load=<load>   # Set a new set of max-load thresholds
-max-load=<load>        # Set a new set of max-load thresholds
-throttle-query=<query> # Set a new throttle-query
-throttle               # Force throttling
-no-throttle            # End forced throttling (other throttling may still apply)
-panic                  # panic and quit without cleanup
-help                   # This message
+status                               # Print a status message
+chunk-size=<newsize>                 # Set a new chunk-size
+critical-load=<load>                 # Set a new set of max-load thresholds
+max-load=<load>                      # Set a new set of max-load thresholds
+throttle-query=<query>               # Set a new throttle-query
+throttle-control-replicas=<replicas> #
+throttle                             # Force throttling
+no-throttle                          # End forced throttling (other throttling may still apply)
+panic                                # panic and quit without cleanup
+help                                 # This message
 `)
 		}
 	case "info", "status":
@@ -701,6 +702,15 @@ help                   # This message
 	case "throttle-query":
 		{
 			this.migrationContext.SetThrottleQuery(arg)
+			this.printStatus(ForcePrintStatusAndHint, writer)
+		}
+	case "throttle-control-replicas":
+		{
+			if err := this.migrationContext.ReadThrottleControlReplicaKeys(arg); err != nil {
+				fmt.Fprintf(writer, "%s\n", err.Error())
+				return log.Errore(err)
+			}
+			fmt.Fprintf(writer, "%s\n", this.migrationContext.GetThrottleControlReplicaKeys().ToCommaDelimitedList())
 			this.printStatus(ForcePrintStatusAndHint, writer)
 		}
 	case "throttle", "pause", "suspend":

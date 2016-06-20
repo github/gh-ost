@@ -169,6 +169,9 @@ func (this *MigrationContext) GetGhostTableName() string {
 
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (this *MigrationContext) GetOldTableName() string {
+	// if this.TestOnReplica {
+	// 	return fmt.Sprintf("_%s_tst", this.OriginalTableName)
+	// }
 	return fmt.Sprintf("_%s_old", this.OriginalTableName)
 }
 
@@ -358,6 +361,28 @@ func (this *MigrationContext) ReadCriticalLoad(criticalLoadList string) error {
 	defer this.throttleMutex.Unlock()
 
 	this.criticalLoad = loadMap
+	return nil
+}
+
+func (this *MigrationContext) GetThrottleControlReplicaKeys() *mysql.InstanceKeyMap {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	keys := mysql.NewInstanceKeyMap()
+	keys.AddKeys(this.ThrottleControlReplicaKeys.GetInstanceKeys())
+	return keys
+}
+
+func (this *MigrationContext) ReadThrottleControlReplicaKeys(throttleControlReplicas string) error {
+	keys := mysql.NewInstanceKeyMap()
+	if err := keys.ReadCommaDelimitedList(throttleControlReplicas); err != nil {
+		return err
+	}
+
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	this.ThrottleControlReplicaKeys = keys
 	return nil
 }
 
