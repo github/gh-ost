@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	renameColumnRegexp = regexp.MustCompile(`(?i)CHANGE\s+(column\s+|)([\S]+)\s+([\S]+)\s+`)
+	renameColumnRegexp = regexp.MustCompile(`(?i)change\s+(column\s+|)([\S]+)\s+([\S]+)\s+`)
 )
 
 type Parser struct {
@@ -27,8 +27,12 @@ func NewParser() *Parser {
 func (this *Parser) ParseAlterStatement(alterStatement string) (err error) {
 	allStringSubmatch := renameColumnRegexp.FindAllStringSubmatch(alterStatement, -1)
 	for _, submatch := range allStringSubmatch {
-		submatch[2], _ = strconv.Unquote(submatch[2])
-		submatch[3], _ = strconv.Unquote(submatch[3])
+		if unquoted, err := strconv.Unquote(submatch[2]); err == nil {
+			submatch[2] = unquoted
+		}
+		if unquoted, err := strconv.Unquote(submatch[3]); err == nil {
+			submatch[3] = unquoted
+		}
 
 		this.columnRenameMap[submatch[2]] = submatch[3]
 	}

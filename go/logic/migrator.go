@@ -40,6 +40,14 @@ const (
 	heartbeatIntervalMilliseconds = 1000
 )
 
+type PrintStatusRule int
+
+const (
+	HeuristicPrintStatusRule PrintStatusRule = iota
+	ForcePrintStatusRule                     = iota
+	ForcePrintStatusAndHint                  = iota
+)
+
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
 	parser           *sql.Parser
@@ -106,6 +114,17 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 			this.panicAbort <- fmt.Errorf("Found panic-file %s. Aborting without cleanup", this.migrationContext.PanicFlagFile)
 		}
 	}
+	criticalLoad := this.migrationContext.GetCriticalLoad()
+	for variableName, threshold := range criticalLoad {
+		value, err := this.applier.ShowStatusVariable(variableName)
+		if err != nil {
+			return true, fmt.Sprintf("%s %s", variableName, err)
+		}
+		if value >= threshold {
+			this.panicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
+		}
+	}
+
 	// Back to throttle considerations
 
 	// User-based throttle
@@ -145,8 +164,13 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 		if err != nil {
 			return true, fmt.Sprintf("%s %s", variableName, err)
 		}
-		if value > threshold {
-			return true, fmt.Sprintf("%s=%d", variableName, value)
+		if value >= threshold {
+			return true, fmt.Sprintf("max-load %s=%d >= %d", variableName, value, threshold)
+		}
+	}
+	if this.migrationContext.GetThrottleQuery() != "" {
+		if res, _ := this.applier.ExecuteThrottleQuery(); res > 0 {
+			return true, "throttle-query"
 		}
 	}
 
@@ -311,6 +335,7 @@ func (this *Migrator) validateStatement() (err error) {
 		if !this.migrationContext.ApproveRenamedColumns {
 			return fmt.Errorf("Alter statement has column(s) renamed. gh-ost suspects the following renames: %v; but to proceed you must approve via `--approve-renamed-columns` (or you can skip renamed columns via `--skip-renamed-columns`)", this.parser.GetNonTrivialRenames())
 		}
+		log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", this.parser.GetNonTrivialRenames())
 	}
 	return nil
 }
@@ -375,7 +400,7 @@ func (this *Migrator) Migrate() (err error) {
 	log.Debugf("Operating until row copy is complete")
 	this.consumeRowCopyComplete()
 	log.Infof("Row copy complete")
-	this.printStatus()
+	this.printStatus(ForcePrintStatusRule)
 
 	if err := this.cutOver(); err != nil {
 		return err
@@ -459,8 +484,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	waitForEventsUpToLockDuration := time.Now().Sub(waitForEventsUpToLockStartTime)
 
 	log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
-	this.printMigrationStatusHint()
-	this.printStatus()
+	this.printStatus(ForcePrintStatusAndHint)
 
 	return nil
 }
@@ -621,17 +645,18 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 	case "help":
 		{
 			fmt.Fprintln(writer, `available commands:
-  status               # Print a status message
-  chunk-size=<newsize> # Set a new chunk-size
-  max-load=<maxload>   # Set a new set of max-load thresholds
-  throttle             # Force throttling
-  no-throttle          # End forced throttling (other throttling may still apply)
-  help                 # This message
+status                 # Print a status message
+chunk-size=<newsize>   # Set a new chunk-size
+critical-load=<load>   # Set a new set of max-load thresholds
+max-load=<load>        # Set a new set of max-load thresholds
+throttle-query=<query> # Set a new throttle-query
+throttle               # Force throttling
+no-throttle            # End forced throttling (other throttling may still apply)
+help                   # This message
 `)
 		}
 	case "info", "status":
-		this.printMigrationStatusHint(writer)
-		this.printStatus(writer)
+		this.printStatus(ForcePrintStatusAndHint, writer)
 	case "chunk-size":
 		{
 			if chunkSize, err := strconv.Atoi(arg); err != nil {
@@ -639,7 +664,7 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 				return log.Errore(err)
 			} else {
 				this.migrationContext.SetChunkSize(int64(chunkSize))
-				this.printMigrationStatusHint(writer)
+				this.printStatus(ForcePrintStatusAndHint, writer)
 			}
 		}
 	case "max-load":
@@ -648,7 +673,20 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 				fmt.Fprintf(writer, "%s\n", err.Error())
 				return log.Errore(err)
 			}
-			this.printMigrationStatusHint(writer)
+			this.printStatus(ForcePrintStatusAndHint, writer)
+		}
+	case "critical-load":
+		{
+			if err := this.migrationContext.ReadCriticalLoad(arg); err != nil {
+				fmt.Fprintf(writer, "%s\n", err.Error())
+				return log.Errore(err)
+			}
+			this.printStatus(ForcePrintStatusAndHint, writer)
+		}
+	case "throttle-query":
+		{
+			this.migrationContext.SetThrottleQuery(arg)
+			this.printStatus(ForcePrintStatusAndHint, writer)
 		}
 	case "throttle", "pause", "suspend":
 		{
@@ -715,17 +753,16 @@ func (this *Migrator) initiateInspector() (err error) {
 }
 
 func (this *Migrator) initiateStatus() error {
-	this.printStatus()
+	this.printStatus(ForcePrintStatusAndHint)
 	statusTick := time.Tick(1 * time.Second)
 	for range statusTick {
-		go this.printStatus()
+		go this.printStatus(HeuristicPrintStatusRule)
 	}
 
 	return nil
 }
 
 func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
-	writers = append(writers, os.Stdout)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -737,10 +774,12 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		this.migrationContext.StartTime.Format(time.RubyDate),
 	))
 	maxLoad := this.migrationContext.GetMaxLoad()
-	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max lag: %+vms; max-load: %+v",
+	criticalLoad := this.migrationContext.GetCriticalLoad()
+	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max lag: %+vms; max-load: %s; critical-load: %s",
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
-		maxLoad,
+		maxLoad.String(),
+		criticalLoad.String(),
 	))
 	if this.migrationContext.ThrottleFlagFile != "" {
 		fmt.Fprintln(w, fmt.Sprintf("# Throttle flag file: %+v",
@@ -750,6 +789,11 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
 		fmt.Fprintln(w, fmt.Sprintf("# Throttle additional flag file: %+v",
 			this.migrationContext.ThrottleAdditionalFlagFile,
+		))
+	}
+	if throttleQuery := this.migrationContext.GetThrottleQuery(); throttleQuery != "" {
+		fmt.Fprintln(w, fmt.Sprintf("# Throttle query: %+v",
+			throttleQuery,
 		))
 	}
 	if this.migrationContext.PostponeCutOverFlagFile != "" {
@@ -770,7 +814,9 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	}
 }
 
-func (this *Migrator) printStatus(writers ...io.Writer) {
+func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
+	writers = append(writers, os.Stdout)
+
 	elapsedTime := this.migrationContext.ElapsedTime()
 	elapsedSeconds := int64(elapsedTime.Seconds())
 	totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
@@ -782,8 +828,11 @@ func (this *Migrator) printStatus(writers ...io.Writer) {
 
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
 	shouldPrintMigrationStatusHint := (elapsedSeconds%600 == 0)
+	if rule == ForcePrintStatusAndHint {
+		shouldPrintMigrationStatusHint = true
+	}
 	if shouldPrintMigrationStatusHint {
-		this.printMigrationStatusHint()
+		this.printMigrationStatusHint(writers...)
 	}
 
 	var etaSeconds float64 = math.MaxFloat64
@@ -820,6 +869,9 @@ func (this *Migrator) printStatus(writers ...io.Writer) {
 	} else {
 		shouldPrintStatus = (elapsedSeconds%30 == 0)
 	}
+	if rule == ForcePrintStatusRule || rule == ForcePrintStatusAndHint {
+		shouldPrintStatus = true
+	}
 	if !shouldPrintStatus {
 		return
 	}
@@ -838,7 +890,6 @@ func (this *Migrator) printStatus(writers ...io.Writer) {
 		fmt.Sprintf("copy iteration %d at %d", this.migrationContext.GetIteration(), time.Now().Unix()),
 		status,
 	)
-	writers = append(writers, os.Stdout)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
 }

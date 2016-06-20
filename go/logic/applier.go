@@ -263,6 +263,19 @@ func (this *Applier) InitiateHeartbeat(heartbeatIntervalMilliseconds int64) {
 	}
 }
 
+func (this *Applier) ExecuteThrottleQuery() (int64, error) {
+	throttleQuery := this.migrationContext.GetThrottleQuery()
+
+	if throttleQuery == "" {
+		return 0, nil
+	}
+	var result int64
+	if err := this.db.QueryRow(throttleQuery).Scan(&result); err != nil {
+		return 0, log.Errore(err)
+	}
+	return result, nil
+}
+
 // ReadMigrationMinValues
 func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)

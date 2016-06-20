@@ -33,10 +33,12 @@ func FileExists(fileName string) bool {
 	return false
 }
 
+// StringContainsAll returns true if `s` contains all non empty given `substrings`
+// The function returns `false` if no non-empty arguments are given.
 func StringContainsAll(s string, substrings ...string) bool {
 	nonEmptyStringsFound := false
 	for _, substring := range substrings {
-		if s == "" {
+		if substring == "" {
 			continue
 		}
 		if strings.Contains(s, substring) {

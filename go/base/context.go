@@ -7,7 +7,6 @@ package base
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,9 +64,10 @@ type MigrationContext struct {
 	ThrottleControlReplicaKeys          *mysql.InstanceKeyMap
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
+	ThrottleQuery                       string
 	ThrottleCommandedByUser             int64
-	maxLoad                             map[string]int64
-	maxLoadMutex                        *sync.Mutex
+	maxLoad                             LoadMap
+	criticalLoad                        LoadMap
 	PostponeCutOverFlagFile             string
 	SwapTablesTimeoutSeconds            int64
 	PanicFlagFile                       string
@@ -148,8 +148,8 @@ func newMigrationContext() *MigrationContext {
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1000,
 		SwapTablesTimeoutSeconds:            3,
-		maxLoad:                             make(map[string]int64),
-		maxLoadMutex:                        &sync.Mutex{},
+		maxLoad:                             NewLoadMap(),
+		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
 		ThrottleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
@@ -278,46 +278,64 @@ func (this *MigrationContext) IsThrottled() (bool, string) {
 	return this.isThrottled, this.throttleReason
 }
 
-func (this *MigrationContext) GetMaxLoad() map[string]int64 {
-	this.maxLoadMutex.Lock()
-	defer this.maxLoadMutex.Unlock()
+func (this *MigrationContext) GetThrottleQuery() string {
+	var query string
 
-	tmpMaxLoadMap := make(map[string]int64)
-	for k, v := range this.maxLoad {
-		tmpMaxLoadMap[k] = v
-	}
-	return tmpMaxLoadMap
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	query = this.ThrottleQuery
+	return query
+}
+
+func (this *MigrationContext) SetThrottleQuery(newQuery string) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	this.ThrottleQuery = newQuery
+}
+
+func (this *MigrationContext) GetMaxLoad() LoadMap {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	return this.maxLoad.Duplicate()
+}
+
+func (this *MigrationContext) GetCriticalLoad() LoadMap {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	return this.criticalLoad.Duplicate()
 }
 
 // ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
 // such as: 'Threads_running=100,Threads_connected=500'
 // It only applies changes in case there's no parsing error.
 func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
-	if maxLoadList == "" {
-		return nil
+	loadMap, err := ParseLoadMap(maxLoadList)
+	if err != nil {
+		return err
 	}
-	this.maxLoadMutex.Lock()
-	defer this.maxLoadMutex.Unlock()
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
 
-	tmpMaxLoadMap := make(map[string]int64)
+	this.maxLoad = loadMap
+	return nil
+}
 
-	maxLoadConditions := strings.Split(maxLoadList, ",")
-	for _, maxLoadCondition := range maxLoadConditions {
-		maxLoadTokens := strings.Split(maxLoadCondition, "=")
-		if len(maxLoadTokens) != 2 {
-			return fmt.Errorf("Error parsing max-load condition: %s", maxLoadCondition)
-		}
-		if maxLoadTokens[0] == "" {
-			return fmt.Errorf("Error parsing status variable in max-load condition: %s", maxLoadCondition)
-		}
-		if n, err := strconv.ParseInt(maxLoadTokens[1], 10, 0); err != nil {
-			return fmt.Errorf("Error parsing numeric value in max-load condition: %s", maxLoadCondition)
-		} else {
-			tmpMaxLoadMap[maxLoadTokens[0]] = n
-		}
+// ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
+// such as: 'Threads_running=100,Threads_connected=500'
+// It only applies changes in case there's no parsing error.
+func (this *MigrationContext) ReadCriticalLoad(criticalLoadList string) error {
+	loadMap, err := ParseLoadMap(criticalLoadList)
+	if err != nil {
+		return err
 	}
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
 
-	this.maxLoad = tmpMaxLoadMap
+	this.criticalLoad = loadMap
 	return nil
 }
 
