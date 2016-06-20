@@ -16,11 +16,16 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 
 - `help`: shows a brief list of available commands
 - `status`: returns a status summary of migration progress and configuration
-- `throttle`: force migration suspend
-- `no-throttle`: cancel forced suspension (though other throttling reasons may still apply)
+replication lag on to determine throttling
 - `chunk-size=<newsize>`: modify the `chunk-size`; applies on next running copy-iteration
 - `max-load=<max-load-thresholds>`: modify the `max-load` config; applies on next running copy-iteration
   The `max-load` format must be: `some_status=<numeric-threshold>[,some_status=<numeric-threshold>...]`. For example: `Threads_running=50,threads_connected=1000`, and you would then write/echo `max-load=Threads_running=50,threads_connected=1000` to the socket.
+- `critical-load=<load>`: change critical load setting (exceeding given thresholds causes panic and abort)
+- `throttle-query`: change throttle query
+- `throttle-control-replicas`: change list of throttle-control replicas, these are replicas `gh-ost` will cehck
+- `throttle`: force migration suspend
+- `no-throttle`: cancel forced suspension (though other throttling reasons may still apply)
+- `panic`: immediately panic and abort operation
 
 ### Examples
 
