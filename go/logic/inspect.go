@@ -41,6 +41,11 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
+	if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
+		return err
+	} else {
+		this.connectionConfig.ImpliedKey = impliedKey
+	}
 	if err := this.validateGrants(); err != nil {
 		return err
 	}
@@ -303,6 +308,7 @@ func (this *Inspector) validateTable() error {
 	return nil
 }
 
+// validateTableForeignKeys makes sure no foreign keys exist on the migrated table
 func (this *Inspector) validateTableForeignKeys() error {
 	query := `
 		SELECT COUNT(*) AS num_foreign_keys
@@ -334,6 +340,7 @@ func (this *Inspector) validateTableForeignKeys() error {
 	return nil
 }
 
+// estimateTableRowsViaExplain estimates number of rows on original table
 func (this *Inspector) estimateTableRowsViaExplain() error {
 	query := fmt.Sprintf(`explain select /* gh-ost */ * from %s.%s where 1=1`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 
@@ -355,6 +362,7 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 	return nil
 }
 
+// CountTableRows counts exact number of rows on the original table
 func (this *Inspector) CountTableRows() error {
 	log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -366,6 +374,7 @@ func (this *Inspector) CountTableRows() error {
 	return nil
 }
 
+// getTableColumns reads column list from given table
 func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.ColumnList, error) {
 	query := fmt.Sprintf(`
 		show columns from %s.%s
@@ -507,6 +516,7 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 	return sql.NewColumnList(sharedColumnNames), sql.NewColumnList(mappedSharedColumnNames)
 }
 
+// readChangelogState reads changelog hints
 func (this *Inspector) readChangelogState() (map[string]string, error) {
 	query := fmt.Sprintf(`
 		select hint, value from %s.%s where id <= 255

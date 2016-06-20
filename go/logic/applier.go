@@ -20,8 +20,11 @@ import (
 	"github.com/outbrain/golib/sqlutils"
 )
 
-// Applier reads data from the read-MySQL-server (typically a replica, but can be the master)
-// It is used for gaining initial status and structure, and later also follow up on progress and changelog
+// Applier connects and writes the the applier-server, which is the server where migration
+// happens. This is typically the master, but could be a replica when `--test-on-replica` or
+// `--execute-on-replica` are given.
+// Applier is the one to actually write row data and apply binlog events onto the ghost table.
+// It is where the ghost & changelog tables get created. It is where the cut-over phase happens.
 type Applier struct {
 	connectionConfig *mysql.ConnectionConfig
 	db               *gosql.DB
@@ -52,6 +55,11 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.validateConnection(this.singletonDB); err != nil {
 		return err
 	}
+	if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
+		return err
+	} else {
+		this.connectionConfig.ImpliedKey = impliedKey
+	}
 	return nil
 }
 
@@ -69,6 +77,7 @@ func (this *Applier) validateConnection(db *gosql.DB) error {
 	return nil
 }
 
+// tableExists checks if a given table exists in database
 func (this *Applier) tableExists(tableName string) (tableFound bool) {
 	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), tableName)
 
@@ -79,6 +88,8 @@ func (this *Applier) tableExists(tableName string) (tableFound bool) {
 	return tableFound
 }
 
+// ValidateOrDropExistingTables verifies ghost and changelog tables do not exist,
+// or attempts to drop them if instructed to.
 func (this *Applier) ValidateOrDropExistingTables() error {
 	if this.migrationContext.InitiallyDropGhostTable {
 		if err := this.DropGhostTable(); err != nil {
@@ -238,7 +249,7 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
 // This is done asynchronously
 func (this *Applier) InitiateHeartbeat(heartbeatIntervalMilliseconds int64) {
-	numSuccessiveFailures := 0
+	var numSuccessiveFailures int64
 	injectHeartbeat := func() error {
 		if _, err := this.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339Nano)); err != nil {
 			numSuccessiveFailures++
@@ -263,6 +274,7 @@ func (this *Applier) InitiateHeartbeat(heartbeatIntervalMilliseconds int64) {
 	}
 }
 
+// ExecuteThrottleQuery executes the `--throttle-query` and returns its results.
 func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 	throttleQuery := this.migrationContext.GetThrottleQuery()
 
@@ -276,7 +288,7 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 	return result, nil
 }
 
-// ReadMigrationMinValues
+// ReadMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
 	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns.Names)
@@ -297,7 +309,7 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	return err
 }
 
-// ReadMigrationMinValues
+// ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
 	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns.Names)
@@ -318,6 +330,7 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	return err
 }
 
+// ReadMigrationRangeValues reads min/max values that will be used for rowcopy
 func (this *Applier) ReadMigrationRangeValues() error {
 	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
 		return err
@@ -326,49 +339,6 @@ func (this *Applier) ReadMigrationRangeValues() error {
 		return err
 	}
 	return nil
-}
-
-// __unused_IterationIsComplete lets us know when the copy-iteration phase is complete, i.e.
-// we've exhausted all rows
-func (this *Applier) __unused_IterationIsComplete() (bool, error) {
-	if !this.migrationContext.HasMigrationRange() {
-		return false, nil
-	}
-	if this.migrationContext.MigrationIterationRangeMinValues == nil {
-		return false, nil
-	}
-	args := sqlutils.Args()
-	compareWithIterationRangeStart, explodedArgs, err := sql.BuildRangePreparedComparison(this.migrationContext.UniqueKey.Columns.Names, this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(), sql.GreaterThanOrEqualsComparisonSign)
-	if err != nil {
-		return false, err
-	}
-	args = append(args, explodedArgs...)
-	compareWithRangeEnd, explodedArgs, err := sql.BuildRangePreparedComparison(this.migrationContext.UniqueKey.Columns.Names, this.migrationContext.MigrationRangeMaxValues.AbstractValues(), sql.LessThanComparisonSign)
-	if err != nil {
-		return false, err
-	}
-	args = append(args, explodedArgs...)
-	query := fmt.Sprintf(`
-			select /* gh-ost IterationIsComplete */ 1
-				from %s.%s
-				where (%s) and (%s)
-				limit 1
-				`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-		compareWithIterationRangeStart,
-		compareWithRangeEnd,
-	)
-
-	moreRowsFound := false
-	err = sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		moreRowsFound = true
-		return nil
-	}, args...)
-	if err != nil {
-		return false, err
-	}
-	return !moreRowsFound, nil
 }
 
 // CalculateNextIterationRangeEndValues reads the next-iteration-range-end unique key values,
@@ -412,6 +382,8 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 	return hasFurtherRange, nil
 }
 
+// ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
+// data actually gets copied from original table.
 func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&this.migrationContext.ChunkSize)
@@ -465,7 +437,7 @@ func (this *Applier) LockOriginalTable() error {
 	return nil
 }
 
-// UnlockTables
+// UnlockTables makes tea. No wait, it unlocks tables.
 func (this *Applier) UnlockTables() error {
 	query := `unlock /* gh-ost */ tables`
 	log.Infof("Unlocking tables")
@@ -476,7 +448,10 @@ func (this *Applier) UnlockTables() error {
 	return nil
 }
 
-// SwapTablesQuickAndBumpy
+// SwapTablesQuickAndBumpy issues a two-step swap table operation:
+// - rename original table to _old
+// - rename ghost table to original
+// There is a point in time in between where the table does not exist.
 func (this *Applier) SwapTablesQuickAndBumpy() error {
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -503,6 +478,7 @@ func (this *Applier) SwapTablesQuickAndBumpy() error {
 	return nil
 }
 
+// RenameTable makes coffee. No, wait. It renames a table.
 func (this *Applier) RenameTable(fromName, toName string) (err error) {
 	query := fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -518,6 +494,8 @@ func (this *Applier) RenameTable(fromName, toName string) (err error) {
 	return nil
 }
 
+// RenameTablesRollback renames back both table: original back to ghost,
+// _old back to original. This is used by `--test-on-replica`
 func (this *Applier) RenameTablesRollback() (renameError error) {
 	// Restoring tables to original names.
 	// We prefer the single, atomic operation:
@@ -594,7 +572,8 @@ func (this *Applier) StartSlaveSQLThread() error {
 	return nil
 }
 
-func (this *Applier) StopSlaveNicely() error {
+// StopReplication is used by `--test-on-replica` and stops replication.
+func (this *Applier) StopReplication() error {
 	if err := this.StopSlaveIOThread(); err != nil {
 		return err
 	}
@@ -609,6 +588,7 @@ func (this *Applier) StopSlaveNicely() error {
 	return nil
 }
 
+// GetSessionLockName returns a name for the special hint session voluntary lock
 func (this *Applier) GetSessionLockName(sessionId int64) string {
 	return fmt.Sprintf("gh-ost.%d.lock", sessionId)
 }
@@ -747,6 +727,7 @@ func (this *Applier) RenameGhostTable(sessionIdChan chan int64, ghostTableRename
 	return nil
 }
 
+// ExpectUsedLock expects the special hint voluntary lock to exist on given session
 func (this *Applier) ExpectUsedLock(sessionId int64) error {
 	var result int64
 	query := `select is_used_lock(?)`
@@ -758,6 +739,7 @@ func (this *Applier) ExpectUsedLock(sessionId int64) error {
 	return nil
 }
 
+// ExpectProcess expects a process to show up in `SHOW PROCESSLIST` that has given characteristics
 func (this *Applier) ExpectProcess(sessionId int64, stateHint, infoHint string) error {
 	found := false
 	query := `
@@ -790,6 +772,8 @@ func (this *Applier) ShowStatusVariable(variableName string) (result int64, err 
 	return result, nil
 }
 
+// buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
+// event entry on the original table.
 func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query string, args []interface{}, rowsDelta int64, err error) {
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
@@ -813,6 +797,8 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query 
 	return "", args, 0, fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)
 }
 
+// ApplyDMLEventQuery writes an entry to the ghost table, in response to an intercepted
+// original-table binlog event
 func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 	query, args, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
 	if err != nil {

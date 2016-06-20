@@ -55,6 +55,7 @@ func NewEventsStreamer() *EventsStreamer {
 	}
 }
 
+// AddListener registers a new listener for binlog events, on a per-table basis
 func (this *EventsStreamer) AddListener(
 	async bool, databaseName string, tableName string, onDmlEvent func(event *binlog.BinlogDMLEvent) error) (err error) {
 
@@ -77,6 +78,8 @@ func (this *EventsStreamer) AddListener(
 	return nil
 }
 
+// notifyListeners will notify relevant listeners with given DML event. Only
+// listeners registered for changes on the table on which the DML operates are notified.
 func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) {
 	this.listenersMutex.Lock()
 	defer this.listenersMutex.Unlock()
@@ -117,6 +120,7 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	return nil
 }
 
+// initBinlogReader creates and connects the reader: we hook up to a MySQL server as a replica
 func (this *EventsStreamer) initBinlogReader(binlogCoordinates *mysql.BinlogCoordinates) error {
 	goMySQLReader, err := binlog.NewGoMySQLReader(this.migrationContext.InspectorConnectionConfig)
 	if err != nil {
@@ -151,8 +155,7 @@ func (this *EventsStreamer) GetReconnectBinlogCoordinates() *mysql.BinlogCoordin
 	return &mysql.BinlogCoordinates{LogFile: this.GetCurrentBinlogCoordinates().LogFile, LogPos: 4}
 }
 
-// validateGrants verifies the user by which we're executing has necessary grants
-// to do its thang.
+// readCurrentBinlogCoordinates reads master status from hooked server
 func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	query := `show /* gh-ost readCurrentBinlogCoordinates */ master status`
 	foundMasterStatus := false
