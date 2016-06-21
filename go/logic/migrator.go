@@ -65,6 +65,7 @@ type Migrator struct {
 
 	rowCopyCompleteFlag                    int64
 	allEventsUpToLockProcessedInjectedFlag int64
+	inCutOverCriticalActionFlag            int64
 	cleanupImminentFlag                    int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
@@ -414,6 +415,7 @@ func (this *Migrator) Migrate() (err error) {
 	this.consumeRowCopyComplete()
 	log.Infof("Row copy complete")
 	this.printStatus(ForcePrintStatusRule)
+	this.migrationContext.MarkPointOfInterest()
 
 	if err := this.cutOver(); err != nil {
 		return err
@@ -507,6 +509,9 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 // There is a point in time where the "original" table does not exist and queries are non-blocked
 // and failing.
 func (this *Migrator) cutOverTwoStep() (err error) {
+	atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 1)
+	defer atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 0)
+
 	if err := this.retryOperation(this.applier.LockOriginalTable); err != nil {
 		return err
 	}
@@ -531,6 +536,9 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 // is being locked until swapped, hence DML queries being locked and unaware of the cut-over.
 // In the worst case, there will ba a minor outage, where the original table would not exist.
 func (this *Migrator) safeCutOver() (err error) {
+	atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 1)
+	defer atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 0)
+
 	okToUnlockTable := make(chan bool, 2)
 	originalTableRenamed := make(chan error, 1)
 	defer func() {
@@ -1102,7 +1110,15 @@ func (this *Migrator) executeWriteFuncs() error {
 		return nil
 	}
 	for {
-		this.throttle(nil)
+		if atomic.LoadInt64(&this.inCutOverCriticalActionFlag) == 0 {
+			// we don't throttle when cutting over. We _do_ throttle:
+			// - during copy phase
+			// - just before cut-over
+			// - in between cut-over retries
+			this.throttle(nil)
+			// When cutting over, we need to be aggressive. Cut-over holds table locks.
+			// We need to release those asap.
+		}
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
 		select {
