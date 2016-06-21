@@ -415,7 +415,6 @@ func (this *Migrator) Migrate() (err error) {
 	this.consumeRowCopyComplete()
 	log.Infof("Row copy complete")
 	this.printStatus(ForcePrintStatusRule)
-	this.migrationContext.MarkPointOfInterest()
 
 	if err := this.cutOver(); err != nil {
 		return err
@@ -435,10 +434,12 @@ func (this *Migrator) cutOver() (err error) {
 		log.Debugf("Noop operation; not really swapping tables")
 		return nil
 	}
+	this.migrationContext.MarkPointOfInterest()
 	this.throttle(func() {
 		log.Debugf("throttling before swapping tables")
 	})
 
+	this.migrationContext.MarkPointOfInterest()
 	this.sleepWhileTrue(
 		func() (bool, error) {
 			if this.migrationContext.PostponeCutOverFlagFile == "" {
@@ -454,6 +455,7 @@ func (this *Migrator) cutOver() (err error) {
 		},
 	)
 	atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 0)
+	this.migrationContext.MarkPointOfInterest()
 
 	if this.migrationContext.TestOnReplica {
 		// With `--test-on-replica` we stop replication thread, and then proceed to use
@@ -478,15 +480,20 @@ func (this *Migrator) cutOver() (err error) {
 		return err
 	}
 	if this.migrationContext.CutOverType == base.CutOverTwoStep {
-		err := this.retryOperation(this.cutOverTwoStep)
+		err := this.retryOperation(
+			func() error {
+				return this.executeAndThrottleOnError(this.cutOverTwoStep)
+			},
+		)
 		return err
 	}
-	return nil
+	return log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 }
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
 func (this *Migrator) waitForEventsUpToLock() (err error) {
+	this.migrationContext.MarkPointOfInterest()
 	waitForEventsUpToLockStartTime := time.Now()
 
 	log.Infof("Writing changelog state: %+v", AllEventsUpToLockProcessed)
@@ -541,19 +548,28 @@ func (this *Migrator) safeCutOver() (err error) {
 
 	okToUnlockTable := make(chan bool, 2)
 	originalTableRenamed := make(chan error, 1)
+	var originalTableRenameIntended int64
 	defer func() {
+		log.Infof("Checking to see if we need to roll back")
 		// The following is to make sure we unlock the table no-matter-what!
 		// There's enough buffer in the channel to support a redundant write here.
 		okToUnlockTable <- true
-		// We need to make sure we wait for the original-rename, successful or not,
-		// so as to be able to rollback in case the ghost-rename fails.
-		<-originalTableRenamed
-
+		if atomic.LoadInt64(&originalTableRenameIntended) == 1 {
+			log.Infof("Waiting for original table rename result")
+			// We need to make sure we wait for the original-rename, successful or not,
+			// so as to be able to rollback in case the ghost-rename fails.
+			// But we only wait on this queue if there's actually going to be a rename.
+			// As an example, what happens should the initial `lock tables` fail? We would
+			// never proceed to rename the table, hence this queue is never written to.
+			<-originalTableRenamed
+		}
 		// Rollback operation
 		if !this.applier.tableExists(this.migrationContext.OriginalTableName) {
 			log.Infof("Cannot find %s, rolling back", this.migrationContext.OriginalTableName)
 			err := this.applier.RenameTable(this.migrationContext.GetOldTableName(), this.migrationContext.OriginalTableName)
 			log.Errore(err)
+		} else {
+			log.Info("No need for rollback")
 		}
 	}()
 	lockOriginalSessionIdChan := make(chan int64, 1)
@@ -577,6 +593,8 @@ func (this *Migrator) safeCutOver() (err error) {
 	// We now attempt a RENAME on the original table, and expect it to block
 	renameOriginalSessionIdChan := make(chan int64, 1)
 	this.migrationContext.RenameTablesStartTime = time.Now()
+	atomic.StoreInt64(&originalTableRenameIntended, 1)
+
 	go func() {
 		this.applier.RenameOriginalTable(renameOriginalSessionIdChan, originalTableRenamed)
 	}()

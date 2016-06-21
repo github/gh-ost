@@ -607,6 +607,7 @@ func (this *Applier) LockOriginalTableAndWait(sessionIdChan chan int64, tableLoc
 
 	var sessionId int64
 	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
+		tableLocked <- err
 		return err
 	}
 	sessionIdChan <- sessionId
@@ -616,7 +617,17 @@ func (this *Applier) LockOriginalTableAndWait(sessionIdChan chan int64, tableLoc
 	lockName := this.GetSessionLockName(sessionId)
 	log.Infof("Grabbing voluntary lock: %s", lockName)
 	if err := tx.QueryRow(query, lockName).Scan(&lockResult); err != nil || lockResult != 1 {
-		return fmt.Errorf("Unable to acquire lock %s", lockName)
+		err := fmt.Errorf("Unable to acquire lock %s", lockName)
+		tableLocked <- err
+		return err
+	}
+
+	tableLockTimeoutSeconds := this.migrationContext.SwapTablesTimeoutSeconds * 2
+	log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
+	query = fmt.Sprintf(`set session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
+	if _, err := tx.Exec(query); err != nil {
+		tableLocked <- err
+		return err
 	}
 
 	query = fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
