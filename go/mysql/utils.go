@@ -84,7 +84,7 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 	return masterKey, err
 }
 
-func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKeys *InstanceKeyMap) (masterConfig *ConnectionConfig, err error) {
+func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKeys *InstanceKeyMap, allowMasterMaster bool) (masterConfig *ConnectionConfig, err error) {
 	log.Debugf("Looking for master on %+v", connectionConfig.Key)
 
 	masterKey, err := GetMasterKeyFromSlaveStatus(connectionConfig)
@@ -102,10 +102,13 @@ func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKe
 
 	log.Debugf("Master of %+v is %+v", connectionConfig.Key, masterConfig.Key)
 	if visitedKeys.HasKey(masterConfig.Key) {
+		if allowMasterMaster {
+			return connectionConfig, nil
+		}
 		return nil, fmt.Errorf("There seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
 	}
 	visitedKeys.AddKey(masterConfig.Key)
-	return GetMasterConnectionConfigSafe(masterConfig, visitedKeys)
+	return GetMasterConnectionConfigSafe(masterConfig, visitedKeys, allowMasterMaster)
 }
 
 func GetReplicationBinlogCoordinates(db *gosql.DB) (readBinlogCoordinates *BinlogCoordinates, executeBinlogCoordinates *BinlogCoordinates, err error) {
