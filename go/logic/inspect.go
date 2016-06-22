@@ -516,6 +516,14 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 	return sql.NewColumnList(sharedColumnNames), sql.NewColumnList(mappedSharedColumnNames)
 }
 
+// showCreateTable returns the `show create table` statement for given table
+func (this *Inspector) showCreateTable(tableName string) (createTableStatement string, err error) {
+	var dummy string
+	query := fmt.Sprintf(`show /* gh-ost */ create table %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(tableName))
+	err = this.db.QueryRow(query).Scan(&dummy, &createTableStatement)
+	return createTableStatement, err
+}
+
 // readChangelogState reads changelog hints
 func (this *Inspector) readChangelogState() (map[string]string, error) {
 	query := fmt.Sprintf(`
