@@ -1173,6 +1173,16 @@ func (this *Migrator) executeWriteFuncs() error {
 // finalCleanup takes actions at very end of migration, dropping tables etc.
 func (this *Migrator) finalCleanup() error {
 	atomic.StoreInt64(&this.cleanupImminentFlag, 1)
+
+	if this.migrationContext.Noop {
+		if createTableStatement, err := this.inspector.showCreateTable(this.migrationContext.GetGhostTableName()); err == nil {
+			log.Infof("New table structure follows")
+			fmt.Println(createTableStatement)
+		} else {
+			log.Errore(err)
+		}
+	}
+
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
 		return err
 	}
