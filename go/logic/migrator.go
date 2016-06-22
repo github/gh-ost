@@ -1177,10 +1177,12 @@ func (this *Migrator) finalCleanup() error {
 		return err
 	}
 	if this.migrationContext.OkToDropTable && !this.migrationContext.TestOnReplica {
-		dropTableFunc := func() error {
-			return this.applier.dropTable(this.migrationContext.GetOldTableName())
+		if err := this.retryOperation(this.applier.DropOldTable); err != nil {
+			return err
 		}
-		if err := this.retryOperation(dropTableFunc); err != nil {
+	}
+	if this.migrationContext.Noop {
+		if err := this.retryOperation(this.applier.DropGhostTable); err != nil {
 			return err
 		}
 	}
