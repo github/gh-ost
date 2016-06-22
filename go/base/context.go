@@ -43,6 +43,7 @@ type MigrationContext struct {
 
 	CountTableRows           bool
 	AllowedRunningOnMaster   bool
+	AllowedMasterMaster      bool
 	SwitchToRowBinlogFormat  bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
