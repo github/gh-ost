@@ -30,7 +30,8 @@ const (
 type CutOver int
 
 const (
-	CutOverSafe    CutOver = iota
+	CutOverAtomic  CutOver = iota
+	CutOverSafe            = iota
 	CutOverTwoStep         = iota
 )
 

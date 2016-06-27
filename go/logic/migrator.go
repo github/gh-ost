@@ -238,7 +238,7 @@ func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 
 // retryOperation attempts up to `count` attempts at running given function,
 // exiting as soon as it returns with non-error.
-func (this *Migrator) retryOperation(operation func() error) (err error) {
+func (this *Migrator) retryOperation(operation func() error, notFatalHint ...bool) (err error) {
 	maxRetries := int(this.migrationContext.MaxRetries())
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
@@ -251,7 +251,9 @@ func (this *Migrator) retryOperation(operation func() error) (err error) {
 		}
 		// there's an error. Let's try again.
 	}
-	this.panicAbort <- err
+	if len(notFatalHint) == 0 {
+		this.panicAbort <- err
+	}
 	return err
 }
 
@@ -469,6 +471,16 @@ func (this *Migrator) cutOver() (err error) {
 		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
 		defer this.applier.RenameTablesRollback()
 	}
+	if this.migrationContext.CutOverType == base.CutOverAtomic {
+		// Atomic solution: we use low timeout and multiple attempts. But for
+		// each failed attempt, we throttle until replication lag is back to normal
+		err := this.retryOperation(
+			func() error {
+				return this.executeAndThrottleOnError(this.atomicCutOver)
+			},
+		)
+		return err
+	}
 	if this.migrationContext.CutOverType == base.CutOverSafe {
 		// Lock-based solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
@@ -536,6 +548,93 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
 	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
 	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	return nil
+}
+
+// atomicCutOver
+func (this *Migrator) atomicCutOver() (err error) {
+	atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 1)
+	defer atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 0)
+
+	defer func() {
+		this.applier.DropAtomicCutOverSentryTableIfExists()
+	}()
+
+	lockOriginalSessionIdChan := make(chan int64, 2)
+	tableLocked := make(chan error, 2)
+	okToUnlockTable := make(chan bool, 3)
+	tableUnlocked := make(chan error, 2)
+	go func() {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
+			log.Errore(err)
+		}
+	}()
+	if err := <-tableLocked; err != nil {
+		return log.Errore(err)
+	}
+	lockOriginalSessionId := <-lockOriginalSessionIdChan
+	log.Infof("Session locking original & magic tables is %+v", lockOriginalSessionId)
+	// At this point we know the original table is locked.
+	// We know any newly incoming DML on original table is blocked.
+	this.waitForEventsUpToLock()
+
+	// Step 2
+	// We now attempt an atomic RENAME on original & ghost tables, and expect it to block.
+	this.migrationContext.RenameTablesStartTime = time.Now()
+
+	var tableRenameKnownToHaveFailed int64
+	renameSessionIdChan := make(chan int64, 2)
+	tablesRenamed := make(chan error, 2)
+	go func() {
+		if err := this.applier.AtomicCutoverRename(renameSessionIdChan, tablesRenamed); err != nil {
+			// Abort! Release the lock
+			atomic.StoreInt64(&tableRenameKnownToHaveFailed, 1)
+			okToUnlockTable <- true
+		}
+	}()
+	renameSessionId := <-renameSessionIdChan
+	log.Infof("Session renaming tables is %+v", renameSessionId)
+
+	waitForRename := func() error {
+		if atomic.LoadInt64(&tableRenameKnownToHaveFailed) == 1 {
+			// We return `nil` here so as to avoid the `retry`. The RENAME has failed,
+			// it won't show up in PROCESSLIST, no point in waiting
+			return nil
+		}
+		return this.applier.ExpectProcess(renameSessionId, "metadata lock", "rename")
+	}
+	// Wait for the RENAME to appear in PROCESSLIST
+	if err := this.retryOperation(waitForRename, true); err != nil {
+		// Abort! Release the lock
+		okToUnlockTable <- true
+		return err
+	}
+	if atomic.LoadInt64(&tableRenameKnownToHaveFailed) == 0 {
+		log.Infof("Found atomic RENAME to be blocking, as expected. Double checking the lock is still in place (though I don't strictly have to)")
+	}
+	if err := this.applier.ExpectUsedLock(lockOriginalSessionId); err != nil {
+		// Abort operation. Just make sure to drop the magic table.
+		return log.Errore(err)
+	}
+	log.Infof("Connection holding lock on original table still exists")
+
+	// Now that we've found the RENAME blocking, AND the locking connection still alive,
+	// we know it is safe to proceed to release the lock
+
+	okToUnlockTable <- true
+	// BAM! magic table dropped, original table lock is released
+	// -> RENAME released -> queries on original are unblocked.
+	if err := <-tableUnlocked; err != nil {
+		return log.Errore(err)
+	}
+	if err := <-tablesRenamed; err != nil {
+		return log.Errore(err)
+	}
+	this.migrationContext.RenameTablesEndTime = time.Now()
+
+	// ooh nice! We're actually truly and thankfully done
+	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
+	log.Infof("Lock & rename duration: %s. During this time, queries on %s were blocked", lockAndRenameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
