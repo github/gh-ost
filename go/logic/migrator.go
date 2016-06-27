@@ -1190,6 +1190,11 @@ func (this *Migrator) finalCleanup() error {
 		if err := this.retryOperation(this.applier.DropOldTable); err != nil {
 			return err
 		}
+	} else {
+		if !this.migrationContext.Noop {
+			log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add `--ok-to-drop-table` next time. But I prefer you do not. To drop the old table, issue:")
+			log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
+		}
 	}
 	if this.migrationContext.Noop {
 		if err := this.retryOperation(this.applier.DropGhostTable); err != nil {
