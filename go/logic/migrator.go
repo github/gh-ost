@@ -67,6 +67,7 @@ type Migrator struct {
 	allEventsUpToLockProcessedInjectedFlag int64
 	inCutOverCriticalActionFlag            int64
 	cleanupImminentFlag                    int64
+	userCommandedUnpostponeFlag            int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
@@ -447,6 +448,9 @@ func (this *Migrator) cutOver() (err error) {
 			if this.migrationContext.PostponeCutOverFlagFile == "" {
 				return false, nil
 			}
+			if atomic.LoadInt64(&this.userCommandedUnpostponeFlag) > 0 {
+				return false, nil
+			}
 			if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
 				// Throttle file defined and exists!
 				atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 1)
@@ -792,6 +796,7 @@ throttle-query=<query>               # Set a new throttle-query
 throttle-control-replicas=<replicas> #
 throttle                             # Force throttling
 no-throttle                          # End forced throttling (other throttling may still apply)
+unpostpone                           # Bail out a cut-over postpone; proceed to cut-over
 panic                                # panic and quit without cleanup
 help                                 # This message
 `)
@@ -845,6 +850,15 @@ help                                 # This message
 	case "no-throttle", "unthrottle", "resume", "continue":
 		{
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 0)
+		}
+	case "unpostpone", "no-postpone", "cut-over":
+		{
+			if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
+				atomic.StoreInt64(&this.userCommandedUnpostponeFlag, 1)
+				fmt.Fprintf(writer, "Unpostponed\n")
+			} else {
+				fmt.Fprintf(writer, "You may only invoke this when gh-ost is actively postponing migration. At this time it is not.\n")
+			}
 		}
 	case "panic":
 		{
