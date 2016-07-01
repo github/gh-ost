@@ -32,6 +32,8 @@ Otherwise you may specify your own list of replica servers you wish it to observ
 
   Example: `--replication-lag-query="SELECT ROUND(NOW() - MAX(UNIX_TIMESTAMP(ts))) AS lag FROM mydb.heartbeat"`
 
+Note that you may dynamically change the `throttle-control-replicas` list via [interactive commands](interactive-commands.md)
+
 #### Status thresholds
 
 - `--max-load`: list of metrics and threshold values; topping the threshold of any will cause throttler to kick in.
@@ -41,6 +43,12 @@ Otherwise you may specify your own list of replica servers you wish it to observ
   `--max-load='Threads_running=100,Threads_connected=500'`
 
   Metrics must be valid, numeric [statis variables](http://dev.mysql.com/doc/refman/5.6/en/server-status-variables.html)
+
+#### Throttle query
+
+- When provided, the `--throttle-query` is expected to return a scalar integer. A return value `> 0` implies `gh-ost` should throttle. A return value `<= 0` implied `gh-ost` is free to proceed (pending other throttling factors).
+
+An example query could be: `--throttle-query="select hour(now()) between 8 and 17"` which implies throttling auto-starts `8:00am` and migration auto-resumes at `18:00pm`.
 
 #### Manual control
 
@@ -68,7 +76,7 @@ In addition to the above, you are able to take control and throttle the operatio
 
 Any single factor in the above that suggests the migration should throttle - causes throttling. That is, once some component decides to throttle, you cannot override it; you cannot force continued execution of the migration.
 
-`gh-ost` will first check the low hanging fruits: user commanded; throttling files. It will then proceed to check replication lag, and lastly it will check for status thresholds.
+`gh-ost` will first check the low hanging fruits: user commanded; throttling files. It will then proceed to check replication lag, then status thesholds, and lastly it will check the throttle-query.
 
 The first check to suggest throttling stops the search; the status message will note the reason for throttling as the first satisfied check.
 

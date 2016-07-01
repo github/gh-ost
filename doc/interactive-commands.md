@@ -25,6 +25,7 @@ replication lag on to determine throttling
 - `throttle-control-replicas`: change list of throttle-control replicas, these are replicas `gh-ost` will cehck
 - `throttle`: force migration suspend
 - `no-throttle`: cancel forced suspension (though other throttling reasons may still apply)
+- `unpostpone`: at a time where `gh-ost` is postponing the [cut-over](cut-over.md) phase, instruct `gh-ost` to stop postponing and proceed immediately to cut-over.
 - `panic`: immediately panic and abort operation
 
 ### Examples
