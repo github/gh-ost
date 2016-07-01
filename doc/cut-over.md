@@ -2,14 +2,15 @@
 
 The cut-over is the final major step of the migration: it's the moment where your original table is pushed aside, and the ghost table (the one we secretly altered and operated on throughout the process) takes its place.
 
-MySQL poses some limitations on how the table swap can take place. While it supports an atomic swap, it does not allow for a swap under controlled lock.
+MySQL poses some limitations on how the table swap can take place. While it supports an atomic swap, it does not allow a connection to swap tables it holds under lock.
 
-The [facebook OSC](https://www.facebook.com/notes/mysql-at-facebook/online-schema-change-for-mysql/430801045932/) tool documents this nicely. Look for **"Cut-over phase"**.
+The [facebook OSC](https://www.facebook.com/notes/mysql-at-facebook/online-schema-change-for-mysql/430801045932/) tool documents this nicely. Look for **"Cut-over phase"**. The Facebook solution uses a non-atomic swap: the original table is first renamed and pushed aside, then the ghost table is renamed to take its place. In between the two renames there's a brief period of time where your table just does not exist, and queries will fail.
 
-`gh-ost` supports various types of cut-over options:
+`gh-ost` solves this by using an atomic, two-step blocking swap: while one connection holds the lock, another attempts the atomic `RENAME`. The `RENAME` is guaranteed to not be executed prematurely by positioning a sentry table which blocks the `RENAME` operation until `gh-ost` is satisfied all is in order.
 
-- `--cut-over=safe` - this is the default value if not specified otherwise. The "safe" cut-over algorithm is depicted [here](https://github.com/github/gh-ost/issues/65). It is essentially a multi-step, locking solution, where queries block until table swapping is complete -- when all operates normally. If, for some reason, connections participating in the cut-over are killed throughout the process, the worst-case scenario is a table-outage: a brief moment where the table ceases to exist, followed by an immediate rollback.
-- `--cut-over=two-step` - this method is similar to the one taken by the facebook OSC. It's non-blocking but also non-atomic. The original table is first renames and pushed aside, then the ghost table is renamed to take its place. In between the two renames there's a brief period of time where your table just does not exist, and queries will fail.
+This solution either:
+- executes successfully, in which case the tables are swapped atomically and pending connections are blocked for a brief period of time, proceeding to operate on the newly migrated table
+- or fails, due to timeout or death of some connection, in which case we are naturally returning to pre-cut-over phase, where the original table is still in place and accessible. This releases the pending connections, which are able again to write to the table, and `gh-ost` is then able to make another attempt at the cut-over.
 
 Also note:
 - With `--migrate-on-replica` the cut-over is executed in exactly the same way as on master.

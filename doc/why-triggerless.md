@@ -7,7 +7,7 @@ Existing MySQL schema migration tools:
 - [LHM](https://github.com/soundcloud/lhm)
 - [oak-online-alter-table](https://github.com/shlomi-noach/openarkkit)
 
-are all using [triggers](http://dev.mysql.com/doc/refman/5.6/en/triggers.html) to propagate live changes on your table onto a ghost/shadow table that is slowly being synchronized. The tools not all work the same: while most use a synchronous approach (all changes applied on the ghost table), the Facebook tool uses an asynchronous approach (changes are appended to a changelog table, later reviewed and appleid on ghost table).
+are all using [triggers](http://dev.mysql.com/doc/refman/5.6/en/triggers.html) to propagate live changes on your table onto a ghost/shadow table that is slowly being synchronized. The tools not all work the same: while most use a synchronous approach (all changes applied on the ghost table), the Facebook tool uses an asynchronous approach (changes are appended to a changelog table, later reviewed and applied on ghost table).
 
 Use of triggers simplifies a lot of the flow in doing a live table migration, but also poses some limitations or difficulties. Here are reasons why we choose to [design a triggerless solution](triggerless-design.md) to schema migrations.
 
@@ -27,11 +27,9 @@ We know this to be a visible overhead on very busy or very large tables.
 
 ### Triggers, locks
 
-When a table with trigger is concurrently being written two, the triggers, being in same transaction space as the incoming queries, are also executed concurrently. While concurrent queries compete for resources via locks (e.g. the `auto_increment` value), the triggers need to _simultaneously_ compete for their own locks (e.g., likewise on the `auto_increment` value on the ghost table, in a synchronous solution). The competitions are un coordinated.
+When a table with triggers is concurrently being written to, the triggers, being in same transaction space as the incoming queries, are also executed concurrently. While concurrent queries compete for resources via locks (e.g. the `auto_increment` value), the triggers need to _simultaneously_ compete for their own locks (e.g., likewise on the `auto_increment` value on the ghost table, in a synchronous solution). These competitions are non-coordinated.
 
 We have evidenced near or complete lock downs in production, to the effect of rendering the table or the entire database inaccessible due to lock contention.
-
-Some lock contention can be reduced; in the case of `auto_increment`, an `innodb_autoinc_lock_mode=2` on Row Based Replication is helpful. But this is but a single example of a locking issue, and even so we have seen lockdowns on busy tables.
 
 ### Trigger based migration, no pause
 

@@ -86,7 +86,7 @@ The Facebook solution uses an "outage", two-step rename:
 
 In between those two renames there's a point in time where the table does not exist, hence there's a "table outage".
 
-`gh-ost` solves this by using an optimistic three-step locking algorithm. It is optimistic in that if no connection gets killed throughout this process, the cut-over is locking; queries are blocking on the original table and are unblocked after the ghost table has taken its place. Should any of the participating connections get killed throughout this process, the algorithm resort to "table outage" which is then rolled back.
+`gh-ost` solves this by using a two-step algorithm that blocks writes to the table, then issues an atomic swap. It uses safety latches such that the operation either succeeds, atomically, or fails, bringing us back to pre-cut-over stage.
 
 Read more on the [cut-over](cut-over.md) documentation.
 
@@ -130,6 +130,12 @@ This is the method used by GitHub to continuously validate the tool's integrity:
 #### Going outside the server space
 
 More to come as we make progress.
+
+### No free meals
+
+#### Increased traffic
+
+The existing tools utilize triggers to propagate data changes. `gh-ost` takes upon itself to read the data, then write it back. `gh-ost` actually prefers to read from a replica and write to the master. This implies data transfers between hosts, and certainly in/out the MySQL server daemon. At this time the MySQL client library used by `gh-ost` does not support compression, and so during a migration you can expect the full volume of a table to transfer on the wire.
 
 #### Code complexity
 

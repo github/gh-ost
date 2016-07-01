@@ -15,6 +15,7 @@ WORK IN PROGRESS
 Please meanwhile refer to the [docs](doc) for more information. No, really, go to the [docs](doc).
 
 - [Why triggerless](doc/why-triggerless.md)
+- [Triggerless design](doc/triggerless-design.md)
 - [Cut over phase](doc/cut-over.md)
 - [Testing on replica](doc/testing-on-replica.md)
 - [Throttle](doc/throttle.md)
@@ -43,43 +44,17 @@ It is still OK to connect `gh-ost` directly on master; you will need to confirm 
 Newcomer? We think you would enjoy building trust with this tool. You can ask `gh-ost` to simulate a migration on a replica -- this will not affect data on master and will not actually do a complete migration. It will operate on a replica, and end up with two tables: the original (untouched), and the migrated. You will have your chance to compare the two and verify the tool works to your satisfaction.
 
 ```
-gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_connected=30 --switch-to-rbr --chunk-size=2500 --exact-rowcount --test-on-replica --verbose
+gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_running=30 --switch-to-rbr --chunk-size=2500 --exact-rowcount --test-on-replica --verbose --postpone-cut-over-flag-file=/tmp/ghost.postpone.flag --throttle-flag-file=/tmp/ghost.throttle.flag
 ```
 Please read more on [testing on replica](testing-on-replica.md)
 
-#### Executing on master
+#### Migrating a master table
 
 ```
-gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_connected=30 --switch-to-rbr --chunk-size=2500 --exact-rowcount --verbose
+gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --initially-drop-ghost-table --initially-drop-old-table --max-load=Threads_running=30 --switch-to-rbr --chunk-size=2500 --exact-rowcount --verbose --postpone-cut-over-flag-file=/tmp/ghost.postpone.flag --throttle-flag-file=/tmp/ghost.throttle.flag [--execute]
 ```
 
-Note: "executing on master" does not mean you need to _connect_ to the master. `gh-ost` is happy if you connect to a replica; it then figures out the identity of the master and makes the connection itself.
-
-#### Notable parameters
-
-Run `gh-ost --help` to get full list of parameters. We like the following:
-
-- `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
-
-  ```
-[client]
-user=gromit
-password=123456
-  ```
-
-- `--user`, `--password`: alternatively, supply these as arguments
-
-- `--host`, `--port`: where to connect to. `gh-ost` prefers to connect to a replica, see above.
-
-- `--exact-rowcount`: actually `select count(*)` from your table prior to migration, and heuristically maintain the updating table size while migrating. This makes for quite accurate assumption on progress. When `gh-ost` says it's `99.8%` done, it really there or very closely there.
-
-- `--execute`: without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
-
-- `--initially-drop-ghost-table`, `--initially-drop-old-table`: `gh-ost` maintains two tables while migrating: the _ghost_ table (which is synced from your original table and finally replaces it) and a changelog table, which is used internally for bookkeeping. By default, it panics and aborts if it sees those tables upon startup. Provide these two params to let `gh-ost` know it's OK to drop them beforehand.
-
-  We think `gh-ost` should not take chances or make assumptions about the user's tables. Dropping tables can be a dangerous, locking operation. We let the user explicitly approve such operations.
-
-- `--test-on-replica`: `gh-ost` can be tested on a replica, without actually modifying master data. We use this for testing, and we suspect new users of this tool would enjoy checking it out, building trust in this tool, before actually applying it on production masters. Read more on [testing on replica](testing-on-replica.md).
+Note: in order to migrate a table on the master you don't need to _connect_ to the master. `gh-ost` is happy (and prefers) if you connect to a replica; it then figures out the identity of the master and makes the connection itself.
 
 ## What's in a name?
 
