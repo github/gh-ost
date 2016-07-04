@@ -790,6 +790,7 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 			fmt.Fprintln(writer, `available commands:
 status                               # Print a status message
 chunk-size=<newsize>                 # Set a new chunk-size
+nice-ratio=<ratio>                   # Set a new nice-ratio, integer (0 is agrressive)
 critical-load=<load>                 # Set a new set of max-load thresholds
 max-load=<load>                      # Set a new set of max-load thresholds
 throttle-query=<query>               # Set a new throttle-query
@@ -810,6 +811,16 @@ help                                 # This message
 				return log.Errore(err)
 			} else {
 				this.migrationContext.SetChunkSize(int64(chunkSize))
+				this.printStatus(ForcePrintStatusAndHint, writer)
+			}
+		}
+	case "nice-ratio":
+		{
+			if niceRatio, err := strconv.Atoi(arg); err != nil {
+				fmt.Fprintf(writer, "%s\n", err.Error())
+				return log.Errore(err)
+			} else {
+				atomic.StoreInt64(&this.migrationContext.NiceRatio, int64(niceRatio))
 				this.printStatus(ForcePrintStatusAndHint, writer)
 			}
 		}
@@ -963,11 +974,12 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	))
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
-	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max lag: %+vms; max-load: %s; critical-load: %s",
+	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max lag: %+vms; max-load: %s; critical-load: %s; nice-ratio: %d",
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
 		maxLoad.String(),
 		criticalLoad.String(),
+		atomic.LoadInt64(&this.migrationContext.NiceRatio),
 	))
 	if this.migrationContext.ThrottleFlagFile != "" {
 		fmt.Fprintln(w, fmt.Sprintf("# Throttle flag file: %+v",
@@ -1264,9 +1276,15 @@ func (this *Migrator) executeWriteFuncs() error {
 				select {
 				case copyRowsFunc := <-this.copyRowsQueue:
 					{
+						copyRowsStartTime := time.Now()
 						// Retries are handled within the copyRowsFunc
 						if err := copyRowsFunc(); err != nil {
 							return log.Errore(err)
+						}
+						if niceRatio := atomic.LoadInt64(&this.migrationContext.NiceRatio); niceRatio > 0 {
+							copyRowsDuration := time.Now().Sub(copyRowsStartTime)
+							sleepTime := copyRowsDuration * time.Duration(niceRatio)
+							time.Sleep(sleepTime)
 						}
 					}
 				default:
