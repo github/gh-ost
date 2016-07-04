@@ -58,6 +58,7 @@ type MigrationContext struct {
 
 	defaultNumRetries                   int64
 	ChunkSize                           int64
+	NiceRatio                           int64
 	MaxLagMillisecondsThrottleThreshold int64
 	ReplictionLagQuery                  string
 	ThrottleControlReplicaKeys          *mysql.InstanceKeyMap
