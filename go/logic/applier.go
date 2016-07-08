@@ -632,7 +632,7 @@ func (this *Applier) LockOriginalTableAndWait(sessionIdChan chan int64, tableLoc
 		return err
 	}
 
-	tableLockTimeoutSeconds := this.migrationContext.SwapTablesTimeoutSeconds * 2
+	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
 	log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
 	query = fmt.Sprintf(`set session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
@@ -690,8 +690,8 @@ func (this *Applier) RenameOriginalTable(sessionIdChan chan int64, originalTable
 	}
 	sessionIdChan <- sessionId
 
-	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.SwapTablesTimeoutSeconds)
-	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.SwapTablesTimeoutSeconds)
+	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.CutOverLockTimeoutSeconds)
+	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.CutOverLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
 		return err
 	}
@@ -725,8 +725,8 @@ func (this *Applier) RenameGhostTable(sessionIdChan chan int64, ghostTableRename
 	}
 	sessionIdChan <- sessionId
 
-	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.SwapTablesTimeoutSeconds)
-	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.SwapTablesTimeoutSeconds)
+	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.CutOverLockTimeoutSeconds)
+	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.CutOverLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
 		return err
 	}
@@ -861,7 +861,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		return err
 	}
 
-	tableLockTimeoutSeconds := this.migrationContext.SwapTablesTimeoutSeconds * 2
+	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
 	log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
 	query = fmt.Sprintf(`set session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
@@ -948,8 +948,8 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 	}
 	sessionIdChan <- sessionId
 
-	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.SwapTablesTimeoutSeconds)
-	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.SwapTablesTimeoutSeconds)
+	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.CutOverLockTimeoutSeconds)
+	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.CutOverLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
 		return err
 	}
