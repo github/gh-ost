@@ -69,7 +69,7 @@ type MigrationContext struct {
 	maxLoad                             LoadMap
 	criticalLoad                        LoadMap
 	PostponeCutOverFlagFile             string
-	SwapTablesTimeoutSeconds            int64
+	CutOverLockTimeoutSeconds           int64
 	PanicFlagFile                       string
 
 	ServeSocketFile string
@@ -149,7 +149,7 @@ func newMigrationContext() *MigrationContext {
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1000,
-		SwapTablesTimeoutSeconds:            3,
+		CutOverLockTimeoutSeconds:           3,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
@@ -210,6 +210,17 @@ func (this *MigrationContext) HasMigrationRange() bool {
 	return this.MigrationRangeMinValues != nil && this.MigrationRangeMaxValues != nil
 }
 
+func (this *MigrationContext) SetCutOverLockTimeoutSeconds(timeoutSeconds int64) error {
+	if timeoutSeconds < 1 {
+		return fmt.Errorf("Minimal timeout is 1sec. Timeout remains at %d", this.CutOverLockTimeoutSeconds)
+	}
+	if timeoutSeconds > 10 {
+		return fmt.Errorf("Maximal timeout is 10sec. Timeout remains at %d", this.CutOverLockTimeoutSeconds)
+	}
+	this.CutOverLockTimeoutSeconds = timeoutSeconds
+	return nil
+}
+
 func (this *MigrationContext) SetDefaultNumRetries(retries int64) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
@@ -217,6 +228,7 @@ func (this *MigrationContext) SetDefaultNumRetries(retries int64) {
 		this.defaultNumRetries = retries
 	}
 }
+
 func (this *MigrationContext) MaxRetries() int64 {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
