@@ -82,6 +82,7 @@ type MigrationContext struct {
 	InitiallyDropOldTable   bool
 	InitiallyDropGhostTable bool
 	CutOverType             CutOver
+	ManagedRowCopy          bool
 
 	TableEngine               string
 	RowsEstimate              int64
