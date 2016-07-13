@@ -148,7 +148,7 @@ func newMigrationContext() *MigrationContext {
 		ChunkSize:                           1000,
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
-		MaxLagMillisecondsThrottleThreshold: 1000,
+		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
@@ -296,6 +296,13 @@ func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
 	defer this.pointOfInterestTimeMutex.Unlock()
 
 	return time.Now().Sub(this.pointOfInterestTime)
+}
+
+func (this *MigrationContext) SetMaxLagMillisecondsThrottleThreshold(maxLagMillisecondsThrottleThreshold int64) {
+	if maxLagMillisecondsThrottleThreshold < 1000 {
+		maxLagMillisecondsThrottleThreshold = 1000
+	}
+	atomic.StoreInt64(&this.MaxLagMillisecondsThrottleThreshold, maxLagMillisecondsThrottleThreshold)
 }
 
 func (this *MigrationContext) SetChunkSize(chunkSize int64) {

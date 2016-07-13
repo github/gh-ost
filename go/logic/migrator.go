@@ -148,8 +148,9 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 		}
 	}
 	// Replication lag throttle
+	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
 	lag := atomic.LoadInt64(&this.migrationContext.CurrentLag)
-	if time.Duration(lag) > time.Duration(this.migrationContext.MaxLagMillisecondsThrottleThreshold)*time.Millisecond {
+	if time.Duration(lag) > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
 		return true, fmt.Sprintf("lag=%fs", time.Duration(lag).Seconds())
 	}
 	if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.allEventsUpToLockProcessedInjectedFlag) == 0) {
@@ -157,7 +158,7 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 		if err != nil {
 			return true, err.Error()
 		}
-		if replicationLag > time.Duration(this.migrationContext.MaxLagMillisecondsThrottleThreshold)*time.Millisecond {
+		if replicationLag > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
 			return true, fmt.Sprintf("replica-lag=%fs", replicationLag.Seconds())
 		}
 	}
@@ -792,6 +793,7 @@ status                               # Print a status message
 chunk-size=<newsize>                 # Set a new chunk-size
 nice-ratio=<ratio>                   # Set a new nice-ratio, integer (0 is agrressive)
 critical-load=<load>                 # Set a new set of max-load thresholds
+max-lag-millis=<max-lag>             # Set a new replication lag threshold
 max-load=<load>                      # Set a new set of max-load thresholds
 throttle-query=<query>               # Set a new throttle-query
 throttle-control-replicas=<replicas> #
@@ -811,6 +813,16 @@ help                                 # This message
 				return log.Errore(err)
 			} else {
 				this.migrationContext.SetChunkSize(int64(chunkSize))
+				this.printStatus(ForcePrintStatusAndHint, writer)
+			}
+		}
+	case "max-lag-millis":
+		{
+			if maxLagMillis, err := strconv.Atoi(arg); err != nil {
+				fmt.Fprintf(writer, "%s\n", err.Error())
+				return log.Errore(err)
+			} else {
+				this.migrationContext.SetMaxLagMillisecondsThrottleThreshold(int64(maxLagMillis))
 				this.printStatus(ForcePrintStatusAndHint, writer)
 			}
 		}
@@ -974,7 +986,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	))
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
-	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max lag: %+vms; max-load: %s; critical-load: %s; nice-ratio: %d",
+	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max-lag-millis: %+vms; max-load: %s; critical-load: %s; nice-ratio: %d",
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
 		maxLoad.String(),
