@@ -74,7 +74,7 @@ func main() {
 	cutOverLockTimeoutSeconds := flag.Int64("cut-over-lock-timeout-seconds", 3, "Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout)")
 	flag.Int64Var(&migrationContext.NiceRatio, "nice-ratio", 0, "force being 'nice', imply sleep time per chunk time. Example values: 0 is aggressive. 3: for every ms spend in a rowcopy chunk, spend 3ms sleeping immediately after")
 
-	flag.Int64Var(&migrationContext.MaxLagMillisecondsThrottleThreshold, "max-lag-millis", 1500, "replication lag at which to throttle operation")
+	maxLagMillis := flag.Int64("max-lag-millis", 1500, "replication lag at which to throttle operation")
 	flag.StringVar(&migrationContext.ReplictionLagQuery, "replication-lag-query", "", "Query that detects replication lag in seconds. Result can be a floating point (by default gh-ost issues SHOW SLAVE STATUS and reads Seconds_behind_master). If you're using pt-heartbeat, query would be something like: SELECT ROUND(UNIX_TIMESTAMP() - MAX(UNIX_TIMESTAMP(ts))) AS delay FROM my_schema.heartbeat")
 	throttleControlReplicas := flag.String("throttle-control-replicas", "", "List of replicas on which to check for lag; comma delimited. Example: myhost1.com:3306,myhost2.com,myhost3.com:3307")
 	flag.StringVar(&migrationContext.ThrottleQuery, "throttle-query", "", "when given, issued (every second) to check if operation should throttle. Expecting to return zero for no-throttle, >0 for throttle. Query is issued on the migrated server. Make sure this query is lightweight")
@@ -171,6 +171,7 @@ func main() {
 		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
 	}
 	migrationContext.SetChunkSize(*chunkSize)
+	migrationContext.SetMaxLagMillisecondsThrottleThreshold(*maxLagMillis)
 	migrationContext.SetDefaultNumRetries(*defaultRetries)
 	migrationContext.ApplyCredentials()
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {
