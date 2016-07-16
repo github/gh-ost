@@ -8,6 +8,9 @@
 - Pausable
 - Operations-friendly
 
+![gh-ost logo](doc/images/gh-ost-logo-dark-320.png)
+
+
 ## How?
 
 WORK IN PROGRESS
