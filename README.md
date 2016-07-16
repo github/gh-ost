@@ -54,8 +54,6 @@ More tips:
 - Use `--postpone-cut-over-flag-file` to gain control over cut-over timing
 - Get familiar with the [interactive commands](doc/interactive-commands.md)
 
-Please read more on [testing on replica](testing-on-replica.md)
-
 Also see [requirements and limitations](doc/requirements-and-limitations.md), [what if?](doc/what-if.md)
 
 ## What's in a name?
@@ -66,6 +64,18 @@ But then a rare genetic mutation happened, and the `s` transformed into `t`. And
 - GitHub Online Schema Transmogrifier/Translator/Transformer/Transfigurator
 
 Pronounce: _ghost_
+
+## License
+
+`gh-ost` is licensed under the [MIT license](https://github.com/github/gh-ost/blob/documentation/LICENSE)
+
+`gh-ost` uses 3rd party libraries, each with their own license. These are found [here](https://github.com/github/gh-ost/tree/master/vendor).
+
+## Community
+
+`gh-ost` is released at a stable state, but with mileage to go. We are [open to pull requests](https://github.com/github/gh-ost/blob/master/.github/CONTRIBUTING.md). Please first discuss your intentions via [Issues](https://github.com/github/gh-ost/issues).
+
+We develop `gh-ost` at GitHub and for the community. We may have different priorities than others. From time to time we may suggest a contribution that is not on our immediate roadmap but which may appeal to others. 
 
 ## Authors
 
