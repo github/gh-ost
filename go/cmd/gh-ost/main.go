@@ -66,7 +66,7 @@ func main() {
 	flag.BoolVar(&migrationContext.OkToDropTable, "ok-to-drop-table", false, "Shall the tool drop the old table at end of operation. DROPping tables can be a long locking operation, which is why I'm not doing it by default. I'm an online tool, yes?")
 	flag.BoolVar(&migrationContext.InitiallyDropOldTable, "initially-drop-old-table", false, "Drop a possibly existing OLD table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists")
 	flag.BoolVar(&migrationContext.InitiallyDropGhostTable, "initially-drop-ghost-table", false, "Drop a possibly existing Ghost table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists")
-	cutOver := flag.String("cut-over", "atomic", "choose cut-over type (atomic, two-step, voluntary-lock)")
+	cutOver := flag.String("cut-over", "atomic", "choose cut-over type (default|atomic, two-step)")
 
 	flag.BoolVar(&migrationContext.SwitchToRowBinlogFormat, "switch-to-rbr", false, "let this tool automatically switch binary log format to 'ROW' on the replica, if needed. The format will NOT be switched back. I'm too scared to do that, and wish to protect you if you happen to execute another migration while this one is running")
 	chunkSize := flag.Int64("chunk-size", 1000, "amount of rows to handle in each iteration (allowed range: 100-100,000)")
@@ -148,8 +148,6 @@ func main() {
 	switch *cutOver {
 	case "atomic", "default", "":
 		migrationContext.CutOverType = base.CutOverAtomic
-	case "safe":
-		migrationContext.CutOverType = base.CutOverSafe
 	case "two-step":
 		migrationContext.CutOverType = base.CutOverTwoStep
 	default:
