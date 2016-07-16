@@ -19,7 +19,7 @@ If your master works with SBR, this is the mode to work with. The replica must b
 
 However even with RBR we suggest this is the least master-intrusive operation mode.
 
-```
+```shell
 gh-ost \
 --max-load=Threads_running=25 \
 --critical-load=Threads_running=1000 \
