@@ -12,7 +12,6 @@ are all using [triggers](http://dev.mysql.com/doc/refman/5.6/en/triggers.html) t
 Use of triggers simplifies a lot of the flow in doing a live table migration, but also poses some limitations or difficulties. Here are reasons why we choose to [design a triggerless solution](triggerless-design.md) to schema migrations.
 
 
-
 ## Overview
 
 Triggers are stored routines which are invoked on a per-row operation upon `INSERT`, `DELETE`, `UPDATE` on a table.
