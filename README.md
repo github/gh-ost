@@ -2,18 +2,26 @@
 
 #### GitHub's online schema migration for MySQL
 
-`gh-ost` allows for online schema migrations in MySQL which are:
-- Triggerless
-- Testable
-- Pausable
-- Operations-friendly
+`gh-ost` is a triggerless online schema migration solution for MySQL. It is testable and provides with pausability, dynamic control/reconfiguration, auditing, and many operational perks.
+
+`gh-ost` produces a light workload on the master throughout the migration, decoupled from the existing workload on the migrated table.
+
+It has been designed based on years of experience with existing solutions, and changes the paradigm of table migrations.
 
 ![gh-ost logo](doc/images/gh-ost-logo-light-160.png)
 
-
 ## How?
 
+All existing online-schema-change tools operate in similar manner: they create a _ghost_ table in the likeness of your original table, migrate that table while empty, slowly and incrementally copy data from your original table to the _ghost_ table, meanwhile propagating ongoing changes (any `INSERT`, `DELETE`, `UPDATE` applied to your table) to the _ghost_ table. Finally, at the right time, they replace your original table with the _ghost_ table.
+
+`gh-ost` uses the same pattern. However it differs from all existing tools by not using triggers. We have recognized the triggers to be the source of [many limitations and risks](doc/why-triggerless.md).
+
+Instead, `gh-ost` [uses the binary log stream](doc/triggerless-design.md) to capture table changes, and asynchronously applies them onto the _ghost_ table. `gh-ost` takes upon itself some tasks that other tools leave for the database to perform. As result, `gh-ost` has greater control over the migration process; can truly suspend it; can truly decouple the migration's write load from the master's workload.
+
+In addition, it offers many [operational perks](doc/perks.md) that make it safer, trustworthy and fun to use. 
+
 ![gh-ost general flow](doc/images/gh-ost-general-flow.png)
+
 
 WORK IN PROGRESS
 
