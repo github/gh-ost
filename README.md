@@ -13,6 +13,8 @@
 
 ## How?
 
+![gh-ost general flow](doc/images/gh-ost-general-flow.png)
+
 WORK IN PROGRESS
 
 Please meanwhile refer to the [docs](doc) for more information. No, really, go to the [docs](doc).
