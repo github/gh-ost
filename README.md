@@ -31,6 +31,7 @@ Please meanwhile refer to the [docs](doc) for more information. No, really, go t
 - [Migrating with Statement Based Replication](doc/migrating-with-sbr.md)
 - [What if](doc/what-if.md)
 - [Requirements & Limitations](doc/requirements-and-limitations.md)
+- [Cheatsheet](doc/cheatsheet.md)
 
 ## Usage
 
