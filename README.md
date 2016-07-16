@@ -18,59 +18,44 @@ All existing online-schema-change tools operate in similar manner: they create a
 
 Instead, `gh-ost` [uses the binary log stream](doc/triggerless-design.md) to capture table changes, and asynchronously applies them onto the _ghost_ table. `gh-ost` takes upon itself some tasks that other tools leave for the database to perform. As result, `gh-ost` has greater control over the migration process; can truly suspend it; can truly decouple the migration's write load from the master's workload.
 
-In addition, it offers many [operational perks](doc/perks.md) that make it safer, trustworthy and fun to use. 
+In addition, it offers many [operational perks](doc/perks.md) that make it safer, trustworthy and fun to use.
 
 ![gh-ost general flow](doc/images/gh-ost-general-flow.png)
 
+## Highlights
 
-WORK IN PROGRESS
+- Build your trust in `gh-ost` by testing it on replicas. `gh-ost` will issue same flow as it would have on the master, to migrate a table on a replica, without actually replacing the original table, leaving the replica with two tables you can then compare and satisfy yourself that the tool operates correctly. This is how we continuously test `gh-ost` in production.
+- True pause: when `gh-ost` [throttles](doc/throttle.md), it truly ceases writes on master: no row copies and no ongoing events processing. By throttling, you return your master to its original workload
+- Dynamic control: you can [interactively](doc/interactive-commands.md) reconfigure `gh-ost`, even as migration still runs. You may forcibly initiate throttling.
+- Auditing: you may query `gh-ost` for status. `gh-ost` listens on unix socket or TCP.
+- Control over cut-over phase: `gh-ost` can be instructed to postpone what is probably the most critical step: the swap of tables, until such time that you're comfortably available. No need to worry about ETA being outside office hours.
 
-Please meanwhile refer to the [docs](doc) for more information. No, really, go to the [docs](doc).
-
-- [Why triggerless](doc/why-triggerless.md)
-- [Triggerless design](doc/triggerless-design.md)
-- [Throttle](doc/throttle.md)
-- [Operational perks](doc/perks.md)
-- [Understanding output](doc/understanding-output.md)
-- [Interactive commands](doc/interactive-commands.md)
-- [Command line flags](doc/command-line-flags.md)
-- [Cut over phase](doc/cut-over.md)
-- [Testing on replica](doc/testing-on-replica.md)
-- [Migrating with Statement Based Replication](doc/migrating-with-sbr.md)
-- [What if](doc/what-if.md)
-- [Requirements & Limitations](doc/requirements-and-limitations.md)
-- [Cheatsheet](doc/cheatsheet.md)
+Please meanwhile refer to the [docs](doc) for more information. No, really, read the [docs](doc).
 
 ## Usage
 
-#### Where to execute
+The [cheatsheet](doc/cheatsheet.md) has it all. You may be interested in invoking `gh-ost` in various modes:
 
-The recommended way of executing `gh-ost` is to have it connect to a _replica_, as opposed to having it connect to the master. `gh-ost` will crawl its way up the replication chain to figure out who the master is.
+- a _noop_ migration (merely testing that the migration is valid and good to go)
+- a real migration, utilizing a replica (the migration runs on the master; `gh-ost` figures out identities of servers involved. Required mode if your master uses Statement Based Replication)
+- a real migration, run directly on the master (but `gh-ost` prefers the former)
+- a real migration on a replica (master untouched)
+- a test migration on a replica, the way for you to build trust with `gh-ost`'s operation.
 
-By connecting to a replica, `gh-ost` sets up a self-throttling mechanism; feels more comfortable in querying `information_schema` tables; and more. Connecting `gh-ost` to a replica is also the trick to make it work even if your master is configured with `statement based replication`, as `gh-ost` is able to manipulate the replica to rewrite logs in `row based replication`. See [Migrating with Statement Based Replication](migrating-with-sbr.md).
+Our tips:
 
-The replica would have to use binary logs and be configured with `log_slave_updates`.
+- [Testing above all](testing-on-replica.md), try out `--test-on-replica` first few times. Better yet, make it continuous. We have multiple replicas where we iterate our entire fleet of production tables, migrating them one by one, checksumming the results, verifying migration is good.
+- For each master migration, first issue a _noop_
+- Then issue the real thing via `--execute`.
 
-It is still OK to connect `gh-ost` directly on master; you will need to confirm this by providing `--allow-on-master`. The master would have to be using `row based replication`.
+More tips:
 
-`gh-ost` itself may be executed from anywhere. It connects via `tcp` and it does not have to be executed from a `MySQL` box. However, do note it generates a lot of traffic, as it connects as a replica and pulls binary log data.
+- Use `--exact-rowcount` for accurate progress indication
+- Use `--postpone-cut-over-flag-file` to gain control over cut-over timing
+- Get familiar with the [interactive commands](doc/interactive-commands.md)
 
-#### Testing on replica
-
-Newcomer? We think you would enjoy building trust with this tool. You can ask `gh-ost` to simulate a migration on a replica -- this will not affect data on master and will not actually do a complete migration. It will operate on a replica, and end up with two tables: the original (untouched), and the migrated. You will have your chance to compare the two and verify the tool works to your satisfaction.
-
-```
-gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_running=30 --switch-to-rbr --chunk-size=2500 --exact-rowcount --test-on-replica --verbose --postpone-cut-over-flag-file=/tmp/ghost.postpone.flag --throttle-flag-file=/tmp/ghost.throttle.flag
-```
 Please read more on [testing on replica](testing-on-replica.md)
 
-#### Migrating a master table
-
-```
-gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --initially-drop-ghost-table --initially-drop-old-table --max-load=Threads_running=30 --switch-to-rbr --chunk-size=2500 --exact-rowcount --verbose --postpone-cut-over-flag-file=/tmp/ghost.postpone.flag --throttle-flag-file=/tmp/ghost.throttle.flag [--execute]
-```
-
-Note: in order to migrate a table on the master you don't need to _connect_ to the master. `gh-ost` is happy (and prefers) if you connect to a replica; it then figures out the identity of the master and makes the connection itself.
 
 ## What's in a name?
 
