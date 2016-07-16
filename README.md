@@ -8,7 +8,7 @@
 - Pausable
 - Operations-friendly
 
-![gh-ost logo](doc/images/gh-ost-logo-dark-320.png)
+![gh-ost logo](doc/images/gh-ost-logo-light-160.png)
 
 
 ## How?
