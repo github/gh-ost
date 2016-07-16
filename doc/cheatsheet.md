@@ -5,7 +5,7 @@
 
 `gh-ost` operates by connecting to potentially multiple servers, as well as imposing itself as a replica in order to streamline binary log events directly from one of those servers. There are various operation modes, which depend on your setup, configuration, and where you want to run the migration.
 
-##### a. Connect to replica, migrate on master
+### a. Connect to replica, migrate on master
 
 This is the mode `gh-ost` expects by default. `gh-ost` will investigate the replica, crawl up to find the topology's master, and will hook onto it as well. Migration will:
 
@@ -46,7 +46,7 @@ gh-ost \
 With `--execute`, migration actually copies data and flips tables. Without it this is a `noop` run.
 
 
-##### b. Connect to master
+### b. Connect to master
 
 If you don't have replicas, or do not wish to use them, you are still able to operate directly on the master. `gh-ost` will do all operations directly on the master. You may still ask it to be considerate of replication lag.
 
@@ -78,7 +78,7 @@ gh-ost \
 [--execute]
 ```
 
-##### c. Migrate/test on replica
+### c. Migrate/test on replica
 
 This will perform a migration on the replica. `gh-ost` will briefly connect to the master but will thereafter perform all operations on the replica without modifying anything on the master.
 Throughout the operation, `gh-ost` will throttle such that the replica is up to date.
@@ -92,6 +92,7 @@ Test on replica cheatsheet:
 gh-ost \
   --user="gh-ost" \
   --password="123456" \
+  --host=replica.with.rbr.com \
   --test-on-replica \
   --database="my_schema" \
   --table="my_table" \
@@ -108,3 +109,15 @@ gh-ost \
   --panic-flag-file=/tmp/gh-ost.panic.flag \
   --execute
 ```
+
+### cnf file
+
+You may use a `cnf` file in the following format:
+
+```
+[client]
+user=gh-ost
+password=123456
+```
+
+You may then remove `--user=gh-ost --password=123456` and specify `--conf=/path/to/config/file.cnf`
