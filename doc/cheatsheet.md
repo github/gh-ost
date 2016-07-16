@@ -53,6 +53,31 @@ If you don't have replicas, or do not wish to use them, you are still able to op
 - Your master must produce binary logs in RBR format.
 - You must approve this mode via `--allow-on-master`.
 
+```shell
+gh-ost \
+--max-load=Threads_running=25 \
+--critical-load=Threads_running=1000 \
+--chunk-size=1000 \
+--throttle-control-replicas="myreplica.1.com,myreplica.2.com" \
+--max-lag-millis=1500 \
+--user="gh-ost" \
+--password="123456" \
+--host=master.with.rbr.com \
+--allow-on-master \
+--database="my_schema" \
+--table="my_table" \
+--verbose \
+--alter="engine=innodb" \
+--switch-to-rbr \
+--allow-master-master \
+--cut-over=default \
+--exact-rowcount \
+--default-retries=120 \
+--panic-flag-file=/tmp/ghost.panic.flag \
+--postpone-cut-over-flag-file=/tmp/ghost.postpone.flag \
+[--execute]
+```
+
 ##### c. Migrate/test on replica
 
 This will perform a migration on the replica. `gh-ost` will briefly connect to the master but will thereafter perform all operations on the replica without modifying anything on the master.
@@ -61,3 +86,25 @@ Throughout the operation, `gh-ost` will throttle such that the replica is up to 
 - `--migrate-on-replica` indicates to `gh-ost` that it must migrate the table directly on the replica. It will perform the cut-over phase even while replication is running.
 - `--test-on-replica` indicates the migration is for purpose of testing only. Before cut-over takes place, replication is stopped. Tables are swapped and then swapped back: your original table returns to its original place.
 Both tables are left with replication stopped. You may examine the two and compare data.
+
+Test on replica cheatsheet:
+```shell
+gh-ost \
+  --user="gh-ost" \
+  --password="123456" \
+  --test-on-replica \
+  --database="my_schema" \
+  --table="my_table" \
+  --verbose \
+  --alter="engine=innodb" \
+  --initially-drop-ghost-table \
+  --initially-drop-old-table \
+  --max-load=Threads_running=30 \
+  --switch-to-rbr \
+  --chunk-size=2500 \
+  --cut-over=default \
+  --exact-rowcount \
+  --serve-socket-file=/tmp/gh-ost.test.sock \
+  --panic-flag-file=/tmp/gh-ost.panic.flag \
+  --execute
+```
