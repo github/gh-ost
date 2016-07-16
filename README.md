@@ -30,7 +30,7 @@ Please meanwhile refer to the [docs](doc) for more information. No, really, go t
 - [Testing on replica](doc/testing-on-replica.md)
 - [Migrating with Statement Based Replication](doc/migrating-with-sbr.md)
 - [What if](doc/what-if.md)
-- [Requirements & Limitations](requirements-and-limitations.md)
+- [Requirements & Limitations](doc/requirements-and-limitations.md)
 
 ## Usage
 
