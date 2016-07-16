@@ -56,6 +56,7 @@ More tips:
 
 Please read more on [testing on replica](testing-on-replica.md)
 
+Also see [requirements and limitations](doc/requirements-and-limitations.md), [what if?](doc/what-if.md)
 
 ## What's in a name?
 
