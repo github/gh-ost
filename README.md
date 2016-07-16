@@ -21,14 +21,16 @@ Please meanwhile refer to the [docs](doc) for more information. No, really, go t
 
 - [Why triggerless](doc/why-triggerless.md)
 - [Triggerless design](doc/triggerless-design.md)
-- [Cut over phase](doc/cut-over.md)
-- [Testing on replica](doc/testing-on-replica.md)
 - [Throttle](doc/throttle.md)
 - [Operational perks](doc/perks.md)
-- [Migrating with Statement Based Replication](doc/migrating-with-sbr.md)
 - [Understanding output](doc/understanding-output.md)
 - [Interactive commands](doc/interactive-commands.md)
 - [Command line flags](doc/command-line-flags.md)
+- [Cut over phase](doc/cut-over.md)
+- [Testing on replica](doc/testing-on-replica.md)
+- [Migrating with Statement Based Replication](doc/migrating-with-sbr.md)
+- [What if](doc/what-if.md)
+- [Requirements & Limitations](requirements-and-limitations.md)
 
 ## Usage
 
