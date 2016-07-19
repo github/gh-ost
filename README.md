@@ -75,7 +75,19 @@ Pronounce: _ghost_
 
 `gh-ost` is released at a stable state, but with mileage to go. We are [open to pull requests](https://github.com/github/gh-ost/blob/master/.github/CONTRIBUTING.md). Please first discuss your intentions via [Issues](https://github.com/github/gh-ost/issues).
 
-We develop `gh-ost` at GitHub and for the community. We may have different priorities than others. From time to time we may suggest a contribution that is not on our immediate roadmap but which may appeal to others. 
+We develop `gh-ost` at GitHub and for the community. We may have different priorities than others. From time to time we may suggest a contribution that is not on our immediate roadmap but which may appeal to others.
+
+## Download/binaries/source
+
+`gh-ost` is now GA and stable.
+
+`gh-ost` is available in binary format for Linux and Mac OS/X
+
+[Download latest release here](https://github.com/github/gh-ost/releases/latest)
+
+`gh-ost` is a Go project; it is built with Go 1.5 with "experimental vendor". Soon to migrate to Go 1.6. See and use [build file](https://github.com/github/gh-ost/blob/master/build.sh) for compiling it on your own.
+
+Generally speaking, `master` branch is stable, but only [releases](https://github.com/github/gh-ost/releases) are to be used in production.
 
 ## Authors
 
