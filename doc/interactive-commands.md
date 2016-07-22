@@ -24,7 +24,7 @@ replication lag on to determine throttling
 - `critical-load=<load>`: change critical load setting (exceeding given thresholds causes panic and abort)
 - `nice-ratio=<ratio>`: change _nice_ ratio: 0 for aggressive, positive integer `n`: for any unit of time spent copying rows, spend `n` units of time sleeping.
 - `throttle-query`: change throttle query
-- `throttle-control-replicas`: change list of throttle-control replicas, these are replicas `gh-ost` will cehck
+- `throttle-control-replicas`: change list of throttle-control replicas, these are replicas `gh-ost` will check
 - `throttle`: force migration suspend
 - `no-throttle`: cancel forced suspension (though other throttling reasons may still apply)
 - `unpostpone`: at a time where `gh-ost` is postponing the [cut-over](cut-over.md) phase, instruct `gh-ost` to stop postponing and proceed immediately to cut-over.

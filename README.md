@@ -1,14 +1,14 @@
 # gh-ost
 
-#### GitHub's online schema migration for MySQL
+#### GitHub's online schema migration for MySQL <img src="doc/images/gh-ost-logo-light-160.png" align="right">
 
-`gh-ost` is a triggerless online schema migration solution for MySQL. It is testable and provides with pausability, dynamic control/reconfiguration, auditing, and many operational perks.
+ `gh-ost` is a triggerless online schema migration solution for MySQL. It is testable and provides with pausability, dynamic control/reconfiguration, auditing, and many operational perks.
 
 `gh-ost` produces a light workload on the master throughout the migration, decoupled from the existing workload on the migrated table.
 
 It has been designed based on years of experience with existing solutions, and changes the paradigm of table migrations.
 
-![gh-ost logo](doc/images/gh-ost-logo-light-160.png)
+
 
 ## How?
 
@@ -44,7 +44,7 @@ The [cheatsheet](doc/cheatsheet.md) has it all. You may be interested in invokin
 
 Our tips:
 
-- [Testing above all](testing-on-replica.md), try out `--test-on-replica` first few times. Better yet, make it continuous. We have multiple replicas where we iterate our entire fleet of production tables, migrating them one by one, checksumming the results, verifying migration is good.
+- [Testing above all](doc/testing-on-replica.md), try out `--test-on-replica` first few times. Better yet, make it continuous. We have multiple replicas where we iterate our entire fleet of production tables, migrating them one by one, checksumming the results, verifying migration is good.
 - For each master migration, first issue a _noop_
 - Then issue the real thing via `--execute`.
 
@@ -62,8 +62,6 @@ Originally this was named `gh-osc`: GitHub Online Schema Change, in the likes of
 
 But then a rare genetic mutation happened, and the `s` transformed into `t`. And that sent us down the path of trying to figure out a new acronym. Right now, `gh-ost` (pronounce: _Ghost_), stands for:
 - GitHub Online Schema Transmogrifier/Translator/Transformer/Transfigurator
-
-Pronounce: _ghost_
 
 ## License
 
