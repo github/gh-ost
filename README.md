@@ -2,7 +2,7 @@
 
 #### GitHub's online schema migration for MySQL
 
-![gh-ost logo](doc/images/gh-ost-logo-light-160.png) `gh-ost` is a triggerless online schema migration solution for MySQL. It is testable and provides with pausability, dynamic control/reconfiguration, auditing, and many operational perks.
+<img src="doc/images/gh-ost-logo-light-160.png" align="right"> `gh-ost` is a triggerless online schema migration solution for MySQL. It is testable and provides with pausability, dynamic control/reconfiguration, auditing, and many operational perks.
 
 `gh-ost` produces a light workload on the master throughout the migration, decoupled from the existing workload on the migrated table.
 
