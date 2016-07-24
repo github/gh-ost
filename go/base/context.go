@@ -72,6 +72,7 @@ type MigrationContext struct {
 	CutOverLockTimeoutSeconds           int64
 	PanicFlagFile                       string
 
+	DropServeSocket bool
 	ServeSocketFile string
 	ServeTCPPort    int64
 
