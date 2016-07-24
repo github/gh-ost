@@ -1,0 +1,19 @@
+## A Pull Request should be associated with an Issue.
+
+> We wish to have discussions in Issues. A single issue may be targeted by multiple PRs.
+> If you're offering a new feature or fixing anything, we'd like to know beforehand in Issues,
+> and potentially we'll be able to point development in a particular direction.
+
+Related issue: https://github.com/github/gh-ost/issues/0123456789
+
+> Thank you! We are open to PRs, but please understand if for technical reasons we are unable to accept each and any PR
+
+### Description
+
+This PR [briefly explain what is does]
+
+> In case this PR introduced Go code changes:
+
+- [ ] contributed code is using same conventions as original code
+- [ ] code is formatted via `gofmt` (please avoid `goimports`)
+- [ ] code is built via `bash build.sh`
