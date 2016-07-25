@@ -63,15 +63,6 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 	return err
 }
 
-func (this *GoMySQLReader) Reconnect() error {
-	this.binlogSyncer.Close()
-	connectCoordinates := &mysql.BinlogCoordinates{LogFile: this.currentCoordinates.LogFile, LogPos: 4}
-	if err := this.ConnectBinlogStreamer(*connectCoordinates); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinates {
 	this.currentCoordinatesMutex.Lock()
 	defer this.currentCoordinatesMutex.Unlock()
