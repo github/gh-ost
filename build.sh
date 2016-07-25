@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 #
-RELEASE_VERSION="1.0.3"
+RELEASE_VERSION="1.0.4"
 
 buildpath=/tmp/gh-ost
 target=gh-ost
