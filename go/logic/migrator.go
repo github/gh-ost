@@ -153,7 +153,11 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 	if time.Duration(lag) > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
 		return true, fmt.Sprintf("lag=%fs", time.Duration(lag).Seconds())
 	}
-	if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.allEventsUpToLockProcessedInjectedFlag) == 0) {
+	checkThrottleControlReplicas := true
+	if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.allEventsUpToLockProcessedInjectedFlag) > 0) {
+		checkThrottleControlReplicas = false
+	}
+	if checkThrottleControlReplicas {
 		replicationLag, err := mysql.GetMaxReplicationLag(this.migrationContext.InspectorConnectionConfig, this.migrationContext.ThrottleControlReplicaKeys, this.migrationContext.ReplictionLagQuery)
 		if err != nil {
 			return true, err.Error()
