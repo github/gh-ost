@@ -65,11 +65,11 @@ type MigrationContext struct {
 	ChunkSize                           int64
 	NiceRatio                           int64
 	MaxLagMillisecondsThrottleThreshold int64
-	ReplictionLagQuery                  string
-	ThrottleControlReplicaKeys          *mysql.InstanceKeyMap
+	replicationLagQuery                 string
+	throttleControlReplicaKeys          *mysql.InstanceKeyMap
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
-	ThrottleQuery                       string
+	throttleQuery                       string
 	ThrottleCommandedByUser             int64
 	maxLoad                             LoadMap
 	criticalLoad                        LoadMap
@@ -159,7 +159,7 @@ func newMigrationContext() *MigrationContext {
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
-		ThrottleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
+		throttleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
@@ -334,13 +334,30 @@ func (this *MigrationContext) IsThrottled() (bool, string) {
 	return this.isThrottled, this.throttleReason
 }
 
+func (this *MigrationContext) GetReplicationLagQuery() string {
+	var query string
+
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	query = this.replicationLagQuery
+	return query
+}
+
+func (this *MigrationContext) SetReplicationLagQuery(newQuery string) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	this.replicationLagQuery = newQuery
+}
+
 func (this *MigrationContext) GetThrottleQuery() string {
 	var query string
 
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
-	query = this.ThrottleQuery
+	query = this.throttleQuery
 	return query
 }
 
@@ -348,7 +365,7 @@ func (this *MigrationContext) SetThrottleQuery(newQuery string) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
-	this.ThrottleQuery = newQuery
+	this.throttleQuery = newQuery
 }
 
 func (this *MigrationContext) GetMaxLoad() LoadMap {
@@ -400,7 +417,7 @@ func (this *MigrationContext) GetThrottleControlReplicaKeys() *mysql.InstanceKey
 	defer this.throttleMutex.Unlock()
 
 	keys := mysql.NewInstanceKeyMap()
-	keys.AddKeys(this.ThrottleControlReplicaKeys.GetInstanceKeys())
+	keys.AddKeys(this.throttleControlReplicaKeys.GetInstanceKeys())
 	return keys
 }
 
@@ -413,7 +430,15 @@ func (this *MigrationContext) ReadThrottleControlReplicaKeys(throttleControlRepl
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
-	this.ThrottleControlReplicaKeys = keys
+	this.throttleControlReplicaKeys = keys
+	return nil
+}
+
+func (this *MigrationContext) AddThrottleControlReplicaKey(key mysql.InstanceKey) error {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	this.throttleControlReplicaKeys.AddKey(key)
 	return nil
 }
 
