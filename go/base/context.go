@@ -7,6 +7,8 @@ package base
 
 import (
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +34,10 @@ type CutOver int
 const (
 	CutOverAtomic  CutOver = iota
 	CutOverTwoStep         = iota
+)
+
+var (
+	envVariableRegexp = regexp.MustCompile("[$][{](.*)[}]")
 )
 
 // MigrationContext has the general, global state of migration. It is used by
@@ -71,6 +77,7 @@ type MigrationContext struct {
 	CutOverLockTimeoutSeconds           int64
 	PanicFlagFile                       string
 
+	DropServeSocket bool
 	ServeSocketFile string
 	ServeTCPPort    int64
 
@@ -439,8 +446,19 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if this.ConfigFile == "" {
 		return nil
 	}
+	gcfg.RelaxedParserMode = true
 	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
 		return err
 	}
+
+	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull
+	// the given variable from os env
+	if submatch := envVariableRegexp.FindStringSubmatch(this.config.Client.User); len(submatch) > 1 {
+		this.config.Client.User = os.Getenv(submatch[1])
+	}
+	if submatch := envVariableRegexp.FindStringSubmatch(this.config.Client.Password); len(submatch) > 1 {
+		this.config.Client.Password = os.Getenv(submatch[1])
+	}
+
 	return nil
 }

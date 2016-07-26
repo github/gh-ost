@@ -30,3 +30,13 @@ There is a `lock_wait_timeout` explicitly associated with the cut-over operation
 This is where `gh-ost` shines. There is no need to kill it as you may be used to with other tools. You can reconfigure `gh-ost` [on the fly](https://github.com/github/gh-ost/blob/master/doc/interactive-commands.md) to be nicer.
 
 You're always able to actively begin [throttling](throttle.md). Just touch the `throttle-file` or `echo throttle` into `gh-ost`. Otherwise, reconfigure your `max-load`, the `nice-ratio`, the `throttle-query` to gain better thresholds that would suit your needs.
+
+### What if my replicas don't use binary logs?
+
+If the master is running Row Based Replication (RBR) - point `gh-ost` to the master, and specify `--allow-on-master`. See [cheatsheets](cheatsheets.md)
+
+If the master is running Statement Based Replication (SBR) - you have no alternative but to reconfigure a replica with:
+
+- `log_bin`
+- `log_slave_updates`
+- `binlog_format=ROW`
