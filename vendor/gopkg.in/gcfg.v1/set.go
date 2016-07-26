@@ -16,6 +16,8 @@ type tag struct {
 	intMode string
 }
 
+var RelaxedParserMode = false
+
 func newTag(ts string) tag {
 	t := tag{}
 	s := strings.Split(ts, ",")
@@ -197,6 +199,9 @@ func set(cfg interface{}, sect, sub, name string, blank bool, value string) erro
 	vCfg := vPCfg.Elem()
 	vSect, _ := fieldFold(vCfg, sect)
 	if !vSect.IsValid() {
+		if RelaxedParserMode {
+			return nil
+		}
 		return fmt.Errorf("invalid section: section %q", sect)
 	}
 	if vSect.Kind() == reflect.Map {
@@ -232,6 +237,9 @@ func set(cfg interface{}, sect, sub, name string, blank bool, value string) erro
 	}
 	vVar, t := fieldFold(vSect, name)
 	if !vVar.IsValid() {
+		if RelaxedParserMode {
+			return nil
+		}
 		return fmt.Errorf("invalid variable: "+
 			"section %q subsection %q variable %q", sect, sub, name)
 	}
