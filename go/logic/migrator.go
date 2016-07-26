@@ -158,7 +158,7 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 		checkThrottleControlReplicas = false
 	}
 	if checkThrottleControlReplicas {
-		replicationLag, err := mysql.GetMaxReplicationLag(this.migrationContext.InspectorConnectionConfig, this.migrationContext.ThrottleControlReplicaKeys, this.migrationContext.ReplictionLagQuery)
+		replicationLag, err := mysql.GetMaxReplicationLag(this.migrationContext.InspectorConnectionConfig, this.migrationContext.GetThrottleControlReplicaKeys(), this.migrationContext.GetReplicationLagQuery())
 		if err != nil {
 			return true, err.Error()
 		}
@@ -661,9 +661,10 @@ chunk-size=<newsize>                 # Set a new chunk-size
 nice-ratio=<ratio>                   # Set a new nice-ratio, integer (0 is agrressive)
 critical-load=<load>                 # Set a new set of max-load thresholds
 max-lag-millis=<max-lag>             # Set a new replication lag threshold
+replication-lag-query=<query>        # Set a new query that determines replication lag (no quotes)
 max-load=<load>                      # Set a new set of max-load thresholds
-throttle-query=<query>               # Set a new throttle-query
-throttle-control-replicas=<replicas> #
+throttle-query=<query>               # Set a new throttle-query (no quotes)
+throttle-control-replicas=<replicas> # Set a new comma delimited list of throttle control replicas
 throttle                             # Force throttling
 no-throttle                          # End forced throttling (other throttling may still apply)
 unpostpone                           # Bail out a cut-over postpone; proceed to cut-over
@@ -692,6 +693,11 @@ help                                 # This message
 				this.migrationContext.SetMaxLagMillisecondsThrottleThreshold(int64(maxLagMillis))
 				this.printStatus(ForcePrintStatusAndHint, writer)
 			}
+		}
+	case "replication-lag-query":
+		{
+			this.migrationContext.SetReplicationLagQuery(arg)
+			this.printStatus(ForcePrintStatusAndHint, writer)
 		}
 	case "nice-ratio":
 		{
@@ -809,8 +815,8 @@ func (this *Migrator) initiateInspector() (err error) {
 			*this.migrationContext.ApplierConnectionConfig.ImpliedKey, *this.migrationContext.InspectorConnectionConfig.ImpliedKey,
 		)
 		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.Duplicate()
-		if this.migrationContext.ThrottleControlReplicaKeys.Len() == 0 {
-			this.migrationContext.ThrottleControlReplicaKeys.AddKey(this.migrationContext.InspectorConnectionConfig.Key)
+		if this.migrationContext.GetThrottleControlReplicaKeys().Len() == 0 {
+			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.InspectorConnectionConfig.Key)
 		}
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
 		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master")
@@ -860,6 +866,11 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		criticalLoad.String(),
 		atomic.LoadInt64(&this.migrationContext.NiceRatio),
 	))
+	if replicationLagQuery := this.migrationContext.GetReplicationLagQuery(); replicationLagQuery != "" {
+		fmt.Fprintln(w, fmt.Sprintf("# Replication lag query: %+v",
+			replicationLagQuery,
+		))
+	}
 	if this.migrationContext.ThrottleFlagFile != "" {
 		fmt.Fprintln(w, fmt.Sprintf("# Throttle flag file: %+v",
 			this.migrationContext.ThrottleFlagFile,
