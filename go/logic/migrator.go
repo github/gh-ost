@@ -654,6 +654,8 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 		arg = strings.TrimSpace(tokens[1])
 	}
 
+	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
+
 	switch command {
 	case "help":
 		{
@@ -730,6 +732,7 @@ help                                 # This message
 	case "throttle-query":
 		{
 			this.migrationContext.SetThrottleQuery(arg)
+			fmt.Fprintf(writer, throttleHint)
 			this.printStatus(ForcePrintStatusAndHint, writer)
 		}
 	case "throttle-control-replicas":
@@ -744,6 +747,8 @@ help                                 # This message
 	case "throttle", "pause", "suspend":
 		{
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
+			fmt.Fprintf(writer, throttleHint)
+			this.printStatus(ForcePrintStatusAndHint, writer)
 		}
 	case "no-throttle", "unthrottle", "resume", "continue":
 		{
