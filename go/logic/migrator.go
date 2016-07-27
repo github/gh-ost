@@ -654,6 +654,8 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 		arg = strings.TrimSpace(tokens[1])
 	}
 
+	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
+
 	switch command {
 	case "help":
 		{
@@ -730,6 +732,7 @@ help                                 # This message
 	case "throttle-query":
 		{
 			this.migrationContext.SetThrottleQuery(arg)
+			fmt.Fprintf(writer, throttleHint)
 			this.printStatus(ForcePrintStatusAndHint, writer)
 		}
 	case "throttle-control-replicas":
@@ -744,6 +747,8 @@ help                                 # This message
 	case "throttle", "pause", "suspend":
 		{
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
+			fmt.Fprintf(writer, throttleHint)
+			this.printStatus(ForcePrintStatusAndHint, writer)
 		}
 	case "no-throttle", "unthrottle", "resume", "continue":
 		{
@@ -874,13 +879,21 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		))
 	}
 	if this.migrationContext.ThrottleFlagFile != "" {
-		fmt.Fprintln(w, fmt.Sprintf("# Throttle flag file: %+v",
-			this.migrationContext.ThrottleFlagFile,
+		setIndicator := ""
+		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
+			setIndicator = "[set]"
+		}
+		fmt.Fprintln(w, fmt.Sprintf("# Throttle flag file: %+v %+v",
+			this.migrationContext.ThrottleFlagFile, setIndicator,
 		))
 	}
 	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
-		fmt.Fprintln(w, fmt.Sprintf("# Throttle additional flag file: %+v",
-			this.migrationContext.ThrottleAdditionalFlagFile,
+		setIndicator := ""
+		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
+			setIndicator = "[set]"
+		}
+		fmt.Fprintln(w, fmt.Sprintf("# Throttle additional flag file: %+v %+v",
+			this.migrationContext.ThrottleAdditionalFlagFile, setIndicator,
 		))
 	}
 	if throttleQuery := this.migrationContext.GetThrottleQuery(); throttleQuery != "" {
@@ -889,8 +902,12 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		))
 	}
 	if this.migrationContext.PostponeCutOverFlagFile != "" {
-		fmt.Fprintln(w, fmt.Sprintf("# Postpone cut-over flag file: %+v",
-			this.migrationContext.PostponeCutOverFlagFile,
+		setIndicator := ""
+		if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
+			setIndicator = "[set]"
+		}
+		fmt.Fprintln(w, fmt.Sprintf("# Postpone cut-over flag file: %+v %+v",
+			this.migrationContext.PostponeCutOverFlagFile, setIndicator,
 		))
 	}
 	if this.migrationContext.PanicFlagFile != "" {
