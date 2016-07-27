@@ -158,12 +158,12 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 		checkThrottleControlReplicas = false
 	}
 	if checkThrottleControlReplicas {
-		replicationLag, err := mysql.GetMaxReplicationLag(this.migrationContext.InspectorConnectionConfig, this.migrationContext.GetThrottleControlReplicaKeys(), this.migrationContext.GetReplicationLagQuery())
-		if err != nil {
-			return true, err.Error()
+		lagResult := mysql.GetMaxReplicationLag(this.migrationContext.InspectorConnectionConfig, this.migrationContext.GetThrottleControlReplicaKeys(), this.migrationContext.GetReplicationLagQuery())
+		if lagResult.Err != nil {
+			return true, fmt.Sprintf("%+v %+v", lagResult.Key, lagResult.Err)
 		}
-		if replicationLag > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
-			return true, fmt.Sprintf("replica-lag=%fs", replicationLag.Seconds())
+		if lagResult.Lag > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
+			return true, fmt.Sprintf("%+v replica-lag=%fs", lagResult.Key, lagResult.Lag.Seconds())
 		}
 	}
 
@@ -217,13 +217,15 @@ func (this *Migrator) initiateThrottler() error {
 // calls callback functions, if any
 func (this *Migrator) throttle(onThrottled func()) {
 	for {
+		// IsThrottled() is non-blocking; the throttling decision making takes place asynchronously.
+		// Therefore calling IsThrottled() is cheap
 		if shouldThrottle, _ := this.migrationContext.IsThrottled(); !shouldThrottle {
 			return
 		}
 		if onThrottled != nil {
 			onThrottled()
 		}
-		time.Sleep(time.Second)
+		time.Sleep(250 * time.Millisecond)
 	}
 }
 
