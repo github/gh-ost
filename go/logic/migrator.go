@@ -396,6 +396,9 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.inspector.InspectOriginalAndGhostTables(); err != nil {
 		return err
 	}
+	if err := this.initiateServer(); err != nil {
+		return err
+	}
 	if this.migrationContext.CountTableRows {
 		if this.migrationContext.Noop {
 			log.Debugf("Noop operation; not really counting table rows")
@@ -404,9 +407,6 @@ func (this *Migrator) Migrate() (err error) {
 		}
 	}
 
-	if err := this.initiateServer(); err != nil {
-		return err
-	}
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
