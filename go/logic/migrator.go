@@ -705,11 +705,11 @@ help                                 # This message
 		}
 	case "nice-ratio":
 		{
-			if niceRatio, err := strconv.Atoi(arg); err != nil {
+			if niceRatio, err := strconv.ParseFloat(arg, 64); err != nil {
 				fmt.Fprintf(writer, "%s\n", err.Error())
 				return log.Errore(err)
 			} else {
-				atomic.StoreInt64(&this.migrationContext.NiceRatio, int64(niceRatio))
+				this.migrationContext.SetNiceRatio(niceRatio)
 				this.printStatus(ForcePrintStatusAndHint, writer)
 			}
 		}
@@ -866,12 +866,12 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	))
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
-	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max-lag-millis: %+vms; max-load: %s; critical-load: %s; nice-ratio: %d",
+	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max-lag-millis: %+vms; max-load: %s; critical-load: %s; nice-ratio: %f",
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
 		maxLoad.String(),
 		criticalLoad.String(),
-		atomic.LoadInt64(&this.migrationContext.NiceRatio),
+		this.migrationContext.GetNiceRatio(),
 	))
 	if replicationLagQuery := this.migrationContext.GetReplicationLagQuery(); replicationLagQuery != "" {
 		fmt.Fprintln(w, fmt.Sprintf("# Replication lag query: %+v",
@@ -1190,9 +1190,10 @@ func (this *Migrator) executeWriteFuncs() error {
 						if err := copyRowsFunc(); err != nil {
 							return log.Errore(err)
 						}
-						if niceRatio := atomic.LoadInt64(&this.migrationContext.NiceRatio); niceRatio > 0 {
+						if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
 							copyRowsDuration := time.Now().Sub(copyRowsStartTime)
-							sleepTime := copyRowsDuration * time.Duration(niceRatio)
+							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
+							sleepTime := time.Duration(time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond)
 							time.Sleep(sleepTime)
 						}
 					}
