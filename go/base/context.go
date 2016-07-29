@@ -63,7 +63,7 @@ type MigrationContext struct {
 
 	defaultNumRetries                   int64
 	ChunkSize                           int64
-	NiceRatio                           int64
+	niceRatio                           float64
 	MaxLagMillisecondsThrottleThreshold int64
 	replicationLagQuery                 string
 	throttleControlReplicaKeys          *mysql.InstanceKeyMap
@@ -380,6 +380,26 @@ func (this *MigrationContext) GetCriticalLoad() LoadMap {
 	defer this.throttleMutex.Unlock()
 
 	return this.criticalLoad.Duplicate()
+}
+
+func (this *MigrationContext) GetNiceRatio() float64 {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	return this.niceRatio
+}
+
+func (this *MigrationContext) SetNiceRatio(newRatio float64) {
+	if newRatio < 0.0 {
+		newRatio = 0.0
+	}
+	if newRatio > 100.0 {
+		newRatio = 100.0
+	}
+
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.niceRatio = newRatio
 }
 
 // ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
