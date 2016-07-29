@@ -874,7 +874,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		this.migrationContext.GetNiceRatio(),
 	))
 	if replicationLagQuery := this.migrationContext.GetReplicationLagQuery(); replicationLagQuery != "" {
-		fmt.Fprintln(w, fmt.Sprintf("# Replication lag query: %+v",
+		fmt.Fprintln(w, fmt.Sprintf("# replication-lag-query: %+v",
 			replicationLagQuery,
 		))
 	}
@@ -883,7 +883,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
 			setIndicator = "[set]"
 		}
-		fmt.Fprintln(w, fmt.Sprintf("# Throttle flag file: %+v %+v",
+		fmt.Fprintln(w, fmt.Sprintf("# throttle-flag-file: %+v %+v",
 			this.migrationContext.ThrottleFlagFile, setIndicator,
 		))
 	}
@@ -892,12 +892,12 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
 			setIndicator = "[set]"
 		}
-		fmt.Fprintln(w, fmt.Sprintf("# Throttle additional flag file: %+v %+v",
+		fmt.Fprintln(w, fmt.Sprintf("# throttle-additional-flag-file: %+v %+v",
 			this.migrationContext.ThrottleAdditionalFlagFile, setIndicator,
 		))
 	}
 	if throttleQuery := this.migrationContext.GetThrottleQuery(); throttleQuery != "" {
-		fmt.Fprintln(w, fmt.Sprintf("# Throttle query: %+v",
+		fmt.Fprintln(w, fmt.Sprintf("# throttle-query: %+v",
 			throttleQuery,
 		))
 	}
@@ -906,12 +906,12 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
 			setIndicator = "[set]"
 		}
-		fmt.Fprintln(w, fmt.Sprintf("# Postpone cut-over flag file: %+v %+v",
+		fmt.Fprintln(w, fmt.Sprintf("# postpone-cut-over-flag-file: %+v %+v",
 			this.migrationContext.PostponeCutOverFlagFile, setIndicator,
 		))
 	}
 	if this.migrationContext.PanicFlagFile != "" {
-		fmt.Fprintln(w, fmt.Sprintf("# Panic flag file: %+v",
+		fmt.Fprintln(w, fmt.Sprintf("# panic-flag-file: %+v",
 			this.migrationContext.PanicFlagFile,
 		))
 	}
