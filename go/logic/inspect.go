@@ -9,6 +9,7 @@ import (
 	gosql "database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
@@ -364,13 +365,19 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 
 // CountTableRows counts exact number of rows on the original table
 func (this *Inspector) CountTableRows() error {
+	atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 1)
+	defer atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 0)
+
 	log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
+
 	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.RowsEstimate); err != nil {
 		return err
 	}
 	this.migrationContext.UsedRowsEstimateMethod = base.CountRowsEstimate
+
 	log.Infof("Exact number of rows via COUNT: %d", this.migrationContext.RowsEstimate)
+
 	return nil
 }
 

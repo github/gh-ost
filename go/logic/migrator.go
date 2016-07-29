@@ -418,7 +418,7 @@ func (this *Migrator) Migrate() (err error) {
 	go this.initiateThrottler()
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
-	this.migrationContext.RowCopyStartTime = time.Now()
+	this.migrationContext.MarkRowCopyStartTime()
 	go this.initiateStatus()
 
 	log.Debugf("Operating until row copy is complete")
@@ -951,7 +951,9 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	var etaSeconds float64 = math.MaxFloat64
 	eta := "N/A"
-	if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
+	if atomic.LoadInt64(&this.migrationContext.CountingRowsFlag) > 0 {
+		eta = "counting rows"
+	} else if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
 		eta = "postponing cut-over"
 	} else if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
 		eta = fmt.Sprintf("throttled, %s", throttleReason)

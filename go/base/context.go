@@ -111,6 +111,7 @@ type MigrationContext struct {
 	throttleReason            string
 	throttleMutex             *sync.Mutex
 	IsPostponingCutOver       int64
+	CountingRowsFlag          int64
 
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
@@ -261,10 +262,22 @@ func (this *MigrationContext) ElapsedTime() time.Duration {
 	return time.Now().Sub(this.StartTime)
 }
 
+// MarkRowCopyStartTime
+func (this *MigrationContext) MarkRowCopyStartTime() {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.RowCopyStartTime = time.Now()
+}
+
 // ElapsedRowCopyTime returns time since starting to copy chunks of rows
 func (this *MigrationContext) ElapsedRowCopyTime() time.Duration {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
+
+	if this.RowCopyStartTime.IsZero() {
+		// Row copy hasn't started yet
+		return 0
+	}
 
 	if this.RowCopyEndTime.IsZero() {
 		return time.Now().Sub(this.RowCopyStartTime)
