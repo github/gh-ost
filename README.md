@@ -30,7 +30,7 @@ In addition, it offers many [operational perks](doc/perks.md) that make it safer
 - Auditing: you may query `gh-ost` for status. `gh-ost` listens on unix socket or TCP.
 - Control over cut-over phase: `gh-ost` can be instructed to postpone what is probably the most critical step: the swap of tables, until such time that you're comfortably available. No need to worry about ETA being outside office hours.
 
-Please meanwhile refer to the [docs](doc) for more information. No, really, read the [docs](doc).
+Please refer to the [docs](doc) for more information. No, really, read the [docs](doc).
 
 ## Usage
 
@@ -54,14 +54,17 @@ More tips:
 - Use `--postpone-cut-over-flag-file` to gain control over cut-over timing
 - Get familiar with the [interactive commands](doc/interactive-commands.md)
 
-Also see [requirements and limitations](doc/requirements-and-limitations.md), [what if?](doc/what-if.md)
+Also see:
+
+- [requirements and limitations](doc/requirements-and-limitations.md)
+- [what if?](doc/what-if.md)
+- [the fine print](doc/the-fine-print.md)
 
 ## What's in a name?
 
 Originally this was named `gh-osc`: GitHub Online Schema Change, in the likes of [Facebook online schema change](https://www.facebook.com/notes/mysql-at-facebook/online-schema-change-for-mysql/430801045932/) and [pt-online-schema-change](https://www.percona.com/doc/percona-toolkit/2.2/pt-online-schema-change.html).
 
-But then a rare genetic mutation happened, and the `s` transformed into `t`. And that sent us down the path of trying to figure out a new acronym. Right now, `gh-ost` (pronounce: _Ghost_), stands for:
-- GitHub Online Schema Transmogrifier/Translator/Transformer/Transfigurator
+But then a rare genetic mutation happened, and the `s` transformed into `t`. And that sent us down the path of trying to figure out a new acronym. `gh-ost` (pronounce: _Ghost_), stands for GitHub's Online Schema Transmogrifier/Translator/Transformer/Transfigurator
 
 ## License
 
