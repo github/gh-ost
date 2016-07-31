@@ -54,7 +54,11 @@ More tips:
 - Use `--postpone-cut-over-flag-file` to gain control over cut-over timing
 - Get familiar with the [interactive commands](doc/interactive-commands.md)
 
-Also see [requirements and limitations](doc/requirements-and-limitations.md), [what if?](doc/what-if.md)
+Also see:
+
+- [requirements and limitations](doc/requirements-and-limitations.md)
+- [what if?](doc/what-if.md)
+- [the fine print](doc/the-fine-print.md)
 
 ## What's in a name?
 
