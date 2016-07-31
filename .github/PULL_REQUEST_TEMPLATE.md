@@ -6,6 +6,7 @@
 
 Related issue: https://github.com/github/gh-ost/issues/0123456789
 
+> Further notes in https://github.com/github/gh-ost/blob/master/.github/CONTRIBUTING.md
 > Thank you! We are open to PRs, but please understand if for technical reasons we are unable to accept each and any PR
 
 ### Description
