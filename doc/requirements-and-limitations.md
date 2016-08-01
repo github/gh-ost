@@ -20,5 +20,5 @@
   - `gh-ost` will do its best to pick a migration key with non-nullable columns. It will by default refuse a migration where the only possible `UNIQUE KEY` includes nullable-columns. You may override this refusal via `--allow-nullable-unique-key` but **you must** be sure there are no actual `NULL` values in those columns. Such `NULL` values would cause a data integrity problem and potentially a corrupted migration.
 - It is not allowed to migrate a table where another table exists with same name and different upper/lower case.
   - For example, you may not migrate `MyTable` if another table called `MYtable` exists in the same schema.
-- Amazon `RDS` is probably not supported (due to `SUPER` requirement)
+- Amazon RDS and Google Cloud SQL are probably not supported (due to `SUPER` requirement)
 - Multisource is not supported when migrating via replica. It _should_ work (but never tested) when connecting directly to master (`--allow-on-master`)
