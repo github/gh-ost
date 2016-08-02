@@ -39,7 +39,7 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 	}()
 }
 
-// main is the application's entry point. It will either spawn a CLI or HTTP itnerfaces.
+// main is the application's entry point. It will either spawn a CLI or HTTP interfaces.
 func main() {
 	migrationContext := base.GetMigrationContext()
 
