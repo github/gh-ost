@@ -419,7 +419,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		return chunkSize, rowsAffected, duration, err
 	}
 	rowsAffected, _ = sqlResult.RowsAffected()
-	duration = time.Now().Sub(startTime)
+	duration = time.Since(startTime)
 	log.Debugf(
 		"Issued INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
 		this.migrationContext.MigrationIterationRangeMinValues,
