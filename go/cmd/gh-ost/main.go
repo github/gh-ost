@@ -185,6 +185,7 @@ func main() {
 
 	migrator := logic.NewMigrator()
 	err := migrator.Migrate()
+	os.Remove(migrationContext.ServeSocketFile)
 	if err != nil {
 		log.Fatale(err)
 	}
