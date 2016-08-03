@@ -312,7 +312,7 @@ func (this *Inspector) validateTable() error {
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
 func (this *Inspector) validateTableForeignKeys() error {
 	query := `
-		SELECT COUNT(*) AS num_foreign_keys
+		SELECT TABLE_SCHEMA, TABLE_NAME
 		FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
 		WHERE
 				REFERENCED_TABLE_NAME IS NOT NULL
@@ -322,8 +322,10 @@ func (this *Inspector) validateTableForeignKeys() error {
 	`
 	numForeignKeys := 0
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		numForeignKeys = rowMap.GetInt("num_foreign_keys")
-
+		fkSchema := rowMap.GetString("TABLE_SCHEMA")
+		fkTable := rowMap.GetString("TABLE_NAME")
+		log.Infof("Found foreign key on %s.%s related to %s.%s", sql.EscapeName(fkSchema), sql.EscapeName(fkTable), sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		numForeignKeys++
 		return nil
 	},
 		this.migrationContext.DatabaseName,
@@ -335,7 +337,7 @@ func (this *Inspector) validateTableForeignKeys() error {
 		return err
 	}
 	if numForeignKeys > 0 {
-		return log.Errorf("Found %d foreign keys on %s.%s. Foreign keys are not supported. Bailing out", numForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return log.Errorf("Found %d foreign keys related to %s.%s. Foreign keys are not supported. Bailing out", numForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Debugf("Validated no foreign keys exist on table")
 	return nil
