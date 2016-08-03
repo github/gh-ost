@@ -25,8 +25,8 @@ const (
 )
 
 // Applier connects and writes the the applier-server, which is the server where migration
-// happens. This is typically the master, but could be a replica when `--test-on-replica` or
-// `--execute-on-replica` are given.
+// happens. This is typically the master, but could be a replica when `-test-on-replica` or
+// `-execute-on-replica` are given.
 // Applier is the one to actually write row data and apply binlog events onto the ghost table.
 // It is where the ghost & changelog tables get created. It is where the cut-over phase happens.
 type Applier struct {
@@ -107,7 +107,7 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 		}
 	}
 	if this.tableExists(this.migrationContext.GetGhostTableName()) {
-		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-ghost-table to force dropping it", sql.EscapeName(this.migrationContext.GetGhostTableName()))
+		return fmt.Errorf("Table %s already exists. Panicking. Use -initially-drop-ghost-table to force dropping it", sql.EscapeName(this.migrationContext.GetGhostTableName()))
 	}
 	if this.migrationContext.InitiallyDropOldTable {
 		if err := this.DropOldTable(); err != nil {
@@ -115,7 +115,7 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 		}
 	}
 	if this.tableExists(this.migrationContext.GetOldTableName()) {
-		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-old-table to force dropping it", sql.EscapeName(this.migrationContext.GetOldTableName()))
+		return fmt.Errorf("Table %s already exists. Panicking. Use -initially-drop-old-table to force dropping it", sql.EscapeName(this.migrationContext.GetOldTableName()))
 	}
 
 	return nil
@@ -284,7 +284,7 @@ func (this *Applier) InitiateHeartbeat(heartbeatIntervalMilliseconds int64) {
 	}
 }
 
-// ExecuteThrottleQuery executes the `--throttle-query` and returns its results.
+// ExecuteThrottleQuery executes the `-throttle-query` and returns its results.
 func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 	throttleQuery := this.migrationContext.GetThrottleQuery()
 
@@ -489,7 +489,7 @@ func (this *Applier) SwapTablesQuickAndBumpy() error {
 }
 
 // RenameTablesRollback renames back both table: original back to ghost,
-// _old back to original. This is used by `--test-on-replica`
+// _old back to original. This is used by `-test-on-replica`
 func (this *Applier) RenameTablesRollback() (renameError error) {
 	// Restoring tables to original names.
 	// We prefer the single, atomic operation:
@@ -531,7 +531,7 @@ func (this *Applier) RenameTablesRollback() (renameError error) {
 	return log.Errore(renameError)
 }
 
-// StopSlaveIOThread is applicable with --test-on-replica; it stops the IO thread, duh.
+// StopSlaveIOThread is applicable with -test-on-replica; it stops the IO thread, duh.
 // We need to keep the SQL thread active so as to complete processing received events,
 // and have them written to the binary log, so that we can then read them via streamer.
 func (this *Applier) StopSlaveIOThread() error {
@@ -544,7 +544,7 @@ func (this *Applier) StopSlaveIOThread() error {
 	return nil
 }
 
-// StartSlaveSQLThread is applicable with --test-on-replica
+// StartSlaveSQLThread is applicable with -test-on-replica
 func (this *Applier) StopSlaveSQLThread() error {
 	query := `stop /* gh-ost */ slave sql_thread`
 	log.Infof("Verifying SQL thread is stopped")
@@ -555,7 +555,7 @@ func (this *Applier) StopSlaveSQLThread() error {
 	return nil
 }
 
-// StartSlaveSQLThread is applicable with --test-on-replica
+// StartSlaveSQLThread is applicable with -test-on-replica
 func (this *Applier) StartSlaveSQLThread() error {
 	query := `start /* gh-ost */ slave sql_thread`
 	log.Infof("Verifying SQL thread is running")
@@ -566,7 +566,7 @@ func (this *Applier) StartSlaveSQLThread() error {
 	return nil
 }
 
-// StopReplication is used by `--test-on-replica` and stops replication.
+// StopReplication is used by `-test-on-replica` and stops replication.
 func (this *Applier) StopReplication() error {
 	if err := this.StopSlaveIOThread(); err != nil {
 		return err

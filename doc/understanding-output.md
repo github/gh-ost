@@ -2,8 +2,8 @@
 
 `gh-ost` attempts to be verbose to the point where you really know what it's doing, without completely spamming you.
 You can control output levels:
-- `--verbose`: common use. Useful output, not tons of it
-- `--debug`: everything. Tons of output.
+- `-verbose`: common use. Useful output, not tons of it
+- `-debug`: everything. Tons of output.
 
 Initial output lines may look like this:
 ```
@@ -16,7 +16,7 @@ Initial output lines may look like this:
 2016-05-19 17:57:04 INFO Table found. Engine=InnoDB
 2016-05-19 17:57:05 INFO As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while
 2016-05-19 17:57:11 INFO Exact number of rows via COUNT: 4466810
-2016-05-19 17:57:11 INFO --test-on-replica given. Will not execute on master the.master:3306 but rather on replica 127.0.0.1:3306 itself
+2016-05-19 17:57:11 INFO -test-on-replica given. Will not execute on master the.master:3306 but rather on replica 127.0.0.1:3306 itself
 2016-05-19 17:57:11 INFO Master found to be 127.0.0.1:3306
 2016-05-19 17:57:11 INFO connection validated on 127.0.0.1:3306
 2016-05-19 17:57:11 INFO Registering replica at 127.0.0.1:3306
@@ -102,7 +102,7 @@ Notes:
 - `Backlog: 100/100`: our buffer of `100` events is full; you may see this during or right after throttling (the binary logs keep filling up with relevant queries that are not being processed), or immediately following a high workload.
   `gh-ost` will always prioritize binlog event processing (backlog) over row-copy; when next possible (throttling completes, in our example), `gh-ost` will drain the queue first, and only then proceed to resume row copy.
   There is nothing wrong with seeing `100/100`; it just indicates we're behind at that point in time.
-- `Copy: 31291200/43138418`, `Copy: 31389700/43138432`: this migration executed with `--exact-rowcount`. `gh-ost` continuously heuristically updates the total number of expected row copies as migration proceeds, hence the change from `43138418` to `43138432`
+- `Copy: 31291200/43138418`, `Copy: 31389700/43138432`: this migration executed with `-exact-rowcount`. `gh-ost` continuously heuristically updates the total number of expected row copies as migration proceeds, hence the change from `43138418` to `43138432`
 - `streamer: mysql-bin.006793:179473435` tells us which binary log entry is `gh-ost` processing at this time.
 
 ### Status hint

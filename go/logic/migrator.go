@@ -353,9 +353,9 @@ func (this *Migrator) validateStatement() (err error) {
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
 		if !this.migrationContext.ApproveRenamedColumns {
-			return fmt.Errorf("Alter statement has column(s) renamed. gh-ost suspects the following renames: %v; but to proceed you must approve via `--approve-renamed-columns` (or you can skip renamed columns via `--skip-renamed-columns`)", this.parser.GetNonTrivialRenames())
+			return fmt.Errorf("Alter statement has column(s) renamed. gh-ost suspects the following renames: %v; but to proceed you must approve via `-approve-renamed-columns` (or you can skip renamed columns via `-skip-renamed-columns`)", this.parser.GetNonTrivialRenames())
 		}
-		log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", this.parser.GetNonTrivialRenames())
+		log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; -approve-renamed-columns is given and so migration proceeds.", this.parser.GetNonTrivialRenames())
 	}
 	return nil
 }
@@ -471,7 +471,7 @@ func (this *Migrator) cutOver() (err error) {
 	this.migrationContext.MarkPointOfInterest()
 
 	if this.migrationContext.TestOnReplica {
-		// With `--test-on-replica` we stop replication thread, and then proceed to use
+		// With `-test-on-replica` we stop replication thread, and then proceed to use
 		// the same cut-over phase as the master would use. That means we take locks
 		// and swap the tables.
 		// The difference is that we will later swap the tables back.
@@ -797,7 +797,7 @@ func (this *Migrator) initiateServer() (err error) {
 // - table row count
 // - schema validation
 // - heartbeat
-// When `--allow-on-master` is supplied, the inspector is actually the master.
+// When `-allow-on-master` is supplied, the inspector is actually the master.
 func (this *Migrator) initiateInspector() (err error) {
 	this.inspector = NewInspector()
 	if err := this.inspector.InitDBConnections(); err != nil {
@@ -816,9 +816,9 @@ func (this *Migrator) initiateInspector() (err error) {
 	}
 	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
 		if this.migrationContext.InspectorIsAlsoApplier() {
-			return fmt.Errorf("Instructed to --test-on-replica or --migrate-on-replica, but the server we connect to doesn't seem to be a replica")
+			return fmt.Errorf("Instructed to -test-on-replica or -migrate-on-replica, but the server we connect to doesn't seem to be a replica")
 		}
-		log.Infof("--test-on-replica or --migrate-on-replica given. Will not execute on master %+v but rather on replica %+v itself",
+		log.Infof("-test-on-replica or -migrate-on-replica given. Will not execute on master %+v but rather on replica %+v itself",
 			*this.migrationContext.ApplierConnectionConfig.ImpliedKey, *this.migrationContext.InspectorConnectionConfig.ImpliedKey,
 		)
 		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.Duplicate()
@@ -826,7 +826,7 @@ func (this *Migrator) initiateInspector() (err error) {
 			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.InspectorConnectionConfig.Key)
 		}
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
-		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master")
+		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide -allow-on-master")
 	}
 
 	log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
@@ -1235,7 +1235,7 @@ func (this *Migrator) finalCleanup() error {
 		}
 	} else {
 		if !this.migrationContext.Noop {
-			log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add `--ok-to-drop-table` next time. But I prefer you do not. To drop the old table, issue:")
+			log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add `-ok-to-drop-table` next time. But I prefer you do not. To drop the old table, issue:")
 			log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
 		}
 	}

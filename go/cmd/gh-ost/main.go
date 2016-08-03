@@ -61,7 +61,7 @@ func main() {
 
 	executeFlag := flag.Bool("execute", false, "actually execute the alter & migrate the table. Default is noop: do some tests and exit")
 	flag.BoolVar(&migrationContext.TestOnReplica, "test-on-replica", false, "Have the migration run on a replica, not on the master. At the end of migration replication is stopped, and tables are swapped and immediately swap-revert. Replication remains stopped and you can compare the two tables for building trust")
-	flag.BoolVar(&migrationContext.MigrateOnReplica, "migrate-on-replica", false, "Have the migration run on a replica, not on the master. This will do the full migration on the replica including cut-over (as opposed to --test-on-replica)")
+	flag.BoolVar(&migrationContext.MigrateOnReplica, "migrate-on-replica", false, "Have the migration run on a replica, not on the master. This will do the full migration on the replica including cut-over (as opposed to -test-on-replica)")
 
 	flag.BoolVar(&migrationContext.OkToDropTable, "ok-to-drop-table", false, "Shall the tool drop the old table at end of operation. DROPping tables can be a long locking operation, which is why I'm not doing it by default. I'm an online tool, yes?")
 	flag.BoolVar(&migrationContext.InitiallyDropOldTable, "initially-drop-old-table", false, "Drop a possibly existing OLD table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists")
@@ -88,7 +88,7 @@ func main() {
 	flag.Int64Var(&migrationContext.ServeTCPPort, "serve-tcp-port", 0, "TCP port to serve on. Default: disabled")
 
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
-	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as `--max-load`. When status exceeds threshold, app panics and quits")
+	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as `-max-load`. When status exceeds threshold, app panics and quits")
 	quiet := flag.Bool("quiet", false, "quiet")
 	verbose := flag.Bool("verbose", false, "verbose")
 	debug := flag.Bool("debug", false, "debug mode (very verbose)")
@@ -127,23 +127,23 @@ func main() {
 	}
 
 	if migrationContext.DatabaseName == "" {
-		log.Fatalf("--database must be provided and database name must not be empty")
+		log.Fatalf("-database must be provided and database name must not be empty")
 	}
 	if migrationContext.OriginalTableName == "" {
-		log.Fatalf("--table must be provided and table name must not be empty")
+		log.Fatalf("-table must be provided and table name must not be empty")
 	}
 	if migrationContext.AlterStatement == "" {
-		log.Fatalf("--alter must be provided and statement must not be empty")
+		log.Fatalf("-alter must be provided and statement must not be empty")
 	}
 	migrationContext.Noop = !(*executeFlag)
 	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {
-		log.Fatalf("--allow-on-master and --test-on-replica are mutually exclusive")
+		log.Fatalf("-allow-on-master and -test-on-replica are mutually exclusive")
 	}
 	if migrationContext.AllowedRunningOnMaster && migrationContext.MigrateOnReplica {
-		log.Fatalf("--allow-on-master and --migrate-on-replica are mutually exclusive")
+		log.Fatalf("-allow-on-master and -migrate-on-replica are mutually exclusive")
 	}
 	if migrationContext.MigrateOnReplica && migrationContext.TestOnReplica {
-		log.Fatalf("--migrate-on-replica and --test-on-replica are mutually exclusive")
+		log.Fatalf("-migrate-on-replica and -test-on-replica are mutually exclusive")
 	}
 
 	switch *cutOver {

@@ -13,7 +13,7 @@ TL;DR `gh-ost` will make all changes on a replica and leave both original and gh
 
 ## Issuing a test drive
 
-Apply `--test-on-replica --host=<a.replica>`.
+Apply `-test-on-replica -host=<a.replica>`.
 - `gh-ost` would connect to the indicated server
 - Will verify this is indeed a replica and not a master
 - Will perform _everything_ on this replica. Other then checking who the master is, it will otherwise not touch it.
@@ -49,12 +49,40 @@ It's your job to:
 
 Simple:
 ```shell
-$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --initially-drop-ghost-table --initially-drop-old-table --test-on-replica --verbose --execute
+$ gh-ost \
+-host=myhost.com \
+-conf=/etc/gh-ost.cnf \
+-database=test \
+-table=sample_table \
+-alter="engine=innodb" \
+-chunk-size=2000 \
+-max-load=Threads_connected=20 \
+-initially-drop-ghost-table \
+-initially-drop-old-table \
+-test-on-replica \
+-verbose \
+-execute
 ```
 
 Elaborate:
 ```shell
-$ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample_table --alter="engine=innodb" --chunk-size=2000 --max-load=Threads_connected=20 --switch-to-rbr --initially-drop-ghost-table --initially-drop-old-table --test-on-replica --postpone-cut-over-flag-file=/tmp/ghost-postpone.flag --exact-rowcount --allow-nullable-unique-key --verbose --execute
+$ gh-ost \
+-host=myhost.com \
+-conf=/etc/gh-ost.cnf \
+-database=test \
+-table=sample_table \
+-alter="engine=innodb" \
+-chunk-size=2000 \
+-max-load=Threads_connected=20 \
+-switch-to-rbr \
+-initially-drop-ghost-table \
+-initially-drop-old-table \
+-test-on-replica \
+-postpone-cut-over-flag-file=/tmp/ghost-postpone.flag \
+-exact-rowcount \
+-allow-nullable-unique-key \
+-verbose \
+-execute
 ```
 - Count exact number of rows (makes ETA estimation very good). This goes at the expense of paying the time for issuing a `SELECT COUNT(*)` on your table. We use this lovingly.
 - Automatically switch to `RBR` if replica is configured as `SBR`. See also: [migrating with SBR](migrating-with-sbr.md)
@@ -62,4 +90,4 @@ $ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample
 
 ### Further notes
 
-Do not confuse `--test-on-replica` with `--migrate-on-replica`; the latter performs the migration and _keeps it that way_ (does not revert the table swap nor stops replication)
+Do not confuse `-test-on-replica` with `-migrate-on-replica`; the latter performs the migration and _keeps it that way_ (does not revert the table swap nor stops replication)
