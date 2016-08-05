@@ -155,7 +155,10 @@ func BuildRangePreparedComparison(columns []string, args []interface{}, comparis
 	return BuildRangeComparison(columns, values, args, comparisonSign)
 }
 
-func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, virtualColumns []string, uniqueKey string, uniqueKeyColumns, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+	var filteredMappedSharedColumns []string
+	var filteredSharedColumns []string
+
 	if len(sharedColumns) == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
@@ -165,15 +168,31 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 
 	mappedSharedColumns = duplicateNames(mappedSharedColumns)
 	for i := range mappedSharedColumns {
-		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
+		isvirtual := false
+		for j := range virtualColumns {
+			if virtualColumns[j] == mappedSharedColumns[i] {
+				isvirtual = true
+			}
+		}
+		if isvirtual == false { // Remove virtual columns from the list as inserting them doesn't make sense and lets the insert fail
+			filteredMappedSharedColumns = append(filteredMappedSharedColumns, EscapeName(mappedSharedColumns[i]))
+		}
 	}
-	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
+	mappedSharedColumnsListing := strings.Join(filteredMappedSharedColumns, ", ")
 
 	sharedColumns = duplicateNames(sharedColumns)
 	for i := range sharedColumns {
-		sharedColumns[i] = EscapeName(sharedColumns[i])
+		isvirtual := false
+		for j := range virtualColumns {
+			if virtualColumns[j] == sharedColumns[i] {
+				isvirtual = true
+			}
+		}
+		if isvirtual == false { // Remove virtual columns from the list as inserting them doesn't make sense and lets the insert fail
+			filteredSharedColumns = append(filteredSharedColumns, EscapeName(sharedColumns[i]))
+		}
 	}
-	sharedColumnsListing := strings.Join(sharedColumns, ", ")
+	sharedColumnsListing := strings.Join(filteredSharedColumns, ", ")
 
 	uniqueKey = EscapeName(uniqueKey)
 	var minRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
@@ -205,10 +224,10 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	return result, explodedArgs, nil
 }
 
-func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, virtualColumns []string, uniqueKey string, uniqueKeyColumns []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
 	rangeStartValues := buildPreparedValues(len(uniqueKeyColumns))
 	rangeEndValues := buildPreparedValues(len(uniqueKeyColumns))
-	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
+	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, virtualColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
 }
 
 func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueKeyColumns []string, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
@@ -330,7 +349,7 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	return result, uniqueKeyArgs, nil
 }
 
-func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
+func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedColumns *ColumnList, virtualColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
 	if len(args) != tableColumns.Len() {
 		return result, args, fmt.Errorf("args count differs from table column count in BuildDMLInsertQuery")
 	}
@@ -368,7 +387,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	return result, sharedArgs, nil
 }
 
-func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedColumns, uniqueKeyColumns *ColumnList, valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {
+func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedColumns, virtualColumns, uniqueKeyColumns *ColumnList, valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {
 	if len(valueArgs) != tableColumns.Len() {
 		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("value args count differs from table column count in BuildDMLUpdateQuery")
 	}
