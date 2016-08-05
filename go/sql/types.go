@@ -89,7 +89,7 @@ func (this *UniqueKey) Len() int {
 func (this *UniqueKey) String() string {
 	description := this.Name
 	if this.IsAutoIncrement {
-		description = fmt.Sprintf("%s (auto_incrmenet)", description)
+		description = fmt.Sprintf("%s (auto_increment)", description)
 	}
 	return fmt.Sprintf("%s: %s; has nullable: %+v", description, this.Columns.Names, this.HasNullable)
 }
