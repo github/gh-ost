@@ -333,7 +333,7 @@ func (this *Migrator) onChangelogHeartbeat(heartbeatValue string) (err error) {
 	if err != nil {
 		return log.Errore(err)
 	}
-	lag := time.Now().Sub(heartbeatTime)
+	lag := time.Since(heartbeatTime)
 
 	atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
 
@@ -517,7 +517,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	log.Infof("Waiting for events up to lock")
 	atomic.StoreInt64(&this.allEventsUpToLockProcessedInjectedFlag, 1)
 	<-this.allEventsUpToLockProcessed
-	waitForEventsUpToLockDuration := time.Now().Sub(waitForEventsUpToLockStartTime)
+	waitForEventsUpToLockDuration := time.Since(waitForEventsUpToLockStartTime)
 
 	log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
 	this.printStatus(ForcePrintStatusAndHint)
@@ -1193,7 +1193,7 @@ func (this *Migrator) executeWriteFuncs() error {
 							return log.Errore(err)
 						}
 						if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
-							copyRowsDuration := time.Now().Sub(copyRowsStartTime)
+							copyRowsDuration := time.Since(copyRowsStartTime)
 							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
 							sleepTime := time.Duration(time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond)
 							time.Sleep(sleepTime)

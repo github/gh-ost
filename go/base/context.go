@@ -259,7 +259,7 @@ func (this *MigrationContext) IsTransactionalTable() bool {
 
 // ElapsedTime returns time since very beginning of the process
 func (this *MigrationContext) ElapsedTime() time.Duration {
-	return time.Now().Sub(this.StartTime)
+	return time.Since(this.StartTime)
 }
 
 // MarkRowCopyStartTime
@@ -280,7 +280,7 @@ func (this *MigrationContext) ElapsedRowCopyTime() time.Duration {
 	}
 
 	if this.RowCopyEndTime.IsZero() {
-		return time.Now().Sub(this.RowCopyStartTime)
+		return time.Since(this.RowCopyStartTime)
 	}
 	return this.RowCopyEndTime.Sub(this.RowCopyStartTime)
 }
@@ -314,7 +314,7 @@ func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
 	this.pointOfInterestTimeMutex.Lock()
 	defer this.pointOfInterestTimeMutex.Unlock()
 
-	return time.Now().Sub(this.pointOfInterestTime)
+	return time.Since(this.pointOfInterestTime)
 }
 
 func (this *MigrationContext) SetMaxLagMillisecondsThrottleThreshold(maxLagMillisecondsThrottleThreshold int64) {
