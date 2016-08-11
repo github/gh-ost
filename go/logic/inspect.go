@@ -190,10 +190,11 @@ func (this *Inspector) validateGrants() error {
 		return nil
 	}
 	if foundSuper && foundReplicationSlave && foundDBAll {
-		log.Infof("User has SUPER, REPLICATION SLAVE privileges, and has ALL privileges on `%s`", this.migrationContext.DatabaseName)
+		log.Infof("User has SUPER, REPLICATION SLAVE privileges, and has ALL privileges on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
 		return nil
 	}
-	return log.Errorf("User has insufficient privileges for migration.")
+	log.Debugf("Privileges: Super: %t, REPLICATION SLAVE: %t, ALL on *.*: %t, ALL on %s.*: %t", foundSuper, foundReplicationSlave, foundAll, sql.EscapeName(this.migrationContext.DatabaseName), foundDBAll)
+	return log.Errorf("User has insufficient privileges for migration. Needed: SUPER, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
 }
 
 // restartReplication is required so that we are _certain_ the binlog format and
