@@ -48,6 +48,7 @@ func (this *Server) BindSocketFile() (err error) {
 }
 
 func (this *Server) RemoveSocketFile() (err error) {
+	log.Infof("Removing socket file: %s", this.migrationContext.ServeSocketFile)
 	return os.Remove(this.migrationContext.ServeSocketFile)
 }
 
