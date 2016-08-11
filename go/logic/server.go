@@ -47,6 +47,10 @@ func (this *Server) BindSocketFile() (err error) {
 	return nil
 }
 
+func (this *Server) RemoveSocketFile() (err error) {
+	return os.Remove(this.migrationContext.ServeSocketFile)
+}
+
 func (this *Server) BindTCPPort() (err error) {
 	if this.migrationContext.ServeTCPPort == 0 {
 		return nil
