@@ -828,6 +828,9 @@ func (this *Migrator) initiateInspector() (err error) {
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
 		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master")
 	}
+	if err := this.inspector.ValidateLogSlaveUpdates(); err != nil {
+		return err
+	}
 
 	log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	return nil
