@@ -69,6 +69,9 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 	if err := this.validateTableForeignKeys(); err != nil {
 		return err
 	}
+	if err := this.validateTableTriggers(); err != nil {
+		return err
+	}
 	if err := this.estimateTableRowsViaExplain(); err != nil {
 		return err
 	}
@@ -339,6 +342,34 @@ func (this *Inspector) validateTableForeignKeys() error {
 		return log.Errorf("Found %d foreign keys on %s.%s. Foreign keys are not supported. Bailing out", numForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Debugf("Validated no foreign keys exist on table")
+	return nil
+}
+
+// validateTableTriggers makes sure no triggers exist on the migrated table
+func (this *Inspector) validateTableTriggers() error {
+	query := `
+		SELECT COUNT(*) AS num_triggers
+			FROM INFORMATION_SCHEMA.TRIGGERS
+			WHERE
+				TRIGGER_SCHEMA=?
+				AND EVENT_OBJECT_TABLE=?
+	`
+	numTriggers := 0
+	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		numTriggers = rowMap.GetInt("num_triggers")
+
+		return nil
+	},
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
+	)
+	if err != nil {
+		return err
+	}
+	if numTriggers > 0 {
+		return log.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	}
+	log.Debugf("Validated no triggers exist on table")
 	return nil
 }
 
