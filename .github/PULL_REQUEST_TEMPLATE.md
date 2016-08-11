@@ -17,4 +17,4 @@ This PR [briefly explain what is does]
 
 - [ ] contributed code is using same conventions as original code
 - [ ] code is formatted via `gofmt` (please avoid `goimports`)
-- [ ] code is built via `bash build.sh`
+- [ ] code is built via `./build.sh`
