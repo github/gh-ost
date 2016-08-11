@@ -22,3 +22,4 @@
   - For example, you may not migrate `MyTable` if another table called `MYtable` exists in the same schema.
 - Amazon RDS and Google Cloud SQL are probably not supported (due to `SUPER` requirement)
 - Multisource is not supported when migrating via replica. It _should_ work (but never tested) when connecting directly to master (`--allow-on-master`)
+- Master-master setup is only supported in active-passive setup. Active-active (where table is being written to on both masters concurrently) is unsupported. It may be supported in the future.
