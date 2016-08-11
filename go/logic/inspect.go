@@ -280,8 +280,8 @@ func (this *Inspector) validateBinlogs() error {
 	return nil
 }
 
-// ValidateLogSlaveUpdates checks that binary log log_slave_updates is set. This test is not required when migrating on replica or when migrating directly on master
-func (this *Inspector) ValidateLogSlaveUpdates() error {
+// validateLogSlaveUpdates checks that binary log log_slave_updates is set. This test is not required when migrating on replica or when migrating directly on master
+func (this *Inspector) validateLogSlaveUpdates() error {
 	query := `select @@global.log_slave_updates`
 	var logSlaveUpdates bool
 	if err := this.db.QueryRow(query).Scan(&logSlaveUpdates); err != nil {
