@@ -246,16 +246,13 @@ func (this *Inspector) applyBinlogFormat() error {
 
 // validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
-	query := `select @@global.log_bin, @@global.log_slave_updates, @@global.binlog_format`
-	var hasBinaryLogs, logSlaveUpdates bool
-	if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &logSlaveUpdates, &this.migrationContext.OriginalBinlogFormat); err != nil {
+	query := `select @@global.log_bin, @@global.binlog_format`
+	var hasBinaryLogs bool
+	if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat); err != nil {
 		return err
 	}
 	if !hasBinaryLogs {
 		return fmt.Errorf("%s:%d must have binary logs enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
-	}
-	if !logSlaveUpdates {
-		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	}
 	if this.migrationContext.RequiresBinlogFormatChange() {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
@@ -283,6 +280,21 @@ func (this *Inspector) validateBinlogs() error {
 	this.migrationContext.OriginalBinlogRowImage = strings.ToUpper(this.migrationContext.OriginalBinlogRowImage)
 
 	log.Infof("binary logs validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	return nil
+}
+
+// validateLogSlaveUpdates checks that binary log log_slave_updates is set. This test is not required when migrating on replica or when migrating directly on master
+func (this *Inspector) validateLogSlaveUpdates() error {
+	query := `select @@global.log_slave_updates`
+	var logSlaveUpdates bool
+	if err := this.db.QueryRow(query).Scan(&logSlaveUpdates); err != nil {
+		return err
+	}
+	if !logSlaveUpdates && !this.migrationContext.InspectorIsAlsoApplier() {
+		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	}
+
+	log.Infof("binary logs updates validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	return nil
 }
 
