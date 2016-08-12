@@ -399,6 +399,8 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateServer(); err != nil {
 		return err
 	}
+	defer this.server.RemoveSocketFile()
+
 	if this.migrationContext.CountTableRows {
 		if this.migrationContext.Noop {
 			log.Debugf("Noop operation; not really counting table rows")
