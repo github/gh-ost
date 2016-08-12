@@ -50,9 +50,6 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateGrants(); err != nil {
 		return err
 	}
-	// if err := this.restartReplication(); err != nil {
-	// 	return err
-	// }
 	if err := this.validateBinlogs(); err != nil {
 		return err
 	}
@@ -157,6 +154,7 @@ func (this *Inspector) validateGrants() error {
 	query := `show /* gh-ost */ grants for current_user()`
 	foundAll := false
 	foundSuper := false
+	foundReplicationClient := false
 	foundReplicationSlave := false
 	foundDBAll := false
 
@@ -168,6 +166,9 @@ func (this *Inspector) validateGrants() error {
 			}
 			if strings.Contains(grant, `SUPER`) && strings.Contains(grant, ` ON *.*`) {
 				foundSuper = true
+			}
+			if strings.Contains(grant, `REPLICATION CLIENT`) && strings.Contains(grant, ` ON *.*`) {
+				foundReplicationClient = true
 			}
 			if strings.Contains(grant, `REPLICATION SLAVE`) && strings.Contains(grant, ` ON *.*`) {
 				foundReplicationSlave = true
@@ -187,6 +188,7 @@ func (this *Inspector) validateGrants() error {
 	if err != nil {
 		return err
 	}
+	this.migrationContext.HasSuperPrivilege = foundSuper
 
 	if foundAll {
 		log.Infof("User has ALL privileges")
@@ -196,7 +198,11 @@ func (this *Inspector) validateGrants() error {
 		log.Infof("User has SUPER, REPLICATION SLAVE privileges, and has ALL privileges on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
 		return nil
 	}
-	log.Debugf("Privileges: Super: %t, REPLICATION SLAVE: %t, ALL on *.*: %t, ALL on %s.*: %t", foundSuper, foundReplicationSlave, foundAll, sql.EscapeName(this.migrationContext.DatabaseName), foundDBAll)
+	if foundReplicationClient && foundReplicationSlave && foundDBAll {
+		log.Infof("User has REPLICATION CLIENT, REPLICATION SLAVE privileges, and has ALL privileges on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+		return nil
+	}
+	log.Debugf("Privileges: Super: %t, REPLICATION CLIENT: %t, REPLICATION SLAVE: %t, ALL on *.*: %t, ALL on %s.*: %t", foundSuper, foundReplicationClient, foundReplicationSlave, foundAll, sql.EscapeName(this.migrationContext.DatabaseName), foundDBAll)
 	return log.Errorf("User has insufficient privileges for migration. Needed: SUPER, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
 }
 
@@ -230,16 +236,26 @@ func (this *Inspector) restartReplication() error {
 // the replication thread apply it.
 func (this *Inspector) applyBinlogFormat() error {
 	if this.migrationContext.RequiresBinlogFormatChange() {
+		if !this.migrationContext.SwitchToRowBinlogFormat {
+			return fmt.Errorf("Existing binlog_format is %s. Am not switching it to ROW unless you specify --switch-to-rbr", this.migrationContext.OriginalBinlogFormat)
+		}
 		if _, err := sqlutils.ExecNoPrepare(this.db, `set global binlog_format='ROW'`); err != nil {
 			return err
 		}
 		if _, err := sqlutils.ExecNoPrepare(this.db, `set session binlog_format='ROW'`); err != nil {
 			return err
 		}
+		if err := this.restartReplication(); err != nil {
+			return err
+		}
 		log.Debugf("'ROW' binlog format applied")
+		return nil
 	}
-	if err := this.restartReplication(); err != nil {
-		return err
+	// We already have RBR, no explicit switch
+	if !this.migrationContext.TrustRBR {
+		if err := this.restartReplication(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

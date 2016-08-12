@@ -51,6 +51,7 @@ type MigrationContext struct {
 	AllowedRunningOnMaster   bool
 	AllowedMasterMaster      bool
 	SwitchToRowBinlogFormat  bool
+	TrustRBR                 bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
@@ -92,6 +93,7 @@ type MigrationContext struct {
 	TableEngine               string
 	RowsEstimate              int64
 	UsedRowsEstimateMethod    RowsEstimateMethod
+	HasSuperPrivilege         bool
 	OriginalBinlogFormat      string
 	OriginalBinlogRowImage    string
 	InspectorConnectionConfig *mysql.ConnectionConfig
