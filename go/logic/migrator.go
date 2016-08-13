@@ -1048,8 +1048,7 @@ func (this *Migrator) initiateStreaming() error {
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
-	this.eventsStreamer.AddListener(
-		false,
+	this.eventsStreamer.addDmlListener(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.GetChangelogTableName(),
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
@@ -1071,8 +1070,7 @@ func (this *Migrator) initiateStreaming() error {
 // addDMLEventsListener begins listening for binlog events on the original table,
 // and creates & enqueues a write task per such event.
 func (this *Migrator) addDMLEventsListener() error {
-	err := this.eventsStreamer.AddListener(
-		false,
+	err := this.eventsStreamer.addDmlListener(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		func(dmlEvent *binlog.BinlogDMLEvent) error {

@@ -21,10 +21,13 @@ import (
 )
 
 type BinlogEventListener struct {
-	async        bool
 	databaseName string
 	tableName    string
 	onDmlEvent   func(event *binlog.BinlogDMLEvent) error
+}
+
+type BinlogCoordinatesListener struct {
+	onBinlogCoordinates func(binlogCoordinates *mysql.BinlogCoordinates) error
 }
 
 const (
@@ -39,25 +42,25 @@ type EventsStreamer struct {
 	db                       *gosql.DB
 	migrationContext         *base.MigrationContext
 	initialBinlogCoordinates *mysql.BinlogCoordinates
-	listeners                [](*BinlogEventListener)
+	dmlListeners             [](*BinlogEventListener)
+	coordinatesListeners     [](*BinlogCoordinatesListener)
 	listenersMutex           *sync.Mutex
-	eventsChannel            chan *binlog.BinlogEntry
 	binlogReader             *binlog.GoMySQLReader
 }
 
 func NewEventsStreamer() *EventsStreamer {
 	return &EventsStreamer{
-		connectionConfig: base.GetMigrationContext().InspectorConnectionConfig,
-		migrationContext: base.GetMigrationContext(),
-		listeners:        [](*BinlogEventListener){},
-		listenersMutex:   &sync.Mutex{},
-		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
+		connectionConfig:     base.GetMigrationContext().InspectorConnectionConfig,
+		migrationContext:     base.GetMigrationContext(),
+		dmlListeners:         [](*BinlogEventListener){},
+		coordinatesListeners: [](*BinlogCoordinatesListener){},
+		listenersMutex:       &sync.Mutex{},
 	}
 }
 
-// AddListener registers a new listener for binlog events, on a per-table basis
-func (this *EventsStreamer) AddListener(
-	async bool, databaseName string, tableName string, onDmlEvent func(event *binlog.BinlogDMLEvent) error) (err error) {
+// addDmlListener registers a new listener for binlog events, on a per-table basis
+func (this *EventsStreamer) addDmlListener(
+	databaseName string, tableName string, onDmlEvent func(event *binlog.BinlogDMLEvent) error) (err error) {
 
 	this.listenersMutex.Lock()
 	defer this.listenersMutex.Unlock()
@@ -69,36 +72,39 @@ func (this *EventsStreamer) AddListener(
 		return fmt.Errorf("Empty table name in AddListener")
 	}
 	listener := &BinlogEventListener{
-		async:        async,
 		databaseName: databaseName,
 		tableName:    tableName,
 		onDmlEvent:   onDmlEvent,
 	}
-	this.listeners = append(this.listeners, listener)
+	this.dmlListeners = append(this.dmlListeners, listener)
 	return nil
 }
 
-// notifyListeners will notify relevant listeners with given DML event. Only
+// notifyDmlListeners will notify relevant listeners with given DML event. Only
 // listeners registered for changes on the table on which the DML operates are notified.
-func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) {
+func (this *EventsStreamer) notifyDmlListeners(binlogEvent *binlog.BinlogDMLEvent) {
 	this.listenersMutex.Lock()
 	defer this.listenersMutex.Unlock()
 
-	for _, listener := range this.listeners {
-		listener := listener
+	for _, listener := range this.dmlListeners {
 		if strings.ToLower(listener.databaseName) != strings.ToLower(binlogEvent.DatabaseName) {
 			continue
 		}
 		if strings.ToLower(listener.tableName) != strings.ToLower(binlogEvent.TableName) {
 			continue
 		}
-		if listener.async {
-			go func() {
-				listener.onDmlEvent(binlogEvent)
-			}()
-		} else {
-			listener.onDmlEvent(binlogEvent)
-		}
+		listener.onDmlEvent(binlogEvent)
+	}
+}
+
+// notifyBinlogCoordinatesListeners will notify all coordinates listeners, and these can decide what
+// to do with the information
+func (this *EventsStreamer) notifyBinlogCoordinatesListeners(binlogCoordinates *mysql.BinlogCoordinates) {
+	this.listenersMutex.Lock()
+	defer this.listenersMutex.Unlock()
+
+	for _, listener := range this.coordinatesListeners {
+		listener.onBinlogCoordinates(binlogCoordinates)
 	}
 }
 
@@ -181,18 +187,26 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 // StreamEvents will begin streaming events. It will be blocking, so should be
 // executed by a goroutine
 func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
+	eventsChannel := make(chan *binlog.BinlogEntry, EventsChannelBufferSize)
 	go func() {
-		for binlogEntry := range this.eventsChannel {
+		for binlogEntry := range eventsChannel {
 			if binlogEntry.DmlEvent != nil {
-				this.notifyListeners(binlogEntry.DmlEvent)
+				this.notifyDmlListeners(binlogEntry.DmlEvent)
 			}
 		}
 	}()
+	binlogCoordinatesChannel := make(chan *mysql.BinlogCoordinates, EventsChannelBufferSize)
+	go func() {
+		for binlogCoordinates := range binlogCoordinatesChannel {
+			this.notifyBinlogCoordinatesListeners(binlogCoordinates)
+		}
+	}()
+
 	// The next should block and execute forever, unless there's a serious error
 	var successiveFailures int64
 	var lastAppliedRowsEventHint mysql.BinlogCoordinates
 	for {
-		if err := this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel); err != nil {
+		if err := this.binlogReader.StreamEvents(canStopStreaming, eventsChannel, binlogCoordinatesChannel); err != nil {
 			log.Infof("StreamEvents encountered unexpected error: %+v", err)
 			this.migrationContext.MarkPointOfInterest()
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
