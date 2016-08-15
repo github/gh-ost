@@ -860,5 +860,8 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 	if this.migrationContext.CountTableRows {
 		atomic.AddInt64(&this.migrationContext.RowsEstimate, rowDelta)
 	}
+	if err != nil {
+		err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), query, args)
+	}
 	return err
 }
