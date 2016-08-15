@@ -566,14 +566,41 @@ func (this *Applier) StartSlaveSQLThread() error {
 	return nil
 }
 
+func (this *Applier) isReplicationStopped() bool {
+	query := `show slave status`
+	replicationStopped := false
+
+	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		replicationStopped = rowMap["Slave_IO_Running"].String == "No" && rowMap["Slave_SQL_Running"].String == "No"
+		return nil
+	})
+
+	if err != nil {
+		return false
+	}
+	return replicationStopped
+}
+
 // StopReplication is used by `--test-on-replica` and stops replication.
 func (this *Applier) StopReplication() error {
-	if err := this.StopSlaveIOThread(); err != nil {
-		return err
+	if this.migrationContext.ManualReplicationControl {
+		for {
+			log.Info("Waiting for replication to stop...")
+			if this.isReplicationStopped() {
+				log.Info("Replication stopped.")
+				break
+			}
+			time.Sleep(5 * time.Second)
+		}
+	} else {
+		if err := this.StopSlaveIOThread(); err != nil {
+			return err
+		}
+		if err := this.StopSlaveSQLThread(); err != nil {
+			return err
+		}
 	}
-	if err := this.StopSlaveSQLThread(); err != nil {
-		return err
-	}
+
 	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.db)
 	if err != nil {
 		return err

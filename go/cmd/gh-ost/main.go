@@ -60,6 +60,7 @@ func main() {
 	flag.BoolVar(&migrationContext.SkipRenamedColumns, "skip-renamed-columns", false, "in case your `ALTER` statement renames columns, gh-ost will note that and offer its interpretation of the rename. By default gh-ost does not proceed to execute. This flag tells gh-ost to skip the renamed columns, i.e. to treat what gh-ost thinks are renamed columns as unrelated columns. NOTE: you may lose column data")
 
 	executeFlag := flag.Bool("execute", false, "actually execute the alter & migrate the table. Default is noop: do some tests and exit")
+	testOnReplicaWithManualReplicationControl := flag.Bool("test-on-replica-manual-replication-control", false, "Same as --test-on-replica, but waits for replication to be stopped, instead of stopping it automatically. (Useful in RDS.)")
 	flag.BoolVar(&migrationContext.TestOnReplica, "test-on-replica", false, "Have the migration run on a replica, not on the master. At the end of migration replication is stopped, and tables are swapped and immediately swap-revert. Replication remains stopped and you can compare the two tables for building trust")
 	flag.BoolVar(&migrationContext.MigrateOnReplica, "migrate-on-replica", false, "Have the migration run on a replica, not on the master. This will do the full migration on the replica including cut-over (as opposed to --test-on-replica)")
 
@@ -148,6 +149,13 @@ func main() {
 	}
 	if migrationContext.SwitchToRowBinlogFormat && migrationContext.AssumeRBR {
 		log.Fatalf("--switch-to-rbr and --assume-rbr are mutually exclusive")
+	}
+	if *testOnReplicaWithManualReplicationControl {
+		if migrationContext.TestOnReplica {
+			log.Fatalf("--test-on-replica-manual-replication-control and --test-on-replica are mutually exclusive")
+		}
+		migrationContext.TestOnReplica = true
+		migrationContext.ManualReplicationControl = true
 	}
 	switch *cutOver {
 	case "atomic", "default", "":
