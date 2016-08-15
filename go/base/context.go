@@ -51,7 +51,7 @@ type MigrationContext struct {
 	AllowedRunningOnMaster   bool
 	AllowedMasterMaster      bool
 	SwitchToRowBinlogFormat  bool
-	TrustRBR                 bool
+	AssumeRBR                bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool

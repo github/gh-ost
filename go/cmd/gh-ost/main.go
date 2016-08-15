@@ -69,7 +69,7 @@ func main() {
 	cutOver := flag.String("cut-over", "atomic", "choose cut-over type (default|atomic, two-step)")
 
 	flag.BoolVar(&migrationContext.SwitchToRowBinlogFormat, "switch-to-rbr", false, "let this tool automatically switch binary log format to 'ROW' on the replica, if needed. The format will NOT be switched back. I'm too scared to do that, and wish to protect you if you happen to execute another migration while this one is running")
-	flag.BoolVar(&migrationContext.TrustRBR, "trust-rbr", false, "set to 'true' when you know for certain your server uses 'ROW' binlog_format. gh-ost is unable to tell, event after reading binlog_format, whether the replication process does indeed use 'ROW', and restarts replication to be certain RBR setting is applied. Such operation requires SUPER privileges which you might not have. Setting this flag avoids restarting replication and you can proceed to use gh-ost without SUPER privileges")
+	flag.BoolVar(&migrationContext.AssumeRBR, "assume-rbr", false, "set to 'true' when you know for certain your server uses 'ROW' binlog_format. gh-ost is unable to tell, event after reading binlog_format, whether the replication process does indeed use 'ROW', and restarts replication to be certain RBR setting is applied. Such operation requires SUPER privileges which you might not have. Setting this flag avoids restarting replication and you can proceed to use gh-ost without SUPER privileges")
 	chunkSize := flag.Int64("chunk-size", 1000, "amount of rows to handle in each iteration (allowed range: 100-100,000)")
 	defaultRetries := flag.Int64("default-retries", 60, "Default number of retries for various operations before panicking")
 	cutOverLockTimeoutSeconds := flag.Int64("cut-over-lock-timeout-seconds", 3, "Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout)")
@@ -146,8 +146,8 @@ func main() {
 	if migrationContext.MigrateOnReplica && migrationContext.TestOnReplica {
 		log.Fatalf("--migrate-on-replica and --test-on-replica are mutually exclusive")
 	}
-	if migrationContext.SwitchToRowBinlogFormat && migrationContext.TrustRBR {
-		log.Fatalf("--switch-to-rbr and --trust-rbr are mutually exclusive")
+	if migrationContext.SwitchToRowBinlogFormat && migrationContext.AssumeRBR {
+		log.Fatalf("--switch-to-rbr and --assume-rbr are mutually exclusive")
 	}
 	switch *cutOver {
 	case "atomic", "default", "":

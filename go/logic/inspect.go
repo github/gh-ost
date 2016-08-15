@@ -252,7 +252,7 @@ func (this *Inspector) applyBinlogFormat() error {
 		return nil
 	}
 	// We already have RBR, no explicit switch
-	if !this.migrationContext.TrustRBR {
+	if !this.migrationContext.AssumeRBR {
 		if err := this.restartReplication(); err != nil {
 			return err
 		}
