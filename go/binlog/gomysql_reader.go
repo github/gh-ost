@@ -128,33 +128,23 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 		if err != nil {
 			return err
 		}
-		// if rand.Intn(1000) == 0 {
-		// 	this.binlogSyncer.Close()
-		// 	log.Debugf("current: %+v, hint: %+v", this.currentCoordinates, this.LastAppliedRowsEventHint)
-		// 	return log.Errorf(".............haha got random error")
-		// }
-		//		log.Debugf("0001 ........ currentCoordinates: %+v", this.currentCoordinates) //TODO
 		func() {
 			this.currentCoordinatesMutex.Lock()
 			defer this.currentCoordinatesMutex.Unlock()
 			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
 		}()
 		if rotateEvent, ok := ev.Event.(*replication.RotateEvent); ok {
-			// log.Debugf("0008 ........ currentCoordinates: %+v", this.currentCoordinates) //TODO
-			// ev.Dump(os.Stdout)
 			func() {
 				this.currentCoordinatesMutex.Lock()
 				defer this.currentCoordinatesMutex.Unlock()
 				this.currentCoordinates.LogFile = string(rotateEvent.NextLogName)
 			}()
-			// log.Debugf("0001 ........ currentCoordinates: %+v", this.currentCoordinates) //TODO
 			log.Infof("rotate to next log name: %s", rotateEvent.NextLogName)
 		} else if rowsEvent, ok := ev.Event.(*replication.RowsEvent); ok {
 			if err := this.handleRowsEvent(ev, rowsEvent, entriesChannel); err != nil {
 				return err
 			}
 		}
-		// log.Debugf("TODO ........ currentCoordinates: %+v", this.currentCoordinates) //TODO
 	}
 	log.Debugf("done streaming events")
 
