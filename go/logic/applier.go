@@ -862,6 +862,7 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 	}
 	if err != nil {
 		err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), query, args)
+		log.Errore(err)
 	}
 	return err
 }
