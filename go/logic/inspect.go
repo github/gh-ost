@@ -134,6 +134,13 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.ColumnRenameMap)
 	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
 	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
+
+	// This additional step looks at which columns are unsigned. We could have merged this within
+	// the `getTableColumns()` function, but it's a later patch and introduces some complexity; I feel
+	// comfortable in doing this as a separate step.
+	this.applyUnsignedColumns(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
+	this.applyUnsignedColumns(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
+
 	return nil
 }
 
@@ -448,6 +455,26 @@ func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.Col
 		)
 	}
 	return sql.NewColumnList(columnNames), nil
+}
+
+// applyUnsignedColumns
+func (this *Inspector) applyUnsignedColumns(databaseName, tableName string, columnsLists ...*sql.ColumnList) error {
+	query := fmt.Sprintf(`
+		show columns from %s.%s
+		`,
+		sql.EscapeName(databaseName),
+		sql.EscapeName(tableName),
+	)
+	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		columnName := rowMap.GetString("Field")
+		if strings.Contains(rowMap.GetString("Type"), "unsigned") {
+			for _, columnsList := range columnsLists {
+				columnsList.SetUnsigned(columnName)
+			}
+		}
+		return nil
+	})
+	return err
 }
 
 // getCandidateUniqueKeys investigates a table and returns the list of unique keys
