@@ -32,6 +32,29 @@ func EscapeName(name string) string {
 	return fmt.Sprintf("`%s`", name)
 }
 
+func fixArgType(arg interface{}, isUnsigned bool) interface{} {
+	if !isUnsigned {
+		return arg
+	}
+	// unsigned
+	if i, ok := arg.(int8); ok {
+		return uint8(i)
+	}
+	if i, ok := arg.(int16); ok {
+		return uint16(i)
+	}
+	if i, ok := arg.(int32); ok {
+		return uint32(i)
+	}
+	if i, ok := arg.(int64); ok {
+		return uint64(i)
+	}
+	if i, ok := arg.(int); ok {
+		return uint(i)
+	}
+	return arg
+}
+
 func buildPreparedValues(length int) []string {
 	values := make([]string, length, length)
 	for i := 0; i < length; i++ {
@@ -309,7 +332,8 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	}
 	for _, column := range uniqueKeyColumns.Names {
 		tableOrdinal := tableColumns.Ordinals[column]
-		uniqueKeyArgs = append(uniqueKeyArgs, args[tableOrdinal])
+		arg := fixArgType(args[tableOrdinal], uniqueKeyColumns.IsUnsigned(column))
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
@@ -345,7 +369,8 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 
 	for _, column := range sharedColumns.Names {
 		tableOrdinal := tableColumns.Ordinals[column]
-		sharedArgs = append(sharedArgs, args[tableOrdinal])
+		arg := fixArgType(args[tableOrdinal], sharedColumns.IsUnsigned(column))
+		sharedArgs = append(sharedArgs, arg)
 	}
 
 	sharedColumnNames := duplicateNames(sharedColumns.Names)
@@ -392,12 +417,14 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 
 	for _, column := range sharedColumns.Names {
 		tableOrdinal := tableColumns.Ordinals[column]
-		sharedArgs = append(sharedArgs, valueArgs[tableOrdinal])
+		arg := fixArgType(valueArgs[tableOrdinal], sharedColumns.IsUnsigned(column))
+		sharedArgs = append(sharedArgs, arg)
 	}
 
 	for _, column := range uniqueKeyColumns.Names {
 		tableOrdinal := tableColumns.Ordinals[column]
-		uniqueKeyArgs = append(uniqueKeyArgs, whereArgs[tableOrdinal])
+		arg := fixArgType(whereArgs[tableOrdinal], uniqueKeyColumns.IsUnsigned(column))
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 
 	sharedColumnNames := duplicateNames(sharedColumns.Names)
