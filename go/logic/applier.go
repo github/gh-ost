@@ -853,6 +853,31 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 	if err != nil {
 		return err
 	}
+
+	// TODO The below is commented, and is in preparation for transactional writes on the ghost tables.
+	// Such writes would be, for example:
+	// - prepended with sql_mode setup
+	// - prepended with SET SQL_LOG_BIN=0
+	// - prepended with SET FK_CHECKS=0
+	// etc.
+	//
+	// Current known problem: https://github.com/golang/go/issues/9373 -- bitint unsigned values, not supported in database/sql
+	//
+
+	// err = func() error {
+	// 	tx, err := this.db.Begin()
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	if _, err := tx.Exec(query, args...); err != nil {
+	// 		return err
+	// 	}
+	// 	if err := tx.Commit(); err != nil {
+	// 		return err
+	// 	}
+	// 	return nil
+	// }()
+
 	_, err = sqlutils.Exec(this.db, query, args...)
 	if err == nil {
 		atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
