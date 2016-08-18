@@ -18,6 +18,7 @@ import (
 	"github.com/github/gh-ost/go/sql"
 
 	"gopkg.in/gcfg.v1"
+	gcfgscanner "gopkg.in/gcfg.v1/scanner"
 )
 
 // RowsEstimateMethod is the type of row number estimation
@@ -507,6 +508,7 @@ func (this *MigrationContext) ReadConfigFile() error {
 		return nil
 	}
 	gcfg.RelaxedParserMode = true
+	gcfgscanner.RelaxedScannerMode = true
 	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
 		return err
 	}

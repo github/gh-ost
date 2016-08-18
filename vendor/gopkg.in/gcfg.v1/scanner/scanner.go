@@ -16,11 +16,11 @@ import (
 	"path/filepath"
 	"unicode"
 	"unicode/utf8"
-)
 
-import (
 	"gopkg.in/gcfg.v1/token"
 )
+
+var RelaxedScannerMode = false
 
 // An ErrorHandler may be provided to Scanner.Init. If a syntax error is
 // encountered and a handler was installed, the handler is called with a
@@ -231,7 +231,7 @@ loop:
 				hasCR = true
 				s.next()
 			}
-			if s.ch != '\n' {
+			if s.ch != '\n' && !RelaxedScannerMode {
 				s.error(offs, "unquoted '\\' must be followed by new line")
 				break loop
 			}
