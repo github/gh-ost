@@ -16,6 +16,12 @@ When your migration issues a column rename (`change column old_name new_name ...
 
 If you think `gh-ost` is mistaken and that there's actually no _rename_ involved, you may pass `--skip-renamed-columns` instead. This will cause `gh-ost` to disassociate the column values; data will not be copied between those columns.
 
+### assume-rbr
+
+If you happen to _know_ your servers use RBR (Row Based Replication, i.e. `binlog_format=ROW`), you may specify `--assume-rbr`. This skips a verification step where `gh-ost` would issue a `STOP SLAVE; START SLAVE`.
+Skipping this step means `gh-ost` would not need the `SUPER` privilege in order to operate.
+You may want to use this on Amazon RDS
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
