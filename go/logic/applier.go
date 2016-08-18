@@ -878,6 +878,13 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 	// 	return nil
 	// }()
 
+	// Use UTC to prevent timestamp columns from drifting
+	// https://github.com/github/gh-ost/issues/161
+	_, err = sqlutils.Exec(this.db, "SET SESSION time_zone = '+00:00'")
+	if err != nil {
+		err = fmt.Errorf("Failed to set session time zone to +00:00")
+		log.Errore(err)
+	}
 	_, err = sqlutils.Exec(this.db, query, args...)
 	if err == nil {
 		atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
