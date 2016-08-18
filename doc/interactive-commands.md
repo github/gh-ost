@@ -22,7 +22,7 @@ replication lag on to determine throttling
 - `max-load=<max-load-thresholds>`: modify the `max-load` config; applies on next running copy-iteration
   The `max-load` format must be: `some_status=<numeric-threshold>[,some_status=<numeric-threshold>...]`. For example: `Threads_running=50,threads_connected=1000`, and you would then write/echo `max-load=Threads_running=50,threads_connected=1000` to the socket.
 - `critical-load=<load>`: change critical load setting (exceeding given thresholds causes panic and abort)
-- `nice-ratio=<ratio>`: change _nice_ ratio: 0 for aggressive, positive integer `n`: for any unit of time spent copying rows, spend `n` units of time sleeping.
+- `nice-ratio=<ratio>`: change _nice_ ratio: 0 for aggressive (not nice, not sleeping), positive integer `n`: for any `1ms` spent copying rows, spend `n*1ms` units of time sleeping. Examples: assume a single rows chunk copy takes `100ms` to complete. `nice-ratio=0.5` will cause `gh-ost` to sleep for `50ms` immediately following. `nice-ratio=1` will cause `gh-ost` to sleep for `100ms`, effectively doubling runtime; value of `2` will effectively triple the runtime; etc.
 - `throttle-query`: change throttle query
 - `throttle-control-replicas`: change list of throttle-control replicas, these are replicas `gh-ost` will check
 - `throttle`: force migration suspend

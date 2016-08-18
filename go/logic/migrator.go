@@ -664,7 +664,7 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 			fmt.Fprintln(writer, `available commands:
 status                               # Print a status message
 chunk-size=<newsize>                 # Set a new chunk-size
-nice-ratio=<ratio>                   # Set a new nice-ratio, integer (0 is agrressive)
+nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is agrressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
 critical-load=<load>                 # Set a new set of max-load thresholds
 max-lag-millis=<max-lag>             # Set a new replication lag threshold
 replication-lag-query=<query>        # Set a new query that determines replication lag (no quotes)
