@@ -941,7 +941,9 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
 	rowsEstimate := atomic.LoadInt64(&this.migrationContext.RowsEstimate)
 	var progressPct float64
-	if rowsEstimate > 0 {
+	if rowsEstimate == 0 {
+		progressPct = 100.0
+	} else {
 		progressPct = 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
 	}
 
