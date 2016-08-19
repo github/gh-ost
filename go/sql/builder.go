@@ -47,7 +47,7 @@ func fixArgType(arg interface{}, isUnsigned bool) interface{} {
 		return uint32(i)
 	}
 	if i, ok := arg.(int64); ok {
-		return uint64(i)
+		return strconv.FormatUint(uint64(i), 10)
 	}
 	if i, ok := arg.(int); ok {
 		return uint(i)
