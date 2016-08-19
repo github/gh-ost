@@ -21,7 +21,6 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 - Foreign keys not supported. They may be supported in the future, to some extent.
 - Triggers are not supported. They may be supported in the future.
-- MySQL 5.7 generated columns are not supported. They may be supported in the future.
 - The two _before_ & _after_ tables must share some `UNIQUE KEY`. Such key would be used by `gh-ost` to iterate the table.
   - As an example, if your table has a single `UNIQUE KEY` and no `PRIMARY KEY`, and you wish to replace it with a `PRIMARY KEY`, you will need two migrations: one to add the `PRIMARY KEY` (this migration will use the existing `UNIQUE KEY`), another to drop the now redundant `UNIQUE KEY` (this migration will use the `PRIMARY KEY`).
 - The chosen migration key must not include columns with `NULL` values.

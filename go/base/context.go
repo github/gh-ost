@@ -117,8 +117,10 @@ type MigrationContext struct {
 	CountingRowsFlag          int64
 
 	OriginalTableColumns             *sql.ColumnList
+	OriginalTableVirtualColumns      *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
 	GhostTableColumns                *sql.ColumnList
+	GhostTableVirtualColumns         *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
 	UniqueKey                        *sql.UniqueKey
 	SharedColumns                    *sql.ColumnList

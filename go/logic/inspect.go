@@ -75,24 +75,24 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 	return nil
 }
 
-func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (columns *sql.ColumnList, uniqueKeys [](*sql.UniqueKey), err error) {
+func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (columns *sql.ColumnList, virtualColumns *sql.ColumnList, uniqueKeys [](*sql.UniqueKey), err error) {
 	uniqueKeys, err = this.getCandidateUniqueKeys(tableName)
 	if err != nil {
-		return columns, uniqueKeys, err
+		return columns, virtualColumns, uniqueKeys, err
 	}
 	if len(uniqueKeys) == 0 {
-		return columns, uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
+		return columns, virtualColumns, uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
 	}
-	columns, err = this.getTableColumns(this.migrationContext.DatabaseName, tableName)
+	columns, virtualColumns, err = this.getTableColumns(this.migrationContext.DatabaseName, tableName)
 	if err != nil {
-		return columns, uniqueKeys, err
+		return columns, virtualColumns, uniqueKeys, err
 	}
 
-	return columns, uniqueKeys, nil
+	return columns, virtualColumns, uniqueKeys, nil
 }
 
 func (this *Inspector) InspectOriginalTable() (err error) {
-	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
+	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableVirtualColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
 	if err == nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func (this *Inspector) InspectOriginalTable() (err error) {
 // InspectOriginalAndGhostTables compares original and ghost tables to see whether the migration
 // makes sense and is valid. It extracts the list of shared columns and the chosen migration unique key
 func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
-	this.migrationContext.GhostTableColumns, this.migrationContext.GhostTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.GetGhostTableName())
+	this.migrationContext.GhostTableColumns, this.migrationContext.GhostTableVirtualColumns, this.migrationContext.GhostTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.GetGhostTableName())
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,8 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 	}
 
 	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.ColumnRenameMap)
-	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
+	log.Infof("Shared columns are: %s", this.migrationContext.SharedColumns)
+	log.Infof("Virtual columns are: %s", this.migrationContext.GhostTableVirtualColumns)
 	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
 
 	// This additional step looks at which columns are unsigned. We could have merged this within
@@ -451,7 +452,7 @@ func (this *Inspector) CountTableRows() error {
 }
 
 // getTableColumns reads column list from given table
-func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.ColumnList, error) {
+func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.ColumnList, *sql.ColumnList, error) {
 	query := fmt.Sprintf(`
 		show columns from %s.%s
 		`,
@@ -459,20 +460,25 @@ func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.Col
 		sql.EscapeName(tableName),
 	)
 	columnNames := []string{}
+	virtualColumnNames := []string{}
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 		columnNames = append(columnNames, rowMap.GetString("Field"))
+		if strings.Contains(rowMap.GetString("Extra"), " GENERATED") {
+			log.Debugf("%s is a generated column", rowMap.GetString("Field"))
+			virtualColumnNames = append(virtualColumnNames, rowMap.GetString("Field"))
+		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(columnNames) == 0 {
-		return nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
+		return nil, nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
 			sql.EscapeName(databaseName),
 			sql.EscapeName(tableName),
 		)
 	}
-	return sql.NewColumnList(columnNames), nil
+	return sql.NewColumnList(columnNames), sql.NewColumnList(virtualColumnNames), nil
 }
 
 // applyUnsignedColumns
