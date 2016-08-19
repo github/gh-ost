@@ -566,32 +566,10 @@ func (this *Applier) StartSlaveSQLThread() error {
 	return nil
 }
 
-func (this *Applier) isReplicationStopped() bool {
-	query := `show slave status`
-	replicationStopped := false
-
-	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		replicationStopped = rowMap["Slave_IO_Running"].String == "No" && rowMap["Slave_SQL_Running"].String == "No"
-		return nil
-	})
-
-	if err != nil {
-		return false
-	}
-	return replicationStopped
-}
-
 // StopReplication is used by `--test-on-replica` and stops replication.
 func (this *Applier) StopReplication() error {
-	if this.migrationContext.ManualReplicationControl {
-		for {
-			log.Info("Waiting for replication to stop...")
-			if this.isReplicationStopped() {
-				log.Info("Replication stopped.")
-				break
-			}
-			time.Sleep(5 * time.Second)
-		}
+	if this.migrationContext.TestOnReplicaSkipReplicaStop {
+		log.Warningf("--test-on-replica-skip-replica-stop enabled, we are not stopping replication.")
 	} else {
 		if err := this.StopSlaveIOThread(); err != nil {
 			return err
