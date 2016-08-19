@@ -56,6 +56,7 @@ type Migrator struct {
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
 	server           *Server
+	hooksExecutor    *HooksExecutor
 	migrationContext *base.MigrationContext
 	hostname         string
 
@@ -108,6 +109,15 @@ func (this *Migrator) acceptSignals() {
 			}
 		}
 	}()
+}
+
+// initiateHooksExecutor
+func (this *Migrator) initiateHooksExecutor() (err error) {
+	this.hooksExecutor = NewHooksExecutor()
+	if err := this.hooksExecutor.detectHooks(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // shouldThrottle performs checks to see whether we should currently be throttling.
@@ -277,7 +287,7 @@ func (this *Migrator) executeAndThrottleOnError(operation func() error) (err err
 }
 
 // consumeRowCopyComplete blocks on the rowCopyComplete channel once, and then
-// consumers and drops any further incoming events that may be left hanging.
+// consumes and drops any further incoming events that may be left hanging.
 func (this *Migrator) consumeRowCopyComplete() {
 	<-this.rowCopyComplete
 	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
@@ -371,6 +381,12 @@ func (this *Migrator) Migrate() (err error) {
 
 	go this.listenOnPanicAbort()
 
+	if err := this.initiateHooksExecutor(); err != nil {
+		return err
+	}
+	if err := this.hooksExecutor.onStartup(); err != nil {
+		return err
+	}
 	if err := this.parser.ParseAlterStatement(this.migrationContext.AlterStatement); err != nil {
 		return err
 	}
@@ -397,6 +413,11 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.inspector.InspectOriginalAndGhostTables(); err != nil {
 		return err
 	}
+	// Validation complete! We're good to execute this migration
+	if err := this.hooksExecutor.onValidated(); err != nil {
+		return err
+	}
+
 	if err := this.initiateServer(); err != nil {
 		return err
 	}
@@ -419,6 +440,9 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	go this.initiateThrottler()
+	if err := this.hooksExecutor.onAboutToRowCopy(); err != nil {
+		return err
+	}
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
@@ -427,14 +451,23 @@ func (this *Migrator) Migrate() (err error) {
 	log.Debugf("Operating until row copy is complete")
 	this.consumeRowCopyComplete()
 	log.Infof("Row copy complete")
+	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
+		return err
+	}
 	this.printStatus(ForcePrintStatusRule)
 
+	if err := this.hooksExecutor.onAboutToCutOver(); err != nil {
+		return err
+	}
 	if err := this.cutOver(); err != nil {
 		return err
 	}
 
 	if err := this.finalCleanup(); err != nil {
 		return nil
+	}
+	if err := this.hooksExecutor.onSuccess(); err != nil {
+		return err
 	}
 	log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
@@ -463,8 +496,12 @@ func (this *Migrator) cutOver() (err error) {
 			}
 			if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
 				// Throttle file defined and exists!
+				if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) == 0 {
+					if err := this.hooksExecutor.onBeginPostponed(); err != nil {
+						return true, err
+					}
+				}
 				atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 1)
-				//log.Debugf("Postponing final table swap as flag file exists: %+v", this.migrationContext.PostponeCutOverFlagFile)
 				return true, nil
 			}
 			return false, nil
@@ -658,6 +695,10 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 	}
 
 	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
+
+	if err := this.hooksExecutor.onInteractiveCommand(command); err != nil {
+		return err
+	}
 
 	switch command {
 	case "help":
