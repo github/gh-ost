@@ -43,9 +43,10 @@ const (
 type PrintStatusRule int
 
 const (
-	HeuristicPrintStatusRule PrintStatusRule = iota
-	ForcePrintStatusRule                     = iota
-	ForcePrintStatusAndHint                  = iota
+	HeuristicPrintStatusRule    PrintStatusRule = iota
+	ForcePrintStatusRule                        = iota
+	ForcePrintStatusOnlyRule                    = iota
+	ForcePrintStatusAndHintRule                 = iota
 )
 
 // Migrator is the main schema migration flow manager.
@@ -522,7 +523,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	waitForEventsUpToLockDuration := time.Since(waitForEventsUpToLockStartTime)
 
 	log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
-	this.printStatus(ForcePrintStatusAndHint)
+	this.printStatus(ForcePrintStatusAndHintRule)
 
 	return nil
 }
@@ -662,7 +663,8 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 	case "help":
 		{
 			fmt.Fprintln(writer, `available commands:
-status                               # Print a status message
+status                               # Print a detailed status message
+sup                                  # Print a short status message
 chunk-size=<newsize>                 # Set a new chunk-size
 nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is agrressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
 critical-load=<load>                 # Set a new set of max-load thresholds
@@ -678,8 +680,10 @@ panic                                # panic and quit without cleanup
 help                                 # This message
 `)
 		}
+	case "sup":
+		this.printStatus(ForcePrintStatusOnlyRule, writer)
 	case "info", "status":
-		this.printStatus(ForcePrintStatusAndHint, writer)
+		this.printStatus(ForcePrintStatusAndHintRule, writer)
 	case "chunk-size":
 		{
 			if chunkSize, err := strconv.Atoi(arg); err != nil {
@@ -687,7 +691,7 @@ help                                 # This message
 				return log.Errore(err)
 			} else {
 				this.migrationContext.SetChunkSize(int64(chunkSize))
-				this.printStatus(ForcePrintStatusAndHint, writer)
+				this.printStatus(ForcePrintStatusAndHintRule, writer)
 			}
 		}
 	case "max-lag-millis":
@@ -697,13 +701,13 @@ help                                 # This message
 				return log.Errore(err)
 			} else {
 				this.migrationContext.SetMaxLagMillisecondsThrottleThreshold(int64(maxLagMillis))
-				this.printStatus(ForcePrintStatusAndHint, writer)
+				this.printStatus(ForcePrintStatusAndHintRule, writer)
 			}
 		}
 	case "replication-lag-query":
 		{
 			this.migrationContext.SetReplicationLagQuery(arg)
-			this.printStatus(ForcePrintStatusAndHint, writer)
+			this.printStatus(ForcePrintStatusAndHintRule, writer)
 		}
 	case "nice-ratio":
 		{
@@ -712,7 +716,7 @@ help                                 # This message
 				return log.Errore(err)
 			} else {
 				this.migrationContext.SetNiceRatio(niceRatio)
-				this.printStatus(ForcePrintStatusAndHint, writer)
+				this.printStatus(ForcePrintStatusAndHintRule, writer)
 			}
 		}
 	case "max-load":
@@ -721,7 +725,7 @@ help                                 # This message
 				fmt.Fprintf(writer, "%s\n", err.Error())
 				return log.Errore(err)
 			}
-			this.printStatus(ForcePrintStatusAndHint, writer)
+			this.printStatus(ForcePrintStatusAndHintRule, writer)
 		}
 	case "critical-load":
 		{
@@ -729,13 +733,13 @@ help                                 # This message
 				fmt.Fprintf(writer, "%s\n", err.Error())
 				return log.Errore(err)
 			}
-			this.printStatus(ForcePrintStatusAndHint, writer)
+			this.printStatus(ForcePrintStatusAndHintRule, writer)
 		}
 	case "throttle-query":
 		{
 			this.migrationContext.SetThrottleQuery(arg)
 			fmt.Fprintf(writer, throttleHint)
-			this.printStatus(ForcePrintStatusAndHint, writer)
+			this.printStatus(ForcePrintStatusAndHintRule, writer)
 		}
 	case "throttle-control-replicas":
 		{
@@ -744,13 +748,13 @@ help                                 # This message
 				return log.Errore(err)
 			}
 			fmt.Fprintf(writer, "%s\n", this.migrationContext.GetThrottleControlReplicaKeys().ToCommaDelimitedList())
-			this.printStatus(ForcePrintStatusAndHint, writer)
+			this.printStatus(ForcePrintStatusAndHintRule, writer)
 		}
 	case "throttle", "pause", "suspend":
 		{
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
 			fmt.Fprintf(writer, throttleHint)
-			this.printStatus(ForcePrintStatusAndHint, writer)
+			this.printStatus(ForcePrintStatusAndHintRule, writer)
 		}
 	case "no-throttle", "unthrottle", "resume", "continue":
 		{
@@ -840,7 +844,7 @@ func (this *Migrator) initiateInspector() (err error) {
 
 // initiateStatus sets and activates the printStatus() ticker
 func (this *Migrator) initiateStatus() error {
-	this.printStatus(ForcePrintStatusAndHint)
+	this.printStatus(ForcePrintStatusAndHintRule)
 	statusTick := time.Tick(1 * time.Second)
 	for range statusTick {
 		go this.printStatus(HeuristicPrintStatusRule)
@@ -949,8 +953,11 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
 	shouldPrintMigrationStatusHint := (elapsedSeconds%600 == 0)
-	if rule == ForcePrintStatusAndHint {
+	if rule == ForcePrintStatusAndHintRule {
 		shouldPrintMigrationStatusHint = true
+	}
+	if rule == ForcePrintStatusOnlyRule {
+		shouldPrintMigrationStatusHint = false
 	}
 	if shouldPrintMigrationStatusHint {
 		this.printMigrationStatusHint(writers...)
@@ -992,7 +999,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	} else {
 		shouldPrintStatus = (elapsedSeconds%30 == 0)
 	}
-	if rule == ForcePrintStatusRule || rule == ForcePrintStatusAndHint {
+	if rule == ForcePrintStatusRule || rule == ForcePrintStatusAndHintRule {
 		shouldPrintStatus = true
 	}
 	if !shouldPrintStatus {
