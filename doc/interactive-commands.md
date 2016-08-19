@@ -15,8 +15,8 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 ### Known commands
 
 - `help`: shows a brief list of available commands
-- `status`: returns a status summary of migration progress and configuration
-replication lag on to determine throttling
+- `status`: returns a detailed status summary of migration progress and configuration
+- `sup`: returns a brief status summary of migration progress
 - `chunk-size=<newsize>`: modify the `chunk-size`; applies on next running copy-iteration
 - `max-lag-millis=<max-lag>`: modify the maximum replication lag threshold (milliseconds, minimum value is `1000`, i.e. 1 second)
 - `max-load=<max-load-thresholds>`: modify the `max-load` config; applies on next running copy-iteration
