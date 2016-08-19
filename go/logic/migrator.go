@@ -986,20 +986,22 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	}
 
 	shouldPrintStatus := false
-	if elapsedSeconds <= 60 {
-		shouldPrintStatus = true
-	} else if etaSeconds <= 60 {
-		shouldPrintStatus = true
-	} else if etaSeconds <= 180 {
-		shouldPrintStatus = (elapsedSeconds%5 == 0)
-	} else if elapsedSeconds <= 180 {
-		shouldPrintStatus = (elapsedSeconds%5 == 0)
-	} else if this.migrationContext.TimeSincePointOfInterest().Seconds() <= 60 {
-		shouldPrintStatus = (elapsedSeconds%5 == 0)
+	if rule == HeuristicPrintStatusRule {
+		if elapsedSeconds <= 60 {
+			shouldPrintStatus = true
+		} else if etaSeconds <= 60 {
+			shouldPrintStatus = true
+		} else if etaSeconds <= 180 {
+			shouldPrintStatus = (elapsedSeconds%5 == 0)
+		} else if elapsedSeconds <= 180 {
+			shouldPrintStatus = (elapsedSeconds%5 == 0)
+		} else if this.migrationContext.TimeSincePointOfInterest().Seconds() <= 60 {
+			shouldPrintStatus = (elapsedSeconds%5 == 0)
+		} else {
+			shouldPrintStatus = (elapsedSeconds%30 == 0)
+		}
 	} else {
-		shouldPrintStatus = (elapsedSeconds%30 == 0)
-	}
-	if rule == ForcePrintStatusRule || rule == ForcePrintStatusAndHintRule {
+		// Not heuristic
 		shouldPrintStatus = true
 	}
 	if !shouldPrintStatus {
