@@ -78,6 +78,7 @@ type MigrationContext struct {
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
 	PanicFlagFile                       string
+	HooksPath                           string
 
 	DropServeSocket bool
 	ServeSocketFile string

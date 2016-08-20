@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/openark/golib/log"
@@ -24,7 +25,7 @@ func NewHooksExecutor() *HooksExecutor {
 	}
 }
 
-func (this *HooksExecutor) detectHooks() error {
+func (this *HooksExecutor) initHooks() error {
 	return nil
 }
 
@@ -39,13 +40,35 @@ func (this *HooksExecutor) applyEnvironmentVairables() []string {
 	return env
 }
 
-// commandRun executes a command with arguments, and set relevant environment variables
-func (this *HooksExecutor) commandRun(commandText string, arguments ...string) error {
-	cmd := exec.Command(commandText, arguments...)
+// executeHook executes a command with arguments, and set relevant environment variables
+func (this *HooksExecutor) executeHook(hook string, arguments ...string) error {
+	cmd := exec.Command(hook, arguments...)
 	cmd.Env = this.applyEnvironmentVairables()
 
 	if err := cmd.Run(); err != nil {
 		return log.Errore(err)
+	}
+	return nil
+}
+
+func (this *HooksExecutor) detectHooks(baseName string) (hooks []string, err error) {
+	if this.migrationContext.HooksPath == "" {
+		return hooks, err
+	}
+	pattern := fmt.Sprintf("%s/%s*", this.migrationContext.HooksPath, baseName)
+	hooks, err = filepath.Glob(pattern)
+	return hooks, err
+}
+
+func (this *HooksExecutor) executeHooks(baseName string) error {
+	hooks, err := this.detectHooks(baseName)
+	if err != nil {
+		return err
+	}
+	for _, hook := range hooks {
+		if err := this.executeHook(hook); err != nil {
+			return err
+		}
 	}
 	return nil
 }

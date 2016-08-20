@@ -114,7 +114,7 @@ func (this *Migrator) acceptSignals() {
 // initiateHooksExecutor
 func (this *Migrator) initiateHooksExecutor() (err error) {
 	this.hooksExecutor = NewHooksExecutor()
-	if err := this.hooksExecutor.detectHooks(); err != nil {
+	if err := this.hooksExecutor.initHooks(); err != nil {
 		return err
 	}
 	return nil
