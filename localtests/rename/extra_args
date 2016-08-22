@@ -1,1 +1,1 @@
---alter="change column c3 c4 int not null" --approve-renamed-columns
+--alter="change column c2 c3 int not null" --approve-renamed-columns
