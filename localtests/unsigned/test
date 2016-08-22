@@ -1,0 +1,20 @@
+go run go/cmd/gh-ost/main.go \
+  --conf=/Users/shlomi-noach/tmp/gh-osc.cnf \
+  --port=22297 \
+  --database=test \
+  --table=gh_ost_test \
+  --alter="engine=innodb" \
+  --exact-rowcount \
+  --switch-to-rbr \
+  --initially-drop-old-table \
+  --initially-drop-ghost-table \
+  --throttle-query="select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc" \
+  --serve-socket-file=/tmp/gh-ost.test.sock \
+  --initially-drop-socket-file \
+  --postpone-cut-over-flag-file=/tmp/gh-ost.postpone.flag \
+  --execute \
+  --verbose \
+  --debug \
+  --stack \
+
+ ~/sandboxes/rsandbox_mysql-5_6_28/m test -e "select * from $t" | md5sum ;  ~/sandboxes/rsandbox_mysql-5_6_28/m test -e "select * from _${t}_del" | md5sum ; ~/sandboxes/rsandbox_mysql-5_6_28/m test -e "select * from $t limit 5"
