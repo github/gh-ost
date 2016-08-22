@@ -65,12 +65,13 @@ test_single() {
     --initially-drop-socket-file \
     --postpone-cut-over-flag-file=/tmp/gh-ost.postpone.flag \
     --test-on-replica \
+    --default-retries=1 \
     --verbose \
     --debug \
     --stack \
     --execute ${extra_args[@]}"
   echo $cmd > $exec_command_file
-  bash $exec_command_file
+  bash $exec_command_file 1> $test_logfile 2>&1
 
   if [ $? -ne 0 ] ; then
     echo "ERROR $test_name execution failure. See $test_logfile"
@@ -80,10 +81,12 @@ test_single() {
   orig_checksum=$(gh-ost-test-mysql-replica test -e "select ${columns} from gh_ost_test" -ss | md5sum)
   ghost_checksum=$(gh-ost-test-mysql-replica test -e "select ${columns} from _gh_ost_test_gho" -ss | md5sum)
 
-  gh-ost-test-mysql-replica -e "start slave"
-
   if [ "$orig_checksum" != "$ghost_checksum" ] ; then
     echo "ERROR $test_name: checksum mismatch"
+    echo "---"
+    gh-ost-test-mysql-replica test -e "select ${columns} from gh_ost_test" -ss
+    echo "---"
+    gh-ost-test-mysql-replica test -e "select ${columns} from _gh_ost_test_gho" -ss
     return 1
   fi
 }
@@ -97,6 +100,7 @@ test_all() {
     else
       echo "+ pass"
     fi
+    gh-ost-test-mysql-replica -e "start slave"
   done
 }
 

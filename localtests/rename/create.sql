@@ -18,5 +18,5 @@ create event gh_ost_test
 begin
   insert into gh_ost_test values (null, 17, 23);
   set @last_insert_id := last_insert_id();
-  update gh_ost_test set c1=c1+@last_insert_id, c2=c2+@last_insert_id where id < @last_insert_id order by id desc limit 1;
+  update gh_ost_test set c1=c1+@last_insert_id, c2=c2+@last_insert_id where id = @last_insert_id order by id desc limit 1;
 end ;;
