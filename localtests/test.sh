@@ -4,6 +4,7 @@
 
 tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
+exec_command_file=/tmp/gh-ost-test.bash
 
 master_host=
 master_port=
@@ -40,29 +41,26 @@ test_single() {
 
   extra_args=""
   if [ -f $tests_path/$test_name/extra_args ] ; then
-    # mapfile -t <$tests_path/$test_name/extra_args
-    # echo "${MAPFILE[@]}"
-    extra_args=($(cat $tests_path/$test_name/extra_args))
-    echo ${extra_args[@]}
+    extra_args=$(cat $tests_path/$test_name/extra_args)
   fi
   columns="*"
   if [ -f $tests_path/$test_name/test_columns ] ; then
     columns=$(cat $tests_path/$test_name/test_columns)
   fi
 
-  go run go/cmd/gh-ost/main.go \
+  cmd="go run go/cmd/gh-ost/main.go \
     --user=gh-ost \
     --password=gh-ost \
     --host=$replica_host \
     --port=$replica_port \
     --database=test \
     --table=gh_ost_test \
-    --alter="engine=innodb" \
+    --alter='engine=innodb' \
     --exact-rowcount \
     --switch-to-rbr \
     --initially-drop-old-table \
     --initially-drop-ghost-table \
-    --throttle-query="select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc" \
+    --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
     --postpone-cut-over-flag-file=/tmp/gh-ost.postpone.flag \
@@ -70,22 +68,24 @@ test_single() {
     --verbose \
     --debug \
     --stack \
-    --execute "${extra_args[@]}"
+    --execute ${extra_args[@]}"
+  echo $cmd > $exec_command_file
+  bash $exec_command_file
 
-    if [ $? -ne 0 ] ; then
-      echo "ERROR $test_name execution failure. See $test_logfile"
-      return 1
-    fi
+  if [ $? -ne 0 ] ; then
+    echo "ERROR $test_name execution failure. See $test_logfile"
+    return 1
+  fi
 
-    orig_checksum=$(gh-ost-test-mysql-replica test -e "select ${columns} from gh_ost_test" -ss | md5sum)
-    ghost_checksum=$(gh-ost-test-mysql-replica test -e "select ${columns} from _gh_ost_test_gho" -ss | md5sum)
+  orig_checksum=$(gh-ost-test-mysql-replica test -e "select ${columns} from gh_ost_test" -ss | md5sum)
+  ghost_checksum=$(gh-ost-test-mysql-replica test -e "select ${columns} from _gh_ost_test_gho" -ss | md5sum)
 
-    gh-ost-test-mysql-replica -e "start slave"
+  gh-ost-test-mysql-replica -e "start slave"
 
-    if [ "$orig_checksum" != "$ghost_checksum" ] ; then
-      echo "ERROR $test_name: checksum mismatch"
-      return 1
-    fi
+  if [ "$orig_checksum" != "$ghost_checksum" ] ; then
+    echo "ERROR $test_name: checksum mismatch"
+    return 1
+  fi
 }
 
 test_all() {
