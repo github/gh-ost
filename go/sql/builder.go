@@ -393,7 +393,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	return result, sharedArgs, nil
 }
 
-func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedColumns, uniqueKeyColumns *ColumnList, valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {
+func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns, uniqueKeyColumns *ColumnList, valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {
 	if len(valueArgs) != tableColumns.Len() {
 		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("value args count differs from table column count in BuildDMLUpdateQuery")
 	}
@@ -415,9 +415,10 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
-	for _, column := range sharedColumns.Names {
+	for i, column := range sharedColumns.Names {
+		mappedColumn := mappedSharedColumns.Names[i]
 		tableOrdinal := tableColumns.Ordinals[column]
-		arg := fixArgType(valueArgs[tableOrdinal], sharedColumns.IsUnsigned(column))
+		arg := fixArgType(valueArgs[tableOrdinal], mappedSharedColumns.IsUnsigned(mappedColumn))
 		sharedArgs = append(sharedArgs, arg)
 	}
 
@@ -427,11 +428,11 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 
-	sharedColumnNames := duplicateNames(sharedColumns.Names)
-	for i := range sharedColumnNames {
-		sharedColumnNames[i] = EscapeName(sharedColumnNames[i])
+	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names)
+	for i := range mappedSharedColumnNames {
+		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
 	}
-	setClause, err := BuildSetPreparedClause(sharedColumnNames)
+	setClause, err := BuildSetPreparedClause(mappedSharedColumnNames)
 
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names)
 	result = fmt.Sprintf(`
