@@ -1065,6 +1065,10 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
+
+	if elapsedSeconds%60 == 0 {
+		this.hooksExecutor.onStatus(status)
+	}
 }
 
 // initiateHeartbeatListener listens for heartbeat events. gh-ost implements its own

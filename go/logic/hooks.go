@@ -108,3 +108,7 @@ func (this *HooksExecutor) onSuccess() error {
 func (this *HooksExecutor) onFailure() error {
 	return nil
 }
+
+func (this *HooksExecutor) onStatus(statusMessage string) error {
+	return nil
+}
