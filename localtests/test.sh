@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+# set -e
 
 tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
@@ -23,6 +23,12 @@ verify_master_and_replica() {
   read replica_host replica_port <<< $(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
 }
 
+exec_cmd() {
+  echo "$@"
+  command "$@" 1> $test_logfile 2>&1
+  return $?
+}
+
 test_single() {
   local test_name
   test_name="$1"
@@ -32,8 +38,12 @@ test_single() {
   gh-ost-test-mysql-replica -e "start slave"
   gh-ost-test-mysql-master test < $tests_path/$test_name/create.sql
 
+  extra_args=""
   if [ -f $tests_path/$test_name/extra_args ] ; then
-    extra_args=$(cat $tests_path/$test_name/extra_args)
+    # mapfile -t <$tests_path/$test_name/extra_args
+    # echo "${MAPFILE[@]}"
+    extra_args=($(cat $tests_path/$test_name/extra_args))
+    echo ${extra_args[@]}
   fi
   columns="*"
   if [ -f $tests_path/$test_name/test_columns ] ; then
@@ -60,8 +70,7 @@ test_single() {
     --verbose \
     --debug \
     --stack \
-    --execute $extra_args \
-    1> $test_logfile 2>&1
+    --execute "${extra_args[@]}"
 
     if [ $? -ne 0 ] ; then
       echo "ERROR $test_name execution failure. See $test_logfile"
@@ -77,12 +86,17 @@ test_single() {
       echo "ERROR $test_name: checksum mismatch"
       return 1
     fi
-    echo "pass"
 }
 
 test_all() {
   find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | while read test_name ; do
     test_single "$test_name"
+    if [ $? -ne 0 ] ; then
+      echo "+ FAIL"
+      return 1
+    else
+      echo "+ pass"
+    fi
   done
 }
 
