@@ -354,7 +354,7 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	return result, uniqueKeyArgs, nil
 }
 
-func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
+func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
 	if len(args) != tableColumns.Len() {
 		return result, args, fmt.Errorf("args count differs from table column count in BuildDMLInsertQuery")
 	}
@@ -367,17 +367,17 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
-	for _, column := range sharedColumns.Names {
+	for _, column := range mappedSharedColumns.Names {
 		tableOrdinal := tableColumns.Ordinals[column]
-		arg := fixArgType(args[tableOrdinal], sharedColumns.IsUnsigned(column))
+		arg := fixArgType(args[tableOrdinal], mappedSharedColumns.IsUnsigned(column))
 		sharedArgs = append(sharedArgs, arg)
 	}
 
-	sharedColumnNames := duplicateNames(sharedColumns.Names)
-	for i := range sharedColumnNames {
-		sharedColumnNames[i] = EscapeName(sharedColumnNames[i])
+	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names)
+	for i := range mappedSharedColumnNames {
+		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
 	}
-	preparedValues := buildPreparedValues(sharedColumns.Len())
+	preparedValues := buildPreparedValues(mappedSharedColumns.Len())
 
 	result = fmt.Sprintf(`
 			replace /* gh-ost %s.%s */ into
@@ -387,7 +387,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 					(%s)
 		`, databaseName, tableName,
 		databaseName, tableName,
-		strings.Join(sharedColumnNames, ", "),
+		strings.Join(mappedSharedColumnNames, ", "),
 		strings.Join(preparedValues, ", "),
 	)
 	return result, sharedArgs, nil
