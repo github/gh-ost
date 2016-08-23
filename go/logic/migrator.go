@@ -58,7 +58,6 @@ type Migrator struct {
 	server           *Server
 	hooksExecutor    *HooksExecutor
 	migrationContext *base.MigrationContext
-	hostname         string
 
 	tablesInPlace              chan bool
 	rowCopyComplete            chan bool
@@ -375,7 +374,7 @@ func (this *Migrator) validateStatement() (err error) {
 func (this *Migrator) Migrate() (err error) {
 	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	this.migrationContext.StartTime = time.Now()
-	if this.hostname, err = os.Hostname(); err != nil {
+	if this.migrationContext.Hostname, err = os.Hostname(); err != nil {
 		return err
 	}
 
@@ -473,6 +472,12 @@ func (this *Migrator) Migrate() (err error) {
 	return nil
 }
 
+// ExecOnFailureHook executes the onFailure hook, and this method is provided as the only external
+// hook access point
+func (this *Migrator) ExecOnFailureHook() (err error) {
+	return this.hooksExecutor.onFailure()
+}
+
 // cutOver performs the final step of migration, based on migration
 // type (on replica? bumpy? safe?)
 func (this *Migrator) cutOver() (err error) {
@@ -516,6 +521,7 @@ func (this *Migrator) cutOver() (err error) {
 		// and swap the tables.
 		// The difference is that we will later swap the tables back.
 		log.Debugf("testing on replica. Stopping replication IO thread")
+		this.hooksExecutor.onStopReplication()
 		if err := this.retryOperation(this.applier.StopReplication); err != nil {
 			return err
 		}
@@ -909,7 +915,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	fmt.Fprintln(w, fmt.Sprintf("# Migrating %+v; inspecting %+v; executing on %+v",
 		*this.applier.connectionConfig.ImpliedKey,
 		*this.inspector.connectionConfig.ImpliedKey,
-		this.hostname,
+		this.migrationContext.Hostname,
 	))
 	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v",
 		this.migrationContext.StartTime.Format(time.RubyDate),

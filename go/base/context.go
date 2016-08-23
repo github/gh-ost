@@ -92,6 +92,7 @@ type MigrationContext struct {
 	InitiallyDropGhostTable bool
 	CutOverType             CutOver
 
+	Hostname                  string
 	TableEngine               string
 	RowsEstimate              int64
 	UsedRowsEstimateMethod    RowsEstimateMethod

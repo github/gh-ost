@@ -189,6 +189,7 @@ func main() {
 	migrator := logic.NewMigrator()
 	err := migrator.Migrate()
 	if err != nil {
+		migrator.ExecOnFailureHook()
 		log.Fatale(err)
 	}
 	log.Info("Done")
