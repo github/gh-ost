@@ -387,7 +387,7 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
-	log.Debugf("Waiting for tables to be in place")
+	log.Infof("Waiting for tables to be in place")
 	<-this.tablesInPlace
 	log.Debugf("Tables are in place")
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
