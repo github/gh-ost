@@ -568,15 +568,11 @@ func (this *Applier) StartSlaveSQLThread() error {
 
 // StopReplication is used by `--test-on-replica` and stops replication.
 func (this *Applier) StopReplication() error {
-	if this.migrationContext.TestOnReplicaSkipReplicaStop {
-		log.Warningf("--test-on-replica-skip-replica-stop enabled, we are not stopping replication.")
-	} else {
-		if err := this.StopSlaveIOThread(); err != nil {
-			return err
-		}
-		if err := this.StopSlaveSQLThread(); err != nil {
-			return err
-		}
+	if err := this.StopSlaveIOThread(); err != nil {
+		return err
+	}
+	if err := this.StopSlaveSQLThread(); err != nil {
+		return err
 	}
 
 	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.db)
