@@ -439,7 +439,7 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	go this.initiateThrottler()
-	if err := this.hooksExecutor.onAboutToRowCopy(); err != nil {
+	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
 	go this.executeWriteFuncs()
@@ -455,7 +455,7 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	this.printStatus(ForcePrintStatusRule)
 
-	if err := this.hooksExecutor.onAboutToCutOver(); err != nil {
+	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
 	}
 	if err := this.cutOver(); err != nil {

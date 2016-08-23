@@ -18,10 +18,10 @@ import (
 const (
 	onStartup            = "gh-ost-on-startup"
 	onValidated          = "gh-ost-on-validated"
-	onAboutToRowCopy     = "gh-ost-on-about-row-copy"
+	onBeforeRowCopy      = "gh-ost-on-before-row-copy"
 	onRowCopyComplete    = "gh-ost-on-row-copy-complete"
 	onBeginPostponed     = "gh-ost-on-begin-postponed"
-	onAboutToCutOver     = "gh-ost-on-about-cut-over"
+	onBeforeCutOver      = "gh-ost-on-before-cut-over"
 	onInteractiveCommand = "gh-ost-on-interactive-command"
 	onSuccess            = "gh-ost-on-success"
 	onFailure            = "gh-ost-on-failure"
@@ -102,8 +102,8 @@ func (this *HooksExecutor) onValidated() error {
 	return this.executeHooks(onValidated)
 }
 
-func (this *HooksExecutor) onAboutToRowCopy() error {
-	return this.executeHooks(onAboutToRowCopy)
+func (this *HooksExecutor) onBeforeRowCopy() error {
+	return this.executeHooks(onBeforeRowCopy)
 }
 
 func (this *HooksExecutor) onRowCopyComplete() error {
@@ -114,8 +114,8 @@ func (this *HooksExecutor) onBeginPostponed() error {
 	return this.executeHooks(onBeginPostponed)
 }
 
-func (this *HooksExecutor) onAboutToCutOver() error {
-	return this.executeHooks(onAboutToCutOver)
+func (this *HooksExecutor) onBeforeCutOver() error {
+	return this.executeHooks(onBeforeCutOver)
 }
 
 func (this *HooksExecutor) onInteractiveCommand(command string) error {
