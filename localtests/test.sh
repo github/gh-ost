@@ -1,6 +1,8 @@
 #!/bin/bash
 
-# set -e
+# Local integration tests. To be used by CI.
+# See https://github.com/github/gh-ost/tree/doc/local-tests.md
+#
 
 tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
