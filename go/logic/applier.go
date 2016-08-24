@@ -890,7 +890,7 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 	// no error
 	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
 	if this.migrationContext.CountTableRows {
-		atomic.AddInt64(&this.migrationContext.RowsEstimate, rowDelta)
+		atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, rowDelta)
 	}
 	return nil
 }

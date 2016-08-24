@@ -95,6 +95,7 @@ type MigrationContext struct {
 
 	TableEngine               string
 	RowsEstimate              int64
+	RowsDeltaEstimate         int64
 	UsedRowsEstimateMethod    RowsEstimateMethod
 	HasSuperPrivilege         bool
 	OriginalBinlogFormat      string
