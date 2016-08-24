@@ -49,6 +49,7 @@ type MigrationContext struct {
 	AlterStatement    string
 
 	CountTableRows           bool
+	ConcurrentCountTableRows bool
 	AllowedRunningOnMaster   bool
 	AllowedMasterMaster      bool
 	SwitchToRowBinlogFormat  bool
