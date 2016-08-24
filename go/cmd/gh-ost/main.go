@@ -61,6 +61,7 @@ func main() {
 
 	executeFlag := flag.Bool("execute", false, "actually execute the alter & migrate the table. Default is noop: do some tests and exit")
 	flag.BoolVar(&migrationContext.TestOnReplica, "test-on-replica", false, "Have the migration run on a replica, not on the master. At the end of migration replication is stopped, and tables are swapped and immediately swap-revert. Replication remains stopped and you can compare the two tables for building trust")
+	flag.BoolVar(&migrationContext.TestOnReplicaSkipReplicaStop, "test-on-replica-skip-replica-stop", false, "When --test-on-replica is enabled, do not issue commands stop replication (requires --test-on-replica)")
 	flag.BoolVar(&migrationContext.MigrateOnReplica, "migrate-on-replica", false, "Have the migration run on a replica, not on the master. This will do the full migration on the replica including cut-over (as opposed to --test-on-replica)")
 
 	flag.BoolVar(&migrationContext.OkToDropTable, "ok-to-drop-table", false, "Shall the tool drop the old table at end of operation. DROPping tables can be a long locking operation, which is why I'm not doing it by default. I'm an online tool, yes?")
@@ -149,6 +150,13 @@ func main() {
 	if migrationContext.SwitchToRowBinlogFormat && migrationContext.AssumeRBR {
 		log.Fatalf("--switch-to-rbr and --assume-rbr are mutually exclusive")
 	}
+	if migrationContext.TestOnReplicaSkipReplicaStop {
+		if !migrationContext.TestOnReplica {
+			log.Fatalf("--test-on-replica-skip-replica-stop requires --test-on-replica to be enabled")
+		}
+		log.Warning("--test-on-replica-skip-replica-stop enabled. We will not stop replication before cut-over. Ensure you have a plugin that does this.")
+	}
+
 	switch *cutOver {
 	case "atomic", "default", "":
 		migrationContext.CutOverType = base.CutOverAtomic

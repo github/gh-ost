@@ -83,13 +83,14 @@ type MigrationContext struct {
 	ServeSocketFile string
 	ServeTCPPort    int64
 
-	Noop                    bool
-	TestOnReplica           bool
-	MigrateOnReplica        bool
-	OkToDropTable           bool
-	InitiallyDropOldTable   bool
-	InitiallyDropGhostTable bool
-	CutOverType             CutOver
+	Noop                         bool
+	TestOnReplica                bool
+	MigrateOnReplica             bool
+	TestOnReplicaSkipReplicaStop bool
+	OkToDropTable                bool
+	InitiallyDropOldTable        bool
+	InitiallyDropGhostTable      bool
+	CutOverType                  CutOver
 
 	TableEngine               string
 	RowsEstimate              int64
