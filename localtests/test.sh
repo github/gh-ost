@@ -49,7 +49,9 @@ test_single() {
   if [ -f $tests_path/$test_name/test_columns ] ; then
     columns=$(cat $tests_path/$test_name/test_columns)
   fi
-
+  # graceful sleep for replica to catch up
+  sleep 1
+  #
   cmd="go run go/cmd/gh-ost/main.go \
     --user=gh-ost \
     --password=gh-ost \
