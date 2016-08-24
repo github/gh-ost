@@ -574,6 +574,7 @@ func (this *Applier) StopReplication() error {
 	if err := this.StopSlaveSQLThread(); err != nil {
 		return err
 	}
+
 	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.db)
 	if err != nil {
 		return err
