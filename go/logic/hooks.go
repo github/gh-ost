@@ -1,4 +1,5 @@
 /*
+/*
    Copyright 2016 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
@@ -89,6 +90,7 @@ func (this *HooksExecutor) executeHooks(baseName string, extraVariables ...strin
 		return err
 	}
 	for _, hook := range hooks {
+		log.Infof("executing %+v hook: %+v", baseName, hook)
 		if err := this.executeHook(hook, extraVariables...); err != nil {
 			return err
 		}
@@ -137,9 +139,11 @@ func (this *HooksExecutor) onFailure() error {
 }
 
 func (this *HooksExecutor) onStatus(statusMessage string, elapsedSeconds int64) error {
-	v0 := fmt.Sprintf("GH_OST_STATUS='%s'", statusMessage)
-	v1 := fmt.Sprintf("GH_OST_ELAPSED_SECONDS='%d'", elapsedSeconds)
-	return this.executeHooks(onStatus, v0, v1)
+	v := []string{
+		fmt.Sprintf("GH_OST_STATUS='%s'", statusMessage),
+		fmt.Sprintf("GH_OST_ELAPSED_SECONDS='%d'", elapsedSeconds),
+	}
+	return this.executeHooks(onStatus, v...)
 }
 
 func (this *HooksExecutor) onStopReplication() error {
