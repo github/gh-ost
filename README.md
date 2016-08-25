@@ -29,6 +29,7 @@ In addition, it offers many [operational perks](doc/perks.md) that make it safer
 - Dynamic control: you can [interactively](doc/interactive-commands.md) reconfigure `gh-ost`, even as migration still runs. You may forcibly initiate throttling.
 - Auditing: you may query `gh-ost` for status. `gh-ost` listens on unix socket or TCP.
 - Control over cut-over phase: `gh-ost` can be instructed to postpone what is probably the most critical step: the swap of tables, until such time that you're comfortably available. No need to worry about ETA being outside office hours.
+- External [hooks](doc/hooks.md) can couple `gh-ost` with your particular environment.
 
 Please refer to the [docs](doc) for more information. No, really, read the [docs](doc).
 
