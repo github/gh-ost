@@ -18,6 +18,7 @@ import (
 const (
 	onStartup            = "gh-ost-on-startup"
 	onValidated          = "gh-ost-on-validated"
+	onRowCountComplete   = "gh-ost-on-rowcount-complete"
 	onBeforeRowCopy      = "gh-ost-on-before-row-copy"
 	onRowCopyComplete    = "gh-ost-on-row-copy-complete"
 	onBeginPostponed     = "gh-ost-on-begin-postponed"
@@ -54,6 +55,7 @@ func (this *HooksExecutor) applyEnvironmentVairables(extraVariables ...string) [
 	env = append(env, fmt.Sprintf("GH_OST_MIGRATED_HOST=%s", this.migrationContext.ApplierConnectionConfig.ImpliedKey.Hostname))
 	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_HOST=%s", this.migrationContext.InspectorConnectionConfig.ImpliedKey.Hostname))
 	env = append(env, fmt.Sprintf("GH_OST_EXECUTING_HOST=%s", this.migrationContext.Hostname))
+	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT=%s", this.migrationContext.HooksHintMessage))
 
 	for _, variable := range extraVariables {
 		env = append(env, variable)
@@ -102,6 +104,9 @@ func (this *HooksExecutor) onValidated() error {
 	return this.executeHooks(onValidated)
 }
 
+func (this *HooksExecutor) onRowCountComplete() error {
+	return this.executeHooks(onRowCountComplete)
+}
 func (this *HooksExecutor) onBeforeRowCopy() error {
 	return this.executeHooks(onBeforeRowCopy)
 }
@@ -131,9 +136,10 @@ func (this *HooksExecutor) onFailure() error {
 	return this.executeHooks(onFailure)
 }
 
-func (this *HooksExecutor) onStatus(statusMessage string) error {
-	v := fmt.Sprintf("GH_OST_STATUS='%s'", statusMessage)
-	return this.executeHooks(onStatus, v)
+func (this *HooksExecutor) onStatus(statusMessage string, elapsedSeconds int64) error {
+	v0 := fmt.Sprintf("GH_OST_STATUS='%s'", statusMessage)
+	v1 := fmt.Sprintf("GH_OST_ELAPSED_SECONDS='%d'", elapsedSeconds)
+	return this.executeHooks(onStatus, v0, v1)
 }
 
 func (this *HooksExecutor) onStopReplication() error {
