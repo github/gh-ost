@@ -66,6 +66,8 @@ The following variables are available on all hooks:
 - `GH_OST_EXECUTING_HOST`
 - `GH_OST_HOOKS_HINT`
 
+The following variable are available on particular hooks:
+
 - `GH_OST_COMMAND` is only available in `gh-ost-on-interactive-command`
 - `GH_OST_STATUS` and `GH_OST_ELAPSED_SECONDS` are only available in `gh-ost-on-status`
 
