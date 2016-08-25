@@ -871,7 +871,10 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec("SET SESSION time_zone = '+00:00'"); err != nil {
+		if _, err := tx.Exec(`SET
+			SESSION time_zone = '+00:00',
+			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
+			`); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(query, args...); err != nil {
