@@ -2,4 +2,4 @@
 
 # Sample hook file for gh-ost-on-success
 
-echo "$(date) gh-ost-on-success $GH_OST_DATABASE_NAME.$GH_OST_TABLE_NAME" >> /tmp/gh-ost.log
+echo "$(date) gh-ost-on-success $GH_OST_DATABASE_NAME.$GH_OST_TABLE_NAME -- this message should show on the gh-ost log"
