@@ -363,7 +363,7 @@ func (this *Migrator) validateStatement() (err error) {
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
 		if !this.migrationContext.ApproveRenamedColumns {
-			return fmt.Errorf("Alter statement has column(s) renamed. gh-ost suspects the following renames: %v; but to proceed you must approve via `--approve-renamed-columns` (or you can skip renamed columns via `--skip-renamed-columns`)", this.parser.GetNonTrivialRenames())
+			return fmt.Errorf("gh-ost believes the ALTER statement renames columns, as follows: %v; as precation, you are asked to confirm gh-ost is correct, and provide with `--approve-renamed-columns`, and we're all happy. Or you can skip renamed columns via `--skip-renamed-columns`, in which case column data may be lost", this.parser.GetNonTrivialRenames())
 		}
 		log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", this.parser.GetNonTrivialRenames())
 	}
@@ -402,7 +402,7 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
-	log.Debugf("Waiting for tables to be in place")
+	log.Infof("Waiting for tables to be in place")
 	<-this.tablesInPlace
 	log.Debugf("Tables are in place")
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
@@ -520,10 +520,14 @@ func (this *Migrator) cutOver() (err error) {
 		// the same cut-over phase as the master would use. That means we take locks
 		// and swap the tables.
 		// The difference is that we will later swap the tables back.
-		log.Debugf("testing on replica. Stopping replication IO thread")
 		this.hooksExecutor.onStopReplication()
-		if err := this.retryOperation(this.applier.StopReplication); err != nil {
-			return err
+		if this.migrationContext.TestOnReplicaSkipReplicaStop {
+			log.Warningf("--test-on-replica-skip-replica-stop enabled, we are not stopping replication.")
+		} else {
+			log.Debugf("testing on replica. Stopping replication IO thread")
+			if err := this.retryOperation(this.applier.StopReplication); err != nil {
+				return err
+			}
 		}
 		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
 		defer this.applier.RenameTablesRollback()
