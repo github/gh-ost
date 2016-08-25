@@ -4,7 +4,7 @@
 
 Use cases include:
 
-- You wish to be notified ny mail when a migration completes/fails
+- You wish to be notified by mail when a migration completes/fails
 - You wish to be notified when `gh-ost` postpones cut-over (at your demand), thus ready to complete (at your leisure)
 - RDS users who wish to `--test-on-replica`, but who cannot have `gh-ost` issue a `STOP SLAVE`, would use a hook to command RDS to stop replication
 - Send a status message to your chatops every hour
