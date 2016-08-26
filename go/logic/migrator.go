@@ -1151,6 +1151,10 @@ func (this *Migrator) iterateChunks() error {
 			return nil
 		}
 		copyRowsFunc := func() error {
+			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+				// Done
+				return nil
+			}
 			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
 			if err != nil {
 				return terminateRowIteration(err)
