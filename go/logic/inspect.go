@@ -440,12 +440,14 @@ func (this *Inspector) CountTableRows() error {
 	log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 
 	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
-	if err := this.db.QueryRow(query).Scan(&this.migrationContext.RowsEstimate); err != nil {
+	var rowsEstimate int64
+	if err := this.db.QueryRow(query).Scan(&rowsEstimate); err != nil {
 		return err
 	}
+	atomic.StoreInt64(&this.migrationContext.RowsEstimate, rowsEstimate)
 	this.migrationContext.UsedRowsEstimateMethod = base.CountRowsEstimate
 
-	log.Infof("Exact number of rows via COUNT: %d", this.migrationContext.RowsEstimate)
+	log.Infof("Exact number of rows via COUNT: %d", rowsEstimate)
 
 	return nil
 }

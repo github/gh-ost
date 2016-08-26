@@ -49,6 +49,7 @@ type MigrationContext struct {
 	AlterStatement    string
 
 	CountTableRows           bool
+	ConcurrentCountTableRows bool
 	AllowedRunningOnMaster   bool
 	AllowedMasterMaster      bool
 	SwitchToRowBinlogFormat  bool
@@ -94,6 +95,7 @@ type MigrationContext struct {
 
 	TableEngine               string
 	RowsEstimate              int64
+	RowsDeltaEstimate         int64
 	UsedRowsEstimateMethod    RowsEstimateMethod
 	HasSuperPrivilege         bool
 	OriginalBinlogFormat      string
