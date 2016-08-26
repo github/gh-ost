@@ -370,6 +370,24 @@ func (this *Migrator) validateStatement() (err error) {
 	return nil
 }
 
+func (this *Migrator) countTableRows() (err error) {
+	if !this.migrationContext.CountTableRows {
+		// Not counting; we stay with an estimate
+		return nil
+	}
+	if this.migrationContext.Noop {
+		log.Debugf("Noop operation; not really counting table rows")
+		return nil
+	}
+	if this.migrationContext.ConcurrentCountTableRows {
+		go this.inspector.CountTableRows()
+		log.Infof("As instructed, counting rows in the background; meanwhile I will use an estimated count, and will update it later on")
+		// and we ignore errors, because this turns to be a background job
+		return nil
+	}
+	return this.inspector.CountTableRows()
+}
+
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
 	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -422,12 +440,8 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	defer this.server.RemoveSocketFile()
 
-	if this.migrationContext.CountTableRows {
-		if this.migrationContext.Noop {
-			log.Debugf("Noop operation; not really counting table rows")
-		} else if err := this.inspector.CountTableRows(); err != nil {
-			return err
-		}
+	if err := this.countTableRows(); err != nil {
+		return err
 	}
 
 	if err := this.addDMLEventsListener(); err != nil {
@@ -994,7 +1008,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	elapsedTime := this.migrationContext.ElapsedTime()
 	elapsedSeconds := int64(elapsedTime.Seconds())
 	totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
-	rowsEstimate := atomic.LoadInt64(&this.migrationContext.RowsEstimate)
+	rowsEstimate := atomic.LoadInt64(&this.migrationContext.RowsEstimate) + atomic.LoadInt64(&this.migrationContext.RowsDeltaEstimate)
 	var progressPct float64
 	if rowsEstimate == 0 {
 		progressPct = 100.0
@@ -1016,7 +1030,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	var etaSeconds float64 = math.MaxFloat64
 	eta := "N/A"
-	if atomic.LoadInt64(&this.migrationContext.CountingRowsFlag) > 0 {
+	if atomic.LoadInt64(&this.migrationContext.CountingRowsFlag) > 0 && !this.migrationContext.ConcurrentCountTableRows {
 		eta = "counting rows"
 	} else if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
 		eta = "postponing cut-over"
@@ -1201,6 +1215,10 @@ func (this *Migrator) iterateChunks() error {
 			return nil
 		}
 		copyRowsFunc := func() error {
+			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+				// Done
+				return nil
+			}
 			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
 			if err != nil {
 				return terminateRowIteration(err)
