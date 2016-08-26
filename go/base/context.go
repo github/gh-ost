@@ -324,8 +324,8 @@ func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
 }
 
 func (this *MigrationContext) SetMaxLagMillisecondsThrottleThreshold(maxLagMillisecondsThrottleThreshold int64) {
-	if maxLagMillisecondsThrottleThreshold < 1000 {
-		maxLagMillisecondsThrottleThreshold = 1000
+	if maxLagMillisecondsThrottleThreshold < 100 {
+		maxLagMillisecondsThrottleThreshold = 100
 	}
 	atomic.StoreInt64(&this.MaxLagMillisecondsThrottleThreshold, maxLagMillisecondsThrottleThreshold)
 }
