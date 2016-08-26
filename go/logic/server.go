@@ -36,7 +36,7 @@ func (this *Server) BindSocketFile() (err error) {
 	if this.migrationContext.ServeSocketFile == "" {
 		return nil
 	}
-	if base.FileExists(this.migrationContext.ServeSocketFile) {
+	if this.migrationContext.DropServeSocket && base.FileExists(this.migrationContext.ServeSocketFile) {
 		os.Remove(this.migrationContext.ServeSocketFile)
 	}
 	this.unixListener, err = net.Listen("unix", this.migrationContext.ServeSocketFile)
@@ -45,6 +45,11 @@ func (this *Server) BindSocketFile() (err error) {
 	}
 	log.Infof("Listening on unix socket file: %s", this.migrationContext.ServeSocketFile)
 	return nil
+}
+
+func (this *Server) RemoveSocketFile() (err error) {
+	log.Infof("Removing socket file: %s", this.migrationContext.ServeSocketFile)
+	return os.Remove(this.migrationContext.ServeSocketFile)
 }
 
 func (this *Server) BindTCPPort() (err error) {

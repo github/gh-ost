@@ -107,7 +107,7 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 		}
 	}
 	if this.tableExists(this.migrationContext.GetGhostTableName()) {
-		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-ghost-table to force dropping it", sql.EscapeName(this.migrationContext.GetGhostTableName()))
+		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-ghost-table to force dropping it, though I really prefer that you drop it or rename it away", sql.EscapeName(this.migrationContext.GetGhostTableName()))
 	}
 	if this.migrationContext.InitiallyDropOldTable {
 		if err := this.DropOldTable(); err != nil {
@@ -115,7 +115,7 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 		}
 	}
 	if this.tableExists(this.migrationContext.GetOldTableName()) {
-		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-old-table to force dropping it", sql.EscapeName(this.migrationContext.GetOldTableName()))
+		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-old-table to force dropping it, though I really prefer that you drop it or rename it away", sql.EscapeName(this.migrationContext.GetOldTableName()))
 	}
 
 	return nil
@@ -419,7 +419,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		return chunkSize, rowsAffected, duration, err
 	}
 	rowsAffected, _ = sqlResult.RowsAffected()
-	duration = time.Now().Sub(startTime)
+	duration = time.Since(startTime)
 	log.Debugf(
 		"Issued INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
 		this.migrationContext.MigrationIterationRangeMinValues,
@@ -485,22 +485,6 @@ func (this *Applier) SwapTablesQuickAndBumpy() error {
 	this.migrationContext.RenameTablesEndTime = time.Now()
 
 	log.Infof("Tables renamed")
-	return nil
-}
-
-// RenameTable makes coffee. No, wait. It renames a table.
-func (this *Applier) RenameTable(fromName, toName string) (err error) {
-	query := fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(fromName),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(toName),
-	)
-	log.Infof("Renaming %s to %s", fromName, toName)
-	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
-		return log.Errore(err)
-	}
-	log.Infof("Table renamed")
 	return nil
 }
 
@@ -590,6 +574,7 @@ func (this *Applier) StopReplication() error {
 	if err := this.StopSlaveSQLThread(); err != nil {
 		return err
 	}
+
 	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.db)
 	if err != nil {
 		return err
@@ -601,151 +586,6 @@ func (this *Applier) StopReplication() error {
 // GetSessionLockName returns a name for the special hint session voluntary lock
 func (this *Applier) GetSessionLockName(sessionId int64) string {
 	return fmt.Sprintf("gh-ost.%d.lock", sessionId)
-}
-
-// LockOriginalTableAndWait locks the original table, notifies the lock is in
-// place, and awaits further instruction
-func (this *Applier) LockOriginalTableAndWait(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
-	tx, err := this.db.Begin()
-	if err != nil {
-		tableLocked <- err
-		return err
-	}
-	defer func() {
-		tx.Rollback()
-	}()
-
-	var sessionId int64
-	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
-		tableLocked <- err
-		return err
-	}
-	sessionIdChan <- sessionId
-
-	query := `select get_lock(?, 0)`
-	lockResult := 0
-	lockName := this.GetSessionLockName(sessionId)
-	log.Infof("Grabbing voluntary lock: %s", lockName)
-	if err := tx.QueryRow(query, lockName).Scan(&lockResult); err != nil || lockResult != 1 {
-		err := fmt.Errorf("Unable to acquire lock %s", lockName)
-		tableLocked <- err
-		return err
-	}
-
-	tableLockTimeoutSeconds := this.migrationContext.SwapTablesTimeoutSeconds * 2
-	log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
-	query = fmt.Sprintf(`set session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
-	if _, err := tx.Exec(query); err != nil {
-		tableLocked <- err
-		return err
-	}
-
-	query = fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-	log.Infof("Locking %s.%s",
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-	this.migrationContext.LockTablesStartTime = time.Now()
-	if _, err := tx.Exec(query); err != nil {
-		tableLocked <- err
-		return err
-	}
-	log.Infof("Table locked")
-	tableLocked <- nil // No error.
-
-	// The cut-over phase will proceed to apply remaining backlon onto ghost table,
-	// and issue RENAMEs. We wait here until told to proceed.
-	<-okToUnlockTable
-	// Release
-	query = `unlock tables`
-	log.Infof("Releasing lock from %s.%s",
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-	if _, err := tx.Exec(query); err != nil {
-		tableUnlocked <- err
-		return log.Errore(err)
-	}
-	log.Infof("Table unlocked")
-	tableUnlocked <- nil
-	return nil
-}
-
-// RenameOriginalTable will attempt renaming the original table into _old
-func (this *Applier) RenameOriginalTable(sessionIdChan chan int64, originalTableRenamed chan<- error) error {
-	tx, err := this.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		tx.Rollback()
-		originalTableRenamed <- nil
-	}()
-	var sessionId int64
-	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
-		return err
-	}
-	sessionIdChan <- sessionId
-
-	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.SwapTablesTimeoutSeconds)
-	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.SwapTablesTimeoutSeconds)
-	if _, err := tx.Exec(query); err != nil {
-		return err
-	}
-
-	query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetOldTableName()),
-	)
-	log.Infof("Issuing and expecting this to block: %s", query)
-	if _, err := tx.Exec(query); err != nil {
-		return log.Errore(err)
-	}
-	log.Infof("Original table renamed")
-	return nil
-}
-
-// RenameGhostTable will attempt renaming the ghost table into original
-func (this *Applier) RenameGhostTable(sessionIdChan chan int64, ghostTableRenamed chan<- error) error {
-	tx, err := this.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		tx.Rollback()
-	}()
-	var sessionId int64
-	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
-		return err
-	}
-	sessionIdChan <- sessionId
-
-	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.SwapTablesTimeoutSeconds)
-	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.SwapTablesTimeoutSeconds)
-	if _, err := tx.Exec(query); err != nil {
-		return err
-	}
-
-	query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-	log.Infof("Issuing and expecting this to block: %s", query)
-	if _, err := tx.Exec(query); err != nil {
-		ghostTableRenamed <- err
-		return log.Errore(err)
-	}
-	log.Infof("Ghost table renamed")
-	ghostTableRenamed <- nil
-
-	return nil
 }
 
 // ExpectUsedLock expects the special hint voluntary lock to exist on given session
@@ -861,7 +701,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		return err
 	}
 
-	tableLockTimeoutSeconds := this.migrationContext.SwapTablesTimeoutSeconds * 2
+	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
 	log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
 	query = fmt.Sprintf(`set session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
@@ -931,7 +771,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 	return nil
 }
 
-// RenameOriginalTable will attempt renaming the original table into _old
+// AtomicCutoverRename
 func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed chan<- error) error {
 	tx, err := this.db.Begin()
 	if err != nil {
@@ -948,8 +788,8 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 	}
 	sessionIdChan <- sessionId
 
-	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.SwapTablesTimeoutSeconds)
-	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.SwapTablesTimeoutSeconds)
+	log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.CutOverLockTimeoutSeconds)
+	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.CutOverLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
 		return err
 	}
@@ -993,12 +833,12 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query 
 		}
 	case binlog.InsertDML:
 		{
-			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
+			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
 			return query, sharedArgs, 1, err
 		}
 	case binlog.UpdateDML:
 		{
-			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
 			return query, args, 0, err
@@ -1014,12 +854,46 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 	if err != nil {
 		return err
 	}
-	_, err = sqlutils.Exec(this.db, query, args...)
-	if err == nil {
-		atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
+	// TODO The below is in preparation for transactional writes on the ghost tables.
+	// Such writes would be, for example:
+	// - prepended with sql_mode setup
+	// - prepended with time zone setup
+	// - prepended with SET SQL_LOG_BIN=0
+	// - prepended with SET FK_CHECKS=0
+	// etc.
+	//
+	// a known problem: https://github.com/golang/go/issues/9373 -- bitint unsigned values, not supported in database/sql
+	// is solved by silently converting unsigned bigints to string values.
+	//
+
+	err = func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`SET
+			SESSION time_zone = '+00:00',
+			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
+			`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(query, args...); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return nil
+	}()
+
+	if err != nil {
+		err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), query, args)
+		return log.Errore(err)
 	}
+	// no error
+	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
 	if this.migrationContext.CountTableRows {
-		atomic.AddInt64(&this.migrationContext.RowsEstimate, rowDelta)
+		atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, rowDelta)
 	}
-	return err
+	return nil
 }

@@ -9,6 +9,7 @@ import (
 	gosql "database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
@@ -49,9 +50,6 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateGrants(); err != nil {
 		return err
 	}
-	// if err := this.restartReplication(); err != nil {
-	// 	return err
-	// }
 	if err := this.validateBinlogs(); err != nil {
 		return err
 	}
@@ -66,6 +64,9 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 		return err
 	}
 	if err := this.validateTableForeignKeys(); err != nil {
+		return err
+	}
+	if err := this.validateTableTriggers(); err != nil {
 		return err
 	}
 	if err := this.estimateTableRowsViaExplain(); err != nil {
@@ -130,6 +131,13 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.ColumnRenameMap)
 	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
 	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
+
+	// This additional step looks at which columns are unsigned. We could have merged this within
+	// the `getTableColumns()` function, but it's a later patch and introduces some complexity; I feel
+	// comfortable in doing this as a separate step.
+	this.applyUnsignedColumns(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
+	this.applyUnsignedColumns(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
+
 	return nil
 }
 
@@ -153,6 +161,7 @@ func (this *Inspector) validateGrants() error {
 	query := `show /* gh-ost */ grants for current_user()`
 	foundAll := false
 	foundSuper := false
+	foundReplicationClient := false
 	foundReplicationSlave := false
 	foundDBAll := false
 
@@ -164,6 +173,9 @@ func (this *Inspector) validateGrants() error {
 			}
 			if strings.Contains(grant, `SUPER`) && strings.Contains(grant, ` ON *.*`) {
 				foundSuper = true
+			}
+			if strings.Contains(grant, `REPLICATION CLIENT`) && strings.Contains(grant, ` ON *.*`) {
+				foundReplicationClient = true
 			}
 			if strings.Contains(grant, `REPLICATION SLAVE`) && strings.Contains(grant, ` ON *.*`) {
 				foundReplicationSlave = true
@@ -183,16 +195,22 @@ func (this *Inspector) validateGrants() error {
 	if err != nil {
 		return err
 	}
+	this.migrationContext.HasSuperPrivilege = foundSuper
 
 	if foundAll {
 		log.Infof("User has ALL privileges")
 		return nil
 	}
 	if foundSuper && foundReplicationSlave && foundDBAll {
-		log.Infof("User has SUPER, REPLICATION SLAVE privileges, and has ALL privileges on `%s`", this.migrationContext.DatabaseName)
+		log.Infof("User has SUPER, REPLICATION SLAVE privileges, and has ALL privileges on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
 		return nil
 	}
-	return log.Errorf("User has insufficient privileges for migration.")
+	if foundReplicationClient && foundReplicationSlave && foundDBAll {
+		log.Infof("User has REPLICATION CLIENT, REPLICATION SLAVE privileges, and has ALL privileges on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+		return nil
+	}
+	log.Debugf("Privileges: Super: %t, REPLICATION CLIENT: %t, REPLICATION SLAVE: %t, ALL on *.*: %t, ALL on %s.*: %t", foundSuper, foundReplicationClient, foundReplicationSlave, foundAll, sql.EscapeName(this.migrationContext.DatabaseName), foundDBAll)
+	return log.Errorf("User has insufficient privileges for migration. Needed: SUPER, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
 }
 
 // restartReplication is required so that we are _certain_ the binlog format and
@@ -225,32 +243,39 @@ func (this *Inspector) restartReplication() error {
 // the replication thread apply it.
 func (this *Inspector) applyBinlogFormat() error {
 	if this.migrationContext.RequiresBinlogFormatChange() {
+		if !this.migrationContext.SwitchToRowBinlogFormat {
+			return fmt.Errorf("Existing binlog_format is %s. Am not switching it to ROW unless you specify --switch-to-rbr", this.migrationContext.OriginalBinlogFormat)
+		}
 		if _, err := sqlutils.ExecNoPrepare(this.db, `set global binlog_format='ROW'`); err != nil {
 			return err
 		}
 		if _, err := sqlutils.ExecNoPrepare(this.db, `set session binlog_format='ROW'`); err != nil {
 			return err
 		}
+		if err := this.restartReplication(); err != nil {
+			return err
+		}
 		log.Debugf("'ROW' binlog format applied")
+		return nil
 	}
-	if err := this.restartReplication(); err != nil {
-		return err
+	// We already have RBR, no explicit switch
+	if !this.migrationContext.AssumeRBR {
+		if err := this.restartReplication(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
-	query := `select @@global.log_bin, @@global.log_slave_updates, @@global.binlog_format`
-	var hasBinaryLogs, logSlaveUpdates bool
-	if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &logSlaveUpdates, &this.migrationContext.OriginalBinlogFormat); err != nil {
+	query := `select @@global.log_bin, @@global.binlog_format`
+	var hasBinaryLogs bool
+	if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat); err != nil {
 		return err
 	}
 	if !hasBinaryLogs {
 		return fmt.Errorf("%s:%d must have binary logs enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
-	}
-	if !logSlaveUpdates {
-		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	}
 	if this.migrationContext.RequiresBinlogFormatChange() {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
@@ -273,11 +298,26 @@ func (this *Inspector) validateBinlogs() error {
 	query = `select @@global.binlog_row_image`
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.OriginalBinlogRowImage); err != nil {
 		// Only as of 5.6. We wish to support 5.5 as well
-		this.migrationContext.OriginalBinlogRowImage = ""
+		this.migrationContext.OriginalBinlogRowImage = "FULL"
 	}
 	this.migrationContext.OriginalBinlogRowImage = strings.ToUpper(this.migrationContext.OriginalBinlogRowImage)
 
 	log.Infof("binary logs validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	return nil
+}
+
+// validateLogSlaveUpdates checks that binary log log_slave_updates is set. This test is not required when migrating on replica or when migrating directly on master
+func (this *Inspector) validateLogSlaveUpdates() error {
+	query := `select @@global.log_slave_updates`
+	var logSlaveUpdates bool
+	if err := this.db.QueryRow(query).Scan(&logSlaveUpdates); err != nil {
+		return err
+	}
+	if !logSlaveUpdates && !this.migrationContext.InspectorIsAlsoApplier() {
+		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	}
+
+	log.Infof("binary logs updates validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	return nil
 }
 
@@ -311,7 +351,7 @@ func (this *Inspector) validateTable() error {
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
 func (this *Inspector) validateTableForeignKeys() error {
 	query := `
-		SELECT COUNT(*) AS num_foreign_keys
+		SELECT TABLE_SCHEMA, TABLE_NAME
 		FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
 		WHERE
 				REFERENCED_TABLE_NAME IS NOT NULL
@@ -321,8 +361,10 @@ func (this *Inspector) validateTableForeignKeys() error {
 	`
 	numForeignKeys := 0
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		numForeignKeys = rowMap.GetInt("num_foreign_keys")
-
+		fkSchema := rowMap.GetString("TABLE_SCHEMA")
+		fkTable := rowMap.GetString("TABLE_NAME")
+		log.Infof("Found foreign key on %s.%s related to %s.%s", sql.EscapeName(fkSchema), sql.EscapeName(fkTable), sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		numForeignKeys++
 		return nil
 	},
 		this.migrationContext.DatabaseName,
@@ -334,9 +376,37 @@ func (this *Inspector) validateTableForeignKeys() error {
 		return err
 	}
 	if numForeignKeys > 0 {
-		return log.Errorf("Found %d foreign keys on %s.%s. Foreign keys are not supported. Bailing out", numForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return log.Errorf("Found %d foreign keys related to %s.%s. Foreign keys are not supported. Bailing out", numForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Debugf("Validated no foreign keys exist on table")
+	return nil
+}
+
+// validateTableTriggers makes sure no triggers exist on the migrated table
+func (this *Inspector) validateTableTriggers() error {
+	query := `
+		SELECT COUNT(*) AS num_triggers
+			FROM INFORMATION_SCHEMA.TRIGGERS
+			WHERE
+				TRIGGER_SCHEMA=?
+				AND EVENT_OBJECT_TABLE=?
+	`
+	numTriggers := 0
+	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		numTriggers = rowMap.GetInt("num_triggers")
+
+		return nil
+	},
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
+	)
+	if err != nil {
+		return err
+	}
+	if numTriggers > 0 {
+		return log.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	}
+	log.Debugf("Validated no triggers exist on table")
 	return nil
 }
 
@@ -364,13 +434,21 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 
 // CountTableRows counts exact number of rows on the original table
 func (this *Inspector) CountTableRows() error {
+	atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 1)
+	defer atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 0)
+
 	log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
+
 	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
-	if err := this.db.QueryRow(query).Scan(&this.migrationContext.RowsEstimate); err != nil {
+	var rowsEstimate int64
+	if err := this.db.QueryRow(query).Scan(&rowsEstimate); err != nil {
 		return err
 	}
+	atomic.StoreInt64(&this.migrationContext.RowsEstimate, rowsEstimate)
 	this.migrationContext.UsedRowsEstimateMethod = base.CountRowsEstimate
-	log.Infof("Exact number of rows via COUNT: %d", this.migrationContext.RowsEstimate)
+
+	log.Infof("Exact number of rows via COUNT: %d", rowsEstimate)
+
 	return nil
 }
 
@@ -397,6 +475,26 @@ func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.Col
 		)
 	}
 	return sql.NewColumnList(columnNames), nil
+}
+
+// applyUnsignedColumns
+func (this *Inspector) applyUnsignedColumns(databaseName, tableName string, columnsLists ...*sql.ColumnList) error {
+	query := fmt.Sprintf(`
+		show columns from %s.%s
+		`,
+		sql.EscapeName(databaseName),
+		sql.EscapeName(tableName),
+	)
+	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		columnName := rowMap.GetString("Field")
+		if strings.Contains(rowMap.GetString("Type"), "unsigned") {
+			for _, columnsList := range columnsLists {
+				columnsList.SetUnsigned(columnName)
+			}
+		}
+		return nil
+	})
+	return err
 }
 
 // getCandidateUniqueKeys investigates a table and returns the list of unique keys

@@ -14,24 +14,31 @@ import (
 // ColumnsMap maps a column onto its ordinal position
 type ColumnsMap map[string]int
 
-func NewColumnsMap(orderedNames []string) ColumnsMap {
+func NewEmptyColumnsMap() ColumnsMap {
 	columnsMap := make(map[string]int)
+	return ColumnsMap(columnsMap)
+}
+
+func NewColumnsMap(orderedNames []string) ColumnsMap {
+	columnsMap := NewEmptyColumnsMap()
 	for i, column := range orderedNames {
 		columnsMap[column] = i
 	}
-	return ColumnsMap(columnsMap)
+	return columnsMap
 }
 
 // ColumnList makes for a named list of columns
 type ColumnList struct {
-	Names    []string
-	Ordinals ColumnsMap
+	Names         []string
+	Ordinals      ColumnsMap
+	UnsignedFlags ColumnsMap
 }
 
 // NewColumnList creates an object given ordered list of column names
 func NewColumnList(names []string) *ColumnList {
 	result := &ColumnList{
-		Names: names,
+		Names:         names,
+		UnsignedFlags: NewEmptyColumnsMap(),
 	}
 	result.Ordinals = NewColumnsMap(result.Names)
 	return result
@@ -40,10 +47,19 @@ func NewColumnList(names []string) *ColumnList {
 // ParseColumnList parses a comma delimited list of column names
 func ParseColumnList(columns string) *ColumnList {
 	result := &ColumnList{
-		Names: strings.Split(columns, ","),
+		Names:         strings.Split(columns, ","),
+		UnsignedFlags: NewEmptyColumnsMap(),
 	}
 	result.Ordinals = NewColumnsMap(result.Names)
 	return result
+}
+
+func (this *ColumnList) SetUnsigned(columnName string) {
+	this.UnsignedFlags[columnName] = 1
+}
+
+func (this *ColumnList) IsUnsigned(columnName string) bool {
+	return this.UnsignedFlags[columnName] == 1
 }
 
 func (this *ColumnList) String() string {
@@ -89,7 +105,7 @@ func (this *UniqueKey) Len() int {
 func (this *UniqueKey) String() string {
 	description := this.Name
 	if this.IsAutoIncrement {
-		description = fmt.Sprintf("%s (auto_incrmenet)", description)
+		description = fmt.Sprintf("%s (auto_increment)", description)
 	}
 	return fmt.Sprintf("%s: %s; has nullable: %+v", description, this.Columns.Names, this.HasNullable)
 }

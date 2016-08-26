@@ -7,6 +7,7 @@ package mysql
 
 import (
 	"fmt"
+	"net"
 )
 
 // ConnectionConfig is the minimal configuration required to connect to a MySQL server
@@ -47,5 +48,11 @@ func (this *ConnectionConfig) Equals(other *ConnectionConfig) bool {
 }
 
 func (this *ConnectionConfig) GetDBUri(databaseName string) string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", this.User, this.Password, this.Key.Hostname, this.Key.Port, databaseName)
+	var ip = net.ParseIP(this.Key.Hostname)
+	if (ip != nil) && (ip.To4() == nil) {
+		// Wrap IPv6 literals in square brackets
+		return fmt.Sprintf("%s:%s@tcp([%s]:%d)/%s", this.User, this.Password, this.Key.Hostname, this.Key.Port, databaseName)
+	} else {
+		return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", this.User, this.Password, this.Key.Hostname, this.Key.Port, databaseName)
+	}
 }

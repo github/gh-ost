@@ -15,15 +15,16 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 ### Known commands
 
 - `help`: shows a brief list of available commands
-- `status`: returns a status summary of migration progress and configuration
-replication lag on to determine throttling
+- `status`: returns a detailed status summary of migration progress and configuration
+- `sup`: returns a brief status summary of migration progress
 - `chunk-size=<newsize>`: modify the `chunk-size`; applies on next running copy-iteration
+- `max-lag-millis=<max-lag>`: modify the maximum replication lag threshold (milliseconds, minimum value is `1000`, i.e. 1 second)
 - `max-load=<max-load-thresholds>`: modify the `max-load` config; applies on next running copy-iteration
   The `max-load` format must be: `some_status=<numeric-threshold>[,some_status=<numeric-threshold>...]`. For example: `Threads_running=50,threads_connected=1000`, and you would then write/echo `max-load=Threads_running=50,threads_connected=1000` to the socket.
 - `critical-load=<load>`: change critical load setting (exceeding given thresholds causes panic and abort)
-- `nice-ratio=<ratio>`: change _nice_ ratio: 0 for aggressive, positive integer `n`: for any unit of time spent copying rows, spend `n` units of time sleeping.
+- `nice-ratio=<ratio>`: change _nice_ ratio: 0 for aggressive (not nice, not sleeping), positive integer `n`: for any `1ms` spent copying rows, spend `n*1ms` units of time sleeping. Examples: assume a single rows chunk copy takes `100ms` to complete. `nice-ratio=0.5` will cause `gh-ost` to sleep for `50ms` immediately following. `nice-ratio=1` will cause `gh-ost` to sleep for `100ms`, effectively doubling runtime; value of `2` will effectively triple the runtime; etc.
 - `throttle-query`: change throttle query
-- `throttle-control-replicas`: change list of throttle-control replicas, these are replicas `gh-ost` will cehck
+- `throttle-control-replicas='replica1,replica2'`: change list of throttle-control replicas, these are replicas `gh-ost` will check. This takes a comma separated list of replica's to check and replaces the previous list.
 - `throttle`: force migration suspend
 - `no-throttle`: cancel forced suspension (though other throttling reasons may still apply)
 - `unpostpone`: at a time where `gh-ost` is postponing the [cut-over](cut-over.md) phase, instruct `gh-ost` to stop postponing and proceed immediately to cut-over.

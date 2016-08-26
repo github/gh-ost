@@ -7,6 +7,8 @@ package base
 
 import (
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +18,7 @@ import (
 	"github.com/github/gh-ost/go/sql"
 
 	"gopkg.in/gcfg.v1"
+	gcfgscanner "gopkg.in/gcfg.v1/scanner"
 )
 
 // RowsEstimateMethod is the type of row number estimation
@@ -31,8 +34,11 @@ type CutOver int
 
 const (
 	CutOverAtomic  CutOver = iota
-	CutOverSafe            = iota
 	CutOverTwoStep         = iota
+)
+
+var (
+	envVariableRegexp = regexp.MustCompile("[$][{](.*)[}]")
 )
 
 // MigrationContext has the general, global state of migration. It is used by
@@ -43,9 +49,11 @@ type MigrationContext struct {
 	AlterStatement    string
 
 	CountTableRows           bool
+	ConcurrentCountTableRows bool
 	AllowedRunningOnMaster   bool
 	AllowedMasterMaster      bool
 	SwitchToRowBinlogFormat  bool
+	AssumeRBR                bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
@@ -58,35 +66,39 @@ type MigrationContext struct {
 
 	defaultNumRetries                   int64
 	ChunkSize                           int64
-	NiceRatio                           int64
+	niceRatio                           float64
 	MaxLagMillisecondsThrottleThreshold int64
-	ReplictionLagQuery                  string
-	ThrottleControlReplicaKeys          *mysql.InstanceKeyMap
+	replicationLagQuery                 string
+	throttleControlReplicaKeys          *mysql.InstanceKeyMap
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
-	ThrottleQuery                       string
+	throttleQuery                       string
 	ThrottleCommandedByUser             int64
 	maxLoad                             LoadMap
 	criticalLoad                        LoadMap
 	PostponeCutOverFlagFile             string
-	SwapTablesTimeoutSeconds            int64
+	CutOverLockTimeoutSeconds           int64
 	PanicFlagFile                       string
 
+	DropServeSocket bool
 	ServeSocketFile string
 	ServeTCPPort    int64
 
-	Noop                    bool
-	TestOnReplica           bool
-	MigrateOnReplica        bool
-	OkToDropTable           bool
-	InitiallyDropOldTable   bool
-	InitiallyDropGhostTable bool
-	CutOverType             CutOver
-	ManagedRowCopy          bool
+	Noop                         bool
+	TestOnReplica                bool
+	MigrateOnReplica             bool
+	TestOnReplicaSkipReplicaStop bool
+	OkToDropTable                bool
+	InitiallyDropOldTable        bool
+	InitiallyDropGhostTable      bool
+	CutOverType                  CutOver
+	ManagedRowCopy               bool
 
 	TableEngine               string
 	RowsEstimate              int64
+	RowsDeltaEstimate         int64
 	UsedRowsEstimateMethod    RowsEstimateMethod
+	HasSuperPrivilege         bool
 	OriginalBinlogFormat      string
 	OriginalBinlogRowImage    string
 	InspectorConnectionConfig *mysql.ConnectionConfig
@@ -106,6 +118,7 @@ type MigrationContext struct {
 	throttleReason            string
 	throttleMutex             *sync.Mutex
 	IsPostponingCutOver       int64
+	CountingRowsFlag          int64
 
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
@@ -149,12 +162,12 @@ func newMigrationContext() *MigrationContext {
 		ChunkSize:                           1000,
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
-		MaxLagMillisecondsThrottleThreshold: 1000,
-		SwapTablesTimeoutSeconds:            3,
+		MaxLagMillisecondsThrottleThreshold: 1500,
+		CutOverLockTimeoutSeconds:           3,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
-		ThrottleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
+		throttleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
@@ -211,6 +224,17 @@ func (this *MigrationContext) HasMigrationRange() bool {
 	return this.MigrationRangeMinValues != nil && this.MigrationRangeMaxValues != nil
 }
 
+func (this *MigrationContext) SetCutOverLockTimeoutSeconds(timeoutSeconds int64) error {
+	if timeoutSeconds < 1 {
+		return fmt.Errorf("Minimal timeout is 1sec. Timeout remains at %d", this.CutOverLockTimeoutSeconds)
+	}
+	if timeoutSeconds > 10 {
+		return fmt.Errorf("Maximal timeout is 10sec. Timeout remains at %d", this.CutOverLockTimeoutSeconds)
+	}
+	this.CutOverLockTimeoutSeconds = timeoutSeconds
+	return nil
+}
+
 func (this *MigrationContext) SetDefaultNumRetries(retries int64) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
@@ -218,6 +242,7 @@ func (this *MigrationContext) SetDefaultNumRetries(retries int64) {
 		this.defaultNumRetries = retries
 	}
 }
+
 func (this *MigrationContext) MaxRetries() int64 {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
@@ -241,7 +266,14 @@ func (this *MigrationContext) IsTransactionalTable() bool {
 
 // ElapsedTime returns time since very beginning of the process
 func (this *MigrationContext) ElapsedTime() time.Duration {
-	return time.Now().Sub(this.StartTime)
+	return time.Since(this.StartTime)
+}
+
+// MarkRowCopyStartTime
+func (this *MigrationContext) MarkRowCopyStartTime() {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.RowCopyStartTime = time.Now()
 }
 
 // ElapsedRowCopyTime returns time since starting to copy chunks of rows
@@ -249,8 +281,13 @@ func (this *MigrationContext) ElapsedRowCopyTime() time.Duration {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
+	if this.RowCopyStartTime.IsZero() {
+		// Row copy hasn't started yet
+		return 0
+	}
+
 	if this.RowCopyEndTime.IsZero() {
-		return time.Now().Sub(this.RowCopyStartTime)
+		return time.Since(this.RowCopyStartTime)
 	}
 	return this.RowCopyEndTime.Sub(this.RowCopyStartTime)
 }
@@ -284,7 +321,14 @@ func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
 	this.pointOfInterestTimeMutex.Lock()
 	defer this.pointOfInterestTimeMutex.Unlock()
 
-	return time.Now().Sub(this.pointOfInterestTime)
+	return time.Since(this.pointOfInterestTime)
+}
+
+func (this *MigrationContext) SetMaxLagMillisecondsThrottleThreshold(maxLagMillisecondsThrottleThreshold int64) {
+	if maxLagMillisecondsThrottleThreshold < 1000 {
+		maxLagMillisecondsThrottleThreshold = 1000
+	}
+	atomic.StoreInt64(&this.MaxLagMillisecondsThrottleThreshold, maxLagMillisecondsThrottleThreshold)
 }
 
 func (this *MigrationContext) SetChunkSize(chunkSize int64) {
@@ -310,13 +354,30 @@ func (this *MigrationContext) IsThrottled() (bool, string) {
 	return this.isThrottled, this.throttleReason
 }
 
+func (this *MigrationContext) GetReplicationLagQuery() string {
+	var query string
+
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	query = this.replicationLagQuery
+	return query
+}
+
+func (this *MigrationContext) SetReplicationLagQuery(newQuery string) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	this.replicationLagQuery = newQuery
+}
+
 func (this *MigrationContext) GetThrottleQuery() string {
 	var query string
 
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
-	query = this.ThrottleQuery
+	query = this.throttleQuery
 	return query
 }
 
@@ -324,7 +385,7 @@ func (this *MigrationContext) SetThrottleQuery(newQuery string) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
-	this.ThrottleQuery = newQuery
+	this.throttleQuery = newQuery
 }
 
 func (this *MigrationContext) GetMaxLoad() LoadMap {
@@ -339,6 +400,26 @@ func (this *MigrationContext) GetCriticalLoad() LoadMap {
 	defer this.throttleMutex.Unlock()
 
 	return this.criticalLoad.Duplicate()
+}
+
+func (this *MigrationContext) GetNiceRatio() float64 {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	return this.niceRatio
+}
+
+func (this *MigrationContext) SetNiceRatio(newRatio float64) {
+	if newRatio < 0.0 {
+		newRatio = 0.0
+	}
+	if newRatio > 100.0 {
+		newRatio = 100.0
+	}
+
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.niceRatio = newRatio
 }
 
 // ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
@@ -376,7 +457,7 @@ func (this *MigrationContext) GetThrottleControlReplicaKeys() *mysql.InstanceKey
 	defer this.throttleMutex.Unlock()
 
 	keys := mysql.NewInstanceKeyMap()
-	keys.AddKeys(this.ThrottleControlReplicaKeys.GetInstanceKeys())
+	keys.AddKeys(this.throttleControlReplicaKeys.GetInstanceKeys())
 	return keys
 }
 
@@ -389,7 +470,15 @@ func (this *MigrationContext) ReadThrottleControlReplicaKeys(throttleControlRepl
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
-	this.ThrottleControlReplicaKeys = keys
+	this.throttleControlReplicaKeys = keys
+	return nil
+}
+
+func (this *MigrationContext) AddThrottleControlReplicaKey(key mysql.InstanceKey) error {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	this.throttleControlReplicaKeys.AddKey(key)
 	return nil
 }
 
@@ -422,8 +511,20 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if this.ConfigFile == "" {
 		return nil
 	}
+	gcfg.RelaxedParserMode = true
+	gcfgscanner.RelaxedScannerMode = true
 	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
 		return err
 	}
+
+	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull
+	// the given variable from os env
+	if submatch := envVariableRegexp.FindStringSubmatch(this.config.Client.User); len(submatch) > 1 {
+		this.config.Client.User = os.Getenv(submatch[1])
+	}
+	if submatch := envVariableRegexp.FindStringSubmatch(this.config.Client.Password); len(submatch) > 1 {
+		this.config.Client.Password = os.Getenv(submatch[1])
+	}
+
 	return nil
 }

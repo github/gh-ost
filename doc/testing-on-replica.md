@@ -63,3 +63,6 @@ $ gh-osc --host=myhost.com --conf=/etc/gh-ost.cnf --database=test --table=sample
 ### Further notes
 
 Do not confuse `--test-on-replica` with `--migrate-on-replica`; the latter performs the migration and _keeps it that way_ (does not revert the table swap nor stops replication)
+
+As part of testing on replica, `gh-ost` issues a `STOP SLAVE`. This requires the `SUPER` privilege.
+See related discussion on https://github.com/github/gh-ost/issues/162

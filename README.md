@@ -1,67 +1,94 @@
 # gh-ost
 
-#### GitHub's online schema migration for MySQL
+#### GitHub's online schema migration for MySQL <img src="doc/images/gh-ost-logo-light-160.png" align="right">
 
-`gh-ost` allows for online schema migrations in MySQL which are:
-- Triggerless
-- Testable
-- Pausable
-- Operations-friendly
+ `gh-ost` is a triggerless online schema migration solution for MySQL. It is testable and provides pausability, dynamic control/reconfiguration, auditing, and many operational perks.
+
+`gh-ost` produces a light workload on the master throughout the migration, decoupled from the existing workload on the migrated table.
+
+It has been designed based on years of experience with existing solutions, and changes the paradigm of table migrations.
+
+
 
 ## How?
 
-WORK IN PROGRESS
+All existing online-schema-change tools operate in similar manner: they create a _ghost_ table in the likeness of your original table, migrate that table while empty, slowly and incrementally copy data from your original table to the _ghost_ table, meanwhile propagating ongoing changes (any `INSERT`, `DELETE`, `UPDATE` applied to your table) to the _ghost_ table. Finally, at the right time, they replace your original table with the _ghost_ table.
 
-Please meanwhile refer to the [docs](doc) for more information. No, really, go to the [docs](doc).
+`gh-ost` uses the same pattern. However it differs from all existing tools by not using triggers. We have recognized the triggers to be the source of [many limitations and risks](doc/why-triggerless.md).
 
-- [Why triggerless](doc/why-triggerless.md)
-- [Triggerless design](doc/triggerless-design.md)
-- [Cut over phase](doc/cut-over.md)
-- [Testing on replica](doc/testing-on-replica.md)
-- [Throttle](doc/throttle.md)
-- [Operational perks](doc/perks.md)
-- [Migrating with Statement Based Replication](doc/migrating-with-sbr.md)
-- [Understanding output](doc/understanding-output.md)
-- [Interactive commands](doc/interactive-commands.md)
-- [Command line flags](doc/command-line-flags.md)
+Instead, `gh-ost` [uses the binary log stream](doc/triggerless-design.md) to capture table changes, and asynchronously applies them onto the _ghost_ table. `gh-ost` takes upon itself some tasks that other tools leave for the database to perform. As result, `gh-ost` has greater control over the migration process; can truly suspend it; can truly decouple the migration's write load from the master's workload.
+
+In addition, it offers many [operational perks](doc/perks.md) that make it safer, trustworthy and fun to use.
+
+![gh-ost general flow](doc/images/gh-ost-general-flow.png)
+
+## Highlights
+
+- Build your trust in `gh-ost` by testing it on replicas. `gh-ost` will issue same flow as it would have on the master, to migrate a table on a replica, without actually replacing the original table, leaving the replica with two tables you can then compare and satisfy yourself that the tool operates correctly. This is how we continuously test `gh-ost` in production.
+- True pause: when `gh-ost` [throttles](doc/throttle.md), it truly ceases writes on master: no row copies and no ongoing events processing. By throttling, you return your master to its original workload
+- Dynamic control: you can [interactively](doc/interactive-commands.md) reconfigure `gh-ost`, even as migration still runs. You may forcibly initiate throttling.
+- Auditing: you may query `gh-ost` for status. `gh-ost` listens on unix socket or TCP.
+- Control over cut-over phase: `gh-ost` can be instructed to postpone what is probably the most critical step: the swap of tables, until such time that you're comfortably available. No need to worry about ETA being outside office hours.
+
+Please refer to the [docs](doc) for more information. No, really, read the [docs](doc).
 
 ## Usage
 
-#### Where to execute
+The [cheatsheet](doc/cheatsheet.md) has it all. You may be interested in invoking `gh-ost` in various modes:
 
-The recommended way of executing `gh-ost` is to have it connect to a _replica_, as opposed to having it connect to the master. `gh-ost` will crawl its way up the replication chain to figure out who the master is.
+- a _noop_ migration (merely testing that the migration is valid and good to go)
+- a real migration, utilizing a replica (the migration runs on the master; `gh-ost` figures out identities of servers involved. Required mode if your master uses Statement Based Replication)
+- a real migration, run directly on the master (but `gh-ost` prefers the former)
+- a real migration on a replica (master untouched)
+- a test migration on a replica, the way for you to build trust with `gh-ost`'s operation.
 
-By connecting to a replica, `gh-ost` sets up a self-throttling mechanism; feels more comfortable in querying `information_schema` tables; and more. Connecting `gh-ost` to a replica is also the trick to make it work even if your master is configured with `statement based replication`, as `gh-ost` is able to manipulate the replica to rewrite logs in `row based replication`. See [Migrating with Statement Based Replication](migrating-with-sbr.md).
+Our tips:
 
-The replica would have to use binary logs and be configured with `log_slave_updates`.
+- [Testing above all](doc/testing-on-replica.md), try out `--test-on-replica` first few times. Better yet, make it continuous. We have multiple replicas where we iterate our entire fleet of production tables, migrating them one by one, checksumming the results, verifying migration is good.
+- For each master migration, first issue a _noop_
+- Then issue the real thing via `--execute`.
 
-It is still OK to connect `gh-ost` directly on master; you will need to confirm this by providing `--allow-on-master`. The master would have to be using `row based replication`.
+More tips:
 
-`gh-ost` itself may be executed from anywhere. It connects via `tcp` and it does not have to be executed from a `MySQL` box. However, do note it generates a lot of traffic, as it connects as a replica and pulls binary log data.
+- Use `--exact-rowcount` for accurate progress indication
+- Use `--postpone-cut-over-flag-file` to gain control over cut-over timing
+- Get familiar with the [interactive commands](doc/interactive-commands.md)
 
-#### Testing on replica
+Also see:
 
-Newcomer? We think you would enjoy building trust with this tool. You can ask `gh-ost` to simulate a migration on a replica -- this will not affect data on master and will not actually do a complete migration. It will operate on a replica, and end up with two tables: the original (untouched), and the migrated. You will have your chance to compare the two and verify the tool works to your satisfaction.
-
-```
-gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --execute --initially-drop-ghost-table --initially-drop-old-table -max-load=Threads_running=30 --switch-to-rbr --chunk-size=2500 --exact-rowcount --test-on-replica --verbose --postpone-cut-over-flag-file=/tmp/ghost.postpone.flag --throttle-flag-file=/tmp/ghost.throttle.flag
-```
-Please read more on [testing on replica](testing-on-replica.md)
-
-#### Migrating a master table
-
-```
-gh-ost --conf=.my.cnf --database=mydb --table=mytable --verbose --alter="engine=innodb" --initially-drop-ghost-table --initially-drop-old-table --max-load=Threads_running=30 --switch-to-rbr --chunk-size=2500 --exact-rowcount --verbose --postpone-cut-over-flag-file=/tmp/ghost.postpone.flag --throttle-flag-file=/tmp/ghost.throttle.flag [--execute]
-```
-
-Note: in order to migrate a table on the master you don't need to _connect_ to the master. `gh-ost` is happy (and prefers) if you connect to a replica; it then figures out the identity of the master and makes the connection itself.
+- [requirements and limitations](doc/requirements-and-limitations.md)
+- [what if?](doc/what-if.md)
+- [the fine print](doc/the-fine-print.md)
 
 ## What's in a name?
 
 Originally this was named `gh-osc`: GitHub Online Schema Change, in the likes of [Facebook online schema change](https://www.facebook.com/notes/mysql-at-facebook/online-schema-change-for-mysql/430801045932/) and [pt-online-schema-change](https://www.percona.com/doc/percona-toolkit/2.2/pt-online-schema-change.html).
 
-But then a rare genetic mutation happened, and the `s` transformed into `t`. And that sent us down the path of trying to figure out a new acronym. Right now, `gh-ost` (pronounce: _Ghost_), stands for:
-- GitHub Online Schema Translator/Transformer/Transfigurator
+But then a rare genetic mutation happened, and the `c` transformed into `t`. And that sent us down the path of trying to figure out a new acronym. `gh-ost` (pronounce: _Ghost_), stands for GitHub's Online Schema Transmogrifier/Translator/Transformer/Transfigurator
+
+## License
+
+`gh-ost` is licensed under the [MIT license](https://github.com/github/gh-ost/blob/master/LICENSE)
+
+`gh-ost` uses 3rd party libraries, each with their own license. These are found [here](https://github.com/github/gh-ost/tree/master/vendor).
+
+## Community
+
+`gh-ost` is released at a stable state, but with mileage to go. We are [open to pull requests](https://github.com/github/gh-ost/blob/master/.github/CONTRIBUTING.md). Please first discuss your intentions via [Issues](https://github.com/github/gh-ost/issues).
+
+We develop `gh-ost` at GitHub and for the community. We may have different priorities than others. From time to time we may suggest a contribution that is not on our immediate roadmap but which may appeal to others.
+
+## Download/binaries/source
+
+`gh-ost` is now GA and stable.
+
+`gh-ost` is available in binary format for Linux and Mac OS/X
+
+[Download latest release here](https://github.com/github/gh-ost/releases/latest)
+
+`gh-ost` is a Go project; it is built with Go 1.5 with "experimental vendor". Soon to migrate to Go 1.6. See and use [build file](https://github.com/github/gh-ost/blob/master/build.sh) for compiling it on your own.
+
+Generally speaking, `master` branch is stable, but only [releases](https://github.com/github/gh-ost/releases) are to be used in production.
 
 ## Authors
 
