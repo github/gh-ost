@@ -1,4 +1,4 @@
-> This is the place to report a bug, ask a question, suggest an enhancment.
+> This is the place to report a bug, ask a question, suggest an enhancement.
 
 > This is the place to make a discussion before creating a PR.
 
