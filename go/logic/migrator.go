@@ -379,13 +379,24 @@ func (this *Migrator) countTableRows() (err error) {
 		log.Debugf("Noop operation; not really counting table rows")
 		return nil
 	}
+
+	countRowsFunc := func() error {
+		if err := this.inspector.CountTableRows(); err != nil {
+			return err
+		}
+		if err := this.hooksExecutor.onRowCountComplete(); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	if this.migrationContext.ConcurrentCountTableRows {
-		go this.inspector.CountTableRows()
 		log.Infof("As instructed, counting rows in the background; meanwhile I will use an estimated count, and will update it later on")
+		go countRowsFunc()
 		// and we ignore errors, because this turns to be a background job
 		return nil
 	}
-	return this.inspector.CountTableRows()
+	return countRowsFunc()
 }
 
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
