@@ -138,12 +138,9 @@ func (this *HooksExecutor) onFailure() error {
 	return this.executeHooks(onFailure)
 }
 
-func (this *HooksExecutor) onStatus(statusMessage string, elapsedSeconds int64) error {
-	v := []string{
-		fmt.Sprintf("GH_OST_STATUS='%s'", statusMessage),
-		fmt.Sprintf("GH_OST_ELAPSED_SECONDS='%d'", elapsedSeconds),
-	}
-	return this.executeHooks(onStatus, v...)
+func (this *HooksExecutor) onStatus(statusMessage string) error {
+	v := fmt.Sprintf("GH_OST_STATUS='%s'", statusMessage)
+	return this.executeHooks(onStatus, v)
 }
 
 func (this *HooksExecutor) onStopReplication() error {

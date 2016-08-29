@@ -1102,7 +1102,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	fmt.Fprintln(w, status)
 
 	if elapsedSeconds%60 == 0 {
-		this.hooksExecutor.onStatus(status, elapsedSeconds)
+		this.hooksExecutor.onStatus(status)
 	}
 }
 
