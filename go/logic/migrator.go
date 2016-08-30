@@ -1026,7 +1026,9 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	} else {
 		progressPct = 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
 	}
-
+	if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+		progressPct = 100.0
+	}
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
 	shouldPrintMigrationStatusHint := (elapsedSeconds%600 == 0)
 	if rule == ForcePrintStatusAndHintRule {
