@@ -41,6 +41,18 @@ var (
 	envVariableRegexp = regexp.MustCompile("[$][{](.*)[}]")
 )
 
+type ThrottleCheckResult struct {
+	ShouldThrottle bool
+	Reason         string
+}
+
+func NewThrottleCheckResult(throttle bool, reason string) *ThrottleCheckResult {
+	return &ThrottleCheckResult{
+		ShouldThrottle: throttle,
+		Reason:         reason,
+	}
+}
+
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
@@ -96,33 +108,34 @@ type MigrationContext struct {
 	InitiallyDropGhostTable      bool
 	CutOverType                  CutOver
 
-	Hostname                  string
-	TableEngine               string
-	RowsEstimate              int64
-	RowsDeltaEstimate         int64
-	UsedRowsEstimateMethod    RowsEstimateMethod
-	HasSuperPrivilege         bool
-	OriginalBinlogFormat      string
-	OriginalBinlogRowImage    string
-	InspectorConnectionConfig *mysql.ConnectionConfig
-	ApplierConnectionConfig   *mysql.ConnectionConfig
-	StartTime                 time.Time
-	RowCopyStartTime          time.Time
-	RowCopyEndTime            time.Time
-	LockTablesStartTime       time.Time
-	RenameTablesStartTime     time.Time
-	RenameTablesEndTime       time.Time
-	pointOfInterestTime       time.Time
-	pointOfInterestTimeMutex  *sync.Mutex
-	CurrentLag                int64
-	controlReplicasLagResult  mysql.ReplicationLagResult
-	TotalRowsCopied           int64
-	TotalDMLEventsApplied     int64
-	isThrottled               bool
-	throttleReason            string
-	throttleMutex             *sync.Mutex
-	IsPostponingCutOver       int64
-	CountingRowsFlag          int64
+	Hostname                   string
+	TableEngine                string
+	RowsEstimate               int64
+	RowsDeltaEstimate          int64
+	UsedRowsEstimateMethod     RowsEstimateMethod
+	HasSuperPrivilege          bool
+	OriginalBinlogFormat       string
+	OriginalBinlogRowImage     string
+	InspectorConnectionConfig  *mysql.ConnectionConfig
+	ApplierConnectionConfig    *mysql.ConnectionConfig
+	StartTime                  time.Time
+	RowCopyStartTime           time.Time
+	RowCopyEndTime             time.Time
+	LockTablesStartTime        time.Time
+	RenameTablesStartTime      time.Time
+	RenameTablesEndTime        time.Time
+	pointOfInterestTime        time.Time
+	pointOfInterestTimeMutex   *sync.Mutex
+	CurrentLag                 int64
+	controlReplicasLagResult   mysql.ReplicationLagResult
+	TotalRowsCopied            int64
+	TotalDMLEventsApplied      int64
+	isThrottled                bool
+	throttleReason             string
+	throttleGeneralCheckResult ThrottleCheckResult
+	throttleMutex              *sync.Mutex
+	IsPostponingCutOver        int64
+	CountingRowsFlag           int64
 
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
@@ -353,6 +366,20 @@ func (this *MigrationContext) SetChunkSize(chunkSize int64) {
 		chunkSize = 100000
 	}
 	atomic.StoreInt64(&this.ChunkSize, chunkSize)
+}
+
+func (this *MigrationContext) SetThrottleGeneralCheckResult(checkResult *ThrottleCheckResult) *ThrottleCheckResult {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.throttleGeneralCheckResult = *checkResult
+	return checkResult
+}
+
+func (this *MigrationContext) GetThrottleGeneralCheckResult() *ThrottleCheckResult {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	result := this.throttleGeneralCheckResult
+	return &result
 }
 
 func (this *MigrationContext) SetThrottled(throttle bool, reason string) {

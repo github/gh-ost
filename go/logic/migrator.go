@@ -55,9 +55,11 @@ type Migrator struct {
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
 	server           *Server
+	throttler        *Throttler
 	hooksExecutor    *HooksExecutor
 	migrationContext *base.MigrationContext
 
+	firstThrottlingCollected   chan bool
 	tablesInPlace              chan bool
 	rowCopyComplete            chan bool
 	allEventsUpToLockProcessed chan bool
@@ -81,6 +83,7 @@ func NewMigrator() *Migrator {
 		migrationContext:           base.GetMigrationContext(),
 		parser:                     sql.NewParser(),
 		tablesInPlace:              make(chan bool),
+		firstThrottlingCollected:   make(chan bool, 1),
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan bool),
 		panicAbort:                 make(chan error),
@@ -119,42 +122,12 @@ func (this *Migrator) initiateHooksExecutor() (err error) {
 }
 
 // shouldThrottle performs checks to see whether we should currently be throttling.
-// It also checks for critical-load and panic aborts.
+// It merely observes the metrics collected by other components, it does not issue
+// its own metric collection.
 func (this *Migrator) shouldThrottle() (result bool, reason string) {
-	// Regardless of throttle, we take opportunity to check for panic-abort
-	if this.migrationContext.PanicFlagFile != "" {
-		if base.FileExists(this.migrationContext.PanicFlagFile) {
-			this.panicAbort <- fmt.Errorf("Found panic-file %s. Aborting without cleanup", this.migrationContext.PanicFlagFile)
-		}
-	}
-	criticalLoad := this.migrationContext.GetCriticalLoad()
-	for variableName, threshold := range criticalLoad {
-		value, err := this.applier.ShowStatusVariable(variableName)
-		if err != nil {
-			return true, fmt.Sprintf("%s %s", variableName, err)
-		}
-		if value >= threshold {
-			this.panicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
-		}
-	}
-
-	// Back to throttle considerations
-
-	// User-based throttle
-	if atomic.LoadInt64(&this.migrationContext.ThrottleCommandedByUser) > 0 {
-		return true, "commanded by user"
-	}
-	if this.migrationContext.ThrottleFlagFile != "" {
-		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
-			// Throttle file defined and exists!
-			return true, "flag-file"
-		}
-	}
-	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
-		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
-			// 2nd Throttle file defined and exists!
-			return true, "flag-file"
-		}
+	generalCheckResult := this.migrationContext.GetThrottleGeneralCheckResult()
+	if generalCheckResult.ShouldThrottle {
+		return generalCheckResult.ShouldThrottle, generalCheckResult.Reason
 	}
 	// Replication lag throttle
 	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
@@ -175,29 +148,93 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 			return true, fmt.Sprintf("%+v replica-lag=%fs", lagResult.Key, lagResult.Lag.Seconds())
 		}
 	}
+	// Got here? No metrics indicates we need throttling.
+	return false, ""
+}
+
+// readGeneralThrottleMetrics reads the once-per-sec metrics, and stores them onto this.migrationContext
+func (this *Migrator) readGeneralThrottleMetrics() error {
+
+	setThrottle := func(throttle bool, reason string) error {
+		this.migrationContext.SetThrottleGeneralCheckResult(base.NewThrottleCheckResult(throttle, reason))
+		return nil
+	}
+
+	// Regardless of throttle, we take opportunity to check for panic-abort
+	if this.migrationContext.PanicFlagFile != "" {
+		if base.FileExists(this.migrationContext.PanicFlagFile) {
+			this.panicAbort <- fmt.Errorf("Found panic-file %s. Aborting without cleanup", this.migrationContext.PanicFlagFile)
+		}
+	}
+	criticalLoad := this.migrationContext.GetCriticalLoad()
+	for variableName, threshold := range criticalLoad {
+		value, err := this.applier.ShowStatusVariable(variableName)
+		if err != nil {
+			return setThrottle(true, fmt.Sprintf("%s %s", variableName, err))
+		}
+		if value >= threshold {
+			this.panicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
+		}
+	}
+
+	// Back to throttle considerations
+
+	// User-based throttle
+	if atomic.LoadInt64(&this.migrationContext.ThrottleCommandedByUser) > 0 {
+		return setThrottle(true, "commanded by user")
+	}
+	if this.migrationContext.ThrottleFlagFile != "" {
+		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
+			// Throttle file defined and exists!
+			return setThrottle(true, "flag-file")
+		}
+	}
+	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
+		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
+			// 2nd Throttle file defined and exists!
+			return setThrottle(true, "flag-file")
+		}
+	}
 
 	maxLoad := this.migrationContext.GetMaxLoad()
 	for variableName, threshold := range maxLoad {
 		value, err := this.applier.ShowStatusVariable(variableName)
 		if err != nil {
-			return true, fmt.Sprintf("%s %s", variableName, err)
+			return setThrottle(true, fmt.Sprintf("%s %s", variableName, err))
 		}
 		if value >= threshold {
-			return true, fmt.Sprintf("max-load %s=%d >= %d", variableName, value, threshold)
+			return setThrottle(true, fmt.Sprintf("max-load %s=%d >= %d", variableName, value, threshold))
 		}
 	}
 	if this.migrationContext.GetThrottleQuery() != "" {
 		if res, _ := this.applier.ExecuteThrottleQuery(); res > 0 {
-			return true, "throttle-query"
+			return setThrottle(true, "throttle-query")
 		}
 	}
 
-	return false, ""
+	return setThrottle(false, "")
+}
+
+// initiateThrottlerMetrics initiates the various processes that collect measurements
+// that may affect throttling. There are several components, all running independently,
+// that collect such metrics.
+func (this *Migrator) initiateThrottlerMetrics() {
+	go this.initiateHeartbeatReader()
+	go this.initiateControlReplicasReader()
+
+	go func() {
+		throttlerMetricsTick := time.Tick(1 * time.Second)
+		this.readGeneralThrottleMetrics()
+		this.firstThrottlingCollected <- true
+		for range throttlerMetricsTick {
+			this.readGeneralThrottleMetrics()
+		}
+	}()
 }
 
 // initiateThrottler initiates the throttle ticker and sets the basic behavior of throttling.
 func (this *Migrator) initiateThrottler() error {
-	throttlerTick := time.Tick(1 * time.Second)
+	throttlerTick := time.Tick(100 * time.Millisecond)
 
 	throttlerFunction := func() {
 		alreadyThrottling, currentReason := this.migrationContext.IsThrottled()
@@ -453,16 +490,15 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.countTableRows(); err != nil {
 		return err
 	}
-
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
-	go this.initiateHeartbeatReader()
-	go this.initiateControlReplicasReader()
-
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
+	go this.initiateThrottlerMetrics()
+	log.Infof("Waiting for first throttle metrics to be collected")
+	<-this.firstThrottlingCollected
 	go this.initiateThrottler()
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
@@ -1204,6 +1240,11 @@ func (this *Migrator) addDMLEventsListener() error {
 		},
 	)
 	return err
+}
+
+func (this *Migrator) initiateThrottler() error {
+	this.throttler = NewThrottler(this.panicAbort)
+	return nil
 }
 
 func (this *Migrator) initiateApplier() error {
