@@ -64,6 +64,7 @@ type MigrationContext struct {
 	CliUser     string
 	CliPassword string
 
+	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
 	ChunkSize                           int64
 	niceRatio                           float64
@@ -111,6 +112,7 @@ type MigrationContext struct {
 	pointOfInterestTime       time.Time
 	pointOfInterestTimeMutex  *sync.Mutex
 	CurrentLag                int64
+	controlReplicasLagResult  mysql.ReplicationLagResult
 	TotalRowsCopied           int64
 	TotalDMLEventsApplied     int64
 	isThrottled               bool
@@ -323,6 +325,16 @@ func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
 	return time.Since(this.pointOfInterestTime)
 }
 
+func (this *MigrationContext) SetHeartbeatIntervalMilliseconds(heartbeatIntervalMilliseconds int64) {
+	if heartbeatIntervalMilliseconds < 100 {
+		heartbeatIntervalMilliseconds = 100
+	}
+	if heartbeatIntervalMilliseconds > 1000 {
+		heartbeatIntervalMilliseconds = 1000
+	}
+	this.HeartbeatIntervalMilliseconds = heartbeatIntervalMilliseconds
+}
+
 func (this *MigrationContext) SetMaxLagMillisecondsThrottleThreshold(maxLagMillisecondsThrottleThreshold int64) {
 	if maxLagMillisecondsThrottleThreshold < 100 {
 		maxLagMillisecondsThrottleThreshold = 100
@@ -449,6 +461,20 @@ func (this *MigrationContext) ReadCriticalLoad(criticalLoadList string) error {
 
 	this.criticalLoad = loadMap
 	return nil
+}
+
+func (this *MigrationContext) GetControlReplicasLagResult() mysql.ReplicationLagResult {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	lagResult := this.controlReplicasLagResult
+	return lagResult
+}
+
+func (this *MigrationContext) SetControlReplicasLagResult(lagResult *mysql.ReplicationLagResult) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.controlReplicasLagResult = *lagResult
 }
 
 func (this *MigrationContext) GetThrottleControlReplicaKeys() *mysql.InstanceKeyMap {

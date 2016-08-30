@@ -258,7 +258,7 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
 // This is done asynchronously
-func (this *Applier) InitiateHeartbeat(heartbeatIntervalMilliseconds int64) {
+func (this *Applier) InitiateHeartbeat() {
 	var numSuccessiveFailures int64
 	injectHeartbeat := func() error {
 		if _, err := this.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339Nano)); err != nil {
@@ -273,10 +273,10 @@ func (this *Applier) InitiateHeartbeat(heartbeatIntervalMilliseconds int64) {
 	}
 	injectHeartbeat()
 
-	heartbeatTick := time.Tick(time.Duration(heartbeatIntervalMilliseconds) * time.Millisecond)
+	heartbeatTick := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	for range heartbeatTick {
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
-		// have this blocked rather than spam the master in the event something
+		// have this block the loop rather than spam the master in the event something
 		// goes wrong
 		if err := injectHeartbeat(); err != nil {
 			return

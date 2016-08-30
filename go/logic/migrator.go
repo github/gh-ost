@@ -36,8 +36,7 @@ const (
 type tableWriteFunc func() error
 
 const (
-	applyEventsQueueBuffer        = 100
-	heartbeatIntervalMilliseconds = 1000
+	applyEventsQueueBuffer = 100
 )
 
 type PrintStatusRule int
@@ -159,7 +158,7 @@ func (this *Migrator) shouldThrottle() (result bool, reason string) {
 		checkThrottleControlReplicas = false
 	}
 	if checkThrottleControlReplicas {
-		lagResult := mysql.GetMaxReplicationLag(this.migrationContext.InspectorConnectionConfig, this.migrationContext.GetThrottleControlReplicaKeys(), this.migrationContext.GetReplicationLagQuery())
+		lagResult := this.migrationContext.GetControlReplicasLagResult()
 		if lagResult.Err != nil {
 			return true, fmt.Sprintf("%+v %+v", lagResult.Key, lagResult.Err)
 		}
@@ -328,8 +327,8 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	return nil
 }
 
-// onChangelogHeartbeat is called when a heartbeat event is intercepted
-func (this *Migrator) onChangelogHeartbeat(heartbeatValue string) (err error) {
+// parseChangelogHeartbeat is called when a heartbeat event is intercepted
+func (this *Migrator) parseChangelogHeartbeat(heartbeatValue string) (err error) {
 	heartbeatTime, err := time.Parse(time.RFC3339Nano, heartbeatValue)
 	if err != nil {
 		return log.Errore(err)
@@ -427,7 +426,8 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
-	go this.initiateHeartbeatListener()
+	go this.initiateHeartbeatReader()
+	go this.initiateControlReplicasReader()
 
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
@@ -1045,11 +1045,11 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	fmt.Fprintln(w, status)
 }
 
-// initiateHeartbeatListener listens for heartbeat events. gh-ost implements its own
+// initiateHeartbeatReader listens for heartbeat events. gh-ost implements its own
 // heartbeat mechanism, whether your DB has or hasn't an existing heartbeat solution.
 // Heartbeat is supplied via the changelog table
-func (this *Migrator) initiateHeartbeatListener() {
-	ticker := time.Tick((heartbeatIntervalMilliseconds * time.Millisecond) / 2)
+func (this *Migrator) initiateHeartbeatReader() {
+	ticker := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	for range ticker {
 		go func() error {
 			if atomic.LoadInt64(&this.cleanupImminentFlag) > 0 {
@@ -1059,16 +1059,44 @@ func (this *Migrator) initiateHeartbeatListener() {
 			if err != nil {
 				return log.Errore(err)
 			}
-			for hint, value := range changelogState {
-				switch hint {
-				case "heartbeat":
-					{
-						this.onChangelogHeartbeat(value)
-					}
-				}
+			if heartbeatValue, ok := changelogState["heartbeat"]; ok {
+				this.parseChangelogHeartbeat(heartbeatValue)
 			}
 			return nil
 		}()
+	}
+}
+
+// initiateControlReplicasReader
+func (this *Migrator) initiateControlReplicasReader() {
+	readControlReplicasLag := func(replicationLagQuery string) error {
+		if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.allEventsUpToLockProcessedInjectedFlag) > 0) {
+			return nil
+		}
+		lagResult := mysql.GetMaxReplicationLag(this.migrationContext.InspectorConnectionConfig, this.migrationContext.GetThrottleControlReplicaKeys(), replicationLagQuery)
+		this.migrationContext.SetControlReplicasLagResult(lagResult)
+		return nil
+	}
+	aggressiveTicker := time.Tick(100 * time.Millisecond)
+	relaxedFactor := 10
+	counter := 0
+	shouldReadLagAggressively := false
+	replicationLagQuery := ""
+
+	for range aggressiveTicker {
+		if counter%relaxedFactor == 0 {
+			// we only check if we wish to be aggressive once per second. The parameters for being aggressive
+			// do not typically change at all throughout the migration, but nonetheless we check them.
+			counter = 0
+			maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
+			replicationLagQuery = this.migrationContext.GetReplicationLagQuery()
+			shouldReadLagAggressively = (replicationLagQuery != "" && maxLagMillisecondsThrottleThreshold < 1000)
+		}
+		if counter == 0 || shouldReadLagAggressively {
+			// We check replication lag every so often, or if we wish to be aggressive
+			readControlReplicasLag(replicationLagQuery)
+		}
+		counter++
 	}
 }
 
@@ -1139,7 +1167,7 @@ func (this *Migrator) initiateApplier() error {
 	}
 
 	this.applier.WriteChangelogState(string(TablesInPlace))
-	go this.applier.InitiateHeartbeat(heartbeatIntervalMilliseconds)
+	go this.applier.InitiateHeartbeat()
 	return nil
 }
 
