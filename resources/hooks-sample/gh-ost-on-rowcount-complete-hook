@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Sample hook file for gh-ost-on-rowcount-complete
+
+echo "$(date) gh-ost-on-rowcount-complete $GH_OST_DATABASE_NAME.$GH_OST_TABLE_NAME" >> /tmp/gh-ost.log

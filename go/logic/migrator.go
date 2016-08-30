@@ -55,8 +55,8 @@ type Migrator struct {
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
 	server           *Server
+	hooksExecutor    *HooksExecutor
 	migrationContext *base.MigrationContext
-	hostname         string
 
 	tablesInPlace              chan bool
 	rowCopyComplete            chan bool
@@ -107,6 +107,15 @@ func (this *Migrator) acceptSignals() {
 			}
 		}
 	}()
+}
+
+// initiateHooksExecutor
+func (this *Migrator) initiateHooksExecutor() (err error) {
+	this.hooksExecutor = NewHooksExecutor()
+	if err := this.hooksExecutor.initHooks(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // shouldThrottle performs checks to see whether we should currently be throttling.
@@ -276,7 +285,7 @@ func (this *Migrator) executeAndThrottleOnError(operation func() error) (err err
 }
 
 // consumeRowCopyComplete blocks on the rowCopyComplete channel once, and then
-// consumers and drops any further incoming events that may be left hanging.
+// consumes and drops any further incoming events that may be left hanging.
 func (this *Migrator) consumeRowCopyComplete() {
 	<-this.rowCopyComplete
 	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
@@ -369,25 +378,42 @@ func (this *Migrator) countTableRows() (err error) {
 		log.Debugf("Noop operation; not really counting table rows")
 		return nil
 	}
+
+	countRowsFunc := func() error {
+		if err := this.inspector.CountTableRows(); err != nil {
+			return err
+		}
+		if err := this.hooksExecutor.onRowCountComplete(); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	if this.migrationContext.ConcurrentCountTableRows {
-		go this.inspector.CountTableRows()
 		log.Infof("As instructed, counting rows in the background; meanwhile I will use an estimated count, and will update it later on")
+		go countRowsFunc()
 		// and we ignore errors, because this turns to be a background job
 		return nil
 	}
-	return this.inspector.CountTableRows()
+	return countRowsFunc()
 }
 
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
 	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	this.migrationContext.StartTime = time.Now()
-	if this.hostname, err = os.Hostname(); err != nil {
+	if this.migrationContext.Hostname, err = os.Hostname(); err != nil {
 		return err
 	}
 
 	go this.listenOnPanicAbort()
 
+	if err := this.initiateHooksExecutor(); err != nil {
+		return err
+	}
+	if err := this.hooksExecutor.onStartup(); err != nil {
+		return err
+	}
 	if err := this.parser.ParseAlterStatement(this.migrationContext.AlterStatement); err != nil {
 		return err
 	}
@@ -414,6 +440,11 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.inspector.InspectOriginalAndGhostTables(); err != nil {
 		return err
 	}
+	// Validation complete! We're good to execute this migration
+	if err := this.hooksExecutor.onValidated(); err != nil {
+		return err
+	}
+
 	if err := this.initiateServer(); err != nil {
 		return err
 	}
@@ -433,6 +464,9 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	go this.initiateThrottler()
+	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
+		return err
+	}
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
@@ -441,8 +475,14 @@ func (this *Migrator) Migrate() (err error) {
 	log.Debugf("Operating until row copy is complete")
 	this.consumeRowCopyComplete()
 	log.Infof("Row copy complete")
+	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
+		return err
+	}
 	this.printStatus(ForcePrintStatusRule)
 
+	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
+		return err
+	}
 	if err := this.cutOver(); err != nil {
 		return err
 	}
@@ -450,8 +490,17 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.finalCleanup(); err != nil {
 		return nil
 	}
+	if err := this.hooksExecutor.onSuccess(); err != nil {
+		return err
+	}
 	log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
+}
+
+// ExecOnFailureHook executes the onFailure hook, and this method is provided as the only external
+// hook access point
+func (this *Migrator) ExecOnFailureHook() (err error) {
+	return this.hooksExecutor.onFailure()
 }
 
 // cutOver performs the final step of migration, based on migration
@@ -477,8 +526,12 @@ func (this *Migrator) cutOver() (err error) {
 			}
 			if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
 				// Throttle file defined and exists!
+				if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) == 0 {
+					if err := this.hooksExecutor.onBeginPostponed(); err != nil {
+						return true, err
+					}
+				}
 				atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 1)
-				//log.Debugf("Postponing final table swap as flag file exists: %+v", this.migrationContext.PostponeCutOverFlagFile)
 				return true, nil
 			}
 			return false, nil
@@ -492,7 +545,7 @@ func (this *Migrator) cutOver() (err error) {
 		// the same cut-over phase as the master would use. That means we take locks
 		// and swap the tables.
 		// The difference is that we will later swap the tables back.
-
+		this.hooksExecutor.onStopReplication()
 		if this.migrationContext.TestOnReplicaSkipReplicaStop {
 			log.Warningf("--test-on-replica-skip-replica-stop enabled, we are not stopping replication.")
 		} else {
@@ -677,6 +730,10 @@ func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err
 	}
 
 	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
+
+	if err := this.hooksExecutor.onInteractiveCommand(command); err != nil {
+		return err
+	}
 
 	switch command {
 	case "help":
@@ -887,7 +944,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	fmt.Fprintln(w, fmt.Sprintf("# Migrating %+v; inspecting %+v; executing on %+v",
 		*this.applier.connectionConfig.ImpliedKey,
 		*this.inspector.connectionConfig.ImpliedKey,
-		this.hostname,
+		this.migrationContext.Hostname,
 	))
 	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v",
 		this.migrationContext.StartTime.Format(time.RubyDate),
@@ -1043,6 +1100,10 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
+
+	if elapsedSeconds%60 == 0 {
+		this.hooksExecutor.onStatus(status)
+	}
 }
 
 // initiateHeartbeatReader listens for heartbeat events. gh-ost implements its own

@@ -80,6 +80,8 @@ type MigrationContext struct {
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
 	PanicFlagFile                       string
+	HooksPath                           string
+	HooksHintMessage                    string
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -94,6 +96,7 @@ type MigrationContext struct {
 	InitiallyDropGhostTable      bool
 	CutOverType                  CutOver
 
+	Hostname                  string
 	TableEngine               string
 	RowsEstimate              int64
 	RowsDeltaEstimate         int64
