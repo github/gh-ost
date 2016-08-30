@@ -108,34 +108,36 @@ type MigrationContext struct {
 	InitiallyDropGhostTable      bool
 	CutOverType                  CutOver
 
-	Hostname                   string
-	TableEngine                string
-	RowsEstimate               int64
-	RowsDeltaEstimate          int64
-	UsedRowsEstimateMethod     RowsEstimateMethod
-	HasSuperPrivilege          bool
-	OriginalBinlogFormat       string
-	OriginalBinlogRowImage     string
-	InspectorConnectionConfig  *mysql.ConnectionConfig
-	ApplierConnectionConfig    *mysql.ConnectionConfig
-	StartTime                  time.Time
-	RowCopyStartTime           time.Time
-	RowCopyEndTime             time.Time
-	LockTablesStartTime        time.Time
-	RenameTablesStartTime      time.Time
-	RenameTablesEndTime        time.Time
-	pointOfInterestTime        time.Time
-	pointOfInterestTimeMutex   *sync.Mutex
-	CurrentLag                 int64
-	controlReplicasLagResult   mysql.ReplicationLagResult
-	TotalRowsCopied            int64
-	TotalDMLEventsApplied      int64
-	isThrottled                bool
-	throttleReason             string
-	throttleGeneralCheckResult ThrottleCheckResult
-	throttleMutex              *sync.Mutex
-	IsPostponingCutOver        int64
-	CountingRowsFlag           int64
+	Hostname                               string
+	TableEngine                            string
+	RowsEstimate                           int64
+	RowsDeltaEstimate                      int64
+	UsedRowsEstimateMethod                 RowsEstimateMethod
+	HasSuperPrivilege                      bool
+	OriginalBinlogFormat                   string
+	OriginalBinlogRowImage                 string
+	InspectorConnectionConfig              *mysql.ConnectionConfig
+	ApplierConnectionConfig                *mysql.ConnectionConfig
+	StartTime                              time.Time
+	RowCopyStartTime                       time.Time
+	RowCopyEndTime                         time.Time
+	LockTablesStartTime                    time.Time
+	RenameTablesStartTime                  time.Time
+	RenameTablesEndTime                    time.Time
+	pointOfInterestTime                    time.Time
+	pointOfInterestTimeMutex               *sync.Mutex
+	CurrentLag                             int64
+	controlReplicasLagResult               mysql.ReplicationLagResult
+	TotalRowsCopied                        int64
+	TotalDMLEventsApplied                  int64
+	isThrottled                            bool
+	throttleReason                         string
+	throttleGeneralCheckResult             ThrottleCheckResult
+	throttleMutex                          *sync.Mutex
+	IsPostponingCutOver                    int64
+	CountingRowsFlag                       int64
+	AllEventsUpToLockProcessedInjectedFlag int64
+	CleanupImminentFlag                    int64
 
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
