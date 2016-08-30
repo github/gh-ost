@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Sample hook file for gh-ost-on-before-cut-over
+
+echo "$(date) gh-ost-on-before-cut-over $GH_OST_DATABASE_NAME.$GH_OST_TABLE_NAME" >> /tmp/gh-ost.log

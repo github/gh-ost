@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Sample hook file for gh-ost-on-failure
+
+echo "$(date) gh-ost-on-failure $GH_OST_DATABASE_NAME.$GH_OST_TABLE_NAME; ghost: $GH_OST_OLD_TABLE_NAME" >> /tmp/gh-ost.log

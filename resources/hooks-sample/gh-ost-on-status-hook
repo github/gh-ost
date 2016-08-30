@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Sample hook file for gh-ost-on-status
+
+echo "$(date) gh-ost-on-status; elapsed: ${GH_OST_ELAPSED_SECONDS}; msg: ${GH_OST_STATUS}" >> /tmp/gh-ost.log

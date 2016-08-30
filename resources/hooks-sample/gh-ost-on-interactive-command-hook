@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Sample hook file for gh-ost-on-interactive-command
+
+echo "$(date) gh-ost-on-interactive-command $GH_OST_COMMAND" >> /tmp/gh-ost.log
