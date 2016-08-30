@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# ( taken from github.com/outbrain/orchestrator )
+# Simple script to update the release version and tag according to that value.
+# - release version now stored in RELEASE_VERSION e.g. 1.4.571
+# - the tag usually is of the form v1.4.571.
+#
+# If there's a difference between current code and there are no pending changes
+# then:
+# - the current version will be increased by one
+# - the RELEASE_VERSION updated accordingly
+# - a new tag will be created
+# - the tag will be pushed to origin (may need fixing)
+
+diff=$(git diff)
+rc=$?
+if [ $rc != 0 ]; then
+	echo "git diff failed. Doing nothing"
+	exit 0
+fi
+if [ -n "$diff" ]; then
+	echo "Some pending changes need committing. Doing nothing"
+	exit 0
+fi
+old_version=$(cat RELEASE_VERSION)
+old_tag=v$old_version
+diff=$(git diff $old_tag)
+rc=$?
+if [ $rc = 128 ]; then
+	echo "git diff $old_tag failed. Revision unknown. Doing nothing"
+	exit 0
+fi
+if [ $rc != 0 ]; then
+	echo "git diff $old_tag failed. Doing nothing"
+	exit 0
+fi
+if [ -z "$diff" ]; then
+	echo "No differences against $old_version. Doing nothing"
+	exit 0
+fi
+
+echo "We need to bump the version"
+echo "OLD: version: $old_version, tag: $old_tag"
+# now generate a new version.
+last_digit=$(echo "$old_version" | sed -e 's/.*\.//')
+new_digit=$(($last_digit + 1))
+new_version=$(echo "$old_version" | sed -e "s/\.[0-9]*$/.$new_digit/")
+new_tag=v$new_version
+echo "NEW: version: $new_version, tag: $new_tag"
+echo "Modifying RELEASE_VERSION..."
+echo "$new_version" > RELEASE_VERSION
+echo "Committing change to RELEASE_VERSION..."
+git add RELEASE_VERSION
+git commit -m"bump RELEASE_VERSION from $old_version to $new_version"
+echo "Adding new tag: $new_tag"
+git tag $new_tag
+echo "Pushing changes and new tag..."
+git push
+git push origin $new_tag
