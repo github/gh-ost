@@ -20,7 +20,6 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
-	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
 	"github.com/outbrain/golib/log"
@@ -36,8 +35,7 @@ const (
 type tableWriteFunc func() error
 
 const (
-	applyEventsQueueBuffer        = 100
-	heartbeatIntervalMilliseconds = 1000
+	applyEventsQueueBuffer = 100
 )
 
 type PrintStatusRule int
@@ -56,19 +54,19 @@ type Migrator struct {
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
 	server           *Server
+	throttler        *Throttler
 	hooksExecutor    *HooksExecutor
 	migrationContext *base.MigrationContext
 
+	firstThrottlingCollected   chan bool
 	tablesInPlace              chan bool
 	rowCopyComplete            chan bool
 	allEventsUpToLockProcessed chan bool
 	panicAbort                 chan error
 
-	rowCopyCompleteFlag                    int64
-	allEventsUpToLockProcessedInjectedFlag int64
-	inCutOverCriticalActionFlag            int64
-	cleanupImminentFlag                    int64
-	userCommandedUnpostponeFlag            int64
+	rowCopyCompleteFlag         int64
+	inCutOverCriticalActionFlag int64
+	userCommandedUnpostponeFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
@@ -82,11 +80,10 @@ func NewMigrator() *Migrator {
 		migrationContext:           base.GetMigrationContext(),
 		parser:                     sql.NewParser(),
 		tablesInPlace:              make(chan bool),
+		firstThrottlingCollected:   make(chan bool, 1),
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan bool),
 		panicAbort:                 make(chan error),
-
-		allEventsUpToLockProcessedInjectedFlag: 0,
 
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
@@ -117,126 +114,6 @@ func (this *Migrator) initiateHooksExecutor() (err error) {
 		return err
 	}
 	return nil
-}
-
-// shouldThrottle performs checks to see whether we should currently be throttling.
-// It also checks for critical-load and panic aborts.
-func (this *Migrator) shouldThrottle() (result bool, reason string) {
-	// Regardless of throttle, we take opportunity to check for panic-abort
-	if this.migrationContext.PanicFlagFile != "" {
-		if base.FileExists(this.migrationContext.PanicFlagFile) {
-			this.panicAbort <- fmt.Errorf("Found panic-file %s. Aborting without cleanup", this.migrationContext.PanicFlagFile)
-		}
-	}
-	criticalLoad := this.migrationContext.GetCriticalLoad()
-	for variableName, threshold := range criticalLoad {
-		value, err := this.applier.ShowStatusVariable(variableName)
-		if err != nil {
-			return true, fmt.Sprintf("%s %s", variableName, err)
-		}
-		if value >= threshold {
-			this.panicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
-		}
-	}
-
-	// Back to throttle considerations
-
-	// User-based throttle
-	if atomic.LoadInt64(&this.migrationContext.ThrottleCommandedByUser) > 0 {
-		return true, "commanded by user"
-	}
-	if this.migrationContext.ThrottleFlagFile != "" {
-		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
-			// Throttle file defined and exists!
-			return true, "flag-file"
-		}
-	}
-	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
-		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
-			// 2nd Throttle file defined and exists!
-			return true, "flag-file"
-		}
-	}
-	// Replication lag throttle
-	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
-	lag := atomic.LoadInt64(&this.migrationContext.CurrentLag)
-	if time.Duration(lag) > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
-		return true, fmt.Sprintf("lag=%fs", time.Duration(lag).Seconds())
-	}
-	checkThrottleControlReplicas := true
-	if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.allEventsUpToLockProcessedInjectedFlag) > 0) {
-		checkThrottleControlReplicas = false
-	}
-	if checkThrottleControlReplicas {
-		lagResult := mysql.GetMaxReplicationLag(this.migrationContext.InspectorConnectionConfig, this.migrationContext.GetThrottleControlReplicaKeys(), this.migrationContext.GetReplicationLagQuery())
-		if lagResult.Err != nil {
-			return true, fmt.Sprintf("%+v %+v", lagResult.Key, lagResult.Err)
-		}
-		if lagResult.Lag > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
-			return true, fmt.Sprintf("%+v replica-lag=%fs", lagResult.Key, lagResult.Lag.Seconds())
-		}
-	}
-
-	maxLoad := this.migrationContext.GetMaxLoad()
-	for variableName, threshold := range maxLoad {
-		value, err := this.applier.ShowStatusVariable(variableName)
-		if err != nil {
-			return true, fmt.Sprintf("%s %s", variableName, err)
-		}
-		if value >= threshold {
-			return true, fmt.Sprintf("max-load %s=%d >= %d", variableName, value, threshold)
-		}
-	}
-	if this.migrationContext.GetThrottleQuery() != "" {
-		if res, _ := this.applier.ExecuteThrottleQuery(); res > 0 {
-			return true, "throttle-query"
-		}
-	}
-
-	return false, ""
-}
-
-// initiateThrottler initiates the throttle ticker and sets the basic behavior of throttling.
-func (this *Migrator) initiateThrottler() error {
-	throttlerTick := time.Tick(1 * time.Second)
-
-	throttlerFunction := func() {
-		alreadyThrottling, currentReason := this.migrationContext.IsThrottled()
-		shouldThrottle, throttleReason := this.shouldThrottle()
-		if shouldThrottle && !alreadyThrottling {
-			// New throttling
-			this.applier.WriteAndLogChangelog("throttle", throttleReason)
-		} else if shouldThrottle && alreadyThrottling && (currentReason != throttleReason) {
-			// Change of reason
-			this.applier.WriteAndLogChangelog("throttle", throttleReason)
-		} else if alreadyThrottling && !shouldThrottle {
-			// End of throttling
-			this.applier.WriteAndLogChangelog("throttle", "done throttling")
-		}
-		this.migrationContext.SetThrottled(shouldThrottle, throttleReason)
-	}
-	throttlerFunction()
-	for range throttlerTick {
-		throttlerFunction()
-	}
-
-	return nil
-}
-
-// throttle initiates a throttling event, if need be, updates the Context and
-// calls callback functions, if any
-func (this *Migrator) throttle(onThrottled func()) {
-	for {
-		// IsThrottled() is non-blocking; the throttling decision making takes place asynchronously.
-		// Therefore calling IsThrottled() is cheap
-		if shouldThrottle, _ := this.migrationContext.IsThrottled(); !shouldThrottle {
-			return
-		}
-		if onThrottled != nil {
-			onThrottled()
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
 }
 
 // sleepWhileTrue sleeps indefinitely until the given function returns 'false'
@@ -279,7 +156,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 // throttles.
 func (this *Migrator) executeAndThrottleOnError(operation func() error) (err error) {
 	if err := operation(); err != nil {
-		this.throttle(nil)
+		this.throttler.throttle(nil)
 		return err
 	}
 	return nil
@@ -334,19 +211,6 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 		}
 	}
 	log.Debugf("Received state %+v", changelogState)
-	return nil
-}
-
-// onChangelogHeartbeat is called when a heartbeat event is intercepted
-func (this *Migrator) onChangelogHeartbeat(heartbeatValue string) (err error) {
-	heartbeatTime, err := time.Parse(time.RFC3339Nano, heartbeatValue)
-	if err != nil {
-		return log.Errore(err)
-	}
-	lag := time.Since(heartbeatTime)
-
-	atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
-
 	return nil
 }
 
@@ -454,16 +318,15 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.countTableRows(); err != nil {
 		return err
 	}
-
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
-	go this.initiateHeartbeatListener()
-
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
-	go this.initiateThrottler()
+	if err := this.initiateThrottler(); err != nil {
+		return err
+	}
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
@@ -511,7 +374,7 @@ func (this *Migrator) cutOver() (err error) {
 		return nil
 	}
 	this.migrationContext.MarkPointOfInterest()
-	this.throttle(func() {
+	this.throttler.throttle(func() {
 		log.Debugf("throttling before swapping tables")
 	})
 
@@ -590,7 +453,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 		return err
 	}
 	log.Infof("Waiting for events up to lock")
-	atomic.StoreInt64(&this.allEventsUpToLockProcessedInjectedFlag, 1)
+	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 1)
 	<-this.allEventsUpToLockProcessed
 	waitForEventsUpToLockDuration := time.Since(waitForEventsUpToLockStartTime)
 
@@ -607,7 +470,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 func (this *Migrator) cutOverTwoStep() (err error) {
 	atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 1)
 	defer atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 0)
-	atomic.StoreInt64(&this.allEventsUpToLockProcessedInjectedFlag, 0)
+	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
 	if err := this.retryOperation(this.applier.LockOriginalTable); err != nil {
 		return err
@@ -638,7 +501,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 		this.applier.DropAtomicCutOverSentryTableIfExists()
 	}()
 
-	atomic.StoreInt64(&this.allEventsUpToLockProcessedInjectedFlag, 0)
+	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
 	lockOriginalSessionIdChan := make(chan int64, 2)
 	tableLocked := make(chan error, 2)
@@ -1108,33 +971,6 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	}
 }
 
-// initiateHeartbeatListener listens for heartbeat events. gh-ost implements its own
-// heartbeat mechanism, whether your DB has or hasn't an existing heartbeat solution.
-// Heartbeat is supplied via the changelog table
-func (this *Migrator) initiateHeartbeatListener() {
-	ticker := time.Tick((heartbeatIntervalMilliseconds * time.Millisecond) / 2)
-	for range ticker {
-		go func() error {
-			if atomic.LoadInt64(&this.cleanupImminentFlag) > 0 {
-				return nil
-			}
-			changelogState, err := this.inspector.readChangelogState()
-			if err != nil {
-				return log.Errore(err)
-			}
-			for hint, value := range changelogState {
-				switch hint {
-				case "heartbeat":
-					{
-						this.onChangelogHeartbeat(value)
-					}
-				}
-			}
-			return nil
-		}()
-	}
-}
-
 // initiateStreaming begins treaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
 	this.eventsStreamer = NewEventsStreamer()
@@ -1180,6 +1016,18 @@ func (this *Migrator) addDMLEventsListener() error {
 	return err
 }
 
+// initiateThrottler kicks in the throttling collection and the throttling checks.
+func (this *Migrator) initiateThrottler() error {
+	this.throttler = NewThrottler(this.applier, this.inspector, this.panicAbort)
+
+	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
+	log.Infof("Waiting for first throttle metrics to be collected")
+	<-this.firstThrottlingCollected
+	go this.throttler.initiateThrottlerChecks()
+
+	return nil
+}
+
 func (this *Migrator) initiateApplier() error {
 	this.applier = NewApplier()
 	if err := this.applier.InitDBConnections(); err != nil {
@@ -1202,7 +1050,7 @@ func (this *Migrator) initiateApplier() error {
 	}
 
 	this.applier.WriteChangelogState(string(TablesInPlace))
-	go this.applier.InitiateHeartbeat(heartbeatIntervalMilliseconds)
+	go this.applier.InitiateHeartbeat()
 	return nil
 }
 
@@ -1271,7 +1119,7 @@ func (this *Migrator) executeWriteFuncs() error {
 			// - during copy phase
 			// - just before cut-over
 			// - in between cut-over retries
-			this.throttle(nil)
+			this.throttler.throttle(nil)
 			// When cutting over, we need to be aggressive. Cut-over holds table locks.
 			// We need to release those asap.
 		}
@@ -1317,7 +1165,7 @@ func (this *Migrator) executeWriteFuncs() error {
 
 // finalCleanup takes actions at very end of migration, dropping tables etc.
 func (this *Migrator) finalCleanup() error {
-	atomic.StoreInt64(&this.cleanupImminentFlag, 1)
+	atomic.StoreInt64(&this.migrationContext.CleanupImminentFlag, 1)
 
 	if this.migrationContext.Noop {
 		if createTableStatement, err := this.inspector.showCreateTable(this.migrationContext.GetGhostTableName()); err == nil {

@@ -41,6 +41,18 @@ var (
 	envVariableRegexp = regexp.MustCompile("[$][{](.*)[}]")
 )
 
+type ThrottleCheckResult struct {
+	ShouldThrottle bool
+	Reason         string
+}
+
+func NewThrottleCheckResult(throttle bool, reason string) *ThrottleCheckResult {
+	return &ThrottleCheckResult{
+		ShouldThrottle: throttle,
+		Reason:         reason,
+	}
+}
+
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
@@ -64,6 +76,7 @@ type MigrationContext struct {
 	CliUser     string
 	CliPassword string
 
+	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
 	ChunkSize                           int64
 	niceRatio                           float64
@@ -95,32 +108,36 @@ type MigrationContext struct {
 	InitiallyDropGhostTable      bool
 	CutOverType                  CutOver
 
-	Hostname                  string
-	TableEngine               string
-	RowsEstimate              int64
-	RowsDeltaEstimate         int64
-	UsedRowsEstimateMethod    RowsEstimateMethod
-	HasSuperPrivilege         bool
-	OriginalBinlogFormat      string
-	OriginalBinlogRowImage    string
-	InspectorConnectionConfig *mysql.ConnectionConfig
-	ApplierConnectionConfig   *mysql.ConnectionConfig
-	StartTime                 time.Time
-	RowCopyStartTime          time.Time
-	RowCopyEndTime            time.Time
-	LockTablesStartTime       time.Time
-	RenameTablesStartTime     time.Time
-	RenameTablesEndTime       time.Time
-	pointOfInterestTime       time.Time
-	pointOfInterestTimeMutex  *sync.Mutex
-	CurrentLag                int64
-	TotalRowsCopied           int64
-	TotalDMLEventsApplied     int64
-	isThrottled               bool
-	throttleReason            string
-	throttleMutex             *sync.Mutex
-	IsPostponingCutOver       int64
-	CountingRowsFlag          int64
+	Hostname                               string
+	TableEngine                            string
+	RowsEstimate                           int64
+	RowsDeltaEstimate                      int64
+	UsedRowsEstimateMethod                 RowsEstimateMethod
+	HasSuperPrivilege                      bool
+	OriginalBinlogFormat                   string
+	OriginalBinlogRowImage                 string
+	InspectorConnectionConfig              *mysql.ConnectionConfig
+	ApplierConnectionConfig                *mysql.ConnectionConfig
+	StartTime                              time.Time
+	RowCopyStartTime                       time.Time
+	RowCopyEndTime                         time.Time
+	LockTablesStartTime                    time.Time
+	RenameTablesStartTime                  time.Time
+	RenameTablesEndTime                    time.Time
+	pointOfInterestTime                    time.Time
+	pointOfInterestTimeMutex               *sync.Mutex
+	CurrentLag                             int64
+	controlReplicasLagResult               mysql.ReplicationLagResult
+	TotalRowsCopied                        int64
+	TotalDMLEventsApplied                  int64
+	isThrottled                            bool
+	throttleReason                         string
+	throttleGeneralCheckResult             ThrottleCheckResult
+	throttleMutex                          *sync.Mutex
+	IsPostponingCutOver                    int64
+	CountingRowsFlag                       int64
+	AllEventsUpToLockProcessedInjectedFlag int64
+	CleanupImminentFlag                    int64
 
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
@@ -326,9 +343,19 @@ func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
 	return time.Since(this.pointOfInterestTime)
 }
 
+func (this *MigrationContext) SetHeartbeatIntervalMilliseconds(heartbeatIntervalMilliseconds int64) {
+	if heartbeatIntervalMilliseconds < 100 {
+		heartbeatIntervalMilliseconds = 100
+	}
+	if heartbeatIntervalMilliseconds > 1000 {
+		heartbeatIntervalMilliseconds = 1000
+	}
+	this.HeartbeatIntervalMilliseconds = heartbeatIntervalMilliseconds
+}
+
 func (this *MigrationContext) SetMaxLagMillisecondsThrottleThreshold(maxLagMillisecondsThrottleThreshold int64) {
-	if maxLagMillisecondsThrottleThreshold < 1000 {
-		maxLagMillisecondsThrottleThreshold = 1000
+	if maxLagMillisecondsThrottleThreshold < 100 {
+		maxLagMillisecondsThrottleThreshold = 100
 	}
 	atomic.StoreInt64(&this.MaxLagMillisecondsThrottleThreshold, maxLagMillisecondsThrottleThreshold)
 }
@@ -341,6 +368,20 @@ func (this *MigrationContext) SetChunkSize(chunkSize int64) {
 		chunkSize = 100000
 	}
 	atomic.StoreInt64(&this.ChunkSize, chunkSize)
+}
+
+func (this *MigrationContext) SetThrottleGeneralCheckResult(checkResult *ThrottleCheckResult) *ThrottleCheckResult {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.throttleGeneralCheckResult = *checkResult
+	return checkResult
+}
+
+func (this *MigrationContext) GetThrottleGeneralCheckResult() *ThrottleCheckResult {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	result := this.throttleGeneralCheckResult
+	return &result
 }
 
 func (this *MigrationContext) SetThrottled(throttle bool, reason string) {
@@ -452,6 +493,20 @@ func (this *MigrationContext) ReadCriticalLoad(criticalLoadList string) error {
 
 	this.criticalLoad = loadMap
 	return nil
+}
+
+func (this *MigrationContext) GetControlReplicasLagResult() mysql.ReplicationLagResult {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	lagResult := this.controlReplicasLagResult
+	return lagResult
+}
+
+func (this *MigrationContext) SetControlReplicasLagResult(lagResult *mysql.ReplicationLagResult) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.controlReplicasLagResult = *lagResult
 }
 
 func (this *MigrationContext) GetThrottleControlReplicaKeys() *mysql.InstanceKeyMap {
