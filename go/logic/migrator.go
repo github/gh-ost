@@ -408,7 +408,9 @@ func (this *Migrator) cutOver() (err error) {
 		// the same cut-over phase as the master would use. That means we take locks
 		// and swap the tables.
 		// The difference is that we will later swap the tables back.
-		this.hooksExecutor.onStopReplication()
+		if err := this.hooksExecutor.onStopReplication(); err != nil {
+			return err
+		}
 		if this.migrationContext.TestOnReplicaSkipReplicaStop {
 			log.Warningf("--test-on-replica-skip-replica-stop enabled, we are not stopping replication.")
 		} else {
