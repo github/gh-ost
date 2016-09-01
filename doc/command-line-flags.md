@@ -68,6 +68,19 @@ We think `gh-ost` should not take chances or make assumptions about the user's t
 
 See #initially-drop-ghost-table
 
+### max-lag-millis
+
+On a replication topology, this is perhaps the most important migration throttling factor: the maximum lag allowed for migration to work. If lag exceeds this value, migration throttles.
+
+When using [Connect to replica, migrate on master](cheatsheet.md), this lag is primarily tested on the very replica `gh-ost` operates on. Lag is measured by checking the heartbeat events injected by `gh-ost` itself on the utility changelog table. That is, to measure this replica's lag, `gh-ost` doesn't need to issue `show slave status` nor have any external heartbeat mechanism.
+
+When `--throttle-control-replicas` is provided, throttling also considers lag on specified hosts. Measuring lag on these hosts works as follows:
+
+- If `--replication-lag-query` is provided, use the query, trust its result to indicate lag seconds (fraction, i.e. float, allowed)
+- Otherwise, issue `show slave status` and read `Seconds_behind_master` (`1sec` granularity)
+
+See also: [Sub-second replication lag throttling](subsecond-lag.md)
+
 ### migrate-on-replica
 
 Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but other issue no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.

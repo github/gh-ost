@@ -104,7 +104,7 @@ gh-ost \
   --initially-drop-old-table \
   --max-load=Threads_running=30 \
   --switch-to-rbr \
-  --chunk-size=2500 \
+  --chunk-size=500 \
   --cut-over=default \
   --exact-rowcount \
   --concurrent-rowcount \
