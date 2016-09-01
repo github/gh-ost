@@ -906,14 +906,8 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	var etaSeconds float64 = math.MaxFloat64
 	eta := "N/A"
-	if atomic.LoadInt64(&this.migrationContext.CountingRowsFlag) > 0 && !this.migrationContext.ConcurrentCountTableRows {
-		eta = "counting rows"
-	} else if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
-		eta = "postponing cut-over"
-	} else if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
-		eta = fmt.Sprintf("throttled, %s", throttleReason)
-	} else if progressPct > 100.0 {
-		eta = "Due"
+	if progressPct >= 100.0 {
+		eta = "due"
 	} else if progressPct >= 1.0 {
 		elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
 		totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
@@ -922,8 +916,18 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 			etaDuration := time.Duration(etaSeconds) * time.Second
 			eta = base.PrettifyDurationOutput(etaDuration)
 		} else {
-			eta = "Due"
+			eta = "due"
 		}
+	}
+
+	state := "migrating"
+	if atomic.LoadInt64(&this.migrationContext.CountingRowsFlag) > 0 && !this.migrationContext.ConcurrentCountTableRows {
+		state = "counting rows"
+	} else if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
+		eta = "due"
+		state = "postponing cut-over"
+	} else if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
+		state = fmt.Sprintf("throttled, %s", throttleReason)
 	}
 
 	shouldPrintStatus := false
@@ -951,12 +955,13 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; ETA: %s",
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
+		state,
 		eta,
 	)
 	this.applier.WriteChangelog(
