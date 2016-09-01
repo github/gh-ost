@@ -26,6 +26,8 @@ As a common example, many use [pt-heartbeat](https://www.percona.com/doc/percona
 
 Note `--interval=0.1` to indicate `10` heartbeats per second.
 
-You would then provide `--replication-lag-query="select unix_timestamp(now(6)) - unix_timestamp(ts) as ghost_lag_check from your_schema.heartbeat order by ts desc limit 1"`
+You would then provide
+
+    gh-ost ... --replication-lag-query="select unix_timestamp(now(6)) - unix_timestamp(ts) as ghost_lag_check from your_schema.heartbeat order by ts desc limit 1"
 
 Our production migrations use sub-second lag throttling and are able to keep our entire fleet of replicas well below `1sec` lag.
