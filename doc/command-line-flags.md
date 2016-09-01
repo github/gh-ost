@@ -32,6 +32,10 @@ user=gromit
 password=123456
   ```
 
+### concurrent-rowcount
+
+See `exact-rowcount`
+
 ### cut-over
 
 Optional. Default is `safe`. See more discussion in [cut-over](cut-over.md)
@@ -44,6 +48,7 @@ A `gh-ost` execution need to copy whatever rows you have in your existing table 
 `gh-ost` also supports the `--exact-rowcount` flag. When this flag is given, two things happen:
 - An initial, authoritative `select count(*) from your_table`.
   This query may take a long time to complete, but is performed before we begin the massive operations.
+  When `--concurrent-rowcount` is also specified, this runs in paralell to row copy.
 - A continuous update to the estimate as we make progress applying events.
   We heuristically update the number of rows based on the queries we process from the binlogs.
 
