@@ -69,6 +69,7 @@ type MigrationContext struct {
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
+	IsTungsten               bool
 
 	config      ContextConfig
 	configMutex *sync.Mutex
@@ -109,7 +110,7 @@ type MigrationContext struct {
 	CutOverType                  CutOver
 
 	Hostname                               string
-	OverrideApplierHostname                string
+	AssumeMasterHostname                   string
 	TableEngine                            string
 	RowsEstimate                           int64
 	RowsDeltaEstimate                      int64
