@@ -3,3 +3,4 @@
 # Sample hook file for gh-ost-on-success
 
 echo "$(date) gh-ost-on-success $GH_OST_DATABASE_NAME.$GH_OST_TABLE_NAME -- this message should show on the gh-ost log"
+echo "$(date) gh-ost-on-success copied $GH_OST_COPIED_ROWS rows in $GH_OST_ELAPSED_COPY_SECONDS seconds. Total runtime was $GH_OST_ELAPSED_SECONDS seconds"
