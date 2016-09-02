@@ -109,6 +109,7 @@ type MigrationContext struct {
 	CutOverType                  CutOver
 
 	Hostname                               string
+	OverrideApplierHostname                string
 	TableEngine                            string
 	RowsEstimate                           int64
 	RowsDeltaEstimate                      int64

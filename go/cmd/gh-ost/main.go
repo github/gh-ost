@@ -44,6 +44,7 @@ func main() {
 	migrationContext := base.GetMigrationContext()
 
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
+	flag.StringVar(&migrationContext.OverrideApplierHostname, "override-applier-host", "", "(with -allow-master-master), optionally specify which host should have changes applied to it")
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
@@ -160,6 +161,9 @@ func main() {
 			log.Fatalf("--test-on-replica-skip-replica-stop requires --test-on-replica to be enabled")
 		}
 		log.Warning("--test-on-replica-skip-replica-stop enabled. We will not stop replication before cut-over. Ensure you have a plugin that does this.")
+	}
+	if migrationContext.OverrideApplierHostname != "" && !migrationContext.AllowedMasterMaster {
+		log.Fatalf("--override-applier-host is only for use with --allow-master-amster")
 	}
 
 	switch *cutOver {
