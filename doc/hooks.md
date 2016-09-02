@@ -58,13 +58,16 @@ The following variables are available on all hooks:
 - `GH_OST_DATABASE_NAME`
 - `GH_OST_TABLE_NAME`
 - `GH_OST_GHOST_TABLE_NAME`
-- `GH_OST_OLD_TABLE_NAME`
+- `GH_OST_OLD_TABLE_NAME` - the name the original table will be renamed to at the end of operation
 - `GH_OST_DDL`
-- `GH_OST_ELAPSED_SECONDS`
+- `GH_OST_ELAPSED_SECONDS` - total runtime
+- `GH_OST_ELAPSED_COPY_SECONDS` - row-copy time (excluding startup, row-count and postpone time)
+- `GH_OST_ESTIMATED_ROWS` - estimated total rows in table
+- `GH_OST_COPIED_ROWS` - number of rows copied by `gh-ost`
 - `GH_OST_MIGRATED_HOST`
 - `GH_OST_INSPECTED_HOST`
 - `GH_OST_EXECUTING_HOST`
-- `GH_OST_HOOKS_HINT`
+- `GH_OST_HOOKS_HINT` - copy of `--hooks-hint` value
 
 The following variable are available on particular hooks:
 
