@@ -15,3 +15,7 @@ This solution either:
 Also note:
 - With `--migrate-on-replica` the cut-over is executed in exactly the same way as on master.
 - With `--test-on-replica` the replication is first stopped; then the cut-over is executed just as on master, but then reverted (tables rename forth then back again).
+
+Internals of the atomic cut-over are discussed in [Issue #82](https://github.com/github/gh-ost/issues/82).
+
+At this time the command-line argument `--cut-over` is supported, and defaults to the atomic cut-over algorithm described above. Also supported is `--cut-over=two-step`, which uses the FB non-atomic algorithm. We recommend using the default cut-over that has been battle tested in our production environments.

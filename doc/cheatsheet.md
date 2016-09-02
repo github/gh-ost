@@ -37,6 +37,7 @@ gh-ost \
 --allow-master-master \
 --cut-over=default \
 --exact-rowcount \
+--concurrent-rowcount \
 --default-retries=120 \
 --panic-flag-file=/tmp/ghost.panic.flag \
 --postpone-cut-over-flag-file=/tmp/ghost.postpone.flag \
@@ -72,6 +73,7 @@ gh-ost \
 --allow-master-master \
 --cut-over=default \
 --exact-rowcount \
+--concurrent-rowcount \
 --default-retries=120 \
 --panic-flag-file=/tmp/ghost.panic.flag \
 --postpone-cut-over-flag-file=/tmp/ghost.postpone.flag \
@@ -102,9 +104,10 @@ gh-ost \
   --initially-drop-old-table \
   --max-load=Threads_running=30 \
   --switch-to-rbr \
-  --chunk-size=2500 \
+  --chunk-size=500 \
   --cut-over=default \
   --exact-rowcount \
+  --concurrent-rowcount \
   --serve-socket-file=/tmp/gh-ost.test.sock \
   --panic-flag-file=/tmp/gh-ost.panic.flag \
   --execute

@@ -58,3 +58,7 @@ You begin a migration, and the ETA is for it to complete at 04:00am. Not a good 
 Today, DBAs are coordinating the migration start time such that it completes in a convenient hour. `gh-ost` offers an alternative: postpone the final cut-over phase till you're ready.
 
 Execute `gh-ost` with `--postpone-cut-over-flag-file=/path/to/flag.file`. As long as this file exists, `gh-ost` will not take the final cut-over step. It will complete the row copy, and continue to synchronize the tables by continuously applying changes made on the original table onto the ghost table. It can do so on and on and on. When you're finally ready, remove the file and cut-over will take place.
+
+### Sub-second lag throttling
+
+With sub-second replication lag measurements, `gh-ost` is able to keep a fleet of replicas well below `1sec` lag throughout the migration. We encourage you to issue sub-second heartbeats. Read more on [sub-second replication lag throttling](subsecond-lag.md)
