@@ -761,6 +761,9 @@ func (this *Migrator) initiateInspector() (err error) {
 	if this.migrationContext.ApplierConnectionConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
 		return err
 	}
+	if this.migrationContext.OverrideApplierHostname != "" {
+		this.migrationContext.ApplierConnectionConfig.Key.Hostname = this.migrationContext.OverrideApplierHostname
+	}
 	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
 		if this.migrationContext.InspectorIsAlsoApplier() {
 			return fmt.Errorf("Instructed to --test-on-replica or --migrate-on-replica, but the server we connect to doesn't seem to be a replica")
