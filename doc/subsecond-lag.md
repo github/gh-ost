@@ -10,11 +10,11 @@ Replication lag is measured on:
 - The "inspected" server (the server `gh-ost` connects to; replica is desired but not mandatory)
 - The `throttle-control-replicas` list
 
-For the inspected server, `gh-ost` uses an internal heartbeat mechanism. It injects heartbeat events onto the utility changelog table, then reads those events in the binary log, and compares times. This measurement is by default adn by definition sub-second enabled.
+For the inspected server, `gh-ost` uses an internal heartbeat mechanism. It injects heartbeat events onto the utility changelog table, then reads those events in the binary log, and compares times. This measurement is by default and by definition sub-second enabled.
 
 You can explicitly define how frequently will `gh-ost` inject heartbeat events, via `heartbeat-interval-millis`. You should set `heartbeat-interval-millis <= max-lag-millis`. It still works if not, but loses granularity and effect.
 
-On the `throttle-control-replicas`, `gh-ost` only issues SQL queries, and does not attempt to read the binary log stream. Perhaps thsoe other replicas don't have binary logs in the first place.
+On the `throttle-control-replicas`, `gh-ost` only issues SQL queries, and does not attempt to read the binary log stream. Perhaps those other replicas don't have binary logs in the first place.
 
 The standard way of getting replication lag on a replica is to issue `SHOW SLAVE STATUS`, then reading `Seconds_behind_master` value. But that value has a `1sec` granularity.
 
