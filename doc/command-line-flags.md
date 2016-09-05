@@ -16,6 +16,13 @@ When your migration issues a column rename (`change column old_name new_name ...
 
 If you think `gh-ost` is mistaken and that there's actually no _rename_ involved, you may pass `--skip-renamed-columns` instead. This will cause `gh-ost` to disassociate the column values; data will not be copied between those columns.
 
+### assume-master-host
+
+`gh-ost` infers the identity of the master server by crawling up the replication topology. You may explicitly tell `gh-ost` the identity of the master host via `--assume-master-host=the.master.com`. This is useful in:
+
+- master-master topologies (together with `--allow-master-master`), where `gh-ost` can arbitrarily pick one of the co-master and you prefer that it picks a specific one
+- _tungsten replicator_ topologies (together with `--tungsten`), where `gh-ost` is unable to crawl and detect the master
+
 ### assume-rbr
 
 If you happen to _know_ your servers use RBR (Row Based Replication, i.e. `binlog_format=ROW`), you may specify `--assume-rbr`. This skips a verification step where `gh-ost` would issue a `STOP SLAVE; START SLAVE`.

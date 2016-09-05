@@ -124,3 +124,30 @@ password=123456
 ```
 
 You may then remove `--user=gh-ost --password=123456` and specify `--conf=/path/to/config/file.cnf`
+
+
+### Special configurations
+
+#### Master-master
+
+Master-master setups are supported, but at this time only active-passive. An active-active setup, where both masters write to the migrated table, is not supported at this stage. `gh-ost` requires you to acknowledge master-master via:
+
+```
+gh-ost --allow-master-master
+```
+
+`gh-ost` will pick one of the masters to work on. You may additionally force `gh-ost` to pick a particular master of your choice:
+
+```
+gh-ost --allow-master-master --assume-master-host=a.specific.master.com
+```
+
+#### Tungsten
+
+Topologies using _tungsten replicator_ are peculiar in that the participating servers are not actually aware they are replicating. The _tungsten replicator_ looks just like another app issuing queries on those hosts. `gh-ost` is unable to identify that a server participates in a _tungsten_ topology.
+
+If you choose to migrate directly on master (see above), there's nothing special you need to do. If you choose to migrate via replica, then you must supply the identity of the master, and indicate this is a tungsten setup, as follows:
+
+```
+gh-ost --tungsten --assume-master-host=the.topology.master.com
+```

@@ -20,6 +20,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
 	"github.com/outbrain/golib/log"
@@ -761,8 +762,12 @@ func (this *Migrator) initiateInspector() (err error) {
 	if this.migrationContext.ApplierConnectionConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
 		return err
 	}
-	if this.migrationContext.OverrideApplierHostname != "" {
-		this.migrationContext.ApplierConnectionConfig.Key.Hostname = this.migrationContext.OverrideApplierHostname
+	if this.migrationContext.AssumeMasterHostname != "" {
+		if key, err := mysql.ParseRawInstanceKeyLoose(this.migrationContext.AssumeMasterHostname); err != nil {
+			return err
+		} else {
+			this.migrationContext.ApplierConnectionConfig.Key = *key
+		}
 	}
 	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
 		if this.migrationContext.InspectorIsAlsoApplier() {
