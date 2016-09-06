@@ -8,6 +8,8 @@ tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
 exec_command_file=/tmp/gh-ost-test.bash
 
+test_pattern="${1:-.}"
+
 master_host=
 master_port=
 replica_host=
@@ -32,13 +34,19 @@ exec_cmd() {
   return $?
 }
 
+echo_dot() {
+  echo -n "."
+}
+
 test_single() {
   local test_name
   test_name="$1"
 
-  echo "Testing: $test_name"
+  echo -n "Testing: $test_name"
 
+  echo_dot
   gh-ost-test-mysql-replica -e "start slave"
+  echo_dot
   gh-ost-test-mysql-master test < $tests_path/$test_name/create.sql
 
   extra_args=""
@@ -50,6 +58,7 @@ test_single() {
     columns=$(cat $tests_path/$test_name/test_columns)
   fi
   # graceful sleep for replica to catch up
+  echo_dot
   sleep 1
   #
   cmd="go run go/cmd/gh-ost/main.go \
@@ -74,14 +83,18 @@ test_single() {
     --debug \
     --stack \
     --execute ${extra_args[@]}"
+  echo_dot
   echo $cmd > $exec_command_file
+  echo_dot
   bash $exec_command_file 1> $test_logfile 2>&1
 
   if [ $? -ne 0 ] ; then
-    echo "ERROR $test_name execution failure. See $test_logfile"
+    echo
+    echo "ERROR $test_name execution failure. cat $test_logfile"
     return 1
   fi
 
+  echo_dot
   orig_checksum=$(gh-ost-test-mysql-replica test -e "select ${columns} from gh_ost_test" -ss | md5sum)
   ghost_checksum=$(gh-ost-test-mysql-replica test -e "select ${columns} from _gh_ost_test_gho" -ss | md5sum)
 
@@ -96,7 +109,7 @@ test_single() {
 }
 
 test_all() {
-  find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | while read test_name ; do
+  find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | egrep "$test_pattern" | while read test_name ; do
     test_single "$test_name"
     if [ $? -ne 0 ] ; then
       echo "+ FAIL"
