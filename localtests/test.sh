@@ -4,6 +4,9 @@
 # See https://github.com/github/gh-ost/tree/doc/local-tests.md
 #
 
+# Usage: localtests/test/sh [filter]
+# By default, runs all tests. Given filter, will only run tests matching given regep
+
 tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
 exec_command_file=/tmp/gh-ost-test.bash
