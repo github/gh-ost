@@ -609,7 +609,7 @@ func decodeTimestamp2(data []byte, dec uint16) (string, int, error) {
 		return "0000-00-00 00:00:00", n, nil
 	}
 
-	t := time.Unix(sec, usec*1000).UTC()
+	t := time.Unix(sec, usec*1000).UTC() // .UTC() converted by shlomi-noach
 	return t.Format(TimeFormat), n, nil
 }
 

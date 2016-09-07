@@ -16,6 +16,6 @@ create event gh_ost_test
   do
 begin
   insert into gh_ost_test values (null, md5(rand()));
-  insert into gh_ost_test values (null, 'novo proprietário');
-  insert into gh_ost_test values (null, 'usuário');
+  insert into gh_ost_test values (null, 'átesting');
+  insert into gh_ost_test values (null, 'testátest');
 end ;;

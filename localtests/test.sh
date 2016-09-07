@@ -50,7 +50,7 @@ test_single() {
   echo_dot
   gh-ost-test-mysql-replica -e "start slave"
   echo_dot
-  gh-ost-test-mysql-master test < $tests_path/$test_name/create.sql
+  gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
 
   extra_args=""
   if [ -f $tests_path/$test_name/extra_args ] ; then
@@ -79,7 +79,7 @@ test_single() {
     --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
-    --postpone-cut-over-flag-file=/tmp/gh-ost.postpone.flag \
+    --postpone-cut-over-flag-file="" \
     --test-on-replica \
     --default-retries=1 \
     --verbose \
@@ -115,9 +115,12 @@ test_all() {
   find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | egrep "$test_pattern" | while read test_name ; do
     test_single "$test_name"
     if [ $? -ne 0 ] ; then
+      create_statement=$(gh-ost-test-mysql-replica test -t -e "show create table _gh_ost_test_gho \G")
+      echo "$create_statement" >> $test_logfile
       echo "+ FAIL"
       return 1
     else
+      echo
       echo "+ pass"
     fi
     gh-ost-test-mysql-replica -e "start slave"
