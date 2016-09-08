@@ -10,8 +10,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-
-	"golang.org/x/text/encoding/charmap"
 )
 
 type Column struct {
@@ -22,9 +20,9 @@ type Column struct {
 
 func (this *Column) convertArg(arg interface{}) interface{} {
 	if s, ok := arg.(string); ok {
-		switch this.Charset {
-		case "latin1":
-			arg, _ = charmap.Windows1252.NewDecoder().String(s)
+		// string, charset conversion
+		if encoding, ok := charsetEncodingMap[this.Charset]; ok {
+			arg, _ = encoding.NewDecoder().String(s)
 		}
 		return arg
 	}
