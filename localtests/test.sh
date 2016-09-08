@@ -98,15 +98,15 @@ test_single() {
   fi
 
   echo_dot
-  orig_checksum=$(gh-ost-test-mysql-replica test -e "select ${columns} from gh_ost_test" -ss | md5sum)
-  ghost_checksum=$(gh-ost-test-mysql-replica test -e "select ${columns} from _gh_ost_test_gho" -ss | md5sum)
+  orig_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${columns} from gh_ost_test" -ss | md5sum)
+  ghost_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${columns} from _gh_ost_test_gho" -ss | md5sum)
 
   if [ "$orig_checksum" != "$ghost_checksum" ] ; then
     echo "ERROR $test_name: checksum mismatch"
     echo "---"
-    gh-ost-test-mysql-replica test -e "select ${columns} from gh_ost_test" -ss
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${columns} from gh_ost_test" -ss
     echo "---"
-    gh-ost-test-mysql-replica test -e "select ${columns} from _gh_ost_test_gho" -ss
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${columns} from _gh_ost_test_gho" -ss
     return 1
   fi
 }
