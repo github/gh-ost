@@ -301,7 +301,7 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 // ReadMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns.Names)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns.Names())
 	if err != nil {
 		return err
 	}
@@ -322,7 +322,7 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 // ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns.Names)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns.Names())
 	if err != nil {
 		return err
 	}
@@ -363,7 +363,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 	query, explodedArgs, err := sql.BuildUniqueKeyRangeEndPreparedQuery(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
-		this.migrationContext.UniqueKey.Columns.Names,
+		this.migrationContext.UniqueKey.Columns.Names(),
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 		this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
@@ -402,10 +402,10 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.GetGhostTableName(),
-		this.migrationContext.SharedColumns.Names,
-		this.migrationContext.MappedSharedColumns.Names,
+		this.migrationContext.SharedColumns.Names(),
+		this.migrationContext.MappedSharedColumns.Names(),
 		this.migrationContext.UniqueKey.Name,
-		this.migrationContext.UniqueKey.Columns.Names,
+		this.migrationContext.UniqueKey.Columns.Names(),
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
 		this.migrationContext.GetIteration() == 0,

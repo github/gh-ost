@@ -8,9 +8,10 @@ package sql
 import (
 	"testing"
 
+	"reflect"
+
 	"github.com/outbrain/golib/log"
 	test "github.com/outbrain/golib/tests"
-	"reflect"
 )
 
 func init() {
@@ -22,7 +23,7 @@ func TestParseColumnList(t *testing.T) {
 
 	columnList := ParseColumnList(names)
 	test.S(t).ExpectEquals(columnList.Len(), 3)
-	test.S(t).ExpectTrue(reflect.DeepEqual(columnList.Names, []string{"id", "category", "max_len"}))
+	test.S(t).ExpectTrue(reflect.DeepEqual(columnList.Names(), []string{"id", "category", "max_len"}))
 	test.S(t).ExpectEquals(columnList.Ordinals["id"], 0)
 	test.S(t).ExpectEquals(columnList.Ordinals["category"], 1)
 	test.S(t).ExpectEquals(columnList.Ordinals["max_len"], 2)

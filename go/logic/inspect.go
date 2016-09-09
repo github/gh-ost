@@ -135,8 +135,8 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 	// This additional step looks at which columns are unsigned. We could have merged this within
 	// the `getTableColumns()` function, but it's a later patch and introduces some complexity; I feel
 	// comfortable in doing this as a separate step.
-	this.applyUnsignedColumns(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
-	this.applyUnsignedColumns(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
+	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
+	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
 
 	return nil
 }
@@ -477,23 +477,31 @@ func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.Col
 	return sql.NewColumnList(columnNames), nil
 }
 
-// applyUnsignedColumns
-func (this *Inspector) applyUnsignedColumns(databaseName, tableName string, columnsLists ...*sql.ColumnList) error {
-	query := fmt.Sprintf(`
-		show columns from %s.%s
-		`,
-		sql.EscapeName(databaseName),
-		sql.EscapeName(tableName),
-	)
-	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		columnName := rowMap.GetString("Field")
-		if strings.Contains(rowMap.GetString("Type"), "unsigned") {
+// applyColumnTypes
+func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsLists ...*sql.ColumnList) error {
+	query := `
+		select
+				*
+			from
+				information_schema.columns
+			where
+				table_schema=?
+				and table_name=?
+		`
+	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		columnName := m.GetString("COLUMN_NAME")
+		if strings.Contains(m.GetString("COLUMN_TYPE"), "unsigned") {
 			for _, columnsList := range columnsLists {
 				columnsList.SetUnsigned(columnName)
 			}
 		}
+		if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
+			for _, columnsList := range columnsLists {
+				columnsList.SetCharset(columnName, charset)
+			}
+		}
 		return nil
-	})
+	}, databaseName, tableName)
 	return err
 }
 
@@ -583,7 +591,7 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 	// the ALTER is on the name itself...
 	for _, originalUniqueKey := range originalUniqueKeys {
 		for _, ghostUniqueKey := range ghostUniqueKeys {
-			if originalUniqueKey.Columns.Equals(&ghostUniqueKey.Columns) {
+			if originalUniqueKey.Columns.EqualsByNames(&ghostUniqueKey.Columns) {
 				uniqueKeys = append(uniqueKeys, originalUniqueKey)
 			}
 		}
@@ -594,11 +602,11 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
 func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
 	columnsInGhost := make(map[string]bool)
-	for _, ghostColumn := range ghostColumns.Names {
+	for _, ghostColumn := range ghostColumns.Names() {
 		columnsInGhost[ghostColumn] = true
 	}
 	sharedColumnNames := []string{}
-	for _, originalColumn := range originalColumns.Names {
+	for _, originalColumn := range originalColumns.Names() {
 		if columnsInGhost[originalColumn] || columnsInGhost[columnRenameMap[originalColumn]] {
 			sharedColumnNames = append(sharedColumnNames, originalColumn)
 		}

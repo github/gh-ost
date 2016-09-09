@@ -32,29 +32,6 @@ func EscapeName(name string) string {
 	return fmt.Sprintf("`%s`", name)
 }
 
-func fixArgType(arg interface{}, isUnsigned bool) interface{} {
-	if !isUnsigned {
-		return arg
-	}
-	// unsigned
-	if i, ok := arg.(int8); ok {
-		return uint8(i)
-	}
-	if i, ok := arg.(int16); ok {
-		return uint16(i)
-	}
-	if i, ok := arg.(int32); ok {
-		return uint32(i)
-	}
-	if i, ok := arg.(int64); ok {
-		return strconv.FormatUint(uint64(i), 10)
-	}
-	if i, ok := arg.(int); ok {
-		return uint(i)
-	}
-	return arg
-}
-
 func buildPreparedValues(length int) []string {
 	values := make([]string, length, length)
 	for i := 0; i < length; i++ {
@@ -330,14 +307,14 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	if uniqueKeyColumns.Len() == 0 {
 		return result, uniqueKeyArgs, fmt.Errorf("No unique key columns found in BuildDMLDeleteQuery")
 	}
-	for _, column := range uniqueKeyColumns.Names {
-		tableOrdinal := tableColumns.Ordinals[column]
-		arg := fixArgType(args[tableOrdinal], uniqueKeyColumns.IsUnsigned(column))
+	for _, column := range uniqueKeyColumns.Columns() {
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal])
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
-	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names)
+	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
 	if err != nil {
 		return result, uniqueKeyArgs, err
 	}
@@ -367,13 +344,13 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
-	for _, column := range mappedSharedColumns.Names {
-		tableOrdinal := tableColumns.Ordinals[column]
-		arg := fixArgType(args[tableOrdinal], mappedSharedColumns.IsUnsigned(column))
+	for _, column := range mappedSharedColumns.Columns() {
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal])
 		sharedArgs = append(sharedArgs, arg)
 	}
 
-	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names)
+	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names())
 	for i := range mappedSharedColumnNames {
 		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
 	}
@@ -415,26 +392,26 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
-	for i, column := range sharedColumns.Names {
-		mappedColumn := mappedSharedColumns.Names[i]
-		tableOrdinal := tableColumns.Ordinals[column]
-		arg := fixArgType(valueArgs[tableOrdinal], mappedSharedColumns.IsUnsigned(mappedColumn))
+	for i, column := range sharedColumns.Columns() {
+		mappedColumn := mappedSharedColumns.Columns()[i]
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := mappedColumn.convertArg(valueArgs[tableOrdinal])
 		sharedArgs = append(sharedArgs, arg)
 	}
 
-	for _, column := range uniqueKeyColumns.Names {
-		tableOrdinal := tableColumns.Ordinals[column]
-		arg := fixArgType(whereArgs[tableOrdinal], uniqueKeyColumns.IsUnsigned(column))
+	for _, column := range uniqueKeyColumns.Columns() {
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(whereArgs[tableOrdinal])
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 
-	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names)
+	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names())
 	for i := range mappedSharedColumnNames {
 		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
 	}
 	setClause, err := BuildSetPreparedClause(mappedSharedColumnNames)
 
-	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names)
+	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
 	result = fmt.Sprintf(`
  			update /* gh-ost %s.%s */
  					%s.%s

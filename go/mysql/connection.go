@@ -48,11 +48,11 @@ func (this *ConnectionConfig) Equals(other *ConnectionConfig) bool {
 }
 
 func (this *ConnectionConfig) GetDBUri(databaseName string) string {
-	var ip = net.ParseIP(this.Key.Hostname)
+	hostname := this.Key.Hostname
+	var ip = net.ParseIP(hostname)
 	if (ip != nil) && (ip.To4() == nil) {
 		// Wrap IPv6 literals in square brackets
-		return fmt.Sprintf("%s:%s@tcp([%s]:%d)/%s", this.User, this.Password, this.Key.Hostname, this.Key.Port, databaseName)
-	} else {
-		return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", this.User, this.Password, this.Key.Hostname, this.Key.Port, databaseName)
+		hostname = fmt.Sprintf("[%s]", hostname)
 	}
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4,utf8,latin1", this.User, this.Password, hostname, this.Key.Port, databaseName)
 }
