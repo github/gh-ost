@@ -6,14 +6,11 @@
 package logic
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -42,7 +39,8 @@ const (
 type PrintStatusRule int
 
 const (
-	HeuristicPrintStatusRule    PrintStatusRule = iota
+	NoPrintStatusRule           PrintStatusRule = iota
+	HeuristicPrintStatusRule                    = iota
 	ForcePrintStatusRule                        = iota
 	ForcePrintStatusOnlyRule                    = iota
 	ForcePrintStatusAndHintRule                 = iota
@@ -63,11 +61,9 @@ type Migrator struct {
 	tablesInPlace              chan bool
 	rowCopyComplete            chan bool
 	allEventsUpToLockProcessed chan bool
-	panicAbort                 chan error
 
 	rowCopyCompleteFlag         int64
 	inCutOverCriticalActionFlag int64
-	userCommandedUnpostponeFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
@@ -84,7 +80,6 @@ func NewMigrator() *Migrator {
 		firstThrottlingCollected:   make(chan bool, 1),
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan bool),
-		panicAbort:                 make(chan error),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
@@ -148,7 +143,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		// there's an error. Let's try again.
 	}
 	if len(notFatalHint) == 0 {
-		this.panicAbort <- err
+		this.migrationContext.PanicAbort <- err
 	}
 	return err
 }
@@ -217,7 +212,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 
 // listenOnPanicAbort aborts on abort request
 func (this *Migrator) listenOnPanicAbort() {
-	err := <-this.panicAbort
+	err := <-this.migrationContext.PanicAbort
 	log.Fatale(err)
 }
 
@@ -385,7 +380,7 @@ func (this *Migrator) cutOver() (err error) {
 			if this.migrationContext.PostponeCutOverFlagFile == "" {
 				return false, nil
 			}
-			if atomic.LoadInt64(&this.userCommandedUnpostponeFlag) > 0 {
+			if atomic.LoadInt64(&this.migrationContext.UserCommandedUnpostponeFlag) > 0 {
 				return false, nil
 			}
 			if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
@@ -584,150 +579,12 @@ func (this *Migrator) atomicCutOver() (err error) {
 	return nil
 }
 
-// onServerCommand responds to a user's interactive command
-func (this *Migrator) onServerCommand(command string, writer *bufio.Writer) (err error) {
-	defer writer.Flush()
-
-	tokens := strings.SplitN(command, "=", 2)
-	command = strings.TrimSpace(tokens[0])
-	arg := ""
-	if len(tokens) > 1 {
-		arg = strings.TrimSpace(tokens[1])
-	}
-
-	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
-
-	if err := this.hooksExecutor.onInteractiveCommand(command); err != nil {
-		return err
-	}
-
-	switch command {
-	case "help":
-		{
-			fmt.Fprintln(writer, `available commands:
-status                               # Print a detailed status message
-sup                                  # Print a short status message
-chunk-size=<newsize>                 # Set a new chunk-size
-nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is agrressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
-critical-load=<load>                 # Set a new set of max-load thresholds
-max-lag-millis=<max-lag>             # Set a new replication lag threshold
-replication-lag-query=<query>        # Set a new query that determines replication lag (no quotes)
-max-load=<load>                      # Set a new set of max-load thresholds
-throttle-query=<query>               # Set a new throttle-query (no quotes)
-throttle-control-replicas=<replicas> # Set a new comma delimited list of throttle control replicas
-throttle                             # Force throttling
-no-throttle                          # End forced throttling (other throttling may still apply)
-unpostpone                           # Bail out a cut-over postpone; proceed to cut-over
-panic                                # panic and quit without cleanup
-help                                 # This message
-`)
-		}
-	case "sup":
-		this.printStatus(ForcePrintStatusOnlyRule, writer)
-	case "info", "status":
-		this.printStatus(ForcePrintStatusAndHintRule, writer)
-	case "chunk-size":
-		{
-			if chunkSize, err := strconv.Atoi(arg); err != nil {
-				fmt.Fprintf(writer, "%s\n", err.Error())
-				return log.Errore(err)
-			} else {
-				this.migrationContext.SetChunkSize(int64(chunkSize))
-				this.printStatus(ForcePrintStatusAndHintRule, writer)
-			}
-		}
-	case "max-lag-millis":
-		{
-			if maxLagMillis, err := strconv.Atoi(arg); err != nil {
-				fmt.Fprintf(writer, "%s\n", err.Error())
-				return log.Errore(err)
-			} else {
-				this.migrationContext.SetMaxLagMillisecondsThrottleThreshold(int64(maxLagMillis))
-				this.printStatus(ForcePrintStatusAndHintRule, writer)
-			}
-		}
-	case "replication-lag-query":
-		{
-			this.migrationContext.SetReplicationLagQuery(arg)
-			this.printStatus(ForcePrintStatusAndHintRule, writer)
-		}
-	case "nice-ratio":
-		{
-			if niceRatio, err := strconv.ParseFloat(arg, 64); err != nil {
-				fmt.Fprintf(writer, "%s\n", err.Error())
-				return log.Errore(err)
-			} else {
-				this.migrationContext.SetNiceRatio(niceRatio)
-				this.printStatus(ForcePrintStatusAndHintRule, writer)
-			}
-		}
-	case "max-load":
-		{
-			if err := this.migrationContext.ReadMaxLoad(arg); err != nil {
-				fmt.Fprintf(writer, "%s\n", err.Error())
-				return log.Errore(err)
-			}
-			this.printStatus(ForcePrintStatusAndHintRule, writer)
-		}
-	case "critical-load":
-		{
-			if err := this.migrationContext.ReadCriticalLoad(arg); err != nil {
-				fmt.Fprintf(writer, "%s\n", err.Error())
-				return log.Errore(err)
-			}
-			this.printStatus(ForcePrintStatusAndHintRule, writer)
-		}
-	case "throttle-query":
-		{
-			this.migrationContext.SetThrottleQuery(arg)
-			fmt.Fprintf(writer, throttleHint)
-			this.printStatus(ForcePrintStatusAndHintRule, writer)
-		}
-	case "throttle-control-replicas":
-		{
-			if err := this.migrationContext.ReadThrottleControlReplicaKeys(arg); err != nil {
-				fmt.Fprintf(writer, "%s\n", err.Error())
-				return log.Errore(err)
-			}
-			fmt.Fprintf(writer, "%s\n", this.migrationContext.GetThrottleControlReplicaKeys().ToCommaDelimitedList())
-			this.printStatus(ForcePrintStatusAndHintRule, writer)
-		}
-	case "throttle", "pause", "suspend":
-		{
-			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
-			fmt.Fprintf(writer, throttleHint)
-			this.printStatus(ForcePrintStatusAndHintRule, writer)
-		}
-	case "no-throttle", "unthrottle", "resume", "continue":
-		{
-			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 0)
-		}
-	case "unpostpone", "no-postpone", "cut-over":
-		{
-			if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
-				atomic.StoreInt64(&this.userCommandedUnpostponeFlag, 1)
-				fmt.Fprintf(writer, "Unpostponed\n")
-			} else {
-				fmt.Fprintf(writer, "You may only invoke this when gh-ost is actively postponing migration. At this time it is not.\n")
-			}
-		}
-	case "panic":
-		{
-			err := fmt.Errorf("User commanded 'panic'. I will now panic, without cleanup. PANIC!")
-			fmt.Fprintf(writer, "%s\n", err.Error())
-			this.panicAbort <- err
-		}
-	default:
-		err = fmt.Errorf("Unknown command: %s", command)
-		fmt.Fprintf(writer, "%s\n", err.Error())
-		return err
-	}
-	return nil
-}
-
 // initiateServer begins listening on unix socket/tcp for incoming interactive commands
 func (this *Migrator) initiateServer() (err error) {
-	this.server = NewServer(this.onServerCommand)
+	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
+		this.printStatus(rule, writer)
+	}
+	this.server = NewServer(this.hooksExecutor, f)
 	if err := this.server.BindSocketFile(); err != nil {
 		return err
 	}
@@ -1005,7 +862,7 @@ func (this *Migrator) initiateStreaming() error {
 		log.Debugf("Beginning streaming")
 		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
 		if err != nil {
-			this.panicAbort <- err
+			this.migrationContext.PanicAbort <- err
 		}
 		log.Debugf("Done streaming")
 	}()
@@ -1033,7 +890,7 @@ func (this *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (this *Migrator) initiateThrottler() error {
-	this.throttler = NewThrottler(this.applier, this.inspector, this.panicAbort)
+	this.throttler = NewThrottler(this.applier, this.inspector)
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")

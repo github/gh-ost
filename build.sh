@@ -2,7 +2,7 @@
 #
 #
 
-RELEASE_VERSION="1.0.18"
+RELEASE_VERSION="1.0.19"
 
 function build {
     osname=$1
