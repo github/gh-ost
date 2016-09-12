@@ -744,6 +744,9 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 // By default the status is written to standard output, but other writers can
 // be used as well.
 func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
+	if rule == NoPrintStatusRule {
+		return
+	}
 	writers = append(writers, os.Stdout)
 
 	elapsedTime := this.migrationContext.ElapsedTime()
