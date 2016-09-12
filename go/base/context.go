@@ -92,6 +92,7 @@ type MigrationContext struct {
 	criticalLoad                        LoadMap
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
+	ForceNamedCutOverCommand            bool
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string

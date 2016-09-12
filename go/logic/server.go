@@ -231,12 +231,14 @@ help                                 # This message
 		}
 	case "unpostpone", "no-postpone", "cut-over":
 		{
-			if arg != "" {
-				if arg != this.migrationContext.OriginalTableName {
-					// User exlpicitly provided table name. This is a courtesy protection mechanism
-					err := fmt.Errorf("User commanded 'unpostpone' on %s, but migrated table is %s; ingoring request.", arg, this.migrationContext.OriginalTableName)
-					return NoPrintStatusRule, err
-				}
+			if arg == "" && this.migrationContext.ForceNamedCutOverCommand {
+				err := fmt.Errorf("User commanded 'unpostpone' without specifying table name, but --force-named-cut-over is set")
+				return NoPrintStatusRule, err
+			}
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User exlpicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'unpostpone' on %s, but migrated table is %s; ingoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
 			}
 			if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
 				atomic.StoreInt64(&this.migrationContext.UserCommandedUnpostponeFlag, 1)
