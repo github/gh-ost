@@ -1,0 +1,1 @@
+--alter='MODIFY `t` varchar(128) CHARACTER SET utf8mb4 NOT NULL' 
