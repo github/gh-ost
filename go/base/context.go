@@ -92,6 +92,7 @@ type MigrationContext struct {
 	criticalLoad                        LoadMap
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
+	ForceNamedCutOverCommand            bool
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string
@@ -140,6 +141,8 @@ type MigrationContext struct {
 	CountingRowsFlag                       int64
 	AllEventsUpToLockProcessedInjectedFlag int64
 	CleanupImminentFlag                    int64
+	UserCommandedUnpostponeFlag            int64
+	PanicAbort                             chan error
 
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
@@ -192,6 +195,7 @@ func newMigrationContext() *MigrationContext {
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
+		PanicAbort:                          make(chan error),
 	}
 }
 
