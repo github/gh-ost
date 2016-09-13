@@ -893,14 +893,16 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	elapsedSeconds := int64(elapsedTime.Seconds())
 	totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
 	rowsEstimate := atomic.LoadInt64(&this.migrationContext.RowsEstimate) + atomic.LoadInt64(&this.migrationContext.RowsDeltaEstimate)
+	if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+		// Done copying rows. The totalRowsCopied value is the de-facto number of rows,
+		// and there is no further need to keep updating the value.
+		rowsEstimate = totalRowsCopied
+	}
 	var progressPct float64
 	if rowsEstimate == 0 {
 		progressPct = 100.0
 	} else {
 		progressPct = 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
-	}
-	if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
-		progressPct = 100.0
 	}
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
 	shouldPrintMigrationStatusHint := (elapsedSeconds%600 == 0)
