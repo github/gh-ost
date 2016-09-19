@@ -98,4 +98,4 @@ See `approve-renamed-columns`
 
 ### test-on-replica
 
-Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [test-on-replica](test-on-replica.md)
+Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [testing-on-replica](testing-on-replica.md)
