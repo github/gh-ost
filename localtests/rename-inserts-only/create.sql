@@ -18,5 +18,5 @@ create event gh_ost_test
 begin
   insert into gh_ost_test values (null, 11, 23);
   insert into gh_ost_test values (null, 13, 23);
-  insert into gh_ost_test values (null, rand(), rand());
+  insert into gh_ost_test values (null, floor(rand()*pow(2,32)), floor(rand()*pow(2,32)));
 end ;;
