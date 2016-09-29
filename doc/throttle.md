@@ -97,7 +97,7 @@ Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 42s(copy), 42s(total); s
 
 Throttling time is limited by the availability of the binary logs. When throttling begins, `gh-ost` suspends reading the binary logs, and expects to resume reading from same binary log where it paused.
 
-Your availability of binary logs is typically determined by the [expire_logs_days](dev.mysql.com/doc/refman/5.6/en/server-system-variables.html#sysvar_expire_logs_days) variable. If you have `expire_logs_days = 10` (or check `select @@global.expire_logs_days`), then you should be able to throttle for up to `10` days.
+Your availability of binary logs is typically determined by the [expire_logs_days](https://dev.mysql.com/doc/refman/5.6/en/server-system-variables.html#sysvar_expire_logs_days) variable. If you have `expire_logs_days = 10` (or check `select @@global.expire_logs_days`), then you should be able to throttle for up to `10` days.
 
 Having said that, throttling for so long is far fetching, in that the `gh-ost` process itself must be kept alive during that time; and the amount of binary logs to process once it resumes will potentially take days to replay.
 
