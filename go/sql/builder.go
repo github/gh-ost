@@ -344,7 +344,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
-	for _, column := range mappedSharedColumns.Columns() {
+	for _, column := range sharedColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
 		arg := column.convertArg(args[tableOrdinal])
 		sharedArgs = append(sharedArgs, arg)
@@ -392,10 +392,9 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
-	for i, column := range sharedColumns.Columns() {
-		mappedColumn := mappedSharedColumns.Columns()[i]
+	for _, column := range sharedColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := mappedColumn.convertArg(valueArgs[tableOrdinal])
+		arg := column.convertArg(valueArgs[tableOrdinal])
 		sharedArgs = append(sharedArgs, arg)
 	}
 
