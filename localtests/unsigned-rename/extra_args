@@ -1,0 +1,1 @@
+--alter="change column iu iu_renamed int unsigned not null" --approve-renamed-columns
