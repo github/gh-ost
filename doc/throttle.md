@@ -46,7 +46,7 @@ Note that you may dynamically change both `replication-lag-query` and the `throt
 
   `--max-load='Threads_running=100,Threads_connected=500'`
 
-  Metrics must be valid, numeric [statis variables](http://dev.mysql.com/doc/refman/5.6/en/server-status-variables.html)
+  Metrics must be valid, numeric [status variables](http://dev.mysql.com/doc/refman/5.6/en/server-status-variables.html)
 
 #### Throttle query
 
@@ -80,7 +80,7 @@ In addition to the above, you are able to take control and throttle the operatio
 
 Any single factor in the above that suggests the migration should throttle - causes throttling. That is, once some component decides to throttle, you cannot override it; you cannot force continued execution of the migration.
 
-`gh-ost` collects different throttle-related metrics at different times, independently. It asynchronously reads the collected metrics and checks if they satisfy conditions/threasholds.
+`gh-ost` collects different throttle-related metrics at different times, independently. It asynchronously reads the collected metrics and checks if they satisfy conditions/thresholds.
 
 The first check to suggest throttling stops the check; the status message will note the reason for throttling as the first satisfied check.
 
