@@ -1,4 +1,4 @@
-# Understading gh-ost output
+# Understanding gh-ost output
 
 `gh-ost` attempts to be verbose to the point where you really know what it's doing, without completely spamming you.
 You can control output levels:
