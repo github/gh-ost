@@ -624,6 +624,7 @@ func (this *Migrator) initiateInspector() (err error) {
 			return err
 		} else {
 			this.migrationContext.ApplierConnectionConfig.Key = *key
+			this.migrationContext.ApplierConnectionConfig.ImpliedKey = key
 		}
 	}
 	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
