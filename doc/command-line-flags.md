@@ -47,6 +47,12 @@ See `exact-rowcount`
 
 Optional. Default is `safe`. See more discussion in [cut-over](cut-over.md)
 
+### discard-foreign-keys
+
+**Danger**: this flag will _silently_ discard any foreign keys existing on your table.
+
+At this time (10-2016) `gh-ost` does not support foreign keys on migrated tables (it bails out when it notices a FK on the migrated table). However, it is able to support _dropping_ of foreign keys via this flag. If you're trying to get rid of foreign keys in your environment, this is a useful flag.
+
 ### exact-rowcount
 
 A `gh-ost` execution need to copy whatever rows you have in your existing table onto the ghost table. This can, and often be, a large number. Exactly what that number is?
