@@ -375,11 +375,15 @@ func (this *Inspector) validateTableForeignKeys() error {
 	if err != nil {
 		return err
 	}
-	if numForeignKeys > 0 {
-		return log.Errorf("Found %d foreign keys related to %s.%s. Foreign keys are not supported. Bailing out", numForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	if numForeignKeys == 0 {
+		log.Debugf("Validated no foreign keys exist on table")
+		return nil
 	}
-	log.Debugf("Validated no foreign keys exist on table")
-	return nil
+	if this.migrationContext.DiscardForeignKeys {
+		log.Debugf("Foreign keys found and will be dropped, as per given --discard-foreign-keys flag")
+		return nil
+	}
+	return log.Errorf("Found %d foreign keys related to %s.%s. Foreign keys are not supported. Bailing out", numForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 }
 
 // validateTableTriggers makes sure no triggers exist on the migrated table
