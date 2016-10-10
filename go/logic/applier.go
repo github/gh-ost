@@ -420,10 +420,11 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(`SET
-			SESSION time_zone = '+00:00',
+		sessionQuery := fmt.Sprintf(`SET
+			SESSION time_zone = '%s',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
-			`); err != nil {
+			`, this.migrationContext.TimeZone)
+		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
 		}
 		result, err := tx.Exec(query, explodedArgs...)
@@ -892,10 +893,11 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`SET
-			SESSION time_zone = '+00:00',
+		sessionQuery := fmt.Sprintf(`SET
+			SESSION time_zone = '%s',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
-			`); err != nil {
+			`, this.migrationContext.TimeZone)
+		if _, err := tx.Exec(sessionQuery); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(query, args...); err != nil {
