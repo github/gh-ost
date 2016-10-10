@@ -48,7 +48,7 @@ func main() {
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
-	flag.StringVar(&migrationContext.TimeZone, "time-zone", "+00:00", "assume timezone. Default: UTC. Set empty for system time zone")
+	flag.StringVar(&migrationContext.TimeZone, "time-zone", "", "assume timezone. Default: MySQL server global time zone.")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")

@@ -56,6 +56,9 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.applyBinlogFormat(); err != nil {
 		return err
 	}
+	if err := this.validateAndReadTimeZone(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -152,6 +155,18 @@ func (this *Inspector) validateConnection() error {
 		return fmt.Errorf("Unexpected database port reported: %+v", port)
 	}
 	log.Infof("connection validated on %+v", this.connectionConfig.Key)
+	return nil
+}
+
+// validateAndReadTimeZone potentially reads server time-zone
+func (this *Inspector) validateAndReadTimeZone() error {
+	if this.migrationContext.TimeZone == "" {
+		query := `select @@global.time_zone`
+		if err := this.db.QueryRow(query).Scan(&this.migrationContext.TimeZone); err != nil {
+			return err
+		}
+	}
+	log.Infof("will use %s timezone", this.migrationContext.TimeZone)
 	return nil
 }
 
