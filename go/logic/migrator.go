@@ -616,17 +616,22 @@ func (this *Migrator) initiateInspector() (err error) {
 	}
 	// So far so good, table is accessible and valid.
 	// Let's get master connection config
-	if this.migrationContext.ApplierConnectionConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
-		return err
-	}
-	if this.migrationContext.AssumeMasterHostname != "" {
-		if key, err := mysql.ParseRawInstanceKeyLoose(this.migrationContext.AssumeMasterHostname); err != nil {
+	if this.migrationContext.AssumeMasterHostname == "" {
+		// No forced master host; detect master
+		if this.migrationContext.ApplierConnectionConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
 			return err
-		} else {
-			this.migrationContext.ApplierConnectionConfig.Key = *key
-			this.migrationContext.ApplierConnectionConfig.ImpliedKey = key
 		}
+		log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
+	} else {
+		// Forced master host.
+		key, err := mysql.ParseRawInstanceKeyLoose(this.migrationContext.AssumeMasterHostname)
+		if err != nil {
+			return err
+		}
+		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.DuplicateCredentials(*key)
+		log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	}
+	// validate configs
 	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
 		if this.migrationContext.InspectorIsAlsoApplier() {
 			return fmt.Errorf("Instructed to --test-on-replica or --migrate-on-replica, but the server we connect to doesn't seem to be a replica")
@@ -639,13 +644,12 @@ func (this *Migrator) initiateInspector() (err error) {
 			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.InspectorConnectionConfig.Key)
 		}
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
-		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master")
+		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", this.migrationContext.InspectorConnectionConfig, this.migrationContext.ApplierConnectionConfig)
 	}
 	if err := this.inspector.validateLogSlaveUpdates(); err != nil {
 		return err
 	}
 
-	log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	return nil
 }
 
