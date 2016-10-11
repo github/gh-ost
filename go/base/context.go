@@ -112,7 +112,8 @@ type MigrationContext struct {
 
 	Hostname                               string
 	AssumeMasterHostname                   string
-	TimeZone                               string
+	InspectorTimeZone                      string
+	ApplierTimeZone                        string
 	TableEngine                            string
 	RowsEstimate                           int64
 	RowsDeltaEstimate                      int64

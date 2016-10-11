@@ -160,13 +160,13 @@ func (this *Inspector) validateConnection() error {
 
 // validateAndReadTimeZone potentially reads server time-zone
 func (this *Inspector) validateAndReadTimeZone() error {
-	if this.migrationContext.TimeZone == "" {
+	if this.migrationContext.InspectorTimeZone == "" {
 		query := `select @@global.time_zone`
-		if err := this.db.QueryRow(query).Scan(&this.migrationContext.TimeZone); err != nil {
+		if err := this.db.QueryRow(query).Scan(&this.migrationContext.InspectorTimeZone); err != nil {
 			return err
 		}
 	}
-	log.Infof("will use %s timezone", this.migrationContext.TimeZone)
+	log.Infof("will use time_zone='%s' on inspector", this.migrationContext.InspectorTimeZone)
 	return nil
 }
 
