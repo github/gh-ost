@@ -90,6 +90,7 @@ type MigrationContext struct {
 	ThrottleCommandedByUser             int64
 	maxLoad                             LoadMap
 	criticalLoad                        LoadMap
+	CriticalLoadIntervalMilliseconds    int64
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
 	ForceNamedCutOverCommand            bool

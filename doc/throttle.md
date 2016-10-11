@@ -46,7 +46,7 @@ Note that you may dynamically change both `replication-lag-query` and the `throt
 
   `--max-load='Threads_running=100,Threads_connected=500'`
 
-  Metrics must be valid, numeric [statis variables](http://dev.mysql.com/doc/refman/5.6/en/server-status-variables.html)
+  Metrics must be valid, numeric [status variables](http://dev.mysql.com/doc/refman/5.6/en/server-status-variables.html)
 
 #### Throttle query
 
@@ -80,7 +80,7 @@ In addition to the above, you are able to take control and throttle the operatio
 
 Any single factor in the above that suggests the migration should throttle - causes throttling. That is, once some component decides to throttle, you cannot override it; you cannot force continued execution of the migration.
 
-`gh-ost` collects different throttle-related metrics at different times, independently. It asynchronously reads the collected metrics and checks if they satisfy conditions/threasholds.
+`gh-ost` collects different throttle-related metrics at different times, independently. It asynchronously reads the collected metrics and checks if they satisfy conditions/thresholds.
 
 The first check to suggest throttling stops the check; the status message will note the reason for throttling as the first satisfied check.
 
@@ -97,7 +97,7 @@ Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 42s(copy), 42s(total); s
 
 Throttling time is limited by the availability of the binary logs. When throttling begins, `gh-ost` suspends reading the binary logs, and expects to resume reading from same binary log where it paused.
 
-Your availability of binary logs is typically determined by the [expire_logs_days](dev.mysql.com/doc/refman/5.6/en/server-system-variables.html#sysvar_expire_logs_days) variable. If you have `expire_logs_days = 10` (or check `select @@global.expire_logs_days`), then you should be able to throttle for up to `10` days.
+Your availability of binary logs is typically determined by the [expire_logs_days](https://dev.mysql.com/doc/refman/5.6/en/server-system-variables.html#sysvar_expire_logs_days) variable. If you have `expire_logs_days = 10` (or check `select @@global.expire_logs_days`), then you should be able to throttle for up to `10` days.
 
 Having said that, throttling for so long is far fetching, in that the `gh-ost` process itself must be kept alive during that time; and the amount of binary logs to process once it resumes will potentially take days to replay.
 
