@@ -59,6 +59,9 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.validateConnection(this.singletonDB); err != nil {
 		return err
 	}
+	if err := this.validateAndReadTimeZone(); err != nil {
+		return err
+	}
 	if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 		return err
 	} else {
@@ -78,6 +81,18 @@ func (this *Applier) validateConnection(db *gosql.DB) error {
 		return fmt.Errorf("Unexpected database port reported: %+v", port)
 	}
 	log.Infof("connection validated on %+v", this.connectionConfig.Key)
+	return nil
+}
+
+// validateAndReadTimeZone potentially reads server time-zone
+func (this *Applier) validateAndReadTimeZone() error {
+	if this.migrationContext.ApplierTimeZone == "" {
+		query := `select @@global.time_zone`
+		if err := this.db.QueryRow(query).Scan(&this.migrationContext.ApplierTimeZone); err != nil {
+			return err
+		}
+	}
+	log.Infof("will use time_zone='%s' on applier", this.migrationContext.ApplierTimeZone)
 	return nil
 }
 
@@ -414,7 +429,29 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
 	}
-	sqlResult, err := sqlutils.Exec(this.db, query, explodedArgs...)
+
+	sqlResult, err := func() (gosql.Result, error) {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return nil, err
+		}
+		sessionQuery := fmt.Sprintf(`SET
+			SESSION time_zone = '%s',
+			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
+			`, this.migrationContext.ApplierTimeZone)
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return nil, err
+		}
+		result, err := tx.Exec(query, explodedArgs...)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}()
+
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
 	}
@@ -871,10 +908,11 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`SET
-			SESSION time_zone = '+00:00',
+		sessionQuery := fmt.Sprintf(`SET
+			SESSION time_zone = '%s',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
-			`); err != nil {
+			`, this.migrationContext.ApplierTimeZone)
+		if _, err := tx.Exec(sessionQuery); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(query, args...); err != nil {
