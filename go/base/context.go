@@ -70,6 +70,7 @@ type MigrationContext struct {
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
 	IsTungsten               bool
+	DiscardForeignKeys       bool
 
 	config      ContextConfig
 	configMutex *sync.Mutex

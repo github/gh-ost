@@ -95,7 +95,18 @@ test_single() {
   echo_dot
   bash $exec_command_file 1> $test_logfile 2>&1
 
-  if [ $? -ne 0 ] ; then
+  execution_result=$?
+
+  if [ -f $tests_path/$test_name/expect_failure ] ; then
+    if [ $execution_result -eq 0 ] ; then
+      echo
+      echo "ERROR $test_name execution was expected to exit on error but did not. cat $test_logfile"
+      return 1
+    fi
+    return 0
+  fi
+
+  if [ $execution_result -ne 0 ] ; then
     echo
     echo "ERROR $test_name execution failure. cat $test_logfile"
     return 1
