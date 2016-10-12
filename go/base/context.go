@@ -238,6 +238,28 @@ func (this *MigrationContext) RequiresBinlogFormatChange() bool {
 	return this.OriginalBinlogFormat != "ROW"
 }
 
+// GetApplierHostname is a safe access method to the applier hostname
+func (this *MigrationContext) GetApplierHostname() string {
+	if this.ApplierConnectionConfig == nil {
+		return ""
+	}
+	if this.ApplierConnectionConfig.ImpliedKey == nil {
+		return ""
+	}
+	return this.ApplierConnectionConfig.ImpliedKey.Hostname
+}
+
+// GetInspectorHostname is a safe access method to the inspector hostname
+func (this *MigrationContext) GetInspectorHostname() string {
+	if this.InspectorConnectionConfig == nil {
+		return ""
+	}
+	if this.InspectorConnectionConfig.ImpliedKey == nil {
+		return ""
+	}
+	return this.InspectorConnectionConfig.ImpliedKey.Hostname
+}
+
 // InspectorIsAlsoApplier is `true` when the both inspector and applier are the
 // same database instance. This would be true when running directly on master or when
 // testing on replica.
