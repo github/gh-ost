@@ -26,17 +26,19 @@ func NewConnectionConfig() *ConnectionConfig {
 	return config
 }
 
-func (this *ConnectionConfig) Duplicate() *ConnectionConfig {
+// DuplicateCredentials creates a new connection config with given key and with same credentials as this config
+func (this *ConnectionConfig) DuplicateCredentials(key InstanceKey) *ConnectionConfig {
 	config := &ConnectionConfig{
-		Key: InstanceKey{
-			Hostname: this.Key.Hostname,
-			Port:     this.Key.Port,
-		},
+		Key:      key,
 		User:     this.User,
 		Password: this.Password,
 	}
 	config.ImpliedKey = &config.Key
 	return config
+}
+
+func (this *ConnectionConfig) Duplicate() *ConnectionConfig {
+	return this.DuplicateCredentials(this.Key)
 }
 
 func (this *ConnectionConfig) String() string {
