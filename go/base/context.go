@@ -70,6 +70,7 @@ type MigrationContext struct {
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
 	IsTungsten               bool
+	DiscardForeignKeys       bool
 
 	config      ContextConfig
 	configMutex *sync.Mutex
@@ -237,6 +238,28 @@ func (this *MigrationContext) GetVoluntaryLockName() string {
 // RequiresBinlogFormatChange is `true` when the original binlog format isn't `ROW`
 func (this *MigrationContext) RequiresBinlogFormatChange() bool {
 	return this.OriginalBinlogFormat != "ROW"
+}
+
+// GetApplierHostname is a safe access method to the applier hostname
+func (this *MigrationContext) GetApplierHostname() string {
+	if this.ApplierConnectionConfig == nil {
+		return ""
+	}
+	if this.ApplierConnectionConfig.ImpliedKey == nil {
+		return ""
+	}
+	return this.ApplierConnectionConfig.ImpliedKey.Hostname
+}
+
+// GetInspectorHostname is a safe access method to the inspector hostname
+func (this *MigrationContext) GetInspectorHostname() string {
+	if this.InspectorConnectionConfig == nil {
+		return ""
+	}
+	if this.InspectorConnectionConfig.ImpliedKey == nil {
+		return ""
+	}
+	return this.InspectorConnectionConfig.ImpliedKey.Hostname
 }
 
 // InspectorIsAlsoApplier is `true` when the both inspector and applier are the

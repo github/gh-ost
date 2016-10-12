@@ -66,7 +66,7 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 	if err := this.validateTable(); err != nil {
 		return err
 	}
-	if err := this.validateTableForeignKeys(); err != nil {
+	if err := this.validateTableForeignKeys(this.migrationContext.DiscardForeignKeys); err != nil {
 		return err
 	}
 	if err := this.validateTableTriggers(); err != nil {
@@ -364,9 +364,11 @@ func (this *Inspector) validateTable() error {
 }
 
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
-func (this *Inspector) validateTableForeignKeys() error {
+func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error {
 	query := `
-		SELECT TABLE_SCHEMA, TABLE_NAME
+		SELECT
+			SUM(REFERENCED_TABLE_NAME IS NOT NULL AND TABLE_SCHEMA=? AND TABLE_NAME=?) as num_child_side_fk,
+			SUM(REFERENCED_TABLE_NAME IS NOT NULL AND REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=?) as num_parent_side_fk
 		FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
 		WHERE
 				REFERENCED_TABLE_NAME IS NOT NULL
@@ -374,14 +376,17 @@ func (this *Inspector) validateTableForeignKeys() error {
 					OR (REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=?)
 				)
 	`
-	numForeignKeys := 0
-	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		fkSchema := rowMap.GetString("TABLE_SCHEMA")
-		fkTable := rowMap.GetString("TABLE_NAME")
-		log.Infof("Found foreign key on %s.%s related to %s.%s", sql.EscapeName(fkSchema), sql.EscapeName(fkTable), sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
-		numForeignKeys++
+	numParentForeignKeys := 0
+	numChildForeignKeys := 0
+	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		numChildForeignKeys = m.GetInt("num_child_side_fk")
+		numParentForeignKeys = m.GetInt("num_parent_side_fk")
 		return nil
 	},
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.DatabaseName,
@@ -390,8 +395,15 @@ func (this *Inspector) validateTableForeignKeys() error {
 	if err != nil {
 		return err
 	}
-	if numForeignKeys > 0 {
-		return log.Errorf("Found %d foreign keys related to %s.%s. Foreign keys are not supported. Bailing out", numForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	if numParentForeignKeys > 0 {
+		return log.Errorf("Found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	}
+	if numChildForeignKeys > 0 {
+		if allowChildForeignKeys {
+			log.Debugf("Foreign keys found and will be dropped, as per given --discard-foreign-keys flag")
+			return nil
+		}
+		return log.Errorf("Found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Debugf("Validated no foreign keys exist on table")
 	return nil
