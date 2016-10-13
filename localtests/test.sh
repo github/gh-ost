@@ -9,6 +9,7 @@
 
 tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
+ghost_binary=/tmp/gh-ost-test
 exec_command_file=/tmp/gh-ost-test.bash
 
 test_pattern="${1:-.}"
@@ -68,7 +69,7 @@ test_single() {
   echo_dot
   sleep 1
   #
-  cmd="go run go/cmd/gh-ost/main.go \
+  cmd="$ghost_binary \
     --user=gh-ost \
     --password=gh-ost \
     --host=$replica_host \
@@ -126,7 +127,13 @@ test_single() {
   fi
 }
 
+build_binary() {
+  echo "Building"
+  go build -o $ghost_binary go/cmd/gh-ost/main.go
+}
+
 test_all() {
+  build_binary
   find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | egrep "$test_pattern" | while read test_name ; do
     test_single "$test_name"
     if [ $? -ne 0 ] ; then
