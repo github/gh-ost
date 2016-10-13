@@ -609,12 +609,8 @@ func decodeTimestamp2(data []byte, dec uint16) (interface{}, int, error) {
 		return "0000-00-00 00:00:00", n, nil
 	}
 
-	// t := time.Unix(sec, usec*1000).UTC() // .UTC() converted by shlomi-noach
-	// return t.Format(TimeFormat), n, nil
-	//t := time.Unix(sec, usec*1000).UTC()
 	t := time.Unix(sec, usec*1000)
-	return t.Format(TimeFormat), n, nil
-	//return t, n, nil
+	return t, n, nil
 }
 
 const DATETIMEF_INT_OFS int64 = 0x8000000000
@@ -660,10 +656,6 @@ func decodeDatetime2(data []byte, dec uint16) (interface{}, int, error) {
 	second := int(hms % (1 << 6))
 	minute := int((hms >> 6) % (1 << 6))
 	hour := int((hms >> 12))
-
-	//	t := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC) // added by Shlomi Noach
-	//return t.Format(TimeFormat), n, nil                                             // added by Shlomi Noach
-	//	return t, n, nil // added by Shlomi Noach
 
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
 }
