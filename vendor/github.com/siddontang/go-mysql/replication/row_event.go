@@ -657,7 +657,10 @@ func decodeDatetime2(data []byte, dec uint16) (string, int, error) {
 	minute := int((hms >> 6) % (1 << 6))
 	hour := int((hms >> 12))
 
-	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second), n, nil
+	t := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC) // added by Shlomi Noach
+	return t.Format(TimeFormat), n, nil                                             // added by Shlomi Noach
+
+	// return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
 }
 
 const TIMEF_OFS int64 = 0x800000000000

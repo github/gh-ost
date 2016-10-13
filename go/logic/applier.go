@@ -414,7 +414,28 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
 	}
-	sqlResult, err := sqlutils.Exec(this.db, query, explodedArgs...)
+
+	sqlResult, err := func() (gosql.Result, error) {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(`SET
+			SESSION time_zone = '+00:00',
+			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
+			`); err != nil {
+			return nil, err
+		}
+		result, err := tx.Exec(query, explodedArgs...)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}()
+
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
 	}
