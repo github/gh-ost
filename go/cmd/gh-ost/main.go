@@ -206,7 +206,6 @@ func main() {
 		log.Errore(err)
 	}
 	if *timeZone != "" {
-		migrationContext.InspectorTimeZone = *timeZone
 		migrationContext.ApplierTimeZone = *timeZone
 	}
 
