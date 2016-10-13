@@ -114,7 +114,6 @@ type MigrationContext struct {
 
 	Hostname                               string
 	AssumeMasterHostname                   string
-	InspectorTimeZone                      string
 	ApplierTimeZone                        string
 	TableEngine                            string
 	RowsEstimate                           int64
