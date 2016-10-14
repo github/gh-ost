@@ -108,6 +108,17 @@ test_single() {
       echo "ERROR $test_name execution was expected to exit on error but did not. cat $test_logfile"
       return 1
     fi
+    if [ -s $tests_path/$test_name/expect_failure ] ; then
+      # 'expect_failure' file has content. We expect to find this content in the log.
+      expected_error_message="$(cat $tests_path/$test_name/expect_failure)"
+      if grep -q "$expected_error_message" $test_logfile ; then
+          return 0
+      fi
+      echo
+      echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not. cat $test_logfile"
+      return 1
+    fi
+    # 'expect_failure' file has no content. We generally agree that the failure is correct
     return 0
   fi
 
