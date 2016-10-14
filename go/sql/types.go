@@ -161,6 +161,10 @@ func (this *ColumnList) SetConvertDatetimeToTimestamp(columnName string, toTimez
 	this.GetColumn(columnName).timezoneConversion = &TimezoneConvertion{ToTimezone: toTimezone}
 }
 
+func (this *ColumnList) HasTimezoneConversion(columnName string) bool {
+	return this.GetColumn(columnName).timezoneConversion != nil
+}
+
 func (this *ColumnList) String() string {
 	return strings.Join(this.Names(), ",")
 }
