@@ -48,7 +48,6 @@ func main() {
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
-	timeZone := flag.String("time-zone", "", "assume timezone. Default: MySQL server global time zone.")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
@@ -204,9 +203,6 @@ func main() {
 	migrationContext.ApplyCredentials()
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {
 		log.Errore(err)
-	}
-	if *timeZone != "" {
-		migrationContext.ApplierTimeZone = *timeZone
 	}
 
 	log.Infof("starting gh-ost %+v", AppVersion)
