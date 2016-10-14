@@ -1,6 +1,6 @@
 drop table if exists gh_ost_test;
 create table gh_ost_test (
-  id int auto_increment,
+  id int unsigned auto_increment,
   i int not null,
   ts0 timestamp default current_timestamp,
   ts1 timestamp,
