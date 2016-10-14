@@ -98,6 +98,10 @@ test_single() {
 
   execution_result=$?
 
+  if [ -f $tests_path/$test_name/destroy.sql ] ; then
+    gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/destroy.sql
+  fi
+
   if [ -f $tests_path/$test_name/expect_failure ] ; then
     if [ $execution_result -eq 0 ] ; then
       echo
