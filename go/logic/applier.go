@@ -86,12 +86,11 @@ func (this *Applier) validateConnection(db *gosql.DB) error {
 
 // validateAndReadTimeZone potentially reads server time-zone
 func (this *Applier) validateAndReadTimeZone() error {
-	if this.migrationContext.ApplierTimeZone == "" {
-		query := `select @@global.time_zone`
-		if err := this.db.QueryRow(query).Scan(&this.migrationContext.ApplierTimeZone); err != nil {
-			return err
-		}
+	query := `select @@global.time_zone`
+	if err := this.db.QueryRow(query).Scan(&this.migrationContext.ApplierTimeZone); err != nil {
+		return err
 	}
+
 	log.Infof("will use time_zone='%s' on applier", this.migrationContext.ApplierTimeZone)
 	return nil
 }
