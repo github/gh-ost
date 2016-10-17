@@ -12,10 +12,24 @@ import (
 	"strings"
 )
 
+type ColumnType int
+
+const (
+	UnknownColumnType   ColumnType = iota
+	TimestampColumnType            = iota
+	DateTimeColumnType             = iota
+)
+
+type TimezoneConvertion struct {
+	ToTimezone string
+}
+
 type Column struct {
-	Name       string
-	IsUnsigned bool
-	Charset    string
+	Name               string
+	IsUnsigned         bool
+	Charset            string
+	Type               ColumnType
+	timezoneConversion *TimezoneConvertion
 }
 
 func (this *Column) convertArg(arg interface{}) interface{} {
@@ -112,20 +126,43 @@ func (this *ColumnList) Names() []string {
 	return names
 }
 
+func (this *ColumnList) GetColumn(columnName string) *Column {
+	if ordinal, ok := this.Ordinals[columnName]; ok {
+		return &this.columns[ordinal]
+	}
+	return nil
+}
+
 func (this *ColumnList) SetUnsigned(columnName string) {
-	this.columns[this.Ordinals[columnName]].IsUnsigned = true
+	this.GetColumn(columnName).IsUnsigned = true
 }
 
 func (this *ColumnList) IsUnsigned(columnName string) bool {
-	return this.columns[this.Ordinals[columnName]].IsUnsigned
+	return this.GetColumn(columnName).IsUnsigned
 }
 
 func (this *ColumnList) SetCharset(columnName string, charset string) {
-	this.columns[this.Ordinals[columnName]].Charset = charset
+	this.GetColumn(columnName).Charset = charset
 }
 
 func (this *ColumnList) GetCharset(columnName string) string {
-	return this.columns[this.Ordinals[columnName]].Charset
+	return this.GetColumn(columnName).Charset
+}
+
+func (this *ColumnList) SetColumnType(columnName string, columnType ColumnType) {
+	this.GetColumn(columnName).Type = columnType
+}
+
+func (this *ColumnList) GetColumnType(columnName string) ColumnType {
+	return this.GetColumn(columnName).Type
+}
+
+func (this *ColumnList) SetConvertDatetimeToTimestamp(columnName string, toTimezone string) {
+	this.GetColumn(columnName).timezoneConversion = &TimezoneConvertion{ToTimezone: toTimezone}
+}
+
+func (this *ColumnList) HasTimezoneConversion(columnName string) bool {
+	return this.GetColumn(columnName).timezoneConversion != nil
 }
 
 func (this *ColumnList) String() string {

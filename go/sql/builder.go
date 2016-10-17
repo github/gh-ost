@@ -32,6 +32,20 @@ func EscapeName(name string) string {
 	return fmt.Sprintf("`%s`", name)
 }
 
+func buildColumnsPreparedValues(columns *ColumnList) []string {
+	values := make([]string, columns.Len(), columns.Len())
+	for i, column := range columns.Columns() {
+		var token string
+		if column.timezoneConversion != nil {
+			token = fmt.Sprintf("convert_tz(?, '%s', '%s')", column.timezoneConversion.ToTimezone, "+00:00")
+		} else {
+			token = "?"
+		}
+		values[i] = token
+	}
+	return values
+}
+
 func buildPreparedValues(length int) []string {
 	values := make([]string, length, length)
 	for i := 0; i < length; i++ {
@@ -83,13 +97,19 @@ func BuildEqualsPreparedComparison(columns []string) (result string, err error) 
 	return BuildEqualsComparison(columns, values)
 }
 
-func BuildSetPreparedClause(columns []string) (result string, err error) {
-	if len(columns) == 0 {
+func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
+	if columns.Len() == 0 {
 		return "", fmt.Errorf("Got 0 columns in BuildSetPreparedClause")
 	}
 	setTokens := []string{}
-	for _, column := range columns {
-		setTokens = append(setTokens, fmt.Sprintf("%s=?", EscapeName(column)))
+	for _, column := range columns.Columns() {
+		var setToken string
+		if column.timezoneConversion != nil {
+			setToken = fmt.Sprintf("%s=convert_tz(?, '%s', '%s')", EscapeName(column.Name), column.timezoneConversion.ToTimezone, "+00:00")
+		} else {
+			setToken = fmt.Sprintf("%s=?", EscapeName(column.Name))
+		}
+		setTokens = append(setTokens, setToken)
 	}
 	return strings.Join(setTokens, ", "), nil
 }
@@ -354,7 +374,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	for i := range mappedSharedColumnNames {
 		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
 	}
-	preparedValues := buildPreparedValues(mappedSharedColumns.Len())
+	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
 
 	result = fmt.Sprintf(`
 			replace /* gh-ost %s.%s */ into
@@ -404,11 +424,7 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 
-	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names())
-	for i := range mappedSharedColumnNames {
-		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
-	}
-	setClause, err := BuildSetPreparedClause(mappedSharedColumnNames)
+	setClause, err := BuildSetPreparedClause(mappedSharedColumns)
 
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
 	result = fmt.Sprintf(`

@@ -138,6 +138,20 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
 	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
 
+	for i := range this.migrationContext.SharedColumns.Columns() {
+		column := this.migrationContext.SharedColumns.Columns()[i]
+		mappedColumn := this.migrationContext.MappedSharedColumns.Columns()[i]
+		if column.Name == mappedColumn.Name && column.Type == sql.DateTimeColumnType && mappedColumn.Type == sql.TimestampColumnType {
+			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.migrationContext.ApplierTimeZone)
+		}
+	}
+
+	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
+		if this.migrationContext.MappedSharedColumns.HasTimezoneConversion(column.Name) {
+			return fmt.Errorf("No support at this time for converting a column from DATETIME to TIMESTAMP that is also part of the chosen unique key. Column: %s, key: %s", column.Name, this.migrationContext.UniqueKey.Name)
+		}
+	}
+
 	return nil
 }
 
@@ -502,9 +516,20 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		`
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		columnName := m.GetString("COLUMN_NAME")
-		if strings.Contains(m.GetString("COLUMN_TYPE"), "unsigned") {
+		columnType := m.GetString("COLUMN_TYPE")
+		if strings.Contains(columnType, "unsigned") {
 			for _, columnsList := range columnsLists {
 				columnsList.SetUnsigned(columnName)
+			}
+		}
+		if strings.Contains(columnType, "timestamp") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.TimestampColumnType
+			}
+		}
+		if strings.Contains(columnType, "datetime") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.DateTimeColumnType
 			}
 		}
 		if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
