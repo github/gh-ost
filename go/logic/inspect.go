@@ -327,7 +327,7 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	if err := this.db.QueryRow(query).Scan(&logSlaveUpdates); err != nil {
 		return err
 	}
-	if !logSlaveUpdates && !this.migrationContext.InspectorIsAlsoApplier() {
+	if !logSlaveUpdates && !this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.IsTungsten {
 		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	}
 
