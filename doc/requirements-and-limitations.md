@@ -4,6 +4,8 @@
 
 - You will need to have one server serving Row Based Replication (RBR) format binary logs. Right now `FULL` row image is supported. `MINIMAL` to be supported in the near future. `gh-ost` prefers to work with replicas. You may [still have your master configured with Statement Based Replication](migrating-with-sbr.md) (SBR).
 
+- If you are using a replica, the table must have an identical schema between the master and replica. 
+
 - `gh-ost` requires an account with these privileges:
 
   - `ALTER, CREATE, DELETE, DROP, INDEX, INSERT, LOCK TABLES, SELECT, TRIGGER, UPDATE` on the database (schema) where your migrated table is, or of course on `*.*`
