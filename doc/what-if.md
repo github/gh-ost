@@ -33,7 +33,7 @@ You're always able to actively begin [throttling](throttle.md). Just touch the `
 
 ### What if my replicas don't use binary logs?
 
-If the master is running Row Based Replication (RBR) - point `gh-ost` to the master, and specify `--allow-on-master`. See [cheatsheets](cheatsheets.md)
+If the master is running Row Based Replication (RBR) - point `gh-ost` to the master, and specify `--allow-on-master`. See [cheatsheets](cheatsheet.md)
 
 If the master is running Statement Based Replication (SBR) - you have no alternative but to reconfigure a replica with:
 
