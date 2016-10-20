@@ -70,6 +70,7 @@ type MigrationContext struct {
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
 	IsTungsten               bool
+	DiscardForeignKeys       bool
 
 	config      ContextConfig
 	configMutex *sync.Mutex
@@ -90,8 +91,10 @@ type MigrationContext struct {
 	ThrottleCommandedByUser             int64
 	maxLoad                             LoadMap
 	criticalLoad                        LoadMap
+	CriticalLoadIntervalMilliseconds    int64
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
+	ForceNamedCutOverCommand            bool
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string
@@ -111,6 +114,7 @@ type MigrationContext struct {
 
 	Hostname                               string
 	AssumeMasterHostname                   string
+	ApplierTimeZone                        string
 	TableEngine                            string
 	RowsEstimate                           int64
 	RowsDeltaEstimate                      int64
@@ -140,6 +144,8 @@ type MigrationContext struct {
 	CountingRowsFlag                       int64
 	AllEventsUpToLockProcessedInjectedFlag int64
 	CleanupImminentFlag                    int64
+	UserCommandedUnpostponeFlag            int64
+	PanicAbort                             chan error
 
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
@@ -192,6 +198,7 @@ func newMigrationContext() *MigrationContext {
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
+		PanicAbort:                          make(chan error),
 	}
 }
 
@@ -230,6 +237,28 @@ func (this *MigrationContext) GetVoluntaryLockName() string {
 // RequiresBinlogFormatChange is `true` when the original binlog format isn't `ROW`
 func (this *MigrationContext) RequiresBinlogFormatChange() bool {
 	return this.OriginalBinlogFormat != "ROW"
+}
+
+// GetApplierHostname is a safe access method to the applier hostname
+func (this *MigrationContext) GetApplierHostname() string {
+	if this.ApplierConnectionConfig == nil {
+		return ""
+	}
+	if this.ApplierConnectionConfig.ImpliedKey == nil {
+		return ""
+	}
+	return this.ApplierConnectionConfig.ImpliedKey.Hostname
+}
+
+// GetInspectorHostname is a safe access method to the inspector hostname
+func (this *MigrationContext) GetInspectorHostname() string {
+	if this.InspectorConnectionConfig == nil {
+		return ""
+	}
+	if this.InspectorConnectionConfig.ImpliedKey == nil {
+		return ""
+	}
+	return this.InspectorConnectionConfig.ImpliedKey.Hostname
 }
 
 // InspectorIsAlsoApplier is `true` when the both inspector and applier are the

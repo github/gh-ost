@@ -63,7 +63,7 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 	if err := this.validateTable(); err != nil {
 		return err
 	}
-	if err := this.validateTableForeignKeys(); err != nil {
+	if err := this.validateTableForeignKeys(this.migrationContext.DiscardForeignKeys); err != nil {
 		return err
 	}
 	if err := this.validateTableTriggers(); err != nil {
@@ -137,6 +137,20 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 	// comfortable in doing this as a separate step.
 	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
 	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
+
+	for i := range this.migrationContext.SharedColumns.Columns() {
+		column := this.migrationContext.SharedColumns.Columns()[i]
+		mappedColumn := this.migrationContext.MappedSharedColumns.Columns()[i]
+		if column.Name == mappedColumn.Name && column.Type == sql.DateTimeColumnType && mappedColumn.Type == sql.TimestampColumnType {
+			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.migrationContext.ApplierTimeZone)
+		}
+	}
+
+	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
+		if this.migrationContext.MappedSharedColumns.HasTimezoneConversion(column.Name) {
+			return fmt.Errorf("No support at this time for converting a column from DATETIME to TIMESTAMP that is also part of the chosen unique key. Column: %s, key: %s", column.Name, this.migrationContext.UniqueKey.Name)
+		}
+	}
 
 	return nil
 }
@@ -313,7 +327,7 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	if err := this.db.QueryRow(query).Scan(&logSlaveUpdates); err != nil {
 		return err
 	}
-	if !logSlaveUpdates && !this.migrationContext.InspectorIsAlsoApplier() {
+	if !logSlaveUpdates && !this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.IsTungsten {
 		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	}
 
@@ -349,9 +363,11 @@ func (this *Inspector) validateTable() error {
 }
 
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
-func (this *Inspector) validateTableForeignKeys() error {
+func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error {
 	query := `
-		SELECT TABLE_SCHEMA, TABLE_NAME
+		SELECT
+			SUM(REFERENCED_TABLE_NAME IS NOT NULL AND TABLE_SCHEMA=? AND TABLE_NAME=?) as num_child_side_fk,
+			SUM(REFERENCED_TABLE_NAME IS NOT NULL AND REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=?) as num_parent_side_fk
 		FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
 		WHERE
 				REFERENCED_TABLE_NAME IS NOT NULL
@@ -359,14 +375,17 @@ func (this *Inspector) validateTableForeignKeys() error {
 					OR (REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=?)
 				)
 	`
-	numForeignKeys := 0
-	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		fkSchema := rowMap.GetString("TABLE_SCHEMA")
-		fkTable := rowMap.GetString("TABLE_NAME")
-		log.Infof("Found foreign key on %s.%s related to %s.%s", sql.EscapeName(fkSchema), sql.EscapeName(fkTable), sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
-		numForeignKeys++
+	numParentForeignKeys := 0
+	numChildForeignKeys := 0
+	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		numChildForeignKeys = m.GetInt("num_child_side_fk")
+		numParentForeignKeys = m.GetInt("num_parent_side_fk")
 		return nil
 	},
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.DatabaseName,
@@ -375,8 +394,15 @@ func (this *Inspector) validateTableForeignKeys() error {
 	if err != nil {
 		return err
 	}
-	if numForeignKeys > 0 {
-		return log.Errorf("Found %d foreign keys related to %s.%s. Foreign keys are not supported. Bailing out", numForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	if numParentForeignKeys > 0 {
+		return log.Errorf("Found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	}
+	if numChildForeignKeys > 0 {
+		if allowChildForeignKeys {
+			log.Debugf("Foreign keys found and will be dropped, as per given --discard-foreign-keys flag")
+			return nil
+		}
+		return log.Errorf("Found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Debugf("Validated no foreign keys exist on table")
 	return nil
@@ -490,9 +516,20 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		`
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		columnName := m.GetString("COLUMN_NAME")
-		if strings.Contains(m.GetString("COLUMN_TYPE"), "unsigned") {
+		columnType := m.GetString("COLUMN_TYPE")
+		if strings.Contains(columnType, "unsigned") {
 			for _, columnsList := range columnsLists {
 				columnsList.SetUnsigned(columnName)
+			}
+		}
+		if strings.Contains(columnType, "timestamp") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.TimestampColumnType
+			}
+		}
+		if strings.Contains(columnType, "datetime") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.DateTimeColumnType
 			}
 		}
 		if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {

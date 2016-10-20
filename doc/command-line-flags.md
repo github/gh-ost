@@ -43,9 +43,25 @@ password=123456
 
 See `exact-rowcount`
 
+### critical-load-interval-millis
+
+`--critical-load` defines a threshold that, when met, `gh-ost` panics and bails out. The default behavior is to bail out immediately when meeting this threshold.
+
+This may sometimes lead to migrations bailing out on a very short spike, that, while in itself is impacting production and is worth investigating, isn't reason enough to kill a 10 hour migration.
+
+When `--critical-load-interval-millis` is specified (e.g. `--critical-load-interval-millis=2500`), `gh-ost` gives a second chance: when it meets `critical-load` threshold, it doesn't bail out. Instead, it starts a timer (in this example: `2.5` seconds) and re-checks `critical-load` when the timer expires. If `critical-load` is met again, `gh-ost` panics and bails out. If not, execution continues.
+
+This is somewhat similar to a Nagios `n`-times test, where `n` in our case is always `2`.
+
 ### cut-over
 
 Optional. Default is `safe`. See more discussion in [cut-over](cut-over.md)
+
+### discard-foreign-keys
+
+**Danger**: this flag will _silently_ discard any foreign keys existing on your table.
+
+At this time (10-2016) `gh-ost` does not support foreign keys on migrated tables (it bails out when it notices a FK on the migrated table). However, it is able to support _dropping_ of foreign keys via this flag. If you're trying to get rid of foreign keys in your environment, this is a useful flag.
 
 ### exact-rowcount
 
@@ -98,4 +114,4 @@ See `approve-renamed-columns`
 
 ### test-on-replica
 
-Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [test-on-replica](test-on-replica.md)
+Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [testing-on-replica](testing-on-replica.md)

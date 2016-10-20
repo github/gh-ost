@@ -8,27 +8,33 @@ package logic
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"strconv"
+	"strings"
+	"sync/atomic"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/outbrain/golib/log"
 )
 
-type onCommandFunc func(command string, writer *bufio.Writer) error
+type printStatusFunc func(PrintStatusRule, io.Writer)
 
 // Server listens for requests on a socket file or via TCP
 type Server struct {
 	migrationContext *base.MigrationContext
 	unixListener     net.Listener
 	tcpListener      net.Listener
-	onCommand        onCommandFunc
+	hooksExecutor    *HooksExecutor
+	printStatus      printStatusFunc
 }
 
-func NewServer(onCommand onCommandFunc) *Server {
+func NewServer(hooksExecutor *HooksExecutor, printStatus printStatusFunc) *Server {
 	return &Server{
 		migrationContext: base.GetMigrationContext(),
-		onCommand:        onCommand,
+		hooksExecutor:    hooksExecutor,
+		printStatus:      printStatus,
 	}
 }
 
@@ -94,5 +100,163 @@ func (this *Server) Serve() (err error) {
 func (this *Server) handleConnection(conn net.Conn) (err error) {
 	defer conn.Close()
 	command, _, err := bufio.NewReader(conn).ReadLine()
-	return this.onCommand(string(command), bufio.NewWriter(conn))
+	return this.onServerCommand(string(command), bufio.NewWriter(conn))
+}
+
+// onServerCommand responds to a user's interactive command
+func (this *Server) onServerCommand(command string, writer *bufio.Writer) (err error) {
+	defer writer.Flush()
+
+	printStatusRule, err := this.applyServerCommand(command, writer)
+	if err == nil {
+		this.printStatus(printStatusRule, writer)
+	} else {
+		fmt.Fprintf(writer, "%s\n", err.Error())
+	}
+	return log.Errore(err)
+}
+
+// applyServerCommand parses and executes commands by user
+func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (printStatusRule PrintStatusRule, err error) {
+	printStatusRule = NoPrintStatusRule
+
+	tokens := strings.SplitN(command, "=", 2)
+	command = strings.TrimSpace(tokens[0])
+	arg := ""
+	if len(tokens) > 1 {
+		arg = strings.TrimSpace(tokens[1])
+	}
+
+	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
+
+	if err := this.hooksExecutor.onInteractiveCommand(command); err != nil {
+		return NoPrintStatusRule, err
+	}
+
+	switch command {
+	case "help":
+		{
+			fmt.Fprintln(writer, `available commands:
+status                               # Print a detailed status message
+sup                                  # Print a short status message
+chunk-size=<newsize>                 # Set a new chunk-size
+nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is agrressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
+critical-load=<load>                 # Set a new set of max-load thresholds
+max-lag-millis=<max-lag>             # Set a new replication lag threshold
+replication-lag-query=<query>        # Set a new query that determines replication lag (no quotes)
+max-load=<load>                      # Set a new set of max-load thresholds
+throttle-query=<query>               # Set a new throttle-query (no quotes)
+throttle-control-replicas=<replicas> # Set a new comma delimited list of throttle control replicas
+throttle                             # Force throttling
+no-throttle                          # End forced throttling (other throttling may still apply)
+unpostpone                           # Bail out a cut-over postpone; proceed to cut-over
+panic                                # panic and quit without cleanup
+help                                 # This message
+`)
+		}
+	case "sup":
+		return ForcePrintStatusOnlyRule, nil
+	case "info", "status":
+		return ForcePrintStatusAndHintRule, nil
+	case "chunk-size":
+		{
+			if chunkSize, err := strconv.Atoi(arg); err != nil {
+				return NoPrintStatusRule, err
+			} else {
+				this.migrationContext.SetChunkSize(int64(chunkSize))
+				return ForcePrintStatusAndHintRule, nil
+			}
+		}
+	case "max-lag-millis":
+		{
+			if maxLagMillis, err := strconv.Atoi(arg); err != nil {
+				return NoPrintStatusRule, err
+			} else {
+				this.migrationContext.SetMaxLagMillisecondsThrottleThreshold(int64(maxLagMillis))
+				return ForcePrintStatusAndHintRule, nil
+			}
+		}
+	case "replication-lag-query":
+		{
+			this.migrationContext.SetReplicationLagQuery(arg)
+			return ForcePrintStatusAndHintRule, nil
+		}
+	case "nice-ratio":
+		{
+			if niceRatio, err := strconv.ParseFloat(arg, 64); err != nil {
+				return NoPrintStatusRule, err
+			} else {
+				this.migrationContext.SetNiceRatio(niceRatio)
+				return ForcePrintStatusAndHintRule, nil
+			}
+		}
+	case "max-load":
+		{
+			if err := this.migrationContext.ReadMaxLoad(arg); err != nil {
+				return NoPrintStatusRule, err
+			}
+			return ForcePrintStatusAndHintRule, nil
+		}
+	case "critical-load":
+		{
+			if err := this.migrationContext.ReadCriticalLoad(arg); err != nil {
+				return NoPrintStatusRule, err
+			}
+			return ForcePrintStatusAndHintRule, nil
+		}
+	case "throttle-query":
+		{
+			this.migrationContext.SetThrottleQuery(arg)
+			fmt.Fprintf(writer, throttleHint)
+			return ForcePrintStatusAndHintRule, nil
+		}
+	case "throttle-control-replicas":
+		{
+			if err := this.migrationContext.ReadThrottleControlReplicaKeys(arg); err != nil {
+				return NoPrintStatusRule, err
+			}
+			fmt.Fprintf(writer, "%s\n", this.migrationContext.GetThrottleControlReplicaKeys().ToCommaDelimitedList())
+			return ForcePrintStatusAndHintRule, nil
+		}
+	case "throttle", "pause", "suspend":
+		{
+			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
+			fmt.Fprintf(writer, throttleHint)
+			return ForcePrintStatusAndHintRule, nil
+		}
+	case "no-throttle", "unthrottle", "resume", "continue":
+		{
+			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 0)
+			return ForcePrintStatusAndHintRule, nil
+		}
+	case "unpostpone", "no-postpone", "cut-over":
+		{
+			if arg == "" && this.migrationContext.ForceNamedCutOverCommand {
+				err := fmt.Errorf("User commanded 'unpostpone' without specifying table name, but --force-named-cut-over is set")
+				return NoPrintStatusRule, err
+			}
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User exlpicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'unpostpone' on %s, but migrated table is %s; ingoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
+			if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
+				atomic.StoreInt64(&this.migrationContext.UserCommandedUnpostponeFlag, 1)
+				fmt.Fprintf(writer, "Unpostponed\n")
+				return ForcePrintStatusAndHintRule, nil
+			}
+			fmt.Fprintf(writer, "You may only invoke this when gh-ost is actively postponing migration. At this time it is not.\n")
+			return NoPrintStatusRule, nil
+		}
+	case "panic":
+		{
+			err := fmt.Errorf("User commanded 'panic'. I will now panic, without cleanup. PANIC!")
+			this.migrationContext.PanicAbort <- err
+			return NoPrintStatusRule, err
+		}
+	default:
+		err = fmt.Errorf("Unknown command: %s", command)
+		return NoPrintStatusRule, err
+	}
+	return NoPrintStatusRule, nil
 }

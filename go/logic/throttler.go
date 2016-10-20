@@ -21,15 +21,13 @@ type Throttler struct {
 	migrationContext *base.MigrationContext
 	applier          *Applier
 	inspector        *Inspector
-	panicAbort       chan error
 }
 
-func NewThrottler(applier *Applier, inspector *Inspector, panicAbort chan error) *Throttler {
+func NewThrottler(applier *Applier, inspector *Inspector) *Throttler {
 	return &Throttler{
 		migrationContext: base.GetMigrationContext(),
 		applier:          applier,
 		inspector:        inspector,
-		panicAbort:       panicAbort,
 	}
 }
 
@@ -132,6 +130,20 @@ func (this *Throttler) collectControlReplicasLag() {
 	}
 }
 
+func (this *Throttler) criticalLoadIsMet() (met bool, variableName string, value int64, threshold int64, err error) {
+	criticalLoad := this.migrationContext.GetCriticalLoad()
+	for variableName, threshold = range criticalLoad {
+		value, err = this.applier.ShowStatusVariable(variableName)
+		if err != nil {
+			return false, variableName, value, threshold, err
+		}
+		if value >= threshold {
+			return true, variableName, value, threshold, nil
+		}
+	}
+	return false, variableName, value, threshold, nil
+}
+
 // collectGeneralThrottleMetrics reads the once-per-sec metrics, and stores them onto this.migrationContext
 func (this *Throttler) collectGeneralThrottleMetrics() error {
 
@@ -143,18 +155,26 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 	// Regardless of throttle, we take opportunity to check for panic-abort
 	if this.migrationContext.PanicFlagFile != "" {
 		if base.FileExists(this.migrationContext.PanicFlagFile) {
-			this.panicAbort <- fmt.Errorf("Found panic-file %s. Aborting without cleanup", this.migrationContext.PanicFlagFile)
+			this.migrationContext.PanicAbort <- fmt.Errorf("Found panic-file %s. Aborting without cleanup", this.migrationContext.PanicFlagFile)
 		}
 	}
-	criticalLoad := this.migrationContext.GetCriticalLoad()
-	for variableName, threshold := range criticalLoad {
-		value, err := this.applier.ShowStatusVariable(variableName)
-		if err != nil {
-			return setThrottle(true, fmt.Sprintf("%s %s", variableName, err))
-		}
-		if value >= threshold {
-			this.panicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
-		}
+
+	criticalLoadMet, variableName, value, threshold, err := this.criticalLoadIsMet()
+	if err != nil {
+		return setThrottle(true, fmt.Sprintf("%s %s", variableName, err))
+	}
+	if criticalLoadMet && this.migrationContext.CriticalLoadIntervalMilliseconds == 0 {
+		this.migrationContext.PanicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
+	}
+	if criticalLoadMet && this.migrationContext.CriticalLoadIntervalMilliseconds > 0 {
+		log.Errorf("critical-load met once: %s=%d, >=%d. Will check again in %d millis", variableName, value, threshold, this.migrationContext.CriticalLoadIntervalMilliseconds)
+		go func() {
+			timer := time.NewTimer(time.Millisecond * time.Duration(this.migrationContext.CriticalLoadIntervalMilliseconds))
+			<-timer.C
+			if criticalLoadMetAgain, variableName, value, threshold, _ := this.criticalLoadIsMet(); criticalLoadMetAgain {
+				this.migrationContext.PanicAbort <- fmt.Errorf("critical-load met again after %d millis: %s=%d, >=%d", this.migrationContext.CriticalLoadIntervalMilliseconds, variableName, value, threshold)
+			}
+		}()
 	}
 
 	// Back to throttle considerations

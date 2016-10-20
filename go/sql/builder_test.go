@@ -79,19 +79,19 @@ func TestBuildEqualsPreparedComparison(t *testing.T) {
 
 func TestBuildSetPreparedClause(t *testing.T) {
 	{
-		columns := []string{"c1"}
+		columns := NewColumnList([]string{"c1"})
 		clause, err := BuildSetPreparedClause(columns)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(clause, "`c1`=?")
 	}
 	{
-		columns := []string{"c1", "c2"}
+		columns := NewColumnList([]string{"c1", "c2"})
 		clause, err := BuildSetPreparedClause(columns)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(clause, "`c1`=?, `c2`=?")
 	}
 	{
-		columns := []string{}
+		columns := NewColumnList([]string{})
 		_, err := BuildSetPreparedClause(columns)
 		test.S(t).ExpectNotNil(err)
 	}
