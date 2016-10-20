@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync/atomic"
 
@@ -83,7 +84,7 @@ func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (colum
 	if len(uniqueKeys) == 0 {
 		return columns, uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
 	}
-	columns, err = this.getTableColumns(this.migrationContext.DatabaseName, tableName)
+	columns, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, tableName)
 	if err != nil {
 		return columns, uniqueKeys, err
 	}
@@ -99,9 +100,15 @@ func (this *Inspector) InspectOriginalTable() (err error) {
 	return nil
 }
 
-// InspectOriginalAndGhostTables compares original and ghost tables to see whether the migration
+// inspectOriginalAndGhostTables compares original and ghost tables to see whether the migration
 // makes sense and is valid. It extracts the list of shared columns and the chosen migration unique key
-func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
+func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
+	originalNamesOnApplier := this.migrationContext.OriginalTableColumnsOnApplier.Names()
+	originalNames := this.migrationContext.OriginalTableColumns.Names()
+	if !reflect.DeepEqual(originalNames, originalNamesOnApplier) {
+		return fmt.Errorf("It seems like table structure is not identical between master and replica. This scenario is not supported.")
+	}
+
 	this.migrationContext.GhostTableColumns, this.migrationContext.GhostTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.GetGhostTableName())
 	if err != nil {
 		return err
@@ -476,31 +483,6 @@ func (this *Inspector) CountTableRows() error {
 	log.Infof("Exact number of rows via COUNT: %d", rowsEstimate)
 
 	return nil
-}
-
-// getTableColumns reads column list from given table
-func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.ColumnList, error) {
-	query := fmt.Sprintf(`
-		show columns from %s.%s
-		`,
-		sql.EscapeName(databaseName),
-		sql.EscapeName(tableName),
-	)
-	columnNames := []string{}
-	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		columnNames = append(columnNames, rowMap.GetString("Field"))
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(columnNames) == 0 {
-		return nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
-			sql.EscapeName(databaseName),
-			sql.EscapeName(tableName),
-		)
-	}
-	return sql.NewColumnList(columnNames), nil
 }
 
 // applyColumnTypes
