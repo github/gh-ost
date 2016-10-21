@@ -70,6 +70,8 @@ type Migrator struct {
 	applyEventsQueue chan tableWriteFunc
 
 	handledChangelogStates map[string]bool
+
+	progressHistory *ProgressHistory
 }
 
 func NewMigrator() *Migrator {
@@ -84,6 +86,7 @@ func NewMigrator() *Migrator {
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
 		handledChangelogStates: make(map[string]bool),
+		progressHistory:        NewProgressHistory(),
 	}
 	return migrator
 }
@@ -782,19 +785,18 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	}
 
 	var etaSeconds float64 = math.MaxFloat64
+	this.progressHistory.markState()
 	eta := "N/A"
 	if progressPct >= 100.0 {
 		eta = "due"
-	} else if progressPct >= 1.0 {
-		elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
-		totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
-		etaSeconds = totalExpectedSeconds - elapsedRowCopySeconds
-		if etaSeconds >= 0 {
-			etaDuration := time.Duration(etaSeconds) * time.Second
-			eta = base.PrettifyDurationOutput(etaDuration)
-		} else {
-			eta = "due"
-		}
+	} else if etaTime := this.progressHistory.getETA(); progressPct >= 0.1 && !etaTime.IsZero() {
+		etaDuration := etaTime.Sub(time.Now())
+		eta = base.PrettifyDurationOutput(etaDuration)
+		etaSeconds = etaDuration.Seconds()
+	}
+
+	if etaSeconds < 0 {
+		eta = "due"
 	}
 
 	state := "migrating"

@@ -7,6 +7,7 @@ package logic
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/github/gh-ost/go/base"
@@ -101,5 +102,14 @@ func (this *ProgressHistory) getETA() (eta time.Time) {
 	if !this.hasEnoughData() {
 		return eta
 	}
+
+	oldest := this.oldestState()
+	newest := this.newestState()
+	rowsEstimate := atomic.LoadInt64(&this.migrationContext.RowsEstimate) + atomic.LoadInt64(&this.migrationContext.RowsDeltaEstimate)
+	ratio := float64(rowsEstimate-oldest.rowsCopied) / float64(newest.rowsCopied-oldest.rowsCopied)
+	// ratio is also float64(totaltime-oldest.mark) / float64(newest.mark-oldest.mark)
+	totalTimeNanosecondsFromOldestMark := ratio * float64(newest.mark.Sub(oldest.mark).Nanoseconds())
+	eta = oldest.mark.Add(time.Duration(totalTimeNanosecondsFromOldestMark))
+
 	return eta
 }
