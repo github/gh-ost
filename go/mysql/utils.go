@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/github/gh-ost/go/sql"
+
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
 )
@@ -148,4 +150,29 @@ func GetInstanceKey(db *gosql.DB) (instanceKey *InstanceKey, err error) {
 	instanceKey = &InstanceKey{}
 	err = db.QueryRow(`select @@global.hostname, @@global.port`).Scan(&instanceKey.Hostname, &instanceKey.Port)
 	return instanceKey, err
+}
+
+// GetTableColumns reads column list from given table
+func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnList, error) {
+	query := fmt.Sprintf(`
+		show columns from %s.%s
+		`,
+		sql.EscapeName(databaseName),
+		sql.EscapeName(tableName),
+	)
+	columnNames := []string{}
+	err := sqlutils.QueryRowsMap(db, query, func(rowMap sqlutils.RowMap) error {
+		columnNames = append(columnNames, rowMap.GetString("Field"))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(columnNames) == 0 {
+		return nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
+			sql.EscapeName(databaseName),
+			sql.EscapeName(tableName),
+		)
+	}
+	return sql.NewColumnList(columnNames), nil
 }

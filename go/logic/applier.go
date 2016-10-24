@@ -67,6 +67,9 @@ func (this *Applier) InitDBConnections() (err error) {
 	} else {
 		this.connectionConfig.ImpliedKey = impliedKey
 	}
+	if err := this.readTableColumns(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -92,6 +95,16 @@ func (this *Applier) validateAndReadTimeZone() error {
 	}
 
 	log.Infof("will use time_zone='%s' on applier", this.migrationContext.ApplierTimeZone)
+	return nil
+}
+
+// readTableColumns reads table columns on applier
+func (this *Applier) readTableColumns() (err error) {
+	log.Infof("Examining table structure on applier")
+	this.migrationContext.OriginalTableColumnsOnApplier, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
