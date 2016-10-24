@@ -3,7 +3,7 @@ package replication
 import (
 	"fmt"
 
-	. "gopkg.in/check.v1"
+	. "github.com/pingcap/check"
 )
 
 type testDecodeSuite struct{}
@@ -325,4 +325,63 @@ func (_ *testDecodeSuite) TestDecodeDecimal(c *C) {
 		value, pos, err := decodeDecimal(tc.Data, tc.Precision, tc.Decimals)
 		c.Assert(value, DecodeDecimalsEquals, pos, err, tc.Expected, tc.ExpectedPos, tc.ExpectedErr, i)
 	}
+}
+
+func (_ *testDecodeSuite) TestLastNull(c *C) {
+	// Table format:
+	// desc funnytable;
+	// +-------+------------+------+-----+---------+-------+
+	// | Field | Type       | Null | Key | Default | Extra |
+	// +-------+------------+------+-----+---------+-------+
+	// | value | tinyint(4) | YES  |     | NULL    |       |
+	// +-------+------------+------+-----+---------+-------+
+
+	// insert into funnytable values (1), (2), (null);
+	// insert into funnytable values (1), (null), (2);
+	// all must get 3 rows
+
+	tableMapEventData := []byte("\xd3\x01\x00\x00\x00\x00\x01\x00\x04test\x00\nfunnytable\x00\x01\x01\x00\x01")
+
+	tableMapEvent := new(TableMapEvent)
+	tableMapEvent.tableIDSize = 6
+	err := tableMapEvent.Decode(tableMapEventData)
+	c.Assert(err, IsNil)
+
+	rows := new(RowsEvent)
+	rows.tableIDSize = 6
+	rows.tables = make(map[uint64]*TableMapEvent)
+	rows.tables[tableMapEvent.TableID] = tableMapEvent
+	rows.Version = 2
+
+	tbls := [][]byte{
+		[]byte("\xd3\x01\x00\x00\x00\x00\x01\x00\x02\x00\x01\xff\xfe\x01\xff\xfe\x02"),
+		[]byte("\xd3\x01\x00\x00\x00\x00\x01\x00\x02\x00\x01\xff\xfe\x01\xfe\x02\xff"),
+	}
+
+	for _, tbl := range tbls {
+		rows.Rows = nil
+		err = rows.Decode(tbl)
+		c.Assert(err, IsNil)
+		c.Assert(rows.Rows, HasLen, 3)
+	}
+}
+
+func (_ *testDecodeSuite) TestParseRowPanic(c *C) {
+	tableMapEvent := new(TableMapEvent)
+	tableMapEvent.tableIDSize = 6
+	tableMapEvent.TableID = 1810
+	tableMapEvent.ColumnType = []byte{3, 15, 15, 15, 9, 15, 15, 252, 3, 3, 3, 15, 3, 3, 3, 15, 3, 15, 1, 15, 3, 1, 252, 15, 15, 15}
+	tableMapEvent.ColumnMeta = []uint16{0, 108, 60, 765, 0, 765, 765, 4, 0, 0, 0, 765, 0, 0, 0, 3, 0, 3, 0, 765, 0, 0, 2, 108, 108, 108}
+
+	rows := new(RowsEvent)
+	rows.tableIDSize = 6
+	rows.tables = make(map[uint64]*TableMapEvent)
+	rows.tables[tableMapEvent.TableID] = tableMapEvent
+	rows.Version = 2
+
+	data := []byte{18, 7, 0, 0, 0, 0, 1, 0, 2, 0, 26, 1, 1, 16, 252, 248, 142, 63, 0, 0, 13, 0, 0, 0, 13, 0, 0, 0}
+
+	err := rows.Decode(data)
+	c.Assert(err, IsNil)
+	c.Assert(rows.Rows[0][0], Equals, int32(16270))
 }

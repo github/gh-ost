@@ -8,15 +8,18 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/net/context"
+
+	. "github.com/pingcap/check"
+	uuid "github.com/satori/go.uuid"
 	"github.com/siddontang/go-mysql/client"
 	"github.com/siddontang/go-mysql/mysql"
-	. "gopkg.in/check.v1"
 )
 
 // Use docker mysql to test, mysql is 3306, mariadb is 3316
 var testHost = flag.String("host", "127.0.0.1", "MySQL master host")
 
-var testOutputLogs = flag.Bool("out", true, "output binlog event")
+var testOutputLogs = flag.Bool("out", false, "output binlog event")
 
 func TestBinLogSyncer(t *testing.T) {
 	TestingT(t)
@@ -69,14 +72,18 @@ func (t *testSyncerSuite) testSync(c *C, s *BinlogStreamer) {
 			return
 		}
 
+		eventCount := 0
 		for {
-			e, err := s.GetEventTimeout(2 * time.Second)
-			if err != nil {
-				if err != ErrGetEventTimeout {
-					c.Fatal(err)
-				}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			e, err := s.GetEvent(ctx)
+			cancel()
+
+			if err == context.DeadlineExceeded {
+				eventCount += 1
 				return
 			}
+
+			c.Assert(err, IsNil)
 
 			if *testOutputLogs {
 				e.Dump(os.Stdout)
@@ -164,10 +171,16 @@ func (t *testSyncerSuite) setupTest(c *C, flavor string) {
 		t.b.Close()
 	}
 
-	t.b = NewBinlogSyncer(100, flavor)
+	cfg := BinlogSyncerConfig{
+		ServerID: 100,
+		Flavor:   flavor,
+		Host:     *testHost,
+		Port:     port,
+		User:     "root",
+		Password: "",
+	}
 
-	err = t.b.RegisterSlave(*testHost, port, "root", "")
-	c.Assert(err, IsNil)
+	t.b = NewBinlogSyncer(&cfg)
 }
 
 func (t *testSyncerSuite) testPositionSync(c *C) {
@@ -179,6 +192,11 @@ func (t *testSyncerSuite) testPositionSync(c *C) {
 
 	s, err := t.b.StartSync(mysql.Position{binFile, uint32(binPos)})
 	c.Assert(err, IsNil)
+
+	// Test re-sync.
+	time.Sleep(100 * time.Millisecond)
+	t.b.c.SetReadDeadline(time.Now().Add(time.Millisecond))
+	time.Sleep(100 * time.Millisecond)
 
 	t.testSync(c, s)
 }
@@ -198,8 +216,14 @@ func (t *testSyncerSuite) TestMysqlGTIDSync(c *C) {
 		c.Skip("GTID mode is not ON")
 	}
 
-	masterUuid, err := t.b.GetMasterUUID()
+	r, err = t.c.Execute("SHOW GLOBAL VARIABLES LIKE 'SERVER_UUID'")
 	c.Assert(err, IsNil)
+
+	var masterUuid uuid.UUID
+	if s, _ := r.GetString(0, 1); len(s) > 0 && s != "NONE" {
+		masterUuid, err = uuid.FromString(s)
+		c.Assert(err, IsNil)
+	}
 
 	set, _ := mysql.ParseMysqlGTIDSet(fmt.Sprintf("%s:%d-%d", masterUuid.String(), 1, 2))
 
@@ -234,10 +258,7 @@ func (t *testSyncerSuite) TestMariadbGTIDSync(c *C) {
 func (t *testSyncerSuite) TestMysqlSemiPositionSync(c *C) {
 	t.setupTest(c, mysql.MySQLFlavor)
 
-	err := t.b.EnableSemiSync()
-	if err != nil {
-		c.Skip(fmt.Sprintf("mysql doest not support semi synchronous replication %v", err))
-	}
+	t.b.cfg.SemiSyncEnabled = true
 
 	t.testPositionSync(c)
 }
@@ -249,6 +270,7 @@ func (t *testSyncerSuite) TestMysqlBinlogCodec(c *C) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
+	defer wg.Wait()
 
 	go func() {
 		defer wg.Done()
@@ -263,7 +285,7 @@ func (t *testSyncerSuite) TestMysqlBinlogCodec(c *C) {
 	os.RemoveAll("./var")
 
 	err := t.b.StartBackup("./var", mysql.Position{"", uint32(0)}, 2*time.Second)
-	c.Check(err, Equals, ErrGetEventTimeout)
+	c.Assert(err, IsNil)
 
 	p := NewBinlogParser()
 
