@@ -684,8 +684,9 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		*this.inspector.connectionConfig.ImpliedKey,
 		this.migrationContext.Hostname,
 	))
-	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v",
+	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v; time now is %+v",
 		this.migrationContext.StartTime.Format(time.RubyDate),
+		time.Now().Format(time.RubyDate),
 	))
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
@@ -793,7 +794,9 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		etaDuration := etaTime.Sub(time.Now())
 		eta = base.PrettifyDurationOutput(etaDuration)
 		etaSeconds = etaDuration.Seconds()
+		log.Errorf("==== etaTime: %+v, eta=%+v, etaSeonds=%+v", etaTime, eta, etaSeconds)
 	}
+	log.Errorf("===1 etaTime: %+v, eta=%+v, etaSeonds=%+v", "na", eta, etaSeconds)
 
 	if etaSeconds < 0 {
 		eta = "due"

@@ -13,7 +13,7 @@ import (
 	"github.com/github/gh-ost/go/base"
 )
 
-const maxHistoryDuration time.Duration = time.Hour
+const maxHistoryDuration time.Duration = time.Minute * 61
 
 type ProgressState struct {
 	mark       time.Time
@@ -48,6 +48,15 @@ func (this *ProgressHistory) oldestState() *ProgressState {
 		return nil
 	}
 	return this.history[0]
+}
+
+func (this *ProgressHistory) firstStateSince(since time.Time) *ProgressState {
+	for _, state := range this.history {
+		if !state.mark.Before(since) {
+			return state
+		}
+	}
+	return nil
 }
 
 func (this *ProgressHistory) newestState() *ProgressState {
@@ -98,12 +107,12 @@ func (this *ProgressHistory) hasEnoughData() bool {
 	return true
 }
 
-func (this *ProgressHistory) getETA() (eta time.Time) {
+func (this *ProgressHistory) getETABasedOnRange(basedOnRange time.Duration) (eta time.Time) {
 	if !this.hasEnoughData() {
 		return eta
 	}
 
-	oldest := this.oldestState()
+	oldest := this.firstStateSince(time.Now().Add(-basedOnRange))
 	newest := this.newestState()
 	rowsEstimate := atomic.LoadInt64(&this.migrationContext.RowsEstimate) + atomic.LoadInt64(&this.migrationContext.RowsDeltaEstimate)
 	ratio := float64(rowsEstimate-oldest.rowsCopied) / float64(newest.rowsCopied-oldest.rowsCopied)
@@ -111,5 +120,24 @@ func (this *ProgressHistory) getETA() (eta time.Time) {
 	totalTimeNanosecondsFromOldestMark := ratio * float64(newest.mark.Sub(oldest.mark).Nanoseconds())
 	eta = oldest.mark.Add(time.Duration(totalTimeNanosecondsFromOldestMark))
 
+	return eta
+}
+
+func (this *ProgressHistory) getETA() (eta time.Time) {
+	if eta = this.getETABasedOnRange(time.Minute * 1); !eta.IsZero() {
+		return eta
+	}
+	if eta = this.getETABasedOnRange(time.Minute * 5); !eta.IsZero() {
+		return eta
+	}
+	if eta = this.getETABasedOnRange(time.Minute * 10); !eta.IsZero() {
+		return eta
+	}
+	if eta = this.getETABasedOnRange(time.Minute * 30); !eta.IsZero() {
+		return eta
+	}
+	if eta = this.getETABasedOnRange(time.Minute * 60); !eta.IsZero() {
+		return eta
+	}
 	return eta
 }
