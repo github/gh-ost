@@ -767,11 +767,11 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		// and there is no further need to keep updating the value.
 		rowsEstimate = totalRowsCopied
 	}
-	var progressPct float64
+	var progressRatio float64
 	if rowsEstimate == 0 {
-		progressPct = 100.0
+		progressRatio = 1.0
 	} else {
-		progressPct = 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
+		progressRatio = float64(totalRowsCopied) / float64(rowsEstimate)
 	}
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
 	shouldPrintMigrationStatusHint := (elapsedSeconds%600 == 0)
@@ -786,27 +786,25 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	}
 
 	var etaSeconds float64 = math.MaxFloat64
-	this.progressHistory.markState()
-	eta := "N/A"
-	if progressPct >= 100.0 {
-		eta = "due"
-	} else if etaTime := this.progressHistory.getETA(); progressPct >= 0.1 && !etaTime.IsZero() {
-		etaDuration := etaTime.Sub(time.Now())
-		eta = base.PrettifyDurationOutput(etaDuration)
-		etaSeconds = etaDuration.Seconds()
-		log.Errorf("==== etaTime: %+v, eta=%+v, etaSeonds=%+v", etaTime, eta, etaSeconds)
-	}
-	log.Errorf("===1 etaTime: %+v, eta=%+v, etaSeonds=%+v", "na", eta, etaSeconds)
 
-	if etaSeconds < 0 {
-		eta = "due"
+	visualETA := "N/A"
+	if progressRatio >= 1.0 {
+		visualETA = "due"
+	} else if _, err := this.progressHistory.markState(this.migrationContext.ElapsedRowCopyTime(), progressRatio); err == nil {
+		eta := this.progressHistory.GetETA()
+		etaDuration := eta.Sub(time.Now())
+		etaSeconds = etaDuration.Seconds()
+		visualETA = base.PrettifyDurationOutput(etaDuration)
+	}
+	if etaSeconds <= 0 {
+		visualETA = "due"
 	}
 
 	state := "migrating"
 	if atomic.LoadInt64(&this.migrationContext.CountingRowsFlag) > 0 && !this.migrationContext.ConcurrentCountTableRows {
 		state = "counting rows"
 	} else if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
-		eta = "due"
+		visualETA = "due"
 		state = "postponing cut-over"
 	} else if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
 		state = fmt.Sprintf("throttled, %s", throttleReason)
@@ -837,6 +835,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
+	progressPct := progressRatio * 100.0
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
@@ -844,7 +843,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
 		state,
-		eta,
+		visualETA,
 	)
 	this.applier.WriteChangelog(
 		fmt.Sprintf("copy iteration %d at %d", this.migrationContext.GetIteration(), time.Now().Unix()),

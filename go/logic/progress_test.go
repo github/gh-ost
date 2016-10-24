@@ -19,41 +19,28 @@ func init() {
 
 func TestNewProgressHistory(t *testing.T) {
 	progressHistory := NewProgressHistory()
-	test.S(t).ExpectEquals(len(progressHistory.history), 0)
+	test.S(t).ExpectTrue(progressHistory.lastProgressState == nil)
 }
 
 func TestMarkState(t *testing.T) {
 	{
 		progressHistory := NewProgressHistory()
-		test.S(t).ExpectEquals(len(progressHistory.history), 0)
+		_, err := progressHistory.markState(0, 0)
+		test.S(t).ExpectNotNil(err)
 	}
 	{
 		progressHistory := NewProgressHistory()
-		progressHistory.markState()
-		progressHistory.markState()
-		progressHistory.markState()
-		progressHistory.markState()
-		progressHistory.markState()
-		test.S(t).ExpectEquals(len(progressHistory.history), 5)
+		_, err := progressHistory.markState(0, 0.01)
+		test.S(t).ExpectNotNil(err)
 	}
 	{
 		progressHistory := NewProgressHistory()
-		progressHistory.markState()
-		progressHistory.markState()
-		progressHistory.history[0].mark = time.Now().Add(-2 * time.Hour)
-		progressHistory.markState()
-		progressHistory.markState()
-		progressHistory.markState()
-		test.S(t).ExpectEquals(len(progressHistory.history), 4)
+		_, err := progressHistory.markState(0, 50)
+		test.S(t).ExpectNotNil(err)
 	}
-}
-
-func TestOldestMark(t *testing.T) {
 	{
 		progressHistory := NewProgressHistory()
-		oldestState := progressHistory.oldestState()
-		test.S(t).ExpectTrue(oldestState == nil)
-		oldestMark := progressHistory.oldestMark()
-		test.S(t).ExpectTrue(oldestMark.IsZero())
+		_, err := progressHistory.markState(time.Hour, 50)
+		test.S(t).ExpectNil(err)
 	}
 }
