@@ -26,7 +26,7 @@ import (
 type ChangelogState string
 
 const (
-	TablesInPlace              ChangelogState = "TablesInPlace"
+	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
 )
 
@@ -58,7 +58,7 @@ type Migrator struct {
 	migrationContext *base.MigrationContext
 
 	firstThrottlingCollected   chan bool
-	tablesInPlace              chan bool
+	ghostTableMigrated         chan bool
 	rowCopyComplete            chan bool
 	allEventsUpToLockProcessed chan bool
 
@@ -76,7 +76,7 @@ func NewMigrator() *Migrator {
 	migrator := &Migrator{
 		migrationContext:           base.GetMigrationContext(),
 		parser:                     sql.NewParser(),
-		tablesInPlace:              make(chan bool),
+		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 1),
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan bool),
@@ -182,9 +182,9 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	}
 	changelogState := ChangelogState(dmlEvent.NewColumnValues.StringColumn(3))
 	switch changelogState {
-	case TablesInPlace:
+	case GhostTableMigrated:
 		{
-			this.tablesInPlace <- true
+			this.ghostTableMigrated <- true
 		}
 	case AllEventsUpToLockProcessed:
 		{
@@ -291,14 +291,14 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
-	log.Infof("Waiting for tables to be in place")
-	<-this.tablesInPlace
-	log.Debugf("Tables are in place")
+	log.Infof("Waiting for ghost table to be migrated")
+	<-this.ghostTableMigrated
+	log.Debugf("ghost table migrated")
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
 	// When running on replica, this means the replica has those tables. When running
 	// on master this is always true, of course, and yet it also implies this knowledge
 	// is in the binlogs.
-	if err := this.inspector.InspectOriginalAndGhostTables(); err != nil {
+	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
 		return err
 	}
 	// Validation complete! We're good to execute this migration
@@ -926,12 +926,13 @@ func (this *Migrator) initiateApplier() error {
 		log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
 		return err
 	}
+
 	if err := this.applier.AlterGhost(); err != nil {
 		log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
 		return err
 	}
 
-	this.applier.WriteChangelogState(string(TablesInPlace))
+	this.applier.WriteChangelogState(string(GhostTableMigrated))
 	go this.applier.InitiateHeartbeat()
 	return nil
 }

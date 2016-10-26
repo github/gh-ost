@@ -147,6 +147,7 @@ type MigrationContext struct {
 	UserCommandedUnpostponeFlag            int64
 	PanicAbort                             chan error
 
+	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
 	GhostTableColumns                *sql.ColumnList
