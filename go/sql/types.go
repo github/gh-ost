@@ -18,6 +18,7 @@ const (
 	UnknownColumnType   ColumnType = iota
 	TimestampColumnType            = iota
 	DateTimeColumnType             = iota
+	EnumColumnValue                = iota
 )
 
 type TimezoneConvertion struct {

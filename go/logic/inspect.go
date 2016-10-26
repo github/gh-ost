@@ -143,6 +143,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	// the `getTableColumns()` function, but it's a later patch and introduces some complexity; I feel
 	// comfortable in doing this as a separate step.
 	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
+	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &this.migrationContext.UniqueKey.Columns)
 	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
 
 	for i := range this.migrationContext.SharedColumns.Columns() {
@@ -512,6 +513,11 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		if strings.Contains(columnType, "datetime") {
 			for _, columnsList := range columnsLists {
 				columnsList.GetColumn(columnName).Type = sql.DateTimeColumnType
+			}
+		}
+		if strings.HasPrefix(columnType, "enum") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.EnumColumnValue
 			}
 		}
 		if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
