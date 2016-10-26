@@ -1,0 +1,22 @@
+#!/bin/bash
+
+set -e
+
+# This is a shim to sit in front of the binaries and load the appropriate
+#  environment variables for the environment set in GITBACKUPS_ENV
+
+# Default to staging for now
+GITBACKUPS_ENV=${GITBACKUPS_ENV:-"staging"}
+
+# The base directory, which includes bin/ and whatever else once deployed
+base=$(cd $(dirname $(dirname ${BASH_SOURCE[0]})) && pwd)
+
+if [ -f "${base}/.app-config/${GITBACKUPS_ENV}.sh" ]; then
+   source "${base}/.app-config/${GITBACKUPS_ENV}.sh"
+fi
+
+# Now that we have the env variables to let the binary know where to put the
+# data, switch into it
+myname=$(basename "$0")
+
+exec "${base}/libexec/${myname}" "$@"
