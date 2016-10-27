@@ -2,7 +2,7 @@
 #
 #
 
-RELEASE_VERSION="1.0.26"
+RELEASE_VERSION=$(cat RELEASE_VERSION)
 
 function build {
     osname=$1
