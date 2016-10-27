@@ -6,7 +6,6 @@ set -e
 
 mkdir -p bin
 bindir="$PWD"/bin
-libexecdir="$PWD"/libexec
 scriptdir="$PWD"/script
 
 # We have a few binaries that we want to build, so let's put them into bin/

@@ -21,7 +21,7 @@ fi
 tarball=$build_dir/${commit_sha}-${build_arch}.tar
 
 # Create the tarball
-tar cvf $tarball --mode="ugo=rx" libexec/ bin/
+tar cvf $tarball --mode="ugo=rx" bin/
 
 # Compress it and copy it to the directory for the CI to upload it
 gzip $tarball
