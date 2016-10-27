@@ -1,0 +1,12 @@
+#!/bin/bash
+
+set -e
+
+. script/bootstrap
+
+script/build
+
+export GITBACKUPS_ENV=test
+
+cd .gopath/src/github.com/github/gh-ost
+go test ./go/...
