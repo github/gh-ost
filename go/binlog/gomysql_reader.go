@@ -120,6 +120,9 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 
 // StreamEvents
 func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChannel chan<- *BinlogEntry) error {
+	if canStopStreaming() {
+		return nil
+	}
 	for {
 		if canStopStreaming() {
 			break
@@ -148,5 +151,10 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 	}
 	log.Debugf("done streaming events")
 
+	return nil
+}
+
+func (this *GoMySQLReader) Close() error {
+	this.binlogSyncer.Close()
 	return nil
 }

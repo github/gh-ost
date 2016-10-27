@@ -217,3 +217,9 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 		}
 	}
 }
+
+func (this *EventsStreamer) Close() (err error) {
+	err = this.binlogReader.Close()
+	log.Infof("Closed streamer connection. err=%+v", err)
+	return err
+}
