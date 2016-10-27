@@ -166,7 +166,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 	sharedColumns := []string{"id", "name", "position"}
 	{
 		uniqueKey := "PRIMARY"
-		uniqueKeyColumns := []string{"id"}
+		uniqueKeyColumns := NewColumnList([]string{"id"})
 		rangeStartValues := []string{"@v1s"}
 		rangeEndValues := []string{"@v1e"}
 		rangeStartArgs := []interface{}{3}
@@ -185,7 +185,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 	}
 	{
 		uniqueKey := "name_position_uidx"
-		uniqueKeyColumns := []string{"name", "position"}
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 		rangeStartValues := []string{"@v1s", "@v2s"}
 		rangeEndValues := []string{"@v1e", "@v2e"}
 		rangeStartArgs := []interface{}{3, 17}
@@ -212,7 +212,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 	mappedSharedColumns := []string{"id", "name", "location"}
 	{
 		uniqueKey := "PRIMARY"
-		uniqueKeyColumns := []string{"id"}
+		uniqueKeyColumns := NewColumnList([]string{"id"})
 		rangeStartValues := []string{"@v1s"}
 		rangeEndValues := []string{"@v1e"}
 		rangeStartArgs := []interface{}{3}
@@ -231,7 +231,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 	}
 	{
 		uniqueKey := "name_position_uidx"
-		uniqueKeyColumns := []string{"name", "position"}
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 		rangeStartValues := []string{"@v1s", "@v2s"}
 		rangeEndValues := []string{"@v1e", "@v2e"}
 		rangeStartArgs := []interface{}{3, 17}
@@ -257,7 +257,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 	sharedColumns := []string{"id", "name", "position"}
 	{
 		uniqueKey := "name_position_uidx"
-		uniqueKeyColumns := []string{"name", "position"}
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
@@ -279,7 +279,7 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 	originalTableName := "tbl"
 	var chunkSize int64 = 500
 	{
-		uniqueKeyColumns := []string{"name", "position"}
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
@@ -309,7 +309,7 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
-	uniqueKeyColumns := []string{"name", "position"}
+	uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 	{
 		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
 		test.S(t).ExpectNil(err)

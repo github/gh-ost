@@ -1,0 +1,4 @@
+/.gopath/
+/bin/
+/libexec/
+/.vendor/
