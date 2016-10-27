@@ -1,0 +1,16 @@
+#!/bin/bash
+
+set -e
+
+# Make sure we have the version of Go we want to depend on, either from the
+# system or one we grab ourselves.
+. script/ensure-go-installed
+
+# Since we want to be able to build this outside of GOPATH, we set it
+# up so it points back to us and go is none the wiser
+
+set -x
+rm -rf .gopath
+mkdir -p .gopath/src/github.com/github
+ln -s "$PWD" .gopath/src/github.com/github/gh-ost
+export GOPATH=$PWD/.gopath:$GOPATH

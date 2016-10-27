@@ -1,0 +1,20 @@
+#!/bin/bash
+
+set -e
+
+. script/bootstrap
+
+mkdir -p bin
+bindir="$PWD"/bin
+scriptdir="$PWD"/script
+
+# We have a few binaries that we want to build, so let's put them into bin/
+
+version=$(git rev-parse HEAD)
+describe=$(git describe --tags --always --dirty)
+
+export GOPATH="$PWD/.gopath"
+cd .gopath/src/github.com/github/gh-ost
+
+# We put the binaries directly into the bindir, because we have no need for shim wrappers
+go build -o "$bindir/gh-ost" -ldflags "-X main.AppVersion=${version} -X main.BuildDescribe=${describe}" ./go/cmd/gh-ost/main.go
