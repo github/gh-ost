@@ -17,8 +17,6 @@ import (
 	"github.com/siddontang/go-mysql/replication"
 )
 
-var ()
-
 const (
 	serverId = 99999
 )

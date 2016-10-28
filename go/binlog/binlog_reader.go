@@ -5,8 +5,6 @@
 
 package binlog
 
-import ()
-
 // BinlogReader is a general interface whose implementations can choose their methods of reading
 // a binary log file and parsing it into binlog entries
 type BinlogReader interface {
