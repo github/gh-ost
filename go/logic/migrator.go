@@ -804,7 +804,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	} else if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
 		eta = "due"
 		state = "postponing cut-over"
-	} else if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
+	} else if isThrottled, throttleReason, _ := this.migrationContext.IsThrottled(); isThrottled {
 		state = fmt.Sprintf("throttled, %s", throttleReason)
 	}
 

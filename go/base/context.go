@@ -37,6 +37,13 @@ const (
 	CutOverTwoStep         = iota
 )
 
+type ThrottleReasonHint string
+
+const (
+	NoThrottleReasonHint          ThrottleReasonHint = "NoThrottleReasonHint"
+	UserCommandThrottleReasonHint                    = "UserCommandThrottleReasonHint"
+)
+
 var (
 	envVariableRegexp = regexp.MustCompile("[$][{](.*)[}]")
 )
@@ -44,12 +51,14 @@ var (
 type ThrottleCheckResult struct {
 	ShouldThrottle bool
 	Reason         string
+	ReasonHint     ThrottleReasonHint
 }
 
-func NewThrottleCheckResult(throttle bool, reason string) *ThrottleCheckResult {
+func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleReasonHint) *ThrottleCheckResult {
 	return &ThrottleCheckResult{
 		ShouldThrottle: throttle,
 		Reason:         reason,
+		ReasonHint:     reasonHint,
 	}
 }
 
@@ -138,6 +147,7 @@ type MigrationContext struct {
 	TotalDMLEventsApplied                  int64
 	isThrottled                            bool
 	throttleReason                         string
+	throttleReasonHint                     ThrottleReasonHint
 	throttleGeneralCheckResult             ThrottleCheckResult
 	throttleMutex                          *sync.Mutex
 	IsPostponingCutOver                    int64
@@ -417,17 +427,18 @@ func (this *MigrationContext) GetThrottleGeneralCheckResult() *ThrottleCheckResu
 	return &result
 }
 
-func (this *MigrationContext) SetThrottled(throttle bool, reason string) {
+func (this *MigrationContext) SetThrottled(throttle bool, reason string, reasonHint ThrottleReasonHint) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 	this.isThrottled = throttle
 	this.throttleReason = reason
+	this.throttleReasonHint = reasonHint
 }
 
-func (this *MigrationContext) IsThrottled() (bool, string) {
+func (this *MigrationContext) IsThrottled() (bool, string, ThrottleReasonHint) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
-	return this.isThrottled, this.throttleReason
+	return this.isThrottled, this.throttleReason, this.throttleReasonHint
 }
 
 func (this *MigrationContext) GetReplicationLagQuery() string {
