@@ -305,6 +305,9 @@ func (this *Applier) InitiateHeartbeat() {
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
 		// have this block the loop rather than spam the master in the event something
 		// goes wrong
+		if throttle, _, reasonHint := this.migrationContext.IsThrottled(); throttle && (reasonHint == base.UserCommandThrottleReasonHint) {
+			continue
+		}
 		if err := injectHeartbeat(); err != nil {
 			return
 		}

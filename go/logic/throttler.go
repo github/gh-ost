@@ -34,16 +34,16 @@ func NewThrottler(applier *Applier, inspector *Inspector) *Throttler {
 // shouldThrottle performs checks to see whether we should currently be throttling.
 // It merely observes the metrics collected by other components, it does not issue
 // its own metric collection.
-func (this *Throttler) shouldThrottle() (result bool, reason string) {
+func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint base.ThrottleReasonHint) {
 	generalCheckResult := this.migrationContext.GetThrottleGeneralCheckResult()
 	if generalCheckResult.ShouldThrottle {
-		return generalCheckResult.ShouldThrottle, generalCheckResult.Reason
+		return generalCheckResult.ShouldThrottle, generalCheckResult.Reason, generalCheckResult.ReasonHint
 	}
 	// Replication lag throttle
 	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
 	lag := atomic.LoadInt64(&this.migrationContext.CurrentLag)
 	if time.Duration(lag) > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
-		return true, fmt.Sprintf("lag=%fs", time.Duration(lag).Seconds())
+		return true, fmt.Sprintf("lag=%fs", time.Duration(lag).Seconds()), base.NoThrottleReasonHint
 	}
 	checkThrottleControlReplicas := true
 	if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag) > 0) {
@@ -52,14 +52,14 @@ func (this *Throttler) shouldThrottle() (result bool, reason string) {
 	if checkThrottleControlReplicas {
 		lagResult := this.migrationContext.GetControlReplicasLagResult()
 		if lagResult.Err != nil {
-			return true, fmt.Sprintf("%+v %+v", lagResult.Key, lagResult.Err)
+			return true, fmt.Sprintf("%+v %+v", lagResult.Key, lagResult.Err), base.NoThrottleReasonHint
 		}
 		if lagResult.Lag > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
-			return true, fmt.Sprintf("%+v replica-lag=%fs", lagResult.Key, lagResult.Lag.Seconds())
+			return true, fmt.Sprintf("%+v replica-lag=%fs", lagResult.Key, lagResult.Lag.Seconds()), base.NoThrottleReasonHint
 		}
 	}
 	// Got here? No metrics indicates we need throttling.
-	return false, ""
+	return false, "", base.NoThrottleReasonHint
 }
 
 // parseChangelogHeartbeat is called when a heartbeat event is intercepted
@@ -147,8 +147,8 @@ func (this *Throttler) criticalLoadIsMet() (met bool, variableName string, value
 // collectGeneralThrottleMetrics reads the once-per-sec metrics, and stores them onto this.migrationContext
 func (this *Throttler) collectGeneralThrottleMetrics() error {
 
-	setThrottle := func(throttle bool, reason string) error {
-		this.migrationContext.SetThrottleGeneralCheckResult(base.NewThrottleCheckResult(throttle, reason))
+	setThrottle := func(throttle bool, reason string, reasonHint base.ThrottleReasonHint) error {
+		this.migrationContext.SetThrottleGeneralCheckResult(base.NewThrottleCheckResult(throttle, reason, reasonHint))
 		return nil
 	}
 
@@ -161,7 +161,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 
 	criticalLoadMet, variableName, value, threshold, err := this.criticalLoadIsMet()
 	if err != nil {
-		return setThrottle(true, fmt.Sprintf("%s %s", variableName, err))
+		return setThrottle(true, fmt.Sprintf("%s %s", variableName, err), base.NoThrottleReasonHint)
 	}
 	if criticalLoadMet && this.migrationContext.CriticalLoadIntervalMilliseconds == 0 {
 		this.migrationContext.PanicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
@@ -181,18 +181,18 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 
 	// User-based throttle
 	if atomic.LoadInt64(&this.migrationContext.ThrottleCommandedByUser) > 0 {
-		return setThrottle(true, "commanded by user")
+		return setThrottle(true, "commanded by user", base.UserCommandThrottleReasonHint)
 	}
 	if this.migrationContext.ThrottleFlagFile != "" {
 		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
 			// Throttle file defined and exists!
-			return setThrottle(true, "flag-file")
+			return setThrottle(true, "flag-file", base.NoThrottleReasonHint)
 		}
 	}
 	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
 		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
 			// 2nd Throttle file defined and exists!
-			return setThrottle(true, "flag-file")
+			return setThrottle(true, "flag-file", base.NoThrottleReasonHint)
 		}
 	}
 
@@ -200,19 +200,19 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 	for variableName, threshold := range maxLoad {
 		value, err := this.applier.ShowStatusVariable(variableName)
 		if err != nil {
-			return setThrottle(true, fmt.Sprintf("%s %s", variableName, err))
+			return setThrottle(true, fmt.Sprintf("%s %s", variableName, err), base.NoThrottleReasonHint)
 		}
 		if value >= threshold {
-			return setThrottle(true, fmt.Sprintf("max-load %s=%d >= %d", variableName, value, threshold))
+			return setThrottle(true, fmt.Sprintf("max-load %s=%d >= %d", variableName, value, threshold), base.NoThrottleReasonHint)
 		}
 	}
 	if this.migrationContext.GetThrottleQuery() != "" {
 		if res, _ := this.applier.ExecuteThrottleQuery(); res > 0 {
-			return setThrottle(true, "throttle-query")
+			return setThrottle(true, "throttle-query", base.NoThrottleReasonHint)
 		}
 	}
 
-	return setThrottle(false, "")
+	return setThrottle(false, "", base.NoThrottleReasonHint)
 }
 
 // initiateThrottlerMetrics initiates the various processes that collect measurements
@@ -237,8 +237,8 @@ func (this *Throttler) initiateThrottlerChecks() error {
 	throttlerTick := time.Tick(100 * time.Millisecond)
 
 	throttlerFunction := func() {
-		alreadyThrottling, currentReason := this.migrationContext.IsThrottled()
-		shouldThrottle, throttleReason := this.shouldThrottle()
+		alreadyThrottling, currentReason, _ := this.migrationContext.IsThrottled()
+		shouldThrottle, throttleReason, throttleReasonHint := this.shouldThrottle()
 		if shouldThrottle && !alreadyThrottling {
 			// New throttling
 			this.applier.WriteAndLogChangelog("throttle", throttleReason)
@@ -249,7 +249,7 @@ func (this *Throttler) initiateThrottlerChecks() error {
 			// End of throttling
 			this.applier.WriteAndLogChangelog("throttle", "done throttling")
 		}
-		this.migrationContext.SetThrottled(shouldThrottle, throttleReason)
+		this.migrationContext.SetThrottled(shouldThrottle, throttleReason, throttleReasonHint)
 	}
 	throttlerFunction()
 	for range throttlerTick {
@@ -265,7 +265,7 @@ func (this *Throttler) throttle(onThrottled func()) {
 	for {
 		// IsThrottled() is non-blocking; the throttling decision making takes place asynchronously.
 		// Therefore calling IsThrottled() is cheap
-		if shouldThrottle, _ := this.migrationContext.IsThrottled(); !shouldThrottle {
+		if shouldThrottle, _, _ := this.migrationContext.IsThrottled(); !shouldThrottle {
 			return
 		}
 		if onThrottled != nil {
