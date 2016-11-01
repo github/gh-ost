@@ -335,12 +335,27 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	if err := this.db.QueryRow(query).Scan(&logSlaveUpdates); err != nil {
 		return err
 	}
-	if !logSlaveUpdates && !this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.IsTungsten {
-		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+
+	if logSlaveUpdates {
+		log.Infof("log_slave_updates validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return nil
 	}
 
-	log.Infof("binary logs updates validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
-	return nil
+	if this.migrationContext.IsTungsten {
+		log.Warning("log_slave_updates not found on %s:%d, but --tungsten provided, so I'm proceeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return nil
+	}
+
+	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
+		return fmt.Errorf("%s:%d must have log_slave_updates enabled for testing/migrating on replica", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	}
+
+	if this.migrationContext.InspectorIsAlsoApplier() {
+		log.Warning("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return nil
+	}
+
+	return fmt.Errorf("%s:%d must have log_slave_updates enabled for executing migration", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 }
 
 // validateTable makes sure the table we need to operate on actually exists
