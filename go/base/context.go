@@ -155,6 +155,7 @@ type MigrationContext struct {
 	AllEventsUpToLockProcessedInjectedFlag int64
 	CleanupImminentFlag                    int64
 	UserCommandedUnpostponeFlag            int64
+	CutOverCompleteFlag                    int64
 	PanicAbort                             chan error
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList

@@ -171,7 +171,7 @@ func (this *Migrator) consumeRowCopyComplete() {
 }
 
 func (this *Migrator) canStopStreaming() bool {
-	return false
+	return atomic.LoadInt64(&this.migrationContext.CutOverCompleteFlag) != 0
 }
 
 // onChangelogStateEvent is called when a binlog event operation on the changelog table is intercepted.
@@ -345,6 +345,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.cutOver(); err != nil {
 		return err
 	}
+	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 
 	if err := this.finalCleanup(); err != nil {
 		return nil
@@ -1057,6 +1058,9 @@ func (this *Migrator) finalCleanup() error {
 		} else {
 			log.Errore(err)
 		}
+	}
+	if err := this.eventsStreamer.Close(); err != nil {
+		log.Errore(err)
 	}
 
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
