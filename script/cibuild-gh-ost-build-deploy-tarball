@@ -27,3 +27,11 @@ tar cvf $tarball --mode="ugo=rx" bin/
 gzip $tarball
 mkdir -p "$BUILD_ARTIFACT_DIR"/gh-ost
 cp ${tarball}.gz "$BUILD_ARTIFACT_DIR"/gh-ost/
+
+### HACK HACK HACK ###
+# Blame @carlosmn. In the good way.
+# We don't have any jessie machines for building, but a pure-Go binary depends
+# on a version of libc and ld which are widely available, so we can copy the
+# tarball over with jessie in its name so we can deploy it on jessie machines.
+jessie_tarball_name=$(echo $(basename "${tarball}") | sed s/-precise-/-jessie-/)
+cp ${tarball}.gz "$BUILD_ARTIFACT_DIR/gh-ost/${jessie_tarball_name}.gz"

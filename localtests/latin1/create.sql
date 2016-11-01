@@ -1,7 +1,7 @@
 drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int auto_increment,
-  t varchar(128),
+  t varchar(128) charset latin1 collate latin1_swedish_ci,
   primary key(id)
 ) auto_increment=1 charset latin1 collate latin1_swedish_ci;
 
@@ -17,5 +17,9 @@ create event gh_ost_test
 begin
   insert into gh_ost_test values (null, md5(rand()));
   insert into gh_ost_test values (null, 'átesting');
+  insert into gh_ost_test values (null, 'ádelete');
   insert into gh_ost_test values (null, 'testátest');
+  update gh_ost_test set t='áupdated' order by id desc limit 1;
+  update gh_ost_test set t='áupdated1' where t='áupdated' order by id desc limit 1;
+  delete from gh_ost_test where t='ádelete';
 end ;;
