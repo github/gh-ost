@@ -38,6 +38,12 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 		var token string
 		if column.timezoneConversion != nil {
 			token = fmt.Sprintf("convert_tz(?, '%s', '%s')", column.timezoneConversion.ToTimezone, "+00:00")
+		} else if column.CharsetUnchanged {
+			token = "?"
+			// token = fmt.Sprintf("BINARY ?")
+			//token = fmt.Sprintf("_%s ?", column.Charset)
+			//			token = fmt.Sprintf("convert(? using %s)", column.Charset)
+			//			token = fmt.Sprintf("convert(?, char character set %s)", column.Charset)
 		} else {
 			token = "?"
 		}
