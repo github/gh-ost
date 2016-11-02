@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
@@ -689,4 +690,13 @@ func (this *Inspector) readChangelogState() (map[string]string, error) {
 func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
 	visitedKeys := mysql.NewInstanceKeyMap()
 	return mysql.GetMasterConnectionConfigSafe(this.connectionConfig, visitedKeys, this.migrationContext.AllowedMasterMaster)
+}
+
+func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err error) {
+	replicationLagQuery := this.migrationContext.GetReplicationLagQuery()
+	lag, err := mysql.GetReplicationLag(
+		this.migrationContext.InspectorConnectionConfig,
+		replicationLagQuery,
+	)
+	return lag, err
 }
