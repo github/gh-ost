@@ -4,7 +4,7 @@
 
 - You will need to have one server serving Row Based Replication (RBR) format binary logs. Right now `FULL` row image is supported. `MINIMAL` to be supported in the near future. `gh-ost` prefers to work with replicas. You may [still have your master configured with Statement Based Replication](migrating-with-sbr.md) (SBR).
 
-- If you are using a replica, the table must have an identical schema between the master and replica. 
+- If you are using a replica, the table must have an identical schema between the master and replica.
 
 - `gh-ost` requires an account with these privileges:
 
@@ -28,6 +28,8 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 - MySQL 5.7 generated columns are not supported. They may be supported in the future.
 
+- MySQL 5.7 `JSON` columns are not supported. They are likely to be supported shortly.
+
 - The two _before_ & _after_ tables must share some `UNIQUE KEY`. Such key would be used by `gh-ost` to iterate the table.
   - As an example, if your table has a single `UNIQUE KEY` and no `PRIMARY KEY`, and you wish to replace it with a `PRIMARY KEY`, you will need two migrations: one to add the `PRIMARY KEY` (this migration will use the existing `UNIQUE KEY`), another to drop the now redundant `UNIQUE KEY` (this migration will use the `PRIMARY KEY`).
 
@@ -43,4 +45,7 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 - Multisource is not supported when migrating via replica. It _should_ work (but never tested) when connecting directly to master (`--allow-on-master`)
 
 - Master-master setup is only supported in active-passive setup. Active-active (where table is being written to on both masters concurrently) is unsupported. It may be supported in the future.
+
 - If you have en `enum` field as part of your migration key (typically the `PRIMARY KEY`), migration performance will be degraded and potentially bad. [Read more](https://github.com/github/gh-ost/pull/277#issuecomment-254811520)
+
+- Migrating a `FEDERATED` table is unsupported and is irrelevant to the problem `gh-ost` tackles. 
