@@ -60,6 +60,7 @@ Also see:
 - [requirements and limitations](doc/requirements-and-limitations.md)
 - [what if?](doc/what-if.md)
 - [the fine print](doc/the-fine-print.md)
+- [Questions](https://github.com/github/gh-ost/issues?q=label%3Aquestion)
 
 ## What's in a name?
 
