@@ -291,7 +291,8 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
-	log.Infof("Waiting for ghost table to be migrated")
+	initialLag, _ := this.inspector.getReplicationLag()
+	log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
 	<-this.ghostTableMigrated
 	log.Debugf("ghost table migrated")
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
