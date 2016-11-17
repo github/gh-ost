@@ -156,6 +156,7 @@ type MigrationContext struct {
 	CleanupImminentFlag                    int64
 	UserCommandedUnpostponeFlag            int64
 	CutOverCompleteFlag                    int64
+	InCutOverCriticalSectionFlag           int64
 	PanicAbort                             chan error
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
@@ -438,6 +439,16 @@ func (this *MigrationContext) SetThrottled(throttle bool, reason string, reasonH
 func (this *MigrationContext) IsThrottled() (bool, string, ThrottleReasonHint) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
+
+	// we don't throttle when cutting over. We _do_ throttle:
+	// - during copy phase
+	// - just before cut-over
+	// - in between cut-over retries
+	// When cutting over, we need to be aggressive. Cut-over holds table locks.
+	// We need to release those asap.
+	if atomic.LoadInt64(&this.InCutOverCriticalSectionFlag) > 0 {
+		return false, "critical section", NoThrottleReasonHint
+	}
 	return this.isThrottled, this.throttleReason, this.throttleReasonHint
 }
 
