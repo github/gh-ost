@@ -694,8 +694,7 @@ func (this *Applier) DropAtomicCutOverSentryTableIfExists() error {
 	return this.dropTable(tableName)
 }
 
-// DropAtomicCutOverSentryTableIfExists checks if the "old" table name
-// happens to be a cut-over magic table; if so, it drops it.
+// CreateAtomicCutOverSentryTable
 func (this *Applier) CreateAtomicCutOverSentryTable() error {
 	if err := this.DropAtomicCutOverSentryTableIfExists(); err != nil {
 		return err
