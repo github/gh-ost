@@ -31,6 +31,10 @@ const (
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
 )
 
+func ReadChangelogState(s string) ChangelogState {
+	return ChangelogState(strings.Split(s, ":")[0])
+}
+
 type tableWriteFunc func() error
 
 const (
@@ -182,7 +186,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 		return nil
 	}
 	changelogStateString := dmlEvent.NewColumnValues.StringColumn(3)
-	changelogState := ChangelogState(strings.Split(changelogStateString, ":")[0])
+	changelogState := ReadChangelogState(changelogStateString)
 	log.Infof("Intercepted changelog state %s", changelogState)
 	switch changelogState {
 	case GhostTableMigrated:
