@@ -388,6 +388,10 @@ func (this *Inspector) validateTable() error {
 
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
 func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error {
+	if this.migrationContext.SkipForeignKeyChecks {
+		log.Warning("--skip-foreign-key-checks provided: will not check for foreign keys")
+		return nil
+	}
 	query := `
 		SELECT
 			SUM(REFERENCED_TABLE_NAME IS NOT NULL AND TABLE_SCHEMA=? AND TABLE_NAME=?) as num_child_side_fk,
