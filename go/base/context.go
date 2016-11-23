@@ -75,6 +75,7 @@ type MigrationContext struct {
 	AllowedMasterMaster      bool
 	SwitchToRowBinlogFormat  bool
 	AssumeRBR                bool
+	SkipForeignKeyChecks     bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
