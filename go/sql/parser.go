@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	stripQuotesRegexp  = regexp.MustCompile("('[^']*')")
-	renameColumnRegexp = regexp.MustCompile(`(?i)\bchange\s+(column\s+|)([\S]+)\s+([\S]+)\s+`)
+	sanitizeQuotesRegexp = regexp.MustCompile("('[^']*')")
+	renameColumnRegexp   = regexp.MustCompile(`(?i)\bchange\s+(column\s+|)([\S]+)\s+([\S]+)\s+`)
 )
 
 type Parser struct {
@@ -53,16 +53,16 @@ func (this *Parser) tokenizeAlterStatement(alterStatement string) (tokens []stri
 	return tokens, nil
 }
 
-func (this *Parser) stripQuotesFromAlterStatement(alterStatement string) (strippedStatement string) {
+func (this *Parser) sanitizeQuotesFromAlterStatement(alterStatement string) (strippedStatement string) {
 	strippedStatement = alterStatement
-	strippedStatement = stripQuotesRegexp.ReplaceAllString(strippedStatement, "''")
+	strippedStatement = sanitizeQuotesRegexp.ReplaceAllString(strippedStatement, "''")
 	return strippedStatement
 }
 
 func (this *Parser) ParseAlterStatement(alterStatement string) (err error) {
 	alterTokens, _ := this.tokenizeAlterStatement(alterStatement)
 	for _, alterToken := range alterTokens {
-		alterToken = this.stripQuotesFromAlterStatement(alterToken)
+		alterToken = this.sanitizeQuotesFromAlterStatement(alterToken)
 		allStringSubmatch := renameColumnRegexp.FindAllStringSubmatch(alterToken, -1)
 		for _, submatch := range allStringSubmatch {
 			if unquoted, err := strconv.Unquote(submatch[2]); err == nil {

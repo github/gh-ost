@@ -91,6 +91,11 @@ func TestTokenizeAlterStatement(t *testing.T) {
 		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "change column i int 'some comment, with comma'"}))
 	}
 	{
+		alterStatement := "add column t int, add column d decimal(10,2)"
+		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "add column d decimal(10,2)"}))
+	}
+	{
 		alterStatement := "add column t int, add column e enum('a','b','c')"
 		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
 		log.Errorf("%#v", tokens)
@@ -104,16 +109,16 @@ func TestTokenizeAlterStatement(t *testing.T) {
 	}
 }
 
-func TestStripQuotesFromAlterStatement(t *testing.T) {
+func TestSanitizeQuotesFromAlterStatement(t *testing.T) {
 	parser := NewParser()
 	{
 		alterStatement := "add column e enum('a','b','c')"
-		strippedStatement := parser.stripQuotesFromAlterStatement(alterStatement)
+		strippedStatement := parser.sanitizeQuotesFromAlterStatement(alterStatement)
 		test.S(t).ExpectEquals(strippedStatement, "add column e enum('','','')")
 	}
 	{
 		alterStatement := "change column i int 'some comment, with comma'"
-		strippedStatement := parser.stripQuotesFromAlterStatement(alterStatement)
+		strippedStatement := parser.sanitizeQuotesFromAlterStatement(alterStatement)
 		test.S(t).ExpectEquals(strippedStatement, "change column i int ''")
 	}
 }
