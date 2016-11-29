@@ -6,6 +6,7 @@
 package sql
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/outbrain/golib/log"
@@ -64,5 +65,55 @@ func TestParseAlterStatementNonTrivial(t *testing.T) {
 		test.S(t).ExpectEquals(len(renames), 2)
 		test.S(t).ExpectEquals(renames["i"], "count")
 		test.S(t).ExpectEquals(renames["f"], "fl")
+	}
+}
+
+func TestTokenizeAlterStatement(t *testing.T) {
+	parser := NewParser()
+	{
+		alterStatement := "add column t int"
+		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int"}))
+	}
+	{
+		alterStatement := "add column t int, change column i int"
+		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "change column i int"}))
+	}
+	{
+		alterStatement := "add column t int, change column i int 'some comment'"
+		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "change column i int 'some comment'"}))
+	}
+	{
+		alterStatement := "add column t int, change column i int 'some comment, with comma'"
+		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "change column i int 'some comment, with comma'"}))
+	}
+	{
+		alterStatement := "add column t int, add column e enum('a','b','c')"
+		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		log.Errorf("%#v", tokens)
+		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "add column e enum('a','b','c')"}))
+	}
+	{
+		alterStatement := "add column t int(11), add column e enum('a','b','c')"
+		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		log.Errorf("%#v", tokens)
+		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int(11)", "add column e enum('a','b','c')"}))
+	}
+}
+
+func TestStripQuotesFromAlterStatement(t *testing.T) {
+	parser := NewParser()
+	{
+		alterStatement := "add column e enum('a','b','c')"
+		strippedStatement := parser.stripQuotesFromAlterStatement(alterStatement)
+		test.S(t).ExpectEquals(strippedStatement, "add column e enum('','','')")
+	}
+	{
+		alterStatement := "change column i int 'some comment, with comma'"
+		strippedStatement := parser.stripQuotesFromAlterStatement(alterStatement)
+		test.S(t).ExpectEquals(strippedStatement, "change column i int ''")
 	}
 }
