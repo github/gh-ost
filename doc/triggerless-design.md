@@ -47,7 +47,7 @@ Initial setup is a no-concurrency operation
 - Applying `alter` on ghost table
 - Comparing structure of original & ghost table. Looking for shared columns, shared unique keys, validating foreign keys. Choosing shared unique key, the key by which we chunk the table and process it.
 - Setting up the binlog listener; begin listening on changelog events
-- Injecting a "good to go" ebtry onto the changelog table (to be intercepted via binary logs)
+- Injecting a "good to go" entry onto the changelog table (to be intercepted via binary logs)
 - Begin listening on binlog events for original table DMLs
 - Reading original table's chosen key min/max values
 

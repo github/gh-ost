@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
@@ -335,12 +336,27 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	if err := this.db.QueryRow(query).Scan(&logSlaveUpdates); err != nil {
 		return err
 	}
-	if !logSlaveUpdates && !this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.IsTungsten {
-		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+
+	if logSlaveUpdates {
+		log.Infof("log_slave_updates validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return nil
 	}
 
-	log.Infof("binary logs updates validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
-	return nil
+	if this.migrationContext.IsTungsten {
+		log.Warning("log_slave_updates not found on %s:%d, but --tungsten provided, so I'm proceeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return nil
+	}
+
+	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
+		return fmt.Errorf("%s:%d must have log_slave_updates enabled for testing/migrating on replica", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	}
+
+	if this.migrationContext.InspectorIsAlsoApplier() {
+		log.Warning("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return nil
+	}
+
+	return fmt.Errorf("%s:%d must have log_slave_updates enabled for executing migration", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 }
 
 // validateTable makes sure the table we need to operate on actually exists
@@ -372,6 +388,10 @@ func (this *Inspector) validateTable() error {
 
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
 func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error {
+	if this.migrationContext.SkipForeignKeyChecks {
+		log.Warning("--skip-foreign-key-checks provided: will not check for foreign keys")
+		return nil
+	}
 	query := `
 		SELECT
 			SUM(REFERENCED_TABLE_NAME IS NOT NULL AND TABLE_SCHEMA=? AND TABLE_NAME=?) as num_child_side_fk,
@@ -674,4 +694,13 @@ func (this *Inspector) readChangelogState() (map[string]string, error) {
 func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
 	visitedKeys := mysql.NewInstanceKeyMap()
 	return mysql.GetMasterConnectionConfigSafe(this.connectionConfig, visitedKeys, this.migrationContext.AllowedMasterMaster)
+}
+
+func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err error) {
+	replicationLagQuery := this.migrationContext.GetReplicationLagQuery()
+	replicationLag, err = mysql.GetReplicationLag(
+		this.migrationContext.InspectorConnectionConfig,
+		replicationLagQuery,
+	)
+	return replicationLag, err
 }

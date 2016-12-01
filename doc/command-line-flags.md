@@ -63,6 +63,8 @@ Optional. Default is `safe`. See more discussion in [cut-over](cut-over.md)
 
 At this time (10-2016) `gh-ost` does not support foreign keys on migrated tables (it bails out when it notices a FK on the migrated table). However, it is able to support _dropping_ of foreign keys via this flag. If you're trying to get rid of foreign keys in your environment, this is a useful flag.
 
+See also: [`skip-foreign-key-checks`](#skip-foreign-key-checks)
+
 ### exact-rowcount
 
 A `gh-ost` execution need to copy whatever rows you have in your existing table onto the ghost table. This can, and often be, a large number. Exactly what that number is?
@@ -71,7 +73,8 @@ A `gh-ost` execution need to copy whatever rows you have in your existing table 
 `gh-ost` also supports the `--exact-rowcount` flag. When this flag is given, two things happen:
 - An initial, authoritative `select count(*) from your_table`.
   This query may take a long time to complete, but is performed before we begin the massive operations.
-  When `--concurrent-rowcount` is also specified, this runs in paralell to row copy.
+  When `--concurrent-rowcount` is also specified, this runs in parallel to row copy.
+  Note: `--concurrent-rowcount` now defaults to `true`.
 - A continuous update to the estimate as we make progress applying events.
   We heuristically update the number of rows based on the queries we process from the binlogs.
 
@@ -107,6 +110,10 @@ See also: [Sub-second replication lag throttling](subsecond-lag.md)
 ### migrate-on-replica
 
 Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but other issue no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
+
+### skip-foreign-key-checks
+
+By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not referenece other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
 
 ### skip-renamed-columns
 

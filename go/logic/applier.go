@@ -305,6 +305,9 @@ func (this *Applier) InitiateHeartbeat() {
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
 		// have this block the loop rather than spam the master in the event something
 		// goes wrong
+		if throttle, _, reasonHint := this.migrationContext.IsThrottled(); throttle && (reasonHint == base.UserCommandThrottleReasonHint) {
+			continue
+		}
 		if err := injectHeartbeat(); err != nil {
 			return
 		}
@@ -691,8 +694,7 @@ func (this *Applier) DropAtomicCutOverSentryTableIfExists() error {
 	return this.dropTable(tableName)
 }
 
-// DropAtomicCutOverSentryTableIfExists checks if the "old" table name
-// happens to be a cut-over magic table; if so, it drops it.
+// CreateAtomicCutOverSentryTable
 func (this *Applier) CreateAtomicCutOverSentryTable() error {
 	if err := this.DropAtomicCutOverSentryTableIfExists(); err != nil {
 		return err

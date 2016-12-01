@@ -1,0 +1,51 @@
+#!/bin/bash
+
+GO_VERSION=go1.7
+
+GO_PKG_DARWIN=${GO_VERSION}.darwin-amd64.pkg
+GO_PKG_DARWIN_SHA=e7089843bc7148ffcc147759985b213604d22bb9fd19bd930b515aa981bf1b22
+
+GO_PKG_LINUX=${GO_VERSION}.linux-amd64.tar.gz
+GO_PKG_LINUX_SHA=702ad90f705365227e902b42d91dd1a40e48ca7f67a2f4b2fd052aaa4295cd95
+
+export ROOTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+cd $ROOTDIR
+
+# If Go isn't installed globally, setup environment variables for local install.
+if [ -z "$(which go)" ] || [ -z "$(go version | grep $GO_VERSION)" ]; then
+  GODIR="$ROOTDIR/.vendor/go17"
+
+  if [ $(uname -s) = "Darwin" ]; then
+    export GOROOT="$GODIR/usr/local/go"
+  else
+    export GOROOT="$GODIR/go"
+  fi
+
+  export PATH="$GOROOT/bin:$PATH"
+fi
+
+# Check if local install exists, and install otherwise.
+if [ -z "$(which go)" ] || [ -z "$(go version | grep $GO_VERSION)" ]; then
+  [ -d "$GODIR" ] && rm -rf $GODIR
+  mkdir -p "$GODIR"
+  cd "$GODIR";
+
+  if [ $(uname -s) = "Darwin" ]; then
+    curl -L -O https://storage.googleapis.com/golang/$GO_PKG_DARWIN
+    shasum -a256 $GO_PKG_DARWIN | grep $GO_PKG_DARWIN_SHA
+    xar -xf $GO_PKG_DARWIN
+    cpio -i < com.googlecode.go.pkg/Payload
+  else
+    curl -L -O https://storage.googleapis.com/golang/$GO_PKG_LINUX
+    shasum -a256 $GO_PKG_LINUX | grep $GO_PKG_LINUX_SHA
+    tar xf $GO_PKG_LINUX
+  fi
+
+  # Prove we did something right
+  echo "$GO_VERSION installed in $GODIR: Go Binary: $(which go)"
+fi
+
+cd $ROOTDIR
+
+# Configure the new go to be the first go found
+export GOPATH=$ROOTDIR/.vendor
