@@ -705,9 +705,9 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 			id int auto_increment primary key
 		) engine=%s comment='%s'
 		`,
-		this.migrationContext.TableEngine,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
+		this.migrationContext.TableEngine,
 		atomicCutOverMagicHint,
 	)
 	log.Infof("Creating magic cut-over table %s.%s",
