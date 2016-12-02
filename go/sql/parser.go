@@ -8,10 +8,12 @@ package sql
 import (
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 var (
-	renameColumnRegexp = regexp.MustCompile(`(?i)change\s+(column\s+|)([\S]+)\s+([\S]+)\s+`)
+	sanitizeQuotesRegexp = regexp.MustCompile("('[^']*')")
+	renameColumnRegexp   = regexp.MustCompile(`(?i)\bchange\s+(column\s+|)([\S]+)\s+([\S]+)\s+`)
 )
 
 type Parser struct {
@@ -24,17 +26,54 @@ func NewParser() *Parser {
 	}
 }
 
-func (this *Parser) ParseAlterStatement(alterStatement string) (err error) {
-	allStringSubmatch := renameColumnRegexp.FindAllStringSubmatch(alterStatement, -1)
-	for _, submatch := range allStringSubmatch {
-		if unquoted, err := strconv.Unquote(submatch[2]); err == nil {
-			submatch[2] = unquoted
+func (this *Parser) tokenizeAlterStatement(alterStatement string) (tokens []string, err error) {
+	terminatingQuote := rune(0)
+	f := func(c rune) bool {
+		switch {
+		case c == terminatingQuote:
+			terminatingQuote = rune(0)
+			return false
+		case terminatingQuote != rune(0):
+			return false
+		case c == '\'':
+			terminatingQuote = c
+			return false
+		case c == '(':
+			terminatingQuote = ')'
+			return false
+		default:
+			return c == ','
 		}
-		if unquoted, err := strconv.Unquote(submatch[3]); err == nil {
-			submatch[3] = unquoted
-		}
+	}
 
-		this.columnRenameMap[submatch[2]] = submatch[3]
+	tokens = strings.FieldsFunc(alterStatement, f)
+	for i := range tokens {
+		tokens[i] = strings.TrimSpace(tokens[i])
+	}
+	return tokens, nil
+}
+
+func (this *Parser) sanitizeQuotesFromAlterStatement(alterStatement string) (strippedStatement string) {
+	strippedStatement = alterStatement
+	strippedStatement = sanitizeQuotesRegexp.ReplaceAllString(strippedStatement, "''")
+	return strippedStatement
+}
+
+func (this *Parser) ParseAlterStatement(alterStatement string) (err error) {
+	alterTokens, _ := this.tokenizeAlterStatement(alterStatement)
+	for _, alterToken := range alterTokens {
+		alterToken = this.sanitizeQuotesFromAlterStatement(alterToken)
+		allStringSubmatch := renameColumnRegexp.FindAllStringSubmatch(alterToken, -1)
+		for _, submatch := range allStringSubmatch {
+			if unquoted, err := strconv.Unquote(submatch[2]); err == nil {
+				submatch[2] = unquoted
+			}
+			if unquoted, err := strconv.Unquote(submatch[3]); err == nil {
+				submatch[3] = unquoted
+			}
+
+			this.columnRenameMap[submatch[2]] = submatch[3]
+		}
 	}
 	return nil
 }
