@@ -692,7 +692,7 @@ func (this *Inspector) readChangelogState() (map[string]string, error) {
 }
 
 func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
-	log.Infof("Start find master, recursive to execute show slave status from the host to find the master.")
+	log.Infof("Recursively searching for replication master")
 	visitedKeys := mysql.NewInstanceKeyMap()
 	return mysql.GetMasterConnectionConfigSafe(this.connectionConfig, visitedKeys, this.migrationContext.AllowedMasterMaster)
 }

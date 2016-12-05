@@ -83,7 +83,10 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 		return nil, err
 	}
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
-		// Using reset slave not reset slave all, the Master_Log_File is empty.
+		// We wish to recognize the case where the topology's master actually has replication configuration.
+		// This can happen when a DBA issues a `RESET SLAVE` instead of `RESET SLAVE ALL`.
+
+		// An empty log file indicates this is a master:
 		if rowMap.GetString("Master_Log_File") == "" {
 			return nil
 		}
@@ -91,10 +94,10 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 		slaveIORunning := rowMap.GetString("Slave_IO_Running")
 		slaveSQLRunning := rowMap.GetString("Slave_SQL_Running")
 
-		// If not using reset slave or reset slave all and slave is break, something is wrong, so we stop.
+		//
 		if slaveIORunning != "Yes" || slaveSQLRunning != "Yes" {
-			return fmt.Errorf("The slave %s is break: Slave_IO_Running:%s Slave_SQL_Running:%s please make sure the replication is correct.",
-				connectionConfig.Key.Hostname,
+			return fmt.Errorf("Replication on %+v is broken: Slave_IO_Running: %s, Slave_SQL_Running: %s. Please make sure replication runs before using gh-ost.",
+				connectionConfig.Key,
 				slaveIORunning,
 				slaveSQLRunning,
 			)
