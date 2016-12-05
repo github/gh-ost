@@ -703,10 +703,11 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s (
 			id int auto_increment primary key
-		) comment='%s'
+		) engine=%s comment='%s'
 		`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
+		this.migrationContext.TableEngine,
 		atomicCutOverMagicHint,
 	)
 	log.Infof("Creating magic cut-over table %s.%s",
