@@ -305,6 +305,9 @@ func (this *Applier) InitiateHeartbeat() {
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
 		// have this block the loop rather than spam the master in the event something
 		// goes wrong
+		if throttle, _, reasonHint := this.migrationContext.IsThrottled(); throttle && (reasonHint == base.UserCommandThrottleReasonHint) {
+			continue
+		}
 		if err := injectHeartbeat(); err != nil {
 			return
 		}
@@ -691,8 +694,7 @@ func (this *Applier) DropAtomicCutOverSentryTableIfExists() error {
 	return this.dropTable(tableName)
 }
 
-// DropAtomicCutOverSentryTableIfExists checks if the "old" table name
-// happens to be a cut-over magic table; if so, it drops it.
+// CreateAtomicCutOverSentryTable
 func (this *Applier) CreateAtomicCutOverSentryTable() error {
 	if err := this.DropAtomicCutOverSentryTableIfExists(); err != nil {
 		return err
@@ -701,10 +703,11 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s (
 			id int auto_increment primary key
-		) comment='%s'
+		) engine=%s comment='%s'
 		`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
+		this.migrationContext.TableEngine,
 		atomicCutOverMagicHint,
 	)
 	log.Infof("Creating magic cut-over table %s.%s",

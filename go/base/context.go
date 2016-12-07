@@ -37,6 +37,13 @@ const (
 	CutOverTwoStep         = iota
 )
 
+type ThrottleReasonHint string
+
+const (
+	NoThrottleReasonHint          ThrottleReasonHint = "NoThrottleReasonHint"
+	UserCommandThrottleReasonHint                    = "UserCommandThrottleReasonHint"
+)
+
 var (
 	envVariableRegexp = regexp.MustCompile("[$][{](.*)[}]")
 )
@@ -44,12 +51,14 @@ var (
 type ThrottleCheckResult struct {
 	ShouldThrottle bool
 	Reason         string
+	ReasonHint     ThrottleReasonHint
 }
 
-func NewThrottleCheckResult(throttle bool, reason string) *ThrottleCheckResult {
+func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleReasonHint) *ThrottleCheckResult {
 	return &ThrottleCheckResult{
 		ShouldThrottle: throttle,
 		Reason:         reason,
+		ReasonHint:     reasonHint,
 	}
 }
 
@@ -66,6 +75,7 @@ type MigrationContext struct {
 	AllowedMasterMaster      bool
 	SwitchToRowBinlogFormat  bool
 	AssumeRBR                bool
+	SkipForeignKeyChecks     bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
@@ -138,6 +148,7 @@ type MigrationContext struct {
 	TotalDMLEventsApplied                  int64
 	isThrottled                            bool
 	throttleReason                         string
+	throttleReasonHint                     ThrottleReasonHint
 	throttleGeneralCheckResult             ThrottleCheckResult
 	throttleMutex                          *sync.Mutex
 	IsPostponingCutOver                    int64
@@ -145,6 +156,8 @@ type MigrationContext struct {
 	AllEventsUpToLockProcessedInjectedFlag int64
 	CleanupImminentFlag                    int64
 	UserCommandedUnpostponeFlag            int64
+	CutOverCompleteFlag                    int64
+	InCutOverCriticalSectionFlag           int64
 	PanicAbort                             chan error
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
@@ -416,17 +429,28 @@ func (this *MigrationContext) GetThrottleGeneralCheckResult() *ThrottleCheckResu
 	return &result
 }
 
-func (this *MigrationContext) SetThrottled(throttle bool, reason string) {
+func (this *MigrationContext) SetThrottled(throttle bool, reason string, reasonHint ThrottleReasonHint) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 	this.isThrottled = throttle
 	this.throttleReason = reason
+	this.throttleReasonHint = reasonHint
 }
 
-func (this *MigrationContext) IsThrottled() (bool, string) {
+func (this *MigrationContext) IsThrottled() (bool, string, ThrottleReasonHint) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
-	return this.isThrottled, this.throttleReason
+
+	// we don't throttle when cutting over. We _do_ throttle:
+	// - during copy phase
+	// - just before cut-over
+	// - in between cut-over retries
+	// When cutting over, we need to be aggressive. Cut-over holds table locks.
+	// We need to release those asap.
+	if atomic.LoadInt64(&this.InCutOverCriticalSectionFlag) > 0 {
+		return false, "critical section", NoThrottleReasonHint
+	}
+	return this.isThrottled, this.throttleReason, this.throttleReasonHint
 }
 
 func (this *MigrationContext) GetReplicationLagQuery() string {

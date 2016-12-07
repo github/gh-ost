@@ -656,7 +656,7 @@ func decodeDatetime2(data []byte, dec uint16) (string, int, error) {
 	}
 
 	//ingore second part, no precision now
-	//var secPart int64 = tmp % (1 << 24)
+	var secPart int64 = tmp % (1 << 24)
 	ymdhms := tmp >> 24
 
 	ymd := ymdhms >> 17
@@ -671,7 +671,10 @@ func decodeDatetime2(data []byte, dec uint16) (string, int, error) {
 	minute := int((hms >> 6) % (1 << 6))
 	hour := int((hms >> 12))
 
-	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second), n, nil
+	if secPart != 0 {
+		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%d", year, month, day, hour, minute, second, secPart), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
+	}
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
 }
 
 const TIMEF_OFS int64 = 0x800000000000
