@@ -82,11 +82,13 @@ type MigrationContext struct {
 	IsTungsten               bool
 	DiscardForeignKeys       bool
 
-	config      ContextConfig
-	configMutex *sync.Mutex
-	ConfigFile  string
-	CliUser     string
-	CliPassword string
+	config            ContextConfig
+	configMutex       *sync.Mutex
+	ConfigFile        string
+	CliUser           string
+	CliPassword       string
+	CliMasterUser     string
+	CliMasterPassword string
 
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
