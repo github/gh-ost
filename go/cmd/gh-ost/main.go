@@ -15,6 +15,8 @@ import (
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
 	"github.com/outbrain/golib/log"
+
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 var AppVersion string
@@ -49,6 +51,7 @@ func main() {
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
+	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
@@ -193,6 +196,14 @@ func main() {
 	}
 	if migrationContext.ServeSocketFile == "" {
 		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
+	}
+	if *askPass {
+		fmt.Println("Password:")
+		bytePassword, err := terminal.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			log.Fatale(err)
+		}
+		migrationContext.CliPassword = string(bytePassword)
 	}
 	migrationContext.SetHeartbeatIntervalMilliseconds(*heartbeatIntervalMillis)
 	migrationContext.SetNiceRatio(*niceRatio)
