@@ -98,13 +98,11 @@ func TestTokenizeAlterStatement(t *testing.T) {
 	{
 		alterStatement := "add column t int, add column e enum('a','b','c')"
 		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
-		log.Errorf("%#v", tokens)
 		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "add column e enum('a','b','c')"}))
 	}
 	{
 		alterStatement := "add column t int(11), add column e enum('a','b','c')"
 		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
-		log.Errorf("%#v", tokens)
 		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int(11)", "add column e enum('a','b','c')"}))
 	}
 }

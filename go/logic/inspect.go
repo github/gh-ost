@@ -95,7 +95,7 @@ func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (colum
 
 func (this *Inspector) InspectOriginalTable() (err error) {
 	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
-	if err == nil {
+	if err != nil {
 		return err
 	}
 	return nil
