@@ -21,6 +21,8 @@ import (
 	"github.com/outbrain/golib/sqlutils"
 )
 
+const startSlavePostWaitMilliseconds = 500 * time.Millisecond
+
 // Inspector reads data from the read-MySQL-server (typically a replica, but can be the master)
 // It is used for gaining initial status and structure, and later also follow up on progress and changelog
 type Inspector struct {
@@ -258,6 +260,8 @@ func (this *Inspector) restartReplication() error {
 	if startError != nil {
 		return startError
 	}
+	time.Sleep(startSlavePostWaitMilliseconds)
+
 	log.Debugf("Replication restarted")
 	return nil
 }
