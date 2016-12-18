@@ -74,6 +74,8 @@ type Migrator struct {
 	applyEventsQueue chan tableWriteFunc
 
 	handledChangelogStates map[string]bool
+	contextDumpFiles       []string
+	panicAbort             chan error
 }
 
 func NewMigrator() *Migrator {
@@ -88,6 +90,9 @@ func NewMigrator() *Migrator {
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
 		handledChangelogStates: make(map[string]bool),
+
+		contextDumpFiles: []string{},
+		panicAbort:       make(chan error),
 	}
 	return migrator
 }
@@ -113,6 +118,24 @@ func (this *Migrator) initiateHooksExecutor() (err error) {
 	if err := this.hooksExecutor.initHooks(); err != nil {
 		return err
 	}
+	return nil
+}
+
+// initiateContextDump
+func (this *Migrator) initiateContextDump() (err error) {
+	go func() {
+		contextDumpTick := time.Tick(1 * time.Minute)
+		for range contextDumpTick {
+			if dumpFile, err := this.migrationContext.DumpJSON(); err == nil {
+				this.contextDumpFiles = append(this.contextDumpFiles, dumpFile)
+				if len(this.contextDumpFiles) > 2 {
+					oldDumpFile := this.contextDumpFiles[0]
+					this.contextDumpFiles = this.contextDumpFiles[1:]
+					os.Remove(oldDumpFile)
+				}
+			}
+		}
+	}()
 	return nil
 }
 
@@ -147,7 +170,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		// there's an error. Let's try again.
 	}
 	if len(notFatalHint) == 0 {
-		this.migrationContext.PanicAbort <- err
+		this.panicAbort <- err
 	}
 	return err
 }
@@ -218,7 +241,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 
 // listenOnPanicAbort aborts on abort request
 func (this *Migrator) listenOnPanicAbort() {
-	err := <-this.migrationContext.PanicAbort
+	err := <-this.panicAbort
 	log.Fatale(err)
 }
 
@@ -276,6 +299,9 @@ func (this *Migrator) Migrate() (err error) {
 	go this.listenOnPanicAbort()
 
 	if err := this.initiateHooksExecutor(); err != nil {
+		return err
+	}
+	if err := this.initiateContextDump(); err != nil {
 		return err
 	}
 	if err := this.hooksExecutor.onStartup(); err != nil {
@@ -608,7 +634,7 @@ func (this *Migrator) initiateServer() (err error) {
 	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
 		this.printStatus(rule, writer)
 	}
-	this.server = NewServer(this.hooksExecutor, f)
+	this.server = NewServer(this.hooksExecutor, f, this.panicAbort)
 	if err := this.server.BindSocketFile(); err != nil {
 		return err
 	}
@@ -896,7 +922,7 @@ func (this *Migrator) initiateStreaming() error {
 		log.Debugf("Beginning streaming")
 		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
 		if err != nil {
-			this.migrationContext.PanicAbort <- err
+			this.panicAbort <- err
 		}
 		log.Debugf("Done streaming")
 	}()
@@ -924,7 +950,7 @@ func (this *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (this *Migrator) initiateThrottler() error {
-	this.throttler = NewThrottler(this.applier, this.inspector)
+	this.throttler = NewThrottler(this.applier, this.inspector, this.panicAbort)
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")

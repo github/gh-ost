@@ -6,7 +6,9 @@
 package base
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"regexp"
 	"strings"
@@ -158,7 +160,6 @@ type MigrationContext struct {
 	UserCommandedUnpostponeFlag            int64
 	CutOverCompleteFlag                    int64
 	InCutOverCriticalSectionFlag           int64
-	PanicAbort                             chan error
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
@@ -174,8 +175,6 @@ type MigrationContext struct {
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
-
-	CanStopStreaming func() bool
 }
 
 type ContextConfig struct {
@@ -212,13 +211,29 @@ func newMigrationContext() *MigrationContext {
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
-		PanicAbort:                          make(chan error),
 	}
 }
 
 // GetMigrationContext
 func GetMigrationContext() *MigrationContext {
 	return context
+}
+
+// ToJSON exports this config to JSON string
+func (this *MigrationContext) ToJSON() (string, error) {
+	b, err := json.Marshal(this)
+	return string(b), err
+}
+
+// DumpJSON exports this config to JSON string and writes it to file
+func (this *MigrationContext) DumpJSON() (fileName string, err error) {
+	jsonBytes, err := json.Marshal(this)
+	if err != nil {
+		return fileName, err
+	}
+	fileName = fmt.Sprintf("%s/gh-ost.%s.%d.context.json", "/tmp", this.OriginalTableName, this.ElapsedTime())
+	err = ioutil.WriteFile(fileName, jsonBytes, 0644)
+	return fileName, err
 }
 
 // GetGhostTableName generates the name of ghost table, based on original table name

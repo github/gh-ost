@@ -28,13 +28,15 @@ type Server struct {
 	tcpListener      net.Listener
 	hooksExecutor    *HooksExecutor
 	printStatus      printStatusFunc
+	panicAbort       chan error
 }
 
-func NewServer(hooksExecutor *HooksExecutor, printStatus printStatusFunc) *Server {
+func NewServer(hooksExecutor *HooksExecutor, printStatus printStatusFunc, panicAbort chan error) *Server {
 	return &Server{
 		migrationContext: base.GetMigrationContext(),
 		hooksExecutor:    hooksExecutor,
 		printStatus:      printStatus,
+		panicAbort:       panicAbort,
 	}
 }
 
@@ -251,7 +253,7 @@ help                                 # This message
 	case "panic":
 		{
 			err := fmt.Errorf("User commanded 'panic'. I will now panic, without cleanup. PANIC!")
-			this.migrationContext.PanicAbort <- err
+			this.panicAbort <- err
 			return NoPrintStatusRule, err
 		}
 	default:

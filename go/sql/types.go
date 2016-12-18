@@ -6,6 +6,7 @@
 package sql
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -245,6 +246,11 @@ func ToColumnValues(abstractValues []interface{}) *ColumnValues {
 	}
 
 	return result
+}
+
+// MarshalJSON will marshal this object as JSON
+func (this *ColumnValues) MarshalJSON() ([]byte, error) {
+	return json.Marshal(this.abstractValues)
 }
 
 func (this *ColumnValues) AbstractValues() []interface{} {
