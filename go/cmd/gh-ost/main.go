@@ -50,6 +50,8 @@ func main() {
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
+	flag.StringVar(&migrationContext.CliMasterUser, "master-user", "", "MySQL user on master, if different from that on replica. Requires --assume-master-host")
+	flag.StringVar(&migrationContext.CliMasterPassword, "master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
 
@@ -170,8 +172,11 @@ func main() {
 		}
 		log.Warning("--test-on-replica-skip-replica-stop enabled. We will not stop replication before cut-over. Ensure you have a plugin that does this.")
 	}
-	if migrationContext.AssumeMasterHostname != "" && !migrationContext.AllowedMasterMaster && !migrationContext.IsTungsten {
-		log.Fatalf("--assume-master-host requires either --allow-master-master or --tungsten")
+	if migrationContext.CliMasterUser != "" && migrationContext.AssumeMasterHostname == "" {
+		log.Fatalf("--master-user requires --assume-master-host")
+	}
+	if migrationContext.CliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
+		log.Fatalf("--master-password requires --assume-master-host")
 	}
 
 	switch *cutOver {
