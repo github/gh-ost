@@ -175,6 +175,7 @@ type MigrationContext struct {
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
+	EncodedRangeValues               map[string]string
 }
 
 type ContextConfig struct {
@@ -211,6 +212,7 @@ func newMigrationContext() *MigrationContext {
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
+		EncodedRangeValues:                  make(map[string]string),
 	}
 }
 
@@ -227,12 +229,25 @@ func (this *MigrationContext) ToJSON() (string, error) {
 
 // DumpJSON exports this config to JSON string and writes it to file
 func (this *MigrationContext) DumpJSON() (fileName string, err error) {
+	if this.MigrationRangeMinValues != nil {
+		this.EncodedRangeValues["MigrationRangeMinValues"], _ = this.MigrationRangeMinValues.ToBase64()
+	}
+	if this.MigrationRangeMaxValues != nil {
+		this.EncodedRangeValues["MigrationRangeMaxValues"], _ = this.MigrationRangeMaxValues.ToBase64()
+	}
+	if this.MigrationIterationRangeMinValues != nil {
+		this.EncodedRangeValues["MigrationIterationRangeMinValues"], _ = this.MigrationIterationRangeMinValues.ToBase64()
+	}
+	if this.MigrationIterationRangeMaxValues != nil {
+		this.EncodedRangeValues["MigrationIterationRangeMaxValues"], _ = this.MigrationIterationRangeMaxValues.ToBase64()
+	}
 	jsonBytes, err := json.Marshal(this)
 	if err != nil {
 		return fileName, err
 	}
 	fileName = fmt.Sprintf("%s/gh-ost.%s.%d.context.json", "/tmp", this.OriginalTableName, this.ElapsedTime())
 	err = ioutil.WriteFile(fileName, jsonBytes, 0644)
+
 	return fileName, err
 }
 

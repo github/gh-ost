@@ -31,6 +31,8 @@ const (
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
 )
 
+const contextDumpInterval time.Duration = 1 * time.Second
+
 func ReadChangelogState(s string) ChangelogState {
 	return ChangelogState(strings.Split(s, ":")[0])
 }
@@ -124,7 +126,7 @@ func (this *Migrator) initiateHooksExecutor() (err error) {
 // initiateContextDump
 func (this *Migrator) initiateContextDump() (err error) {
 	go func() {
-		contextDumpTick := time.Tick(1 * time.Minute)
+		contextDumpTick := time.Tick(contextDumpInterval)
 		for range contextDumpTick {
 			if dumpFile, err := this.migrationContext.DumpJSON(); err == nil {
 				this.contextDumpFiles = append(this.contextDumpFiles, dumpFile)
