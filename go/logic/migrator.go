@@ -123,19 +123,6 @@ func (this *Migrator) initiateHooksExecutor() (err error) {
 	return nil
 }
 
-// initiateContextDump
-func (this *Migrator) initiateContextDump() (err error) {
-	go func() {
-		contextDumpTick := time.Tick(contextDumpInterval)
-		for range contextDumpTick {
-			if jsonString, err := this.migrationContext.ToJSON(); err == nil {
-				this.applier.WriteChangelog("context", jsonString)
-			}
-		}
-	}()
-	return nil
-}
-
 // sleepWhileTrue sleeps indefinitely until the given function returns 'false'
 // (or fails with error)
 func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
@@ -296,9 +283,6 @@ func (this *Migrator) Migrate() (err error) {
 	go this.listenOnPanicAbort()
 
 	if err := this.initiateHooksExecutor(); err != nil {
-		return err
-	}
-	if err := this.initiateContextDump(); err != nil {
 		return err
 	}
 	if err := this.hooksExecutor.onStartup(); err != nil {
@@ -1049,12 +1033,20 @@ func (this *Migrator) executeWriteFuncs() error {
 		log.Debugf("Noop operation; not really executing write funcs")
 		return nil
 	}
+	contextDumpTick := time.Tick(contextDumpInterval)
 	for {
 		this.throttler.throttle(nil)
 
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
 		select {
+		case <-contextDumpTick:
+			{
+				if jsonString, err := this.migrationContext.ToJSON(); err == nil {
+					this.applier.WriteChangelog("context", jsonString)
+					log.Debugf("Context dumped")
+				}
+			}
 		case applyEventFunc := <-this.applyEventsQueue:
 			{
 				if err := this.retryOperation(applyEventFunc); err != nil {

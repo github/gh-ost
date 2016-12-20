@@ -224,6 +224,9 @@ func GetMigrationContext() *MigrationContext {
 
 // DumpJSON exports this config to JSON string and writes it to file
 func (this *MigrationContext) ToJSON() (string, error) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
 	if this.MigrationRangeMinValues != nil {
 		this.EncodedRangeValues["MigrationRangeMinValues"], _ = this.MigrationRangeMinValues.ToBase64()
 	}
