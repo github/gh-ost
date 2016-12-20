@@ -1042,6 +1042,7 @@ func (this *Migrator) executeWriteFuncs() error {
 		select {
 		case <-contextDumpTick:
 			{
+				this.migrationContext.SetStreamerBinlogCoordinates(this.eventsStreamer.GetCurrentBinlogCoordinates())
 				if jsonString, err := this.migrationContext.ToJSON(); err == nil {
 					this.applier.WriteChangelog("context", jsonString)
 					log.Debugf("Context dumped")

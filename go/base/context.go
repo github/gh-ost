@@ -177,6 +177,7 @@ type MigrationContext struct {
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 	EncodedRangeValues               map[string]string
+	StreamerBinlogCoordinates        mysql.BinlogCoordinates
 }
 
 type ContextConfig struct {
@@ -212,6 +213,7 @@ func newMigrationContext() *MigrationContext {
 		throttleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
+		StreamerBinlogCoordinates:           mysql.BinlogCoordinates{},
 		ColumnRenameMap:                     make(map[string]string),
 		EncodedRangeValues:                  make(map[string]string),
 	}
@@ -544,6 +546,13 @@ func (this *MigrationContext) SetNiceRatio(newRatio float64) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 	this.niceRatio = newRatio
+}
+
+func (this *MigrationContext) SetStreamerBinlogCoordinates(binlogCoordinates *mysql.BinlogCoordinates) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	this.StreamerBinlogCoordinates = *binlogCoordinates
 }
 
 // ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
