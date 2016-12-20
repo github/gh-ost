@@ -653,6 +653,12 @@ func (this *Migrator) initiateInspector() (err error) {
 			return err
 		}
 		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.DuplicateCredentials(*key)
+		if this.migrationContext.CliMasterUser != "" {
+			this.migrationContext.ApplierConnectionConfig.User = this.migrationContext.CliMasterUser
+		}
+		if this.migrationContext.CliMasterPassword != "" {
+			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
+		}
 		log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	}
 	// validate configs
