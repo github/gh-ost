@@ -1043,10 +1043,13 @@ func (this *Migrator) executeWriteFuncs() error {
 		case <-contextDumpTick:
 			{
 				this.migrationContext.SetStreamerBinlogCoordinates(this.eventsStreamer.GetCurrentBinlogCoordinates())
-				if jsonString, err := this.migrationContext.ToJSON(); err == nil {
-					this.applier.WriteChangelog("context", jsonString)
-					log.Debugf("Context dumped")
+				if !this.migrationContext.Resurrect || this.migrationContext.IsResurrected {
+					if jsonString, err := this.migrationContext.ToJSON(); err == nil {
+						this.applier.WriteChangelog("context", jsonString)
+						log.Debugf("Context dumped")
+					}
 				}
+				// If we're about to resurrect (resurrect requested) but haven't done so yet, do not wrtie resurrect info.
 			}
 		case applyEventFunc := <-this.applyEventsQueue:
 			{

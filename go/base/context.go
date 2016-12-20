@@ -82,6 +82,7 @@ type MigrationContext struct {
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
+	Resurrect                bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -161,6 +162,7 @@ type MigrationContext struct {
 	UserCommandedUnpostponeFlag            int64
 	CutOverCompleteFlag                    int64
 	InCutOverCriticalSectionFlag           int64
+	IsResurrected                          bool
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
