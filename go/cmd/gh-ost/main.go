@@ -49,9 +49,9 @@ func main() {
 	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unabel to determine the master")
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
-	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
+	cliPassword := flag.String("password", "", "MySQL password")
 	flag.StringVar(&migrationContext.CliMasterUser, "master-user", "", "MySQL user on master, if different from that on replica. Requires --assume-master-host")
-	flag.StringVar(&migrationContext.CliMasterPassword, "master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
+	cliMasterPassword := flag.String("master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
 
@@ -175,7 +175,7 @@ func main() {
 	if migrationContext.CliMasterUser != "" && migrationContext.AssumeMasterHostname == "" {
 		log.Fatalf("--master-user requires --assume-master-host")
 	}
-	if migrationContext.CliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
+	if *cliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
 		log.Fatalf("--master-password requires --assume-master-host")
 	}
 
@@ -202,13 +202,15 @@ func main() {
 	if migrationContext.ServeSocketFile == "" {
 		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
 	}
+	migrationContext.SetCliPassword(*cliPassword)
+	migrationContext.SetCliMasterPassword(*cliMasterPassword)
 	if *askPass {
 		fmt.Println("Password:")
 		bytePassword, err := terminal.ReadPassword(int(syscall.Stdin))
 		if err != nil {
 			log.Fatale(err)
 		}
-		migrationContext.CliPassword = string(bytePassword)
+		migrationContext.SetCliPassword(string(bytePassword))
 	}
 	migrationContext.SetHeartbeatIntervalMilliseconds(*heartbeatIntervalMillis)
 	migrationContext.SetNiceRatio(*niceRatio)

@@ -87,9 +87,9 @@ type MigrationContext struct {
 	configMutex       *sync.Mutex
 	ConfigFile        string
 	CliUser           string
-	CliPassword       string
+	cliPassword       string
 	CliMasterUser     string
-	CliMasterPassword string
+	cliMasterPassword string
 
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
@@ -629,6 +629,18 @@ func (this *MigrationContext) AddThrottleControlReplicaKey(key mysql.InstanceKey
 	return nil
 }
 
+func (this *MigrationContext) SetCliPassword(password string) {
+	this.cliPassword = password
+}
+
+func (this *MigrationContext) SetCliMasterPassword(password string) {
+	this.cliMasterPassword = password
+}
+
+func (this *MigrationContext) GetCliMasterPassword() string {
+	return this.cliMasterPassword
+}
+
 // ApplyCredentials sorts out the credentials between the config file and the CLI flags
 func (this *MigrationContext) ApplyCredentials() {
 	this.configMutex.Lock()
@@ -644,9 +656,9 @@ func (this *MigrationContext) ApplyCredentials() {
 	if this.config.Client.Password != "" {
 		this.InspectorConnectionConfig.Password = this.config.Client.Password
 	}
-	if this.CliPassword != "" {
+	if this.cliPassword != "" {
 		// Override
-		this.InspectorConnectionConfig.Password = this.CliPassword
+		this.InspectorConnectionConfig.Password = this.cliPassword
 	}
 }
 

@@ -663,8 +663,8 @@ func (this *Migrator) initiateInspector() (err error) {
 		if this.migrationContext.CliMasterUser != "" {
 			this.migrationContext.ApplierConnectionConfig.User = this.migrationContext.CliMasterUser
 		}
-		if this.migrationContext.CliMasterPassword != "" {
-			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
+		if this.migrationContext.GetCliMasterPassword() != "" {
+			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.GetCliMasterPassword()
 		}
 		log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	}
