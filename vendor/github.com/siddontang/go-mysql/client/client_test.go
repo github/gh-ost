@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"testing"
 
-	. "gopkg.in/check.v1"
+	. "github.com/pingcap/check"
 
 	"github.com/siddontang/go-mysql/mysql"
 )
 
-var testAddr = flag.String("addr", "127.0.0.1:3306", "MySQL server address")
+var testHost = flag.String("host", "127.0.0.1", "MySQL server host")
+var testPort = flag.Int("port", 3306, "MySQL server port")
 var testUser = flag.String("user", "root", "MySQL user")
 var testPassword = flag.String("pass", "", "MySQL password")
 var testDB = flag.String("db", "test", "MySQL test database")
@@ -27,7 +28,8 @@ var _ = Suite(&clientTestSuite{})
 
 func (s *clientTestSuite) SetUpSuite(c *C) {
 	var err error
-	s.c, err = Connect(*testAddr, *testUser, *testPassword, *testDB)
+	addr := fmt.Sprintf("%s:%d", *testHost, *testPort)
+	s.c, err = Connect(addr, *testUser, *testPassword, *testDB)
 	if err != nil {
 		c.Fatal(err)
 	}

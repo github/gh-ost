@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"sync"
 
+	"golang.org/x/net/context"
+
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
@@ -38,7 +40,16 @@ func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *G
 		binlogSyncer:            nil,
 		binlogStreamer:          nil,
 	}
-	binlogReader.binlogSyncer = replication.NewBinlogSyncer(serverId, "mysql")
+	binlogSyncerConfig := &replication.BinlogSyncerConfig{
+		ServerID: serverId,
+		Flavor:   "mysql",
+		Host:     connectionConfig.Key.Hostname,
+		Port:     uint16(connectionConfig.Key.Port),
+		User:     connectionConfig.User,
+		Password: connectionConfig.Password,
+	}
+
+	binlogReader.binlogSyncer = replication.NewBinlogSyncer(binlogSyncerConfig)
 
 	return binlogReader, err
 }
@@ -47,10 +58,6 @@ func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *G
 func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordinates) (err error) {
 	if coordinates.IsEmpty() {
 		return log.Errorf("Emptry coordinates at ConnectBinlogStreamer()")
-	}
-	log.Infof("Registering replica at %+v:%+v", this.connectionConfig.Key.Hostname, uint16(this.connectionConfig.Key.Port))
-	if err := this.binlogSyncer.RegisterSlave(this.connectionConfig.Key.Hostname, uint16(this.connectionConfig.Key.Port), this.connectionConfig.User, this.connectionConfig.Password); err != nil {
-		return err
 	}
 
 	this.currentCoordinates = coordinates
@@ -125,7 +132,7 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 		if canStopStreaming() {
 			break
 		}
-		ev, err := this.binlogStreamer.GetEvent()
+		ev, err := this.binlogStreamer.GetEvent(context.Background())
 		if err != nil {
 			return err
 		}
