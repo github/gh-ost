@@ -128,13 +128,8 @@ func (this *Migrator) initiateContextDump() (err error) {
 	go func() {
 		contextDumpTick := time.Tick(contextDumpInterval)
 		for range contextDumpTick {
-			if dumpFile, err := this.migrationContext.DumpJSON(); err == nil {
-				this.contextDumpFiles = append(this.contextDumpFiles, dumpFile)
-				if len(this.contextDumpFiles) > 2 {
-					oldDumpFile := this.contextDumpFiles[0]
-					this.contextDumpFiles = this.contextDumpFiles[1:]
-					os.Remove(oldDumpFile)
-				}
+			if jsonString, err := this.migrationContext.ToJSON(); err == nil {
+				this.applier.WriteChangelog("context", jsonString)
 			}
 		}
 	}()

@@ -8,7 +8,6 @@ package base
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"regexp"
 	"strings"
@@ -221,14 +220,8 @@ func GetMigrationContext() *MigrationContext {
 	return context
 }
 
-// ToJSON exports this config to JSON string
-func (this *MigrationContext) ToJSON() (string, error) {
-	b, err := json.Marshal(this)
-	return string(b), err
-}
-
 // DumpJSON exports this config to JSON string and writes it to file
-func (this *MigrationContext) DumpJSON() (fileName string, err error) {
+func (this *MigrationContext) ToJSON() (string, error) {
 	if this.MigrationRangeMinValues != nil {
 		this.EncodedRangeValues["MigrationRangeMinValues"], _ = this.MigrationRangeMinValues.ToBase64()
 	}
@@ -243,12 +236,9 @@ func (this *MigrationContext) DumpJSON() (fileName string, err error) {
 	}
 	jsonBytes, err := json.Marshal(this)
 	if err != nil {
-		return fileName, err
+		return "", err
 	}
-	fileName = fmt.Sprintf("%s/gh-ost.%s.%d.context.json", "/tmp", this.OriginalTableName, this.ElapsedTime())
-	err = ioutil.WriteFile(fileName, jsonBytes, 0644)
-
-	return fileName, err
+	return string(jsonBytes), nil
 }
 
 // GetGhostTableName generates the name of ghost table, based on original table name
