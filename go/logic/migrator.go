@@ -282,7 +282,7 @@ func (this *Migrator) resurrect() error {
 	}
 	log.Infof("Proceeding to resurrection")
 
-	// Dry run: loading migration context to a temporary location just to confirm there's no errors:
+	// Loading migration context to a temporary location:
 	loadedContext := base.NewMigrationContext()
 	if err := loadedContext.LoadJSON(encodedContext); err != nil {
 		return err
@@ -297,10 +297,9 @@ func (this *Migrator) resurrect() error {
 	if this.migrationContext.AlterStatement != loadedContext.AlterStatement {
 		return fmt.Errorf("Resurrection: given --alter statement not identical to resurrected one. Bailing out")
 	}
-	// Happy. Let's go live and load the context for real.
-	if err := this.migrationContext.LoadJSON(encodedContext); err != nil {
-		return err
-	}
+	// Happy. Let's go live and update our real context
+	this.migrationContext.ApplyResurrectedContext(loadedContext)
+
 	return nil
 }
 

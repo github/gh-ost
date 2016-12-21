@@ -255,10 +255,6 @@ func (this *MigrationContext) LoadJSON(jsonString string) error {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
-	// Some stuff that is in context but is more of a config that may be overriden by --resurrect kind of execution:
-	// Push
-	hooksPath := this.HooksPath
-
 	jsonBytes := []byte(jsonString)
 	err := json.Unmarshal(jsonBytes, this)
 
@@ -275,10 +271,23 @@ func (this *MigrationContext) LoadJSON(jsonString string) error {
 		return err
 	}
 
-	// Pop
-	this.HooksPath = hooksPath
-
 	return err
+}
+
+// GetGhostTableName generates the name of ghost table, based on original table name
+func (this *MigrationContext) ApplyResurrectedContext(other *MigrationContext) {
+	this.MigrationRangeMinValues = other.MigrationRangeMinValues
+	this.MigrationRangeMaxValues = other.MigrationRangeMaxValues
+	this.MigrationIterationRangeMinValues = other.MigrationIterationRangeMinValues
+	this.MigrationIterationRangeMaxValues = other.MigrationIterationRangeMaxValues
+
+	this.RowsEstimate = other.RowsEstimate
+	this.RowsDeltaEstimate = other.RowsDeltaEstimate
+	this.TotalRowsCopied = other.TotalRowsCopied
+	this.TotalDMLEventsApplied = other.TotalDMLEventsApplied
+
+	this.Iteration = other.Iteration
+	this.StreamerBinlogCoordinates = other.StreamerBinlogCoordinates
 }
 
 // GetGhostTableName generates the name of ghost table, based on original table name

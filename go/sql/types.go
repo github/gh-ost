@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/gob"
-	//	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -276,11 +275,6 @@ func (this *ColumnValues) ToBase64() (b64 string, err error) {
 	}
 	return base64.StdEncoding.EncodeToString(buff.Bytes()), nil
 }
-
-// // MarshalJSON will marshal this object as JSON
-// func (this *ColumnValues) MarshalJSON() ([]byte, error) {
-// 	return json.Marshal(this.abstractValues)
-// }
 
 func (this *ColumnValues) AbstractValues() []interface{} {
 	return this.abstractValues
