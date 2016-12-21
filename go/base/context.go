@@ -198,10 +198,10 @@ type ContextConfig struct {
 var context *MigrationContext
 
 func init() {
-	context = newMigrationContext()
+	context = NewMigrationContext()
 }
 
-func newMigrationContext() *MigrationContext {
+func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
 		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
@@ -248,6 +248,37 @@ func (this *MigrationContext) ToJSON() (string, error) {
 		return "", err
 	}
 	return string(jsonBytes), nil
+}
+
+// LoadJSON treats given json as context-dump, and attempts to load this context's data.
+func (this *MigrationContext) LoadJSON(jsonString string) error {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	// Some stuff that is in context but is more of a config that may be overriden by --resurrect kind of execution:
+	// Push
+	hooksPath := this.HooksPath
+
+	jsonBytes := []byte(jsonString)
+	err := json.Unmarshal(jsonBytes, this)
+
+	if this.MigrationRangeMinValues, err = sql.NewColumnValuesFromBase64(this.EncodedRangeValues["MigrationRangeMinValues"]); err != nil {
+		return err
+	}
+	if this.MigrationRangeMaxValues, err = sql.NewColumnValuesFromBase64(this.EncodedRangeValues["MigrationRangeMaxValues"]); err != nil {
+		return err
+	}
+	if this.MigrationIterationRangeMinValues, err = sql.NewColumnValuesFromBase64(this.EncodedRangeValues["MigrationIterationRangeMinValues"]); err != nil {
+		return err
+	}
+	if this.MigrationIterationRangeMaxValues, err = sql.NewColumnValuesFromBase64(this.EncodedRangeValues["MigrationIterationRangeMaxValues"]); err != nil {
+		return err
+	}
+
+	// Pop
+	this.HooksPath = hooksPath
+
+	return err
 }
 
 // GetGhostTableName generates the name of ghost table, based on original table name

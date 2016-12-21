@@ -272,6 +272,38 @@ func (this *Migrator) countTableRows() (err error) {
 	return countRowsFunc()
 }
 
+func (this *Migrator) resurrect() error {
+	encodedContext, err := this.inspector.readChangelogState("context")
+	if err != nil {
+		return err
+	}
+	if encodedContext == "" {
+		return fmt.Errorf("No resurrect info found")
+	}
+	log.Infof("Proceeding to resurrection")
+
+	// Dry run: loading migration context to a temporary location just to confirm there's no errors:
+	loadedContext := base.NewMigrationContext()
+	if err := loadedContext.LoadJSON(encodedContext); err != nil {
+		return err
+	}
+	// Sanity: heuristically verify loaded context truly reflects our very own context (e.g. is this the same migration on the same table?)
+	if this.migrationContext.DatabaseName != loadedContext.DatabaseName {
+		return fmt.Errorf("Resurrection: given --database not identical to resurrected one. Bailing out")
+	}
+	if this.migrationContext.OriginalTableName != loadedContext.OriginalTableName {
+		return fmt.Errorf("Resurrection: given --table not identical to resurrected one. Bailing out")
+	}
+	if this.migrationContext.AlterStatement != loadedContext.AlterStatement {
+		return fmt.Errorf("Resurrection: given --alter statement not identical to resurrected one. Bailing out")
+	}
+	// Happy. Let's go live and load the context for real.
+	if err := this.migrationContext.LoadJSON(encodedContext); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
 	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -339,6 +371,11 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
+	}
+	if this.migrationContext.Resurrect {
+		if err := this.resurrect(); err != nil {
+			return err
+		}
 	}
 	go this.executeWriteFuncs()
 	go this.iterateChunks()

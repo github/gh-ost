@@ -83,11 +83,9 @@ func (this *Throttler) collectHeartbeat() {
 			if atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
 				return nil
 			}
-			changelogState, err := this.inspector.readChangelogState()
-			if err != nil {
+			if heartbeatValue, err := this.inspector.readChangelogState("heartbeat"); err != nil {
 				return log.Errore(err)
-			}
-			if heartbeatValue, ok := changelogState["heartbeat"]; ok {
+			} else {
 				this.parseChangelogHeartbeat(heartbeatValue)
 			}
 			return nil

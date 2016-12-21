@@ -680,18 +680,18 @@ func (this *Inspector) showCreateTable(tableName string) (createTableStatement s
 }
 
 // readChangelogState reads changelog hints
-func (this *Inspector) readChangelogState() (map[string]string, error) {
+func (this *Inspector) readChangelogState(hint string) (string, error) {
 	query := fmt.Sprintf(`
-		select hint, value from %s.%s where id <= 255
+		select hint, value from %s.%s where hint = ? and id <= 255
 		`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
-	result := make(map[string]string)
+	result := ""
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
-		result[m.GetString("hint")] = m.GetString("value")
+		result = m.GetString("value")
 		return nil
-	})
+	}, hint)
 	return result, err
 }
 
