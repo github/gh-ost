@@ -180,11 +180,13 @@ func main() {
 	if *cliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
 		log.Fatalf("--master-password requires --assume-master-host")
 	}
-	if migrationContext.InitiallyDropGhostTable && migrationContext.Resurrect {
-		log.Fatalf("--initially-drop-ghost-table and --resurrect are mutually exclusive")
+	if migrationContext.Resurrect && migrationContext.InitiallyDropGhostTable {
+		migrationContext.InitiallyDropGhostTable = false
+		log.Warningf("--resurrect given, implicitly disabling --initially-drop-ghost-table")
 	}
-	if migrationContext.InitiallyDropOldTable && migrationContext.Resurrect {
-		log.Fatalf("--initially-drop-old-table and --resurrect are mutually exclusive")
+	if migrationContext.Resurrect && migrationContext.InitiallyDropOldTable {
+		migrationContext.InitiallyDropOldTable = false
+		log.Warningf("--resurrect given, implicitly disabling --initially-drop-old-table")
 	}
 
 	switch *cutOver {

@@ -128,6 +128,19 @@ func (this *Applier) tableExists(tableName string) (tableFound bool) {
 // ValidateOrDropExistingTables verifies ghost and changelog tables do not exist,
 // or attempts to drop them if instructed to.
 func (this *Applier) ValidateOrDropExistingTables() error {
+	if this.migrationContext.Resurrect {
+		ghostTableExists := this.tableExists(this.migrationContext.GetGhostTableName())
+		if !ghostTableExists {
+			return fmt.Errorf("--ressurect requested, but ghost table %s doesn't exist. Panicking.", this.migrationContext.GetGhostTableName())
+		}
+		changelogTableExists := this.tableExists(this.migrationContext.GetChangelogTableName())
+		if !changelogTableExists {
+			return fmt.Errorf("--ressurect requested, but changelog table %s doesn't exist. Panicking.", this.migrationContext.GetChangelogTableName())
+		}
+		return nil
+	}
+	// Normal mode (no resurrection)
+
 	if this.migrationContext.InitiallyDropGhostTable {
 		if err := this.DropGhostTable(); err != nil {
 			return err
