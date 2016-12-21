@@ -952,21 +952,27 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}
-	if err := this.applier.ValidateOrDropExistingTables(); err != nil {
-		return err
-	}
-	if err := this.applier.CreateChangelogTable(); err != nil {
-		log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
-		return err
-	}
-	if err := this.applier.CreateGhostTable(); err != nil {
-		log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
-		return err
-	}
-
-	if err := this.applier.AlterGhost(); err != nil {
-		log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
-		return err
+	if this.migrationContext.Resurrect {
+		if err := this.applier.ValidateTablesForResurrection(); err != nil {
+			return err
+		}
+	} else {
+		// Normal operation, no resurrection
+		if err := this.applier.ValidateOrDropExistingTables(); err != nil {
+			return err
+		}
+		if err := this.applier.CreateChangelogTable(); err != nil {
+			log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			return err
+		}
+		if err := this.applier.CreateGhostTable(); err != nil {
+			log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+			return err
+		}
+		if err := this.applier.AlterGhost(); err != nil {
+			log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
+			return err
+		}
 	}
 
 	this.applier.WriteChangelogState(string(GhostTableMigrated))
