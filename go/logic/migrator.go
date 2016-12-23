@@ -936,7 +936,7 @@ func (this *Migrator) initiateStreaming() error {
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.GetChangelogTableName(),
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
+		func(dmlEvent *binlog.BinlogDMLEvent, _ *mysql.BinlogCoordinates) error {
 			return this.onChangelogStateEvent(dmlEvent)
 		},
 	)
@@ -959,10 +959,14 @@ func (this *Migrator) addDMLEventsListener() error {
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
+		func(dmlEvent *binlog.BinlogDMLEvent, coordinates *mysql.BinlogCoordinates) error {
 			// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 			applyEventFunc := func() error {
-				return this.applier.ApplyDMLEventQuery(dmlEvent)
+				err := this.applier.ApplyDMLEventQuery(dmlEvent)
+				if err != nil {
+					this.migrationContext.SetAppliedBinlogCoordinates(coordinates)
+				}
+				return err
 			}
 			this.applyEventsQueue <- applyEventFunc
 			return nil
@@ -1084,7 +1088,6 @@ func (this *Migrator) executeWriteFuncs() error {
 		select {
 		case <-contextDumpTick:
 			{
-				this.migrationContext.SetStreamerBinlogCoordinates(this.eventsStreamer.GetCurrentBinlogCoordinates())
 				if !this.migrationContext.Resurrect || this.migrationContext.IsResurrected {
 					if jsonString, err := this.migrationContext.ToJSON(); err == nil {
 						this.applier.WriteChangelog("context", jsonString)

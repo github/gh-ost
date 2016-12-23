@@ -179,7 +179,7 @@ type MigrationContext struct {
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 	EncodedRangeValues               map[string]string
-	StreamerBinlogCoordinates        mysql.BinlogCoordinates
+	AppliedBinlogCoordinates         mysql.BinlogCoordinates
 }
 
 type ContextConfig struct {
@@ -215,7 +215,7 @@ func NewMigrationContext() *MigrationContext {
 		throttleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
-		StreamerBinlogCoordinates:           mysql.BinlogCoordinates{},
+		AppliedBinlogCoordinates:            mysql.BinlogCoordinates{},
 		ColumnRenameMap:                     make(map[string]string),
 		EncodedRangeValues:                  make(map[string]string),
 	}
@@ -287,7 +287,7 @@ func (this *MigrationContext) ApplyResurrectedContext(other *MigrationContext) {
 	this.TotalDMLEventsApplied = other.TotalDMLEventsApplied
 
 	this.Iteration = other.Iteration
-	this.StreamerBinlogCoordinates = other.StreamerBinlogCoordinates
+	this.AppliedBinlogCoordinates = other.AppliedBinlogCoordinates
 }
 
 // GetGhostTableName generates the name of ghost table, based on original table name
@@ -590,11 +590,11 @@ func (this *MigrationContext) SetNiceRatio(newRatio float64) {
 	this.niceRatio = newRatio
 }
 
-func (this *MigrationContext) SetStreamerBinlogCoordinates(binlogCoordinates *mysql.BinlogCoordinates) {
+func (this *MigrationContext) SetAppliedBinlogCoordinates(binlogCoordinates *mysql.BinlogCoordinates) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
-	this.StreamerBinlogCoordinates = *binlogCoordinates
+	this.AppliedBinlogCoordinates = *binlogCoordinates
 }
 
 // ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
