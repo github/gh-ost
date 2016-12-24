@@ -105,7 +105,7 @@ func (this *EventsStreamer) notifyListeners(binlogEntry *binlog.BinlogEntry) {
 	}
 }
 
-func (this *EventsStreamer) InitDBConnections() (err error) {
+func (this *EventsStreamer) InitDBConnections(resurrectedContext *base.MigrationContext) (err error) {
 	EventsStreamerUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = sqlutils.GetDB(EventsStreamerUri); err != nil {
 		return err
@@ -113,8 +113,13 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
-	if err := this.readCurrentBinlogCoordinates(); err != nil {
-		return err
+	if this.migrationContext.Resurrect {
+		log.Infof("Resurrection: initiating streamer at resurrected coordinates %+v", resurrectedContext.AppliedBinlogCoordinates)
+		this.initialBinlogCoordinates = &resurrectedContext.AppliedBinlogCoordinates
+	} else {
+		if err := this.readCurrentBinlogCoordinates(); err != nil {
+			return err
+		}
 	}
 	if err := this.initBinlogReader(this.initialBinlogCoordinates); err != nil {
 		return err
