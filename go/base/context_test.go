@@ -46,6 +46,7 @@ func TestContextLoadJSON(t *testing.T) {
 		err = context.LoadJSON(jsonString)
 		test.S(t).ExpectEqualsAny(err, nil, io.EOF)
 		test.S(t).ExpectEquals(context.AppliedBinlogCoordinates, mysql.BinlogCoordinates{LogFile: "mysql-bin.012345", LogPos: 6789})
+
 		abstractValues := context.MigrationRangeMinValues.AbstractValues()
 		test.S(t).ExpectEquals(len(abstractValues), 2)
 		test.S(t).ExpectEquals(abstractValues[0], 31)
