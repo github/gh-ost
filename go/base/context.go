@@ -8,6 +8,7 @@ package base
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -256,8 +257,12 @@ func (this *MigrationContext) LoadJSON(jsonString string) error {
 	defer this.throttleMutex.Unlock()
 
 	jsonBytes := []byte(jsonString)
-	err := json.Unmarshal(jsonBytes, this)
 
+	if err := json.Unmarshal(jsonBytes, this); err != nil && err != io.EOF {
+		return err
+	}
+
+	var err error
 	if this.MigrationRangeMinValues, err = sql.NewColumnValuesFromBase64(this.EncodedRangeValues["MigrationRangeMinValues"]); err != nil {
 		return err
 	}
@@ -271,7 +276,7 @@ func (this *MigrationContext) LoadJSON(jsonString string) error {
 		return err
 	}
 
-	return err
+	return nil
 }
 
 // GetGhostTableName generates the name of ghost table, based on original table name
