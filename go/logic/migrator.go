@@ -301,6 +301,7 @@ func (this *Migrator) readResurrectedContext() error {
 
 func (this *Migrator) applyResurrectedContext() error {
 	this.migrationContext.ApplyResurrectedContext(this.resurrectedContext)
+	atomic.StoreInt64(&this.migrationContext.IsResurrected, 1)
 
 	return nil
 }
@@ -1094,12 +1095,14 @@ func (this *Migrator) executeWriteFuncs() error {
 	for {
 		this.throttler.throttle(nil)
 
-		// We give higher priority to event processing, then secondary priority to
-		// rowcopy
+		// We give higher priority to event processing, then secondary priority to rowcopy
 		select {
 		case <-contextDumpTick:
 			{
-				if !this.migrationContext.Resurrect || this.migrationContext.IsResurrected {
+				if !(this.migrationContext.Resurrect && atomic.LoadInt64(&this.migrationContext.IsResurrected) == 0) {
+					// Not dumping context if we're _in the process of resurrecting_...
+					// otherwise, we dump the context. Note that this operation works sequentially to any row copy or
+					// event handling. There is no concurrency issue here.
 					if jsonString, err := this.migrationContext.ToJSON(); err == nil {
 						this.applier.WriteChangelog("context", jsonString)
 						log.Debugf("Context dumped. Applied coordinates: %+v", this.migrationContext.AppliedBinlogCoordinates)
