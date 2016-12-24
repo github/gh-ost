@@ -76,9 +76,7 @@ type Migrator struct {
 	copyRowsQueue    chan tableWriteFunc
 	applyEventsQueue chan tableWriteFunc
 
-	handledChangelogStates map[string]bool
-	contextDumpFiles       []string
-	panicAbort             chan error
+	panicAbort chan error
 }
 
 func NewMigrator() *Migrator {
@@ -90,12 +88,10 @@ func NewMigrator() *Migrator {
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan string),
 
-		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
-		handledChangelogStates: make(map[string]bool),
+		copyRowsQueue:    make(chan tableWriteFunc),
+		applyEventsQueue: make(chan tableWriteFunc, applyEventsQueueBuffer),
 
-		contextDumpFiles: []string{},
-		panicAbort:       make(chan error),
+		panicAbort: make(chan error),
 	}
 	return migrator
 }
