@@ -30,6 +30,7 @@ In addition, it offers many [operational perks](doc/perks.md) that make it safer
 - Auditing: you may query `gh-ost` for status. `gh-ost` listens on unix socket or TCP.
 - Control over cut-over phase: `gh-ost` can be instructed to postpone what is probably the most critical step: the swap of tables, until such time that you're comfortably available. No need to worry about ETA being outside office hours.
 - External [hooks](doc/hooks.md) can couple `gh-ost` with your particular environment.
+- [Resurrection](doc/resurrect.md) can resume a failed migration, proceeding from last known good position.
 
 Please refer to the [docs](doc) for more information. No, really, read the [docs](doc).
 
@@ -76,19 +77,17 @@ But then a rare genetic mutation happened, and the `c` transformed into `t`. And
 
 ## Community
 
-`gh-ost` is released at a stable state, but with mileage to go. We are [open to pull requests](https://github.com/github/gh-ost/blob/master/.github/CONTRIBUTING.md). Please first discuss your intentions via [Issues](https://github.com/github/gh-ost/issues).
+`gh-ost` is released at a stable state, and still with mileage to go. We are [open to pull requests](https://github.com/github/gh-ost/blob/master/.github/CONTRIBUTING.md). Please first discuss your intentions via [Issues](https://github.com/github/gh-ost/issues).
 
 We develop `gh-ost` at GitHub and for the community. We may have different priorities than others. From time to time we may suggest a contribution that is not on our immediate roadmap but which may appeal to others.
 
 ## Download/binaries/source
 
-`gh-ost` is now GA and stable.
-
-`gh-ost` is available in binary format for Linux and Mac OS/X
+`gh-ost` is GA and stable, available in binary format for Linux and Mac OS/X
 
 [Download latest release here](https://github.com/github/gh-ost/releases/latest)
 
-`gh-ost` is a Go project; it is built with Go 1.5 with "experimental vendor". Soon to migrate to Go 1.6. See and use [build file](https://github.com/github/gh-ost/blob/master/build.sh) for compiling it on your own.
+`gh-ost` is a Go project; it is built with Go 1.7. See and use [build file](https://github.com/github/gh-ost/blob/master/build.sh) for compiling it on your own.
 
 Generally speaking, `master` branch is stable, but only [releases](https://github.com/github/gh-ost/releases) are to be used in production.
 

@@ -111,6 +111,14 @@ See also: [Sub-second replication lag throttling](subsecond-lag.md)
 
 Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but other issue no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
 
+### resurrect
+
+It is possible to resurrect/resume a failed migration. Such a migration would be a valid execution, which bailed out throughout the migration process. A migration would bail out on meeting with `--critical-load`, or perhaps a user `kill -9`'d it.
+
+Use `--resurrect` with exact same other flags (same `--database, --table, --alter`) to resume a failed migration.
+
+Read more on [resurrection docs](resurrect.md)
+
 ### skip-foreign-key-checks
 
 By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not referenece other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
