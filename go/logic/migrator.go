@@ -303,6 +303,10 @@ func (this *Migrator) applyResurrectedContext() error {
 	this.migrationContext.ApplyResurrectedContext(this.resurrectedContext)
 	atomic.StoreInt64(&this.migrationContext.IsResurrected, 1)
 
+	if err := this.hooksExecutor.onResurrecting(); err != nil {
+		return err
+	}
+
 	return nil
 }
 

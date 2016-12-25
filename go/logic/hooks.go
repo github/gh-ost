@@ -20,6 +20,7 @@ import (
 const (
 	onStartup            = "gh-ost-on-startup"
 	onValidated          = "gh-ost-on-validated"
+	onResurrecting       = "gh-ost-on-resurrecting"
 	onRowCountComplete   = "gh-ost-on-rowcount-complete"
 	onBeforeRowCopy      = "gh-ost-on-before-row-copy"
 	onRowCopyComplete    = "gh-ost-on-row-copy-complete"
@@ -110,6 +111,10 @@ func (this *HooksExecutor) onStartup() error {
 
 func (this *HooksExecutor) onValidated() error {
 	return this.executeHooks(onValidated)
+}
+
+func (this *HooksExecutor) onResurrecting() error {
+	return this.executeHooks(onResurrecting)
 }
 
 func (this *HooksExecutor) onRowCountComplete() error {
