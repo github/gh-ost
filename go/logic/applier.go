@@ -876,33 +876,48 @@ func (this *Applier) ShowStatusVariable(variableName string) (result int64, err 
 
 // buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
 // event entry on the original table.
-func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query string, args []interface{}, rowsDelta int64, err error) {
+func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query string, args []interface{}, dataViaBinlog bool, rowsDelta int64, err error) {
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
 		{
 			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
-			return query, uniqueKeyArgs, -1, err
+			return query, uniqueKeyArgs, true, -1, err
 		}
 	case binlog.InsertDML:
 		{
+			if this.migrationContext.UniqueKey.IsPrimary() {
+				query, sharedArgs, err := sql.BuildPKInsertPreparedQuery(dmlEvent.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns.Names(), this.migrationContext.MappedSharedColumns.Names(), this.migrationContext.UniqueKey, dmlEvent.NewColumnValues.AbstractValues(), this.migrationContext.IsTransactionalTable())
+				log.Errorf("-------------- insert")
+				log.Errorf("query: %+v", query)
+				log.Errorf("argss: %+v", sharedArgs)
+				return query, sharedArgs, false, 1, err
+			}
 			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
-			return query, sharedArgs, 1, err
+			return query, sharedArgs, true, 1, err
 		}
 	case binlog.UpdateDML:
 		{
+			// if this.migrationContext.UniqueKey.IsPrimary() {
+			// 	query, sharedArgs, err := sql.BuildPKInsertPreparedQuery(dmlEvent.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns.Names(), this.migrationContext.MappedSharedColumns.Names(), this.migrationContext.UniqueKey, dmlEvent.NewColumnValues.AbstractValues(), this.migrationContext.IsTransactionalTable())
+			// 	log.Errorf("-------------- update")
+			// 	log.Errorf("query: %+v", query)
+			// 	log.Errorf("argss: %+v", sharedArgs)
+			//
+			// 	return query, sharedArgs, false, 1, err
+			// }
 			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
-			return query, args, 0, err
+			return query, args, true, 0, err
 		}
 	}
-	return "", args, 0, fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)
+	return "", args, false, 0, fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)
 }
 
 // ApplyDMLEventQuery writes an entry to the ghost table, in response to an intercepted
 // original-table binlog event
 func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
-	query, args, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
+	query, args, dataViaBinlog, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
 	if err != nil {
 		return err
 	}
@@ -923,10 +938,16 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 		if err != nil {
 			return err
 		}
-		sessionQuery := `SET
-			SESSION time_zone = '+00:00',
-			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
+		extraSessionChanges := ""
+		if dataViaBinlog {
+			extraSessionChanges = `
+				SESSION time_zone = '+00:00',
 			`
+		}
+		sessionQuery := fmt.Sprintf(`SET
+			%s
+			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
+			`, extraSessionChanges)
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return err
 		}
