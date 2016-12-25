@@ -39,4 +39,4 @@ Row-based replication has the property of being idempotent for DML events. There
 
 Chunk-reiteration likewise poses no integrity concern and there is no harm in re-copying same range of rows.
 
-The only concern is to never skip binlog events, and never skip a row range. By virtue of only dumping events and ranges that have been applied, and by virtue of only proceessing binlog events and chunks moving forward, `gh-ost` keeps integrity intact.
+The only concern is to never skip binlog events, and never skip a row range. By virtue of only dumping events and ranges that have been applied, and by virtue of only processing binlog events and chunks moving forward, `gh-ost` keeps integrity intact.
