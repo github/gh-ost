@@ -95,7 +95,6 @@ type MigrationContext struct {
 	ChunkSize                           int64
 	niceRatio                           float64
 	MaxLagMillisecondsThrottleThreshold int64
-	replicationLagQuery                 string
 	throttleControlReplicaKeys          *mysql.InstanceKeyMap
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
@@ -453,23 +452,6 @@ func (this *MigrationContext) IsThrottled() (bool, string, ThrottleReasonHint) {
 		return false, "critical section", NoThrottleReasonHint
 	}
 	return this.isThrottled, this.throttleReason, this.throttleReasonHint
-}
-
-func (this *MigrationContext) GetReplicationLagQuery() string {
-	var query string
-
-	this.throttleMutex.Lock()
-	defer this.throttleMutex.Unlock()
-
-	query = this.replicationLagQuery
-	return query
-}
-
-func (this *MigrationContext) SetReplicationLagQuery(newQuery string) {
-	this.throttleMutex.Lock()
-	defer this.throttleMutex.Unlock()
-
-	this.replicationLagQuery = newQuery
 }
 
 func (this *MigrationContext) GetThrottleQuery() string {

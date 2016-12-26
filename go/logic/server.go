@@ -178,8 +178,7 @@ help                                 # This message
 		}
 	case "replication-lag-query":
 		{
-			this.migrationContext.SetReplicationLagQuery(arg)
-			return ForcePrintStatusAndHintRule, nil
+			return NoPrintStatusRule, fmt.Errorf("replication-lag-query is deprecated. gh-ost uses an internal, subsecond resolution query")
 		}
 	case "nice-ratio":
 		{
