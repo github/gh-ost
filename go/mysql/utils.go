@@ -24,19 +24,13 @@ type ReplicationLagResult struct {
 
 // GetReplicationLag returns replication lag for a given connection config; either by explicit query
 // or via SHOW SLAVE STATUS
-func GetReplicationLag(connectionConfig *ConnectionConfig, replicationLagQuery string) (replicationLag time.Duration, err error) {
+func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.Duration, err error) {
 	dbUri := connectionConfig.GetDBUri("information_schema")
 	var db *gosql.DB
 	if db, _, err = sqlutils.GetDB(dbUri); err != nil {
 		return replicationLag, err
 	}
 
-	if replicationLagQuery != "" {
-		var floatLag float64
-		err = db.QueryRow(replicationLagQuery).Scan(&floatLag)
-		return time.Duration(int64(floatLag*1000)) * time.Millisecond, err
-	}
-	// No explicit replication lag query.
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
 		secondsBehindMaster := m.GetNullInt64("Seconds_Behind_Master")
 		if !secondsBehindMaster.Valid {
@@ -46,34 +40,6 @@ func GetReplicationLag(connectionConfig *ConnectionConfig, replicationLagQuery s
 		return nil
 	})
 	return replicationLag, err
-}
-
-// GetMaxReplicationLag concurrently checks for replication lag on given list of instance keys,
-// each via GetReplicationLag
-func GetMaxReplicationLag(baseConnectionConfig *ConnectionConfig, instanceKeyMap *InstanceKeyMap, replicationLagQuery string) (result *ReplicationLagResult) {
-	result = &ReplicationLagResult{Lag: 0}
-	if instanceKeyMap.Len() == 0 {
-		return result
-	}
-	lagResults := make(chan *ReplicationLagResult, instanceKeyMap.Len())
-	for key := range *instanceKeyMap {
-		connectionConfig := baseConnectionConfig.Duplicate()
-		connectionConfig.Key = key
-		result := &ReplicationLagResult{Key: connectionConfig.Key}
-		go func() {
-			result.Lag, result.Err = GetReplicationLag(connectionConfig, replicationLagQuery)
-			lagResults <- result
-		}()
-	}
-	for range *instanceKeyMap {
-		lagResult := <-lagResults
-		if lagResult.Err != nil {
-			result = lagResult
-		} else if lagResult.Lag.Nanoseconds() > result.Lag.Nanoseconds() {
-			result = lagResult
-		}
-	}
-	return result
 }
 
 func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
