@@ -100,10 +100,7 @@ On a replication topology, this is perhaps the most important migration throttli
 
 When using [Connect to replica, migrate on master](cheatsheet.md), this lag is primarily tested on the very replica `gh-ost` operates on. Lag is measured by checking the heartbeat events injected by `gh-ost` itself on the utility changelog table. That is, to measure this replica's lag, `gh-ost` doesn't need to issue `show slave status` nor have any external heartbeat mechanism.
 
-When `--throttle-control-replicas` is provided, throttling also considers lag on specified hosts. Measuring lag on these hosts works as follows:
-
-- If `--replication-lag-query` is provided, use the query, trust its result to indicate lag seconds (fraction, i.e. float, allowed)
-- Otherwise, issue `show slave status` and read `Seconds_behind_master` (`1sec` granularity)
+When `--throttle-control-replicas` is provided, throttling also considers lag on specified hosts. Lag measurements on listed hosts is done by querying `gh-ost`'s _changelog_ table, where `gh-ost` injects a heartbeat.
 
 See also: [Sub-second replication lag throttling](subsecond-lag.md)
 
