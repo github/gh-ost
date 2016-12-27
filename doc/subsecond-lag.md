@@ -10,7 +10,7 @@ Replication lag is measured on:
 - The "inspected" server (the server `gh-ost` connects to; replica is desired but not mandatory)
 - The `throttle-control-replicas` list
 
-`gh-ost` uses an internal heartbeat mechanism. It injects heartbeat events onto the utility changelog table, then reads those events in the binary log, and compares times. This measurement is on by default and by definition supports sub-second resolution.
+`gh-ost` uses an internal heartbeat mechanism. It injects heartbeat events onto the utility changelog table, then reads those entries on replicas, and compares times. This measurement is on by default and by definition supports sub-second resolution.
 
 You can explicitly define how frequently will `gh-ost` inject heartbeat events, via `heartbeat-interval-millis`. You should set `heartbeat-interval-millis <= max-lag-millis`. It still works if not, but loses granularity and effect.
 
