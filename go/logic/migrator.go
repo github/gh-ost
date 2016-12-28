@@ -315,6 +315,24 @@ func (this *Migrator) applyResurrectedContext() error {
 	return nil
 }
 
+func (this *Migrator) dumpResurrectContext() error {
+	if this.migrationContext.Resurrect && atomic.LoadInt64(&this.migrationContext.IsResurrected) == 0 {
+		// we're in the process of resurrecting; don't dump context, because it would overwrite
+		// the very context we want to resurrect by!
+		return nil
+	}
+
+	// we dump the context. Note that this operation works sequentially to any row copy or
+	// event handling. There is no concurrency issue here.
+	if jsonString, err := this.migrationContext.ToJSON(); err != nil {
+		return log.Errore(err)
+	} else {
+		this.applier.WriteChangelog("context", jsonString)
+		log.Debugf("Context dumped. Applied coordinates: %+v", this.migrationContext.AppliedBinlogCoordinates)
+	}
+	return nil
+}
+
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
 	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -393,6 +411,7 @@ func (this *Migrator) Migrate() (err error) {
 			return err
 		}
 	}
+	this.dumpResurrectContext()
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
@@ -1108,16 +1127,7 @@ func (this *Migrator) executeWriteFuncs() error {
 		select {
 		case <-contextDumpTick:
 			{
-				if !(this.migrationContext.Resurrect && atomic.LoadInt64(&this.migrationContext.IsResurrected) == 0) {
-					// Not dumping context if we're _in the process of resurrecting_...
-					// otherwise, we dump the context. Note that this operation works sequentially to any row copy or
-					// event handling. There is no concurrency issue here.
-					if jsonString, err := this.migrationContext.ToJSON(); err == nil {
-						this.applier.WriteChangelog("context", jsonString)
-						log.Debugf("Context dumped. Applied coordinates: %+v", this.migrationContext.AppliedBinlogCoordinates)
-					}
-				}
-				// If we're about to resurrect (resurrect requested) but haven't done so yet, do not wrtie resurrect info.
+				this.dumpResurrectContext()
 			}
 		case applyEventFunc := <-this.applyEventsQueue:
 			{
