@@ -280,7 +280,7 @@ func (this *Migrator) readResurrectedContext() error {
 
 	// Loading migration context to a temporary location:
 	this.resurrectedContext = base.NewMigrationContext()
-	if err := this.resurrectedContext.LoadJSON(encodedContext); err != nil {
+	if err := this.resurrectedContext.LoadJSON(encodedContext); err != nil && err != io.EOF {
 		return err
 	}
 	// Sanity: heuristically verify loaded context truly reflects our very own context (e.g. is this the same migration on the same table?)
