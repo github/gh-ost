@@ -307,6 +307,9 @@ func (this *Migrator) applyResurrectedContext() error {
 		return err
 	}
 
+	log.Infof("Applied migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
+	log.Infof("Applied migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+
 	return nil
 }
 

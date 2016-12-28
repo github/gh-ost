@@ -114,6 +114,8 @@ func (this *EventsStreamer) InitDBConnections(resurrectedContext *base.Migration
 		return err
 	}
 	if this.migrationContext.Resurrect {
+		// Rewinding to beginning of logfile:
+		resurrectedContext.AppliedBinlogCoordinates.LogPos = 4
 		log.Infof("Resurrection: initiating streamer at resurrected coordinates %+v", resurrectedContext.AppliedBinlogCoordinates)
 		this.initialBinlogCoordinates = &resurrectedContext.AppliedBinlogCoordinates
 	} else {
