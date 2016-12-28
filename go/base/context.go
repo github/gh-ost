@@ -281,8 +281,8 @@ func (this *MigrationContext) LoadJSON(jsonString string) error {
 
 // GetGhostTableName generates the name of ghost table, based on original table name
 func (this *MigrationContext) ApplyResurrectedContext(other *MigrationContext) {
-	this.MigrationRangeMinValues = other.MigrationRangeMinValues
-	this.MigrationRangeMaxValues = other.MigrationRangeMaxValues
+	// this.MigrationRangeMinValues = other.MigrationRangeMinValues
+	// this.MigrationRangeMaxValues = other.MigrationRangeMaxValues
 	this.MigrationIterationRangeMinValues = other.MigrationIterationRangeMinValues
 	this.MigrationIterationRangeMaxValues = other.MigrationIterationRangeMaxValues
 
