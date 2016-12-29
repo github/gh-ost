@@ -9,16 +9,13 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
 	"github.com/outbrain/golib/log"
 	gomysql "github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/replication"
-)
-
-const (
-	serverId = 99999
 )
 
 type GoMySQLReader struct {
@@ -28,6 +25,7 @@ type GoMySQLReader struct {
 	currentCoordinates       mysql.BinlogCoordinates
 	currentCoordinatesMutex  *sync.Mutex
 	LastAppliedRowsEventHint mysql.BinlogCoordinates
+	MigrationContext         *base.MigrationContext
 }
 
 func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *GoMySQLReader, err error) {
@@ -37,7 +35,10 @@ func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *G
 		currentCoordinatesMutex: &sync.Mutex{},
 		binlogSyncer:            nil,
 		binlogStreamer:          nil,
+		MigrationContext:        base.GetMigrationContext(),
 	}
+
+	serverId := uint32(binlogReader.MigrationContext.ReplicaServerId)
 	binlogReader.binlogSyncer = replication.NewBinlogSyncer(serverId, "mysql")
 
 	return binlogReader, err
