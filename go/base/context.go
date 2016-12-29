@@ -279,7 +279,7 @@ func (this *MigrationContext) LoadJSON(jsonString string) error {
 	return nil
 }
 
-// GetGhostTableName generates the name of ghost table, based on original table name
+// ApplyResurrectedContext loads resurrection-related infor from given context
 func (this *MigrationContext) ApplyResurrectedContext(other *MigrationContext) {
 	// this.MigrationRangeMinValues = other.MigrationRangeMinValues
 	// this.MigrationRangeMaxValues = other.MigrationRangeMaxValues
@@ -303,10 +303,10 @@ func (this *MigrationContext) GetGhostTableName() string {
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (this *MigrationContext) GetOldTableName() string {
 	if this.TestOnReplica {
-		return fmt.Sprintf("_%s_ght", this.OriginalTableName)
+		return fmt.Sprintf("_%s_delr", this.OriginalTableName)
 	}
 	if this.MigrateOnReplica {
-		return fmt.Sprintf("_%s_ghr", this.OriginalTableName)
+		return fmt.Sprintf("_%s_delr", this.OriginalTableName)
 	}
 	return fmt.Sprintf("_%s_del", this.OriginalTableName)
 }
