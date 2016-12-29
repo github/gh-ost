@@ -283,8 +283,12 @@ func (this *MigrationContext) LoadJSON(jsonString string) error {
 func (this *MigrationContext) ApplyResurrectedContext(other *MigrationContext) {
 	// this.MigrationRangeMinValues = other.MigrationRangeMinValues
 	// this.MigrationRangeMaxValues = other.MigrationRangeMaxValues
-	this.MigrationIterationRangeMinValues = other.MigrationIterationRangeMinValues
-	this.MigrationIterationRangeMaxValues = other.MigrationIterationRangeMaxValues
+	if other.MigrationIterationRangeMinValues != nil {
+		this.MigrationIterationRangeMinValues = other.MigrationIterationRangeMinValues
+	}
+	if other.MigrationIterationRangeMaxValues != nil {
+		this.MigrationIterationRangeMaxValues = other.MigrationIterationRangeMaxValues
+	}
 
 	this.RowsEstimate = other.RowsEstimate
 	this.RowsDeltaEstimate = other.RowsDeltaEstimate
