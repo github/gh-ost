@@ -122,6 +122,7 @@ type MigrationContext struct {
 	InitiallyDropOldTable        bool
 	InitiallyDropGhostTable      bool
 	CutOverType                  CutOver
+	ReplicaServerId              uint
 
 	Hostname                               string
 	AssumeMasterHostname                   string
