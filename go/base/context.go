@@ -6,7 +6,9 @@
 package base
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -81,14 +83,15 @@ type MigrationContext struct {
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
+	Resurrect                bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
 	ConfigFile        string
 	CliUser           string
-	CliPassword       string
+	cliPassword       string
 	CliMasterUser     string
-	CliMasterPassword string
+	cliMasterPassword string
 
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
@@ -161,7 +164,7 @@ type MigrationContext struct {
 	UserCommandedUnpostponeFlag            int64
 	CutOverCompleteFlag                    int64
 	InCutOverCriticalSectionFlag           int64
-	PanicAbort                             chan error
+	IsResurrected                          int64
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
@@ -177,8 +180,8 @@ type MigrationContext struct {
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
-
-	CanStopStreaming func() bool
+	EncodedRangeValues               map[string]string
+	AppliedBinlogCoordinates         mysql.BinlogCoordinates
 }
 
 type ContextConfig struct {
@@ -197,10 +200,10 @@ type ContextConfig struct {
 var context *MigrationContext
 
 func init() {
-	context = newMigrationContext()
+	context = NewMigrationContext()
 }
 
-func newMigrationContext() *MigrationContext {
+func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
 		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
@@ -214,14 +217,87 @@ func newMigrationContext() *MigrationContext {
 		throttleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
+		AppliedBinlogCoordinates:            mysql.BinlogCoordinates{},
 		ColumnRenameMap:                     make(map[string]string),
-		PanicAbort:                          make(chan error),
+		EncodedRangeValues:                  make(map[string]string),
 	}
 }
 
 // GetMigrationContext
 func GetMigrationContext() *MigrationContext {
 	return context
+}
+
+// DumpJSON exports this config to JSON string and writes it to file
+func (this *MigrationContext) ToJSON() (string, error) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	if this.MigrationRangeMinValues != nil {
+		this.EncodedRangeValues["MigrationRangeMinValues"], _ = this.MigrationRangeMinValues.ToBase64()
+	}
+	if this.MigrationRangeMaxValues != nil {
+		this.EncodedRangeValues["MigrationRangeMaxValues"], _ = this.MigrationRangeMaxValues.ToBase64()
+	}
+	if this.MigrationIterationRangeMinValues != nil {
+		this.EncodedRangeValues["MigrationIterationRangeMinValues"], _ = this.MigrationIterationRangeMinValues.ToBase64()
+	}
+	if this.MigrationIterationRangeMaxValues != nil {
+		this.EncodedRangeValues["MigrationIterationRangeMaxValues"], _ = this.MigrationIterationRangeMaxValues.ToBase64()
+	}
+	jsonBytes, err := json.Marshal(this)
+	if err != nil {
+		return "", err
+	}
+	return string(jsonBytes), nil
+}
+
+// LoadJSON treats given json as context-dump, and attempts to load this context's data.
+func (this *MigrationContext) LoadJSON(jsonString string) error {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	jsonBytes := []byte(jsonString)
+
+	if err := json.Unmarshal(jsonBytes, this); err != nil && err != io.EOF {
+		return err
+	}
+
+	var err error
+	if this.MigrationRangeMinValues, err = sql.NewColumnValuesFromBase64(this.EncodedRangeValues["MigrationRangeMinValues"]); err != nil {
+		return err
+	}
+	if this.MigrationRangeMaxValues, err = sql.NewColumnValuesFromBase64(this.EncodedRangeValues["MigrationRangeMaxValues"]); err != nil {
+		return err
+	}
+	if this.MigrationIterationRangeMinValues, err = sql.NewColumnValuesFromBase64(this.EncodedRangeValues["MigrationIterationRangeMinValues"]); err != nil {
+		return err
+	}
+	if this.MigrationIterationRangeMaxValues, err = sql.NewColumnValuesFromBase64(this.EncodedRangeValues["MigrationIterationRangeMaxValues"]); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ApplyResurrectedContext loads resurrection-related infor from given context
+func (this *MigrationContext) ApplyResurrectedContext(other *MigrationContext) {
+	// this.MigrationRangeMinValues = other.MigrationRangeMinValues
+	// this.MigrationRangeMaxValues = other.MigrationRangeMaxValues
+	if other.MigrationIterationRangeMinValues != nil {
+		this.MigrationIterationRangeMinValues = other.MigrationIterationRangeMinValues
+	}
+	if other.MigrationIterationRangeMaxValues != nil {
+		this.MigrationIterationRangeMaxValues = other.MigrationIterationRangeMaxValues
+	}
+
+	this.RowsEstimate = other.RowsEstimate
+	this.RowsDeltaEstimate = other.RowsDeltaEstimate
+	this.TotalRowsCopied = other.TotalRowsCopied
+	this.TotalDMLEventsApplied = other.TotalDMLEventsApplied
+
+	this.Iteration = other.Iteration
+	this.AppliedBinlogCoordinates = other.AppliedBinlogCoordinates
 }
 
 // GetGhostTableName generates the name of ghost table, based on original table name
@@ -232,10 +308,10 @@ func (this *MigrationContext) GetGhostTableName() string {
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (this *MigrationContext) GetOldTableName() string {
 	if this.TestOnReplica {
-		return fmt.Sprintf("_%s_ght", this.OriginalTableName)
+		return fmt.Sprintf("_%s_delr", this.OriginalTableName)
 	}
 	if this.MigrateOnReplica {
-		return fmt.Sprintf("_%s_ghr", this.OriginalTableName)
+		return fmt.Sprintf("_%s_delr", this.OriginalTableName)
 	}
 	return fmt.Sprintf("_%s_del", this.OriginalTableName)
 }
@@ -524,6 +600,13 @@ func (this *MigrationContext) SetNiceRatio(newRatio float64) {
 	this.niceRatio = newRatio
 }
 
+func (this *MigrationContext) SetAppliedBinlogCoordinates(binlogCoordinates *mysql.BinlogCoordinates) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	this.AppliedBinlogCoordinates = *binlogCoordinates
+}
+
 // ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
 // such as: 'Threads_running=100,Threads_connected=500'
 // It only applies changes in case there's no parsing error.
@@ -598,6 +681,18 @@ func (this *MigrationContext) AddThrottleControlReplicaKey(key mysql.InstanceKey
 	return nil
 }
 
+func (this *MigrationContext) SetCliPassword(password string) {
+	this.cliPassword = password
+}
+
+func (this *MigrationContext) SetCliMasterPassword(password string) {
+	this.cliMasterPassword = password
+}
+
+func (this *MigrationContext) GetCliMasterPassword() string {
+	return this.cliMasterPassword
+}
+
 // ApplyCredentials sorts out the credentials between the config file and the CLI flags
 func (this *MigrationContext) ApplyCredentials() {
 	this.configMutex.Lock()
@@ -613,9 +708,9 @@ func (this *MigrationContext) ApplyCredentials() {
 	if this.config.Client.Password != "" {
 		this.InspectorConnectionConfig.Password = this.config.Client.Password
 	}
-	if this.CliPassword != "" {
+	if this.cliPassword != "" {
 		// Override
-		this.InspectorConnectionConfig.Password = this.CliPassword
+		this.InspectorConnectionConfig.Password = this.cliPassword
 	}
 }
 

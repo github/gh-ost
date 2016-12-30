@@ -124,7 +124,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		return fmt.Errorf("No shared unique key can be found after ALTER! Bailing out")
 	}
 	this.migrationContext.UniqueKey = sharedUniqueKeys[0]
-	log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
+	log.Infof("Chosen shared unique key is %+v", this.migrationContext.UniqueKey)
 	if this.migrationContext.UniqueKey.HasNullable {
 		if this.migrationContext.NullableUniqueKeyAllowed {
 			log.Warningf("Chosen key (%s) has nullable columns. You have supplied with --allow-nullable-unique-key and so this migration proceeds. As long as there aren't NULL values in this key's column, migration should be fine. NULL values will corrupt migration's data", this.migrationContext.UniqueKey)
@@ -680,18 +680,18 @@ func (this *Inspector) showCreateTable(tableName string) (createTableStatement s
 }
 
 // readChangelogState reads changelog hints
-func (this *Inspector) readChangelogState() (map[string]string, error) {
+func (this *Inspector) readChangelogState(hint string) (string, error) {
 	query := fmt.Sprintf(`
-		select hint, value from %s.%s where id <= 255
+		select hint, value from %s.%s where hint = ? and id <= 255
 		`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
-	result := make(map[string]string)
+	result := ""
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
-		result[m.GetString("hint")] = m.GetString("value")
+		result = m.GetString("value")
 		return nil
-	})
+	}, hint)
 	return result, err
 }
 

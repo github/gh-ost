@@ -20,11 +20,13 @@ import (
 	"github.com/outbrain/golib/sqlutils"
 )
 
+type BinlogEventListenerFunc func(event *binlog.BinlogDMLEvent, coordinates *mysql.BinlogCoordinates) error
+
 type BinlogEventListener struct {
 	async        bool
 	databaseName string
 	tableName    string
-	onDmlEvent   func(event *binlog.BinlogDMLEvent) error
+	onDmlEvent   BinlogEventListenerFunc
 }
 
 const (
@@ -57,7 +59,7 @@ func NewEventsStreamer() *EventsStreamer {
 
 // AddListener registers a new listener for binlog events, on a per-table basis
 func (this *EventsStreamer) AddListener(
-	async bool, databaseName string, tableName string, onDmlEvent func(event *binlog.BinlogDMLEvent) error) (err error) {
+	async bool, databaseName string, tableName string, onDmlEvent BinlogEventListenerFunc) (err error) {
 
 	this.listenersMutex.Lock()
 	defer this.listenersMutex.Unlock()
@@ -80,10 +82,11 @@ func (this *EventsStreamer) AddListener(
 
 // notifyListeners will notify relevant listeners with given DML event. Only
 // listeners registered for changes on the table on which the DML operates are notified.
-func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) {
+func (this *EventsStreamer) notifyListeners(binlogEntry *binlog.BinlogEntry) {
 	this.listenersMutex.Lock()
 	defer this.listenersMutex.Unlock()
 
+	binlogEvent := binlogEntry.DmlEvent
 	for _, listener := range this.listeners {
 		listener := listener
 		if strings.ToLower(listener.databaseName) != strings.ToLower(binlogEvent.DatabaseName) {
@@ -94,15 +97,15 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 		}
 		if listener.async {
 			go func() {
-				listener.onDmlEvent(binlogEvent)
+				listener.onDmlEvent(binlogEvent, &binlogEntry.Coordinates)
 			}()
 		} else {
-			listener.onDmlEvent(binlogEvent)
+			listener.onDmlEvent(binlogEvent, &binlogEntry.Coordinates)
 		}
 	}
 }
 
-func (this *EventsStreamer) InitDBConnections() (err error) {
+func (this *EventsStreamer) InitDBConnections(resurrectedContext *base.MigrationContext) (err error) {
 	EventsStreamerUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = sqlutils.GetDB(EventsStreamerUri); err != nil {
 		return err
@@ -110,8 +113,15 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
-	if err := this.readCurrentBinlogCoordinates(); err != nil {
-		return err
+	if this.migrationContext.Resurrect {
+		// Rewinding to beginning of logfile:
+		resurrectedContext.AppliedBinlogCoordinates.LogPos = 4
+		log.Infof("Resurrection: initiating streamer at resurrected coordinates %+v", resurrectedContext.AppliedBinlogCoordinates)
+		this.initialBinlogCoordinates = &resurrectedContext.AppliedBinlogCoordinates
+	} else {
+		if err := this.readCurrentBinlogCoordinates(); err != nil {
+			return err
+		}
 	}
 	if err := this.initBinlogReader(this.initialBinlogCoordinates); err != nil {
 		return err
@@ -184,7 +194,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	go func() {
 		for binlogEntry := range this.eventsChannel {
 			if binlogEntry.DmlEvent != nil {
-				this.notifyListeners(binlogEntry.DmlEvent)
+				this.notifyListeners(binlogEntry)
 			}
 		}
 	}()

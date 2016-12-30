@@ -31,6 +31,8 @@ const (
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
 )
 
+const contextDumpInterval time.Duration = 1 * time.Minute
+
 func ReadChangelogState(s string) ChangelogState {
 	return ChangelogState(strings.Split(s, ":")[0])
 }
@@ -53,14 +55,15 @@ const (
 
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
-	parser           *sql.Parser
-	inspector        *Inspector
-	applier          *Applier
-	eventsStreamer   *EventsStreamer
-	server           *Server
-	throttler        *Throttler
-	hooksExecutor    *HooksExecutor
-	migrationContext *base.MigrationContext
+	parser             *sql.Parser
+	inspector          *Inspector
+	applier            *Applier
+	eventsStreamer     *EventsStreamer
+	server             *Server
+	throttler          *Throttler
+	hooksExecutor      *HooksExecutor
+	migrationContext   *base.MigrationContext
+	resurrectedContext *base.MigrationContext
 
 	firstThrottlingCollected   chan bool
 	ghostTableMigrated         chan bool
@@ -73,7 +76,7 @@ type Migrator struct {
 	copyRowsQueue    chan tableWriteFunc
 	applyEventsQueue chan tableWriteFunc
 
-	handledChangelogStates map[string]bool
+	panicAbort chan error
 }
 
 func NewMigrator() *Migrator {
@@ -85,9 +88,10 @@ func NewMigrator() *Migrator {
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan string),
 
-		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
-		handledChangelogStates: make(map[string]bool),
+		copyRowsQueue:    make(chan tableWriteFunc),
+		applyEventsQueue: make(chan tableWriteFunc, applyEventsQueueBuffer),
+
+		panicAbort: make(chan error),
 	}
 	return migrator
 }
@@ -147,7 +151,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		// there's an error. Let's try again.
 	}
 	if len(notFatalHint) == 0 {
-		this.migrationContext.PanicAbort <- err
+		this.panicAbort <- err
 	}
 	return err
 }
@@ -218,7 +222,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 
 // listenOnPanicAbort aborts on abort request
 func (this *Migrator) listenOnPanicAbort() {
-	err := <-this.migrationContext.PanicAbort
+	err := <-this.panicAbort
 	log.Fatale(err)
 }
 
@@ -265,6 +269,70 @@ func (this *Migrator) countTableRows() (err error) {
 	return countRowsFunc()
 }
 
+func (this *Migrator) readResurrectedContext() error {
+	encodedContext, err := this.inspector.readChangelogState("context")
+	if err != nil {
+		return err
+	}
+	if encodedContext == "" {
+		return fmt.Errorf("No resurrect info found")
+	}
+
+	// Loading migration context to a temporary location:
+	this.resurrectedContext = base.NewMigrationContext()
+	if err := this.resurrectedContext.LoadJSON(encodedContext); err != nil && err != io.EOF {
+		return err
+	}
+	// Sanity: heuristically verify loaded context truly reflects our very own context (e.g. is this the same migration on the same table?)
+	if this.migrationContext.DatabaseName != this.resurrectedContext.DatabaseName {
+		return fmt.Errorf("Resurrection: given --database not identical to resurrected one. Bailing out")
+	}
+	if this.migrationContext.OriginalTableName != this.resurrectedContext.OriginalTableName {
+		return fmt.Errorf("Resurrection: given --table not identical to resurrected one. Bailing out")
+	}
+	if this.migrationContext.AlterStatement != this.resurrectedContext.AlterStatement {
+		return fmt.Errorf("Resurrection: given --alter statement not identical to resurrected one. Bailing out")
+	}
+	if this.resurrectedContext.AppliedBinlogCoordinates.IsEmpty() {
+		return fmt.Errorf("Resurrection: no applied binlog coordinates. Seems like the migration you're trying to resurrect crashed before applying a single binlog event. There's not enough info for resurrection, and not much point to it. Just run your migration again.")
+	}
+	return nil
+}
+
+func (this *Migrator) applyResurrectedContext() error {
+	this.migrationContext.ApplyResurrectedContext(this.resurrectedContext)
+	atomic.StoreInt64(&this.migrationContext.IsResurrected, 1)
+
+	if err := this.hooksExecutor.onResurrecting(); err != nil {
+		return err
+	}
+
+	log.Infof("Applied migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
+	log.Infof("Applied migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+	log.Infof("Applied migration iteration range min values: [%s]", this.migrationContext.MigrationIterationRangeMinValues)
+	log.Infof("Applied migration iteration range max values: [%s]", this.migrationContext.MigrationIterationRangeMaxValues)
+
+	return nil
+}
+
+func (this *Migrator) dumpResurrectContext() error {
+	if this.migrationContext.Resurrect && atomic.LoadInt64(&this.migrationContext.IsResurrected) == 0 {
+		// we're in the process of resurrecting; don't dump context, because it would overwrite
+		// the very context we want to resurrect by!
+		return nil
+	}
+
+	// we dump the context. Note that this operation works sequentially to any row copy or
+	// event handling. There is no concurrency issue here.
+	if jsonString, err := this.migrationContext.ToJSON(); err != nil {
+		return log.Errore(err)
+	} else {
+		this.applier.WriteChangelog("context", jsonString)
+		log.Debugf("Context dumped. Applied coordinates: %+v", this.migrationContext.AppliedBinlogCoordinates)
+	}
+	return nil
+}
+
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
 	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -289,6 +357,11 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	if err := this.initiateInspector(); err != nil {
 		return err
+	}
+	if this.migrationContext.Resurrect {
+		if err := this.readResurrectedContext(); err != nil {
+			return err
+		}
 	}
 	if err := this.initiateStreaming(); err != nil {
 		return err
@@ -333,6 +406,12 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
+	if this.migrationContext.Resurrect {
+		if err := this.applyResurrectedContext(); err != nil {
+			return err
+		}
+	}
+	this.dumpResurrectContext()
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
@@ -608,7 +687,7 @@ func (this *Migrator) initiateServer() (err error) {
 	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
 		this.printStatus(rule, writer)
 	}
-	this.server = NewServer(this.hooksExecutor, f)
+	this.server = NewServer(this.hooksExecutor, f, this.panicAbort)
 	if err := this.server.BindSocketFile(); err != nil {
 		return err
 	}
@@ -656,8 +735,8 @@ func (this *Migrator) initiateInspector() (err error) {
 		if this.migrationContext.CliMasterUser != "" {
 			this.migrationContext.ApplierConnectionConfig.User = this.migrationContext.CliMasterUser
 		}
-		if this.migrationContext.CliMasterPassword != "" {
-			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
+		if this.migrationContext.GetCliMasterPassword() != "" {
+			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.GetCliMasterPassword()
 		}
 		log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	}
@@ -886,15 +965,19 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 // initiateStreaming begins treaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
 	this.eventsStreamer = NewEventsStreamer()
-	if err := this.eventsStreamer.InitDBConnections(); err != nil {
+	if err := this.eventsStreamer.InitDBConnections(this.resurrectedContext); err != nil {
 		return err
 	}
 	this.eventsStreamer.AddListener(
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.GetChangelogTableName(),
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			return this.onChangelogStateEvent(dmlEvent)
+		func(dmlEvent *binlog.BinlogDMLEvent, coordinates *mysql.BinlogCoordinates) error {
+			err := this.onChangelogStateEvent(dmlEvent)
+			if err == nil {
+				this.migrationContext.SetAppliedBinlogCoordinates(coordinates)
+			}
+			return err
 		},
 	)
 
@@ -902,7 +985,7 @@ func (this *Migrator) initiateStreaming() error {
 		log.Debugf("Beginning streaming")
 		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
 		if err != nil {
-			this.migrationContext.PanicAbort <- err
+			this.panicAbort <- err
 		}
 		log.Debugf("Done streaming")
 	}()
@@ -916,10 +999,14 @@ func (this *Migrator) addDMLEventsListener() error {
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
+		func(dmlEvent *binlog.BinlogDMLEvent, coordinates *mysql.BinlogCoordinates) error {
 			// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 			applyEventFunc := func() error {
-				return this.applier.ApplyDMLEventQuery(dmlEvent)
+				err := this.applier.ApplyDMLEventQuery(dmlEvent)
+				if err == nil {
+					this.migrationContext.SetAppliedBinlogCoordinates(coordinates)
+				}
+				return err
 			}
 			this.applyEventsQueue <- applyEventFunc
 			return nil
@@ -930,7 +1017,7 @@ func (this *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (this *Migrator) initiateThrottler() error {
-	this.throttler = NewThrottler(this.applier, this.inspector)
+	this.throttler = NewThrottler(this.applier, this.inspector, this.panicAbort)
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")
@@ -945,21 +1032,27 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}
-	if err := this.applier.ValidateOrDropExistingTables(); err != nil {
-		return err
-	}
-	if err := this.applier.CreateChangelogTable(); err != nil {
-		log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
-		return err
-	}
-	if err := this.applier.CreateGhostTable(); err != nil {
-		log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
-		return err
-	}
-
-	if err := this.applier.AlterGhost(); err != nil {
-		log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
-		return err
+	if this.migrationContext.Resurrect {
+		if err := this.applier.ValidateTablesForResurrection(); err != nil {
+			return err
+		}
+	} else {
+		// Normal operation, no resurrection
+		if err := this.applier.ValidateOrDropExistingTables(); err != nil {
+			return err
+		}
+		if err := this.applier.CreateChangelogTable(); err != nil {
+			log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			return err
+		}
+		if err := this.applier.CreateGhostTable(); err != nil {
+			log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+			return err
+		}
+		if err := this.applier.AlterGhost(); err != nil {
+			log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
+			return err
+		}
 	}
 
 	this.applier.WriteChangelogState(string(GhostTableMigrated))
@@ -1026,12 +1119,16 @@ func (this *Migrator) executeWriteFuncs() error {
 		log.Debugf("Noop operation; not really executing write funcs")
 		return nil
 	}
+	contextDumpTick := time.Tick(contextDumpInterval)
 	for {
 		this.throttler.throttle(nil)
 
-		// We give higher priority to event processing, then secondary priority to
-		// rowcopy
+		// We give higher priority to event processing, then secondary priority to rowcopy
 		select {
+		case <-contextDumpTick:
+			{
+				this.dumpResurrectContext()
+			}
 		case applyEventFunc := <-this.applyEventsQueue:
 			{
 				if err := this.retryOperation(applyEventFunc); err != nil {

@@ -6,6 +6,9 @@
 package sql
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/gob"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -215,7 +218,7 @@ func (this *UniqueKey) String() string {
 	if this.IsAutoIncrement {
 		description = fmt.Sprintf("%s (auto_increment)", description)
 	}
-	return fmt.Sprintf("%s: %s; has nullable: %+v", description, this.Columns.Names(), this.HasNullable)
+	return fmt.Sprintf("%s: %s; has nullable: %+v", description, this.Columns.String(), this.HasNullable)
 }
 
 type ColumnValues struct {
@@ -245,6 +248,32 @@ func ToColumnValues(abstractValues []interface{}) *ColumnValues {
 	}
 
 	return result
+}
+
+func NewColumnValuesFromBase64(b64 string) (columnValues *ColumnValues, err error) {
+	var abstractValues []interface{}
+
+	b, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, err
+	}
+	buff := bytes.Buffer{}
+	buff.Write(b)
+	decoder := gob.NewDecoder(&buff)
+	err = decoder.Decode(&abstractValues)
+	if err != nil {
+		return nil, err
+	}
+	return ToColumnValues(abstractValues), nil
+}
+
+func (this *ColumnValues) ToBase64() (b64 string, err error) {
+	buff := bytes.Buffer{}
+	encoder := gob.NewEncoder(&buff)
+	if err = encoder.Encode(this.abstractValues); err != nil {
+		return b64, err
+	}
+	return base64.StdEncoding.EncodeToString(buff.Bytes()), nil
 }
 
 func (this *ColumnValues) AbstractValues() []interface{} {

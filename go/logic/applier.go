@@ -125,7 +125,20 @@ func (this *Applier) tableExists(tableName string) (tableFound bool) {
 	return (m != nil)
 }
 
-// ValidateOrDropExistingTables verifies ghost and changelog tables do not exist,
+// ValidateTablesForResurrection verifies ghost and changelog exist given resurrection request
+func (this *Applier) ValidateTablesForResurrection() error {
+	ghostTableExists := this.tableExists(this.migrationContext.GetGhostTableName())
+	if !ghostTableExists {
+		return fmt.Errorf("--resurrect requested, but ghost table %s doesn't exist. Panicking.", this.migrationContext.GetGhostTableName())
+	}
+	changelogTableExists := this.tableExists(this.migrationContext.GetChangelogTableName())
+	if !changelogTableExists {
+		return fmt.Errorf("--resurrect requested, but changelog table %s doesn't exist. Panicking.", this.migrationContext.GetChangelogTableName())
+	}
+	return nil
+}
+
+// ValidateOrDropExistingTables verifies ghost and old tables do not exist,
 // or attempts to drop them if instructed to.
 func (this *Applier) ValidateOrDropExistingTables() error {
 	if this.migrationContext.InitiallyDropGhostTable {
@@ -195,7 +208,7 @@ func (this *Applier) CreateChangelogTable() error {
 			id bigint auto_increment,
 			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			hint varchar(64) charset ascii not null,
-			value varchar(255) charset ascii not null,
+			value text charset ascii not null,
 			primary key(id),
 			unique key hint_uidx(hint)
 		) auto_increment=256
@@ -220,7 +233,7 @@ func (this *Applier) dropTable(tableName string) error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
-	log.Infof("Droppping table %s.%s",
+	log.Infof("Dropping table %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
@@ -257,6 +270,8 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 		explicitId = 2
 	case "throttle":
 		explicitId = 3
+	case "context":
+		explicitId = 4
 	}
 	query := fmt.Sprintf(`
 			insert /* gh-ost */ into %s.%s

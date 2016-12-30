@@ -38,6 +38,7 @@ The full list of supported hooks is best found in code: [hooks.go](https://githu
 
 - `gh-ost-on-startup`
 - `gh-ost-on-validated`
+- `gh-ost-on-resurrecting`
 - `gh-ost-on-rowcount-complete`
 - `gh-ost-on-before-row-copy`
 - `gh-ost-on-status`
