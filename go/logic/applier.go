@@ -961,21 +961,27 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		if err != nil {
 			return err
 		}
+
+		rollback := func(err error) error {
+			tx.Rollback()
+			return err
+		}
+
 		sessionQuery := `SET
 			SESSION time_zone = '+00:00',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
 			`
 		if _, err := tx.Exec(sessionQuery); err != nil {
-			return err
+			return rollback(err)
 		}
 		for _, dmlEvent := range dmlEvents {
 			query, args, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
 			if err != nil {
-				return err
+				return rollback(err)
 			}
 			if _, err := tx.Exec(query, args...); err != nil {
 				err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), query, args)
-				return err
+				return rollback(err)
 			}
 			totalDelta += rowDelta
 		}
