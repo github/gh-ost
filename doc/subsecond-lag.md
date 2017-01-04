@@ -14,6 +14,6 @@ In both cases, `gh-ost` uses an internal heartbeat mechanism. It injects heartbe
 
 You can explicitly define how frequently will `gh-ost` inject heartbeat events, via `heartbeat-interval-millis`. You should set `heartbeat-interval-millis <= max-lag-millis`. It still works if not, but loses granularity and effect.
 
-In earlier versions, the `--throttle-control-replicas` list was subjected to `1` second resolution or to 3rd party heartbeat injections such as `pt-heartbeat`. This is no longer the case. The argument `--replication-lag-query` has been deprecated and no longer needed.
+In earlier versions, the `--throttle-control-replicas` list was subjected to `1` second resolution or to 3rd party heartbeat injections such as `pt-heartbeat`. This is no longer the case. The argument `--replication-lag-query` has been deprecated and is no longer needed.
 
 Our production migrations use sub-second lag throttling and are able to keep our entire fleet of replicas well below `1sec` lag. We use `--heartbeat-interval-millis=100` on our production migrations with a `--max-lag-millis` value of between `300` and `500`.
