@@ -1074,7 +1074,9 @@ func (this *Migrator) executeWriteFuncs() error {
 		select {
 		case eventStruct := <-this.applyEventsQueue:
 			{
-				this.onApplyEventStruct(eventStruct)
+				if err := this.onApplyEventStruct(eventStruct); err != nil {
+					return err
+				}
 			}
 		default:
 			{
