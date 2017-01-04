@@ -746,3 +746,40 @@ func TestBuildPKInsertPreparedQuery(t *testing.T) {
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{"gromit", "dog"}))
 	}
 }
+
+func TestBuildPKSelectPreparedQuery(t *testing.T) {
+	databaseName := "mydb"
+	originalTableName := "tbl"
+	sharedColumns := []string{"id", "name", "position"}
+	tableColumns := NewColumnList(sharedColumns)
+	args := []interface{}{3, "gromit", "dog"}
+	{
+		uniqueKey := UniqueKey{Name: "PRIMARY", Columns: *NewColumnList([]string{"name", "position"})}
+
+		query, uniqueKeyArgs, err := BuildPKSelectPreparedQuery(databaseName, originalTableName, tableColumns, sharedColumns, &uniqueKey, args, false)
+		test.S(t).ExpectNil(err)
+		expected := `
+			select id, name, position from mydb.tbl force index (PRIMARY) where ((name = ?) and (position = ?))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{"gromit", "dog"}))
+	}
+	{
+		sharedColumns := []string{"id", "name"}
+		uniqueKey := UniqueKey{Name: "PRIMARY", Columns: *NewColumnList([]string{"name"})}
+
+		query, uniqueKeyArgs, err := BuildPKSelectPreparedQuery(databaseName, originalTableName, tableColumns, sharedColumns, &uniqueKey, args, false)
+		test.S(t).ExpectNil(err)
+		expected := `
+			select id, name from mydb.tbl force index (PRIMARY) where ((name = ?))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{"gromit"}))
+	}
+	{
+		uniqueKey := UniqueKey{Name: "name_uidx", Columns: *NewColumnList([]string{"name"})}
+
+		_, _, err := BuildPKSelectPreparedQuery(databaseName, originalTableName, tableColumns, sharedColumns, &uniqueKey, args, false)
+		test.S(t).ExpectNotNil(err)
+	}
+}
