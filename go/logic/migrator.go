@@ -723,11 +723,6 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		criticalLoad.String(),
 		this.migrationContext.GetNiceRatio(),
 	))
-	if replicationLagQuery := this.migrationContext.GetReplicationLagQuery(); replicationLagQuery != "" {
-		fmt.Fprintln(w, fmt.Sprintf("# replication-lag-query: %+v",
-			replicationLagQuery,
-		))
-	}
 	if this.migrationContext.ThrottleFlagFile != "" {
 		setIndicator := ""
 		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
