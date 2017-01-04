@@ -12,7 +12,9 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
+	"github.com/github/gh-ost/go/sql"
 	"github.com/outbrain/golib/log"
+	"github.com/outbrain/golib/sqlutils"
 )
 
 // Throttler collects metrics related to throttling and makes informed decisison
@@ -62,15 +64,24 @@ func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint 
 	return false, "", base.NoThrottleReasonHint
 }
 
-// parseChangelogHeartbeat is called when a heartbeat event is intercepted
-func (this *Throttler) parseChangelogHeartbeat(heartbeatValue string) (err error) {
+// parseChangelogHeartbeat parses a string timestamp and deduces replication lag
+func parseChangelogHeartbeat(heartbeatValue string) (lag time.Duration, err error) {
 	heartbeatTime, err := time.Parse(time.RFC3339Nano, heartbeatValue)
 	if err != nil {
-		return log.Errore(err)
+		return lag, err
 	}
-	lag := time.Since(heartbeatTime)
-	atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
-	return nil
+	lag = time.Since(heartbeatTime)
+	return lag, nil
+}
+
+// parseChangelogHeartbeat parses a string timestamp and deduces replication lag
+func (this *Throttler) parseChangelogHeartbeat(heartbeatValue string) (err error) {
+	if lag, err := parseChangelogHeartbeat(heartbeatValue); err != nil {
+		return log.Errore(err)
+	} else {
+		atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
+		return nil
+	}
 }
 
 // collectHeartbeat reads the latest changelog heartbeat value
@@ -81,11 +92,9 @@ func (this *Throttler) collectHeartbeat() {
 			if atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
 				return nil
 			}
-			changelogState, err := this.inspector.readChangelogState()
-			if err != nil {
+			if heartbeatValue, err := this.inspector.readChangelogState("heartbeat"); err != nil {
 				return log.Errore(err)
-			}
-			if heartbeatValue, ok := changelogState["heartbeat"]; ok {
+			} else {
 				this.parseChangelogHeartbeat(heartbeatValue)
 			}
 			return nil
@@ -95,23 +104,68 @@ func (this *Throttler) collectHeartbeat() {
 
 // collectControlReplicasLag polls all the control replicas to get maximum lag value
 func (this *Throttler) collectControlReplicasLag() {
-	readControlReplicasLag := func(replicationLagQuery string) error {
-		if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag) > 0) {
-			return nil
+
+	replicationLagQuery := fmt.Sprintf(`
+		select value from %s.%s where hint = 'heartbeat' and id <= 255
+		`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+
+	readReplicaLag := func(connectionConfig *mysql.ConnectionConfig) (lag time.Duration, err error) {
+		dbUri := connectionConfig.GetDBUri("information_schema")
+		var heartbeatValue string
+		if db, _, err := sqlutils.GetDB(dbUri); err != nil {
+			return lag, err
+		} else if err = db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
+			return lag, err
 		}
-		lagResult := mysql.GetMaxReplicationLag(
-			this.migrationContext.InspectorConnectionConfig,
-			this.migrationContext.GetThrottleControlReplicaKeys(),
-			replicationLagQuery,
-		)
-		this.migrationContext.SetControlReplicasLagResult(lagResult)
-		return nil
+		lag, err = parseChangelogHeartbeat(heartbeatValue)
+		return lag, err
+	}
+
+	readControlReplicasLag := func() (result *mysql.ReplicationLagResult) {
+		instanceKeyMap := this.migrationContext.GetThrottleControlReplicaKeys()
+		if instanceKeyMap.Len() == 0 {
+			return result
+		}
+		lagResults := make(chan *mysql.ReplicationLagResult, instanceKeyMap.Len())
+		for replicaKey := range *instanceKeyMap {
+			connectionConfig := this.migrationContext.InspectorConnectionConfig.Duplicate()
+			connectionConfig.Key = replicaKey
+
+			lagResult := &mysql.ReplicationLagResult{Key: connectionConfig.Key}
+			go func() {
+				lagResult.Lag, lagResult.Err = readReplicaLag(connectionConfig)
+				lagResults <- lagResult
+			}()
+		}
+		for range *instanceKeyMap {
+			lagResult := <-lagResults
+			if result == nil {
+				result = lagResult
+			} else if lagResult.Err != nil {
+				result = lagResult
+			} else if lagResult.Lag.Nanoseconds() > result.Lag.Nanoseconds() {
+				result = lagResult
+			}
+		}
+		return result
+	}
+
+	checkControlReplicasLag := func() {
+		if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag) > 0) {
+			// No need to read lag
+			return
+		}
+		if result := readControlReplicasLag(); result != nil {
+			this.migrationContext.SetControlReplicasLagResult(result)
+		}
 	}
 	aggressiveTicker := time.Tick(100 * time.Millisecond)
 	relaxedFactor := 10
 	counter := 0
 	shouldReadLagAggressively := false
-	replicationLagQuery := ""
 
 	for range aggressiveTicker {
 		if counter%relaxedFactor == 0 {
@@ -119,12 +173,11 @@ func (this *Throttler) collectControlReplicasLag() {
 			// do not typically change at all throughout the migration, but nonetheless we check them.
 			counter = 0
 			maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
-			replicationLagQuery = this.migrationContext.GetReplicationLagQuery()
-			shouldReadLagAggressively = (replicationLagQuery != "" && maxLagMillisecondsThrottleThreshold < 1000)
+			shouldReadLagAggressively = (maxLagMillisecondsThrottleThreshold < 1000)
 		}
 		if counter == 0 || shouldReadLagAggressively {
 			// We check replication lag every so often, or if we wish to be aggressive
-			readControlReplicasLag(replicationLagQuery)
+			checkControlReplicasLag()
 		}
 		counter++
 	}
