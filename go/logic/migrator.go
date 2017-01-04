@@ -1024,6 +1024,40 @@ func (this *Migrator) iterateChunks() error {
 	return nil
 }
 
+func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
+	if eventStruct.writeFunc != nil {
+		if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
+			return log.Errore(err)
+		}
+	}
+	if eventStruct.dmlEvent != nil {
+		dmlEvents := [](*binlog.BinlogDMLEvent){}
+		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
+
+		availableEvents := len(this.applyEventsQueue)
+		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
+		if availableEvents > batchSize {
+			availableEvents = batchSize
+		}
+		for i := 0; i < availableEvents; i++ {
+			additionalStruct := <-this.applyEventsQueue
+			if additionalStruct.dmlEvent == nil {
+				// Not a DML. We don't group this, and we don't batch any further
+				break
+			}
+			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
+		}
+		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
+		var applyEventFunc tableWriteFunc = func() error {
+			return this.applier.ApplyDMLEventQueries(dmlEvents)
+		}
+		if err := this.retryOperation(applyEventFunc); err != nil {
+			return log.Errore(err)
+		}
+	}
+	return nil
+}
+
 // executeWriteFuncs writes data via applier: both the rowcopy and the events backlog.
 // This is where the ghost table gets the data. The function fills the data single-threaded.
 // Both event backlog and rowcopy events are polled; the backlog events have precedence.
@@ -1038,38 +1072,9 @@ func (this *Migrator) executeWriteFuncs() error {
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
 		select {
-		case applyEventStruct := <-this.applyEventsQueue:
+		case eventStruct := <-this.applyEventsQueue:
 			{
-				if applyEventStruct.writeFunc != nil {
-					if err := this.retryOperation(*applyEventStruct.writeFunc); err != nil {
-						return log.Errore(err)
-					}
-				}
-				if applyEventStruct.dmlEvent != nil {
-					dmlEvents := [](*binlog.BinlogDMLEvent){}
-					dmlEvents = append(dmlEvents, applyEventStruct.dmlEvent)
-
-					availableEvents := len(this.applyEventsQueue)
-					batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
-					if availableEvents > batchSize {
-						availableEvents = batchSize
-					}
-					for i := 0; i < availableEvents; i++ {
-						additionalStruct := <-this.applyEventsQueue
-						if additionalStruct.dmlEvent == nil {
-							// Not a DML. We don't group this, and we don't batch any further
-							break
-						}
-						dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
-					}
-					// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
-					var applyEventFunc tableWriteFunc = func() error {
-						return this.applier.ApplyDMLEventQueries(dmlEvents)
-					}
-					if err := this.retryOperation(applyEventFunc); err != nil {
-						return log.Errore(err)
-					}
-				}
+				this.onApplyEventStruct(eventStruct)
 			}
 		default:
 			{
