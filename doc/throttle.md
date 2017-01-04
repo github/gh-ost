@@ -28,15 +28,7 @@ Otherwise you may specify your own list of replica servers you wish it to observ
 
 - `--max-lag-millis`: maximum allowed lag; any controlled replica lagging more than this value will cause throttling to kick in. When all control replicas have smaller lag than indicated, operation resumes.
 
-- `--replication-lag-query`: `gh-ost` will, by default, issue a `show slave status` query to find replication lag. However, this is a notoriously flaky value. If you're using your own `heartbeat` mechanism, e.g. via [`pt-heartbeat`](https://www.percona.com/doc/percona-toolkit/2.2/pt-heartbeat.html), you may provide your own custom query to return a single decimal (floating point) value indicating replication lag.
-
-  Example: `--replication-lag-query="SELECT UNIX_TIMESTAMP() - MAX(UNIX_TIMESTAMP(ts)) AS lag FROM mydb.heartbeat"`
-
-  We encourage you to use [sub-second replication lag throttling](subsecond-lag.md). Your query may then look like:
-
-  `--replication-lag-query="SELECT UNIX_TIMESTAMP(6) - MAX(UNIX_TIMESTAMP(ts)) AS lag FROM mydb.heartbeat"`
-
-Note that you may dynamically change both `replication-lag-query` and the `throttle-control-replicas` list via [interactive commands](interactive-commands.md)
+Note that you may dynamically change both `--max-lag-millis` and the `throttle-control-replicas` list via [interactive commands](interactive-commands.md)
 
 #### Status thresholds
 
