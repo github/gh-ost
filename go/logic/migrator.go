@@ -1025,14 +1025,21 @@ func (this *Migrator) iterateChunks() error {
 }
 
 func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
-	if eventStruct.writeFunc != nil {
-		if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
-			return log.Errore(err)
+	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
+		if eventStruct.writeFunc != nil {
+			if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
+				return log.Errore(err)
+			}
 		}
+		return nil
+	}
+	if eventStruct.dmlEvent == nil {
+		return handleNonDMLEventStruct(eventStruct)
 	}
 	if eventStruct.dmlEvent != nil {
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
+		var nonDmlStructToApply *applyEventStruct
 
 		availableEvents := len(this.applyEventsQueue)
 		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
@@ -1043,6 +1050,7 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 			additionalStruct := <-this.applyEventsQueue
 			if additionalStruct.dmlEvent == nil {
 				// Not a DML. We don't group this, and we don't batch any further
+				nonDmlStructToApply = additionalStruct
 				break
 			}
 			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
@@ -1053,6 +1061,13 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		}
 		if err := this.retryOperation(applyEventFunc); err != nil {
 			return log.Errore(err)
+		}
+		if nonDmlStructToApply != nil {
+			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
+			// We need to handle it!
+			if err := handleNonDMLEventStruct(nonDmlStructToApply); err != nil {
+				return log.Errore(err)
+			}
 		}
 	}
 	return nil
