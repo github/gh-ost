@@ -37,6 +37,21 @@ func ReadChangelogState(s string) ChangelogState {
 
 type tableWriteFunc func() error
 
+type applyEventStruct struct {
+	writeFunc *tableWriteFunc
+	dmlEvent  *binlog.BinlogDMLEvent
+}
+
+func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
+	result := &applyEventStruct{writeFunc: writeFunc}
+	return result
+}
+
+func newApplyEventStructByDML(dmlEvent *binlog.BinlogDMLEvent) *applyEventStruct {
+	result := &applyEventStruct{dmlEvent: dmlEvent}
+	return result
+}
+
 const (
 	applyEventsQueueBuffer = 100
 )
@@ -71,7 +86,7 @@ type Migrator struct {
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
-	applyEventsQueue chan tableWriteFunc
+	applyEventsQueue chan *applyEventStruct
 
 	handledChangelogStates map[string]bool
 }
@@ -86,7 +101,7 @@ func NewMigrator() *Migrator {
 		allEventsUpToLockProcessed: make(chan string),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
+		applyEventsQueue:       make(chan *applyEventStruct, applyEventsQueueBuffer),
 		handledChangelogStates: make(map[string]bool),
 	}
 	return migrator
@@ -194,7 +209,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 		}
 	case AllEventsUpToLockProcessed:
 		{
-			applyEventFunc := func() error {
+			var applyEventFunc tableWriteFunc = func() error {
 				this.allEventsUpToLockProcessed <- changelogStateString
 				return nil
 			}
@@ -204,7 +219,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 			// So as not to create a potential deadlock, we write this func to applyEventsQueue
 			// asynchronously, understanding it doesn't really matter.
 			go func() {
-				this.applyEventsQueue <- applyEventFunc
+				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
 		}
 	default:
@@ -912,11 +927,7 @@ func (this *Migrator) addDMLEventsListener() error {
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
-			applyEventFunc := func() error {
-				return this.applier.ApplyDMLEventQuery(dmlEvent)
-			}
-			this.applyEventsQueue <- applyEventFunc
+			this.applyEventsQueue <- newApplyEventStructByDML(dmlEvent)
 			return nil
 		},
 	)
@@ -1013,6 +1024,55 @@ func (this *Migrator) iterateChunks() error {
 	return nil
 }
 
+func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
+	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
+		if eventStruct.writeFunc != nil {
+			if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
+				return log.Errore(err)
+			}
+		}
+		return nil
+	}
+	if eventStruct.dmlEvent == nil {
+		return handleNonDMLEventStruct(eventStruct)
+	}
+	if eventStruct.dmlEvent != nil {
+		dmlEvents := [](*binlog.BinlogDMLEvent){}
+		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
+		var nonDmlStructToApply *applyEventStruct
+
+		availableEvents := len(this.applyEventsQueue)
+		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
+		if availableEvents > batchSize {
+			availableEvents = batchSize
+		}
+		for i := 0; i < availableEvents; i++ {
+			additionalStruct := <-this.applyEventsQueue
+			if additionalStruct.dmlEvent == nil {
+				// Not a DML. We don't group this, and we don't batch any further
+				nonDmlStructToApply = additionalStruct
+				break
+			}
+			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
+		}
+		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
+		var applyEventFunc tableWriteFunc = func() error {
+			return this.applier.ApplyDMLEventQueries(dmlEvents)
+		}
+		if err := this.retryOperation(applyEventFunc); err != nil {
+			return log.Errore(err)
+		}
+		if nonDmlStructToApply != nil {
+			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
+			// We need to handle it!
+			if err := handleNonDMLEventStruct(nonDmlStructToApply); err != nil {
+				return log.Errore(err)
+			}
+		}
+	}
+	return nil
+}
+
 // executeWriteFuncs writes data via applier: both the rowcopy and the events backlog.
 // This is where the ghost table gets the data. The function fills the data single-threaded.
 // Both event backlog and rowcopy events are polled; the backlog events have precedence.
@@ -1027,10 +1087,10 @@ func (this *Migrator) executeWriteFuncs() error {
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
 		select {
-		case applyEventFunc := <-this.applyEventsQueue:
+		case eventStruct := <-this.applyEventsQueue:
 			{
-				if err := this.retryOperation(applyEventFunc); err != nil {
-					return log.Errore(err)
+				if err := this.onApplyEventStruct(eventStruct); err != nil {
+					return err
 				}
 			}
 		default:

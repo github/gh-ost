@@ -148,6 +148,7 @@ type MigrationContext struct {
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
 	TotalDMLEventsApplied                  int64
+	DMLBatchSize                           int64
 	isThrottled                            bool
 	throttleReason                         string
 	throttleReasonHint                     ThrottleReasonHint
@@ -207,6 +208,7 @@ func newMigrationContext() *MigrationContext {
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
+		DMLBatchSize:                        10,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
@@ -415,6 +417,16 @@ func (this *MigrationContext) SetChunkSize(chunkSize int64) {
 		chunkSize = 100000
 	}
 	atomic.StoreInt64(&this.ChunkSize, chunkSize)
+}
+
+func (this *MigrationContext) SetDMLBatchSize(batchSize int64) {
+	if batchSize < 1 {
+		batchSize = 1
+	}
+	if batchSize > 100 {
+		batchSize = 100
+	}
+	atomic.StoreInt64(&this.DMLBatchSize, batchSize)
 }
 
 func (this *MigrationContext) SetThrottleGeneralCheckResult(checkResult *ThrottleCheckResult) *ThrottleCheckResult {
