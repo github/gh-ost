@@ -49,7 +49,7 @@ test_single() {
   echo -n "Testing: $test_name"
 
   echo_dot
-  gh-ost-test-mysql-replica -e "start slave"
+  gh-ost-test-mysql-replica -e "stop slave; start slave; do sleep(1)"
   echo_dot
   gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
 
