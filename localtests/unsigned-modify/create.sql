@@ -5,6 +5,7 @@ create table gh_ost_test (
   column2 smallint(5) unsigned NOT NULL,
   column3 mediumint(8) unsigned NOT NULL,
   column4 tinyint(3) unsigned NOT NULL,
+  column5 int(11) NOT NULL,
   column6 int(11) NOT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY c12_uix (column1, column2)
