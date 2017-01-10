@@ -529,6 +529,11 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 				columnsList.SetUnsigned(columnName)
 			}
 		}
+		if strings.Contains(columnType, "mediumint") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.MediumIntColumnType
+			}
+		}
 		if strings.Contains(columnType, "timestamp") {
 			for _, columnsList := range columnsLists {
 				columnsList.GetColumn(columnName).Type = sql.TimestampColumnType
@@ -541,7 +546,7 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		}
 		if strings.HasPrefix(columnType, "enum") {
 			for _, columnsList := range columnsLists {
-				columnsList.GetColumn(columnName).Type = sql.EnumColumnValue
+				columnsList.GetColumn(columnName).Type = sql.EnumColumnType
 			}
 		}
 		if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
