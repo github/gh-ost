@@ -30,10 +30,12 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 - MySQL 5.7 `JSON` columns are not supported. They are likely to be supported shortly.
 
-- The two _before_ & _after_ tables must share some `UNIQUE KEY`. Such key would be used by `gh-ost` to iterate the table. See [Read more](shared-key.md)
-
-- The chosen migration key must not include columns with `NULL` values.
-  - `gh-ost` will do its best to pick a migration key with non-nullable columns. It will by default refuse a migration where the only possible `UNIQUE KEY` includes nullable-columns. You may override this refusal via `--allow-nullable-unique-key` but **you must** be sure there are no actual `NULL` values in those columns. Such `NULL` values would cause a data integrity problem and potentially a corrupted migration.
+- The two _before_ & _after_ tables must share a `PRIMARY KEY` or other `UNIQUE KEY`. This key will be used by `gh-ost` to iterate through the table rows when copying. [Read more](shared-key.md)
+  - The migration key must not include columns with NULL values. This means either:
+    1. The columns are `NOT NULL`, or
+    2. The columns are nullable but don't contain any NULL values.
+  - by default, `gh-ost` will not run if the only `UNIQUE KEY` includes nullable columns.
+    - You may override this via `--allow-nullable-unique-key` but make sure there are no actual `NULL` values in those columns. Existing NULL values can't guarantee data integrity on the migrated table.
 
 - It is not allowed to migrate a table where another table exists with same name and different upper/lower case.
   - For example, you may not migrate `MyTable` if another table called `MYtable` exists in the same schema.
