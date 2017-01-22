@@ -1,0 +1,1 @@
+--alter="drop primary key, add primary key (id, i)" 
