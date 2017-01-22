@@ -59,11 +59,15 @@ test_single() {
   fi
   orig_columns="*"
   ghost_columns="*"
+  order_by=""
   if [ -f $tests_path/$test_name/orig_columns ] ; then
     orig_columns=$(cat $tests_path/$test_name/orig_columns)
   fi
   if [ -f $tests_path/$test_name/ghost_columns ] ; then
     ghost_columns=$(cat $tests_path/$test_name/ghost_columns)
+  fi
+  if [ -f $tests_path/$test_name/order_by ] ; then
+    order_by="order by $(cat $tests_path/$test_name/order_by)"
   fi
   # graceful sleep for replica to catch up
   echo_dot
@@ -129,8 +133,8 @@ test_single() {
   fi
 
   echo_dot
-  orig_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test" -ss | md5sum)
-  ghost_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho" -ss | md5sum)
+  orig_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss | md5sum)
+  ghost_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss | md5sum)
 
   if [ "$orig_checksum" != "$ghost_checksum" ] ; then
     echo "ERROR $test_name: checksum mismatch"
