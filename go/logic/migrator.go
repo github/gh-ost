@@ -761,6 +761,12 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 			throttleQuery,
 		))
 	}
+	if throttleControlReplicaKeys := this.migrationContext.GetThrottleControlReplicaKeys(); throttleControlReplicaKeys.Len() > 0 {
+		fmt.Fprintln(w, fmt.Sprintf("# throttle-control-replicas count: %+v",
+			throttleControlReplicaKeys.Len(),
+		))
+	}
+
 	if this.migrationContext.PostponeCutOverFlagFile != "" {
 		setIndicator := ""
 		if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
