@@ -17,6 +17,10 @@ Read more on [cut-over](cut-over.md) and on the [cut-over design Issue](https://
 
 Adding a `UNIQUE KEY` is possible, in the condition that no violation will occur. That is, you must make sure there aren't any violating rows on your table before, and during the migration.
 
-At this time there is no equivalent to `ALETER IGNORE`, where duplicates are implicitly and silently thrown away. This behavior may be supported in the future.
+At this time there is no equivalent to `ALETER IGNORE`, where duplicates are implicitly and silently thrown away. The MySQL `5.7` docs say:
+
+> As of MySQL 5.7.4, the IGNORE clause for ALTER TABLE is removed and its use produces an error.
+
+It is therefore unlikely that `gh-ost` will support this behavior.
 
 # Why
