@@ -385,8 +385,38 @@ func (this *Migrator) ExecOnFailureHook() (err error) {
 	return this.hooksExecutor.onFailure()
 }
 
+func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
+	if this.migrationContext.TestOnReplica {
+		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
+		this.applier.RenameTablesRollback()
+	}
+	if cutOverError == nil {
+		return nil
+	}
+	// Only on error:
+
+	if this.migrationContext.TestOnReplica {
+		// With `--test-on-replica` we stop replication thread, and then proceed to use
+		// the same cut-over phase as the master would use. That means we take locks
+		// and swap the tables.
+		// The difference is that we will later swap the tables back.
+		if err := this.hooksExecutor.onStartReplication(); err != nil {
+			return log.Errore(err)
+		}
+		if this.migrationContext.TestOnReplicaSkipReplicaStop {
+			log.Warningf("--test-on-replica-skip-replica-stop enabled, we are not starting replication.")
+		} else {
+			log.Debugf("testing on replica. Starting replication IO thread after cut-over failure")
+			if err := this.retryOperation(this.applier.StartReplication); err != nil {
+				return log.Errore(err)
+			}
+		}
+	}
+	return nil
+}
+
 // cutOver performs the final step of migration, based on migration
-// type (on replica? bumpy? safe?)
+// type (on replica? atomic? safe?)
 func (this *Migrator) cutOver() (err error) {
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really swapping tables")
@@ -441,18 +471,18 @@ func (this *Migrator) cutOver() (err error) {
 				return err
 			}
 		}
-		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
-		defer this.applier.RenameTablesRollback()
-		// We further proceed to do the cutover by normal means; the 'defer' above will rollback the swap
 	}
 	if this.migrationContext.CutOverType == base.CutOverAtomic {
 		// Atomic solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
 		err := this.atomicCutOver()
+		this.handleCutOverResult(err)
 		return err
 	}
 	if this.migrationContext.CutOverType == base.CutOverTwoStep {
-		return this.cutOverTwoStep()
+		err := this.cutOverTwoStep()
+		this.handleCutOverResult(err)
+		return err
 	}
 	return log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 }
@@ -1043,8 +1073,10 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 
 		availableEvents := len(this.applyEventsQueue)
 		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
-		if availableEvents > batchSize {
-			availableEvents = batchSize
+		if availableEvents > batchSize-1 {
+			// The "- 1" is because we already consumed one event: the original event that led to this function getting called.
+			// So, if DMLBatchSize==1 we wish to not process any further events
+			availableEvents = batchSize - 1
 		}
 		for i := 0; i < availableEvents; i++ {
 			additionalStruct := <-this.applyEventsQueue
