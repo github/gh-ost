@@ -154,4 +154,4 @@ If you choose to migrate via replica, then you need to make sure Tungsten is con
 gh-ost --tungsten --assume-master-host=the.topology.master.com
 ```
 
-Also note that `--switch-to-rbr` does not work for a Tungsten setup as the replication process is external, so you need to make sure `binlog_format` is set to ROW beforehand.
+Also note that `--switch-to-rbr` does not work for a Tungsten setup as the replication process is external, so you need to make sure `binlog_format` is set to ROW before Tungsten Replicator connects to the server and starts applying events from the master.
