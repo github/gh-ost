@@ -135,7 +135,9 @@ type MigrationContext struct {
 	OriginalBinlogFormat                   string
 	OriginalBinlogRowImage                 string
 	InspectorConnectionConfig              *mysql.ConnectionConfig
+	InspectorMySQLVersion                  string
 	ApplierConnectionConfig                *mysql.ConnectionConfig
+	ApplierMySQLVersion                    string
 	StartTime                              time.Time
 	RowCopyStartTime                       time.Time
 	RowCopyEndTime                         time.Time
