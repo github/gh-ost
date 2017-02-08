@@ -36,7 +36,7 @@ func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.
 		slaveSQLRunning := m.GetString("Slave_SQL_Running")
 		secondsBehindMaster := m.GetNullInt64("Seconds_Behind_Master")
 		if !secondsBehindMaster.Valid {
-			return fmt.Errorf("replication not running; Slave_IO_Running=%+v, Slave_SQL_Running=", slaveIORunning, slaveSQLRunning)
+			return fmt.Errorf("replication not running; Slave_IO_Running=%+v, Slave_SQL_Running=%+v", slaveIORunning, slaveSQLRunning)
 		}
 		replicationLag = time.Duration(secondsBehindMaster.Int64) * time.Second
 		return nil
