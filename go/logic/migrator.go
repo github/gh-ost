@@ -940,7 +940,9 @@ func (this *Migrator) initiateThrottler() error {
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")
-	<-this.firstThrottlingCollected
+	<-this.firstThrottlingCollected // replication lag
+	<-this.firstThrottlingCollected // other metrics
+	log.Infof("First throttle metrics collected")
 	go this.throttler.initiateThrottlerChecks()
 
 	return nil
