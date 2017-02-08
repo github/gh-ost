@@ -26,9 +26,9 @@ Both interfaces may serve at the same time. Both respond to simple text command,
   - The `critical-load` format must be: `some_status=<numeric-threshold>[,some_status=<numeric-threshold>...]`'
   - For example: `Threads_running=1000,threads_connected=5000`, and you would then write/echo `critical-load=Threads_running=1000,threads_connected=5000` to the socket.
 - `nice-ratio=<ratio>`: change _nice_ ratio: 0 for aggressive (not nice, not sleeping), positive integer `n`:
-  - For any `1ms` spent copying rows, spend `n*1ms` units of time sleeping. 
-  - Examples: assume a single rows chunk copy takes `100ms` to complete. 
-    - `nice-ratio=0.5` will cause `gh-ost` to sleep for `50ms` immediately following. 
+  - For any `1ms` spent copying rows, spend `n*1ms` units of time sleeping.
+  - Examples: assume a single rows chunk copy takes `100ms` to complete.
+    - `nice-ratio=0.5` will cause `gh-ost` to sleep for `50ms` immediately following.
     - `nice-ratio=1` will cause `gh-ost` to sleep for `100ms`, effectively doubling runtime
     - value of `2` will effectively triple the runtime; etc.
 - `throttle-query`: change throttle query
@@ -37,6 +37,10 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `no-throttle`: cancel forced suspension (though other throttling reasons may still apply)
 - `unpostpone`: at a time where `gh-ost` is postponing the [cut-over](cut-over.md) phase, instruct `gh-ost` to stop postponing and proceed immediately to cut-over.
 - `panic`: immediately panic and abort operation
+
+### Querying for data
+
+For commands that accept an argumetn as value, pass `?` (question mark) to _get_ current value rather than _set_ a new one.
 
 ### Examples
 
@@ -61,6 +65,11 @@ $ echo "chunk-size=250" | nc -U /tmp/gh-ost.test.sample_data_0.sock
 # Throttle additional flag file: /tmp/gh-ost.throttle
 # Serving on unix socket: /tmp/gh-ost.test.sample_data_0.sock
 # Serving on TCP port: 10001
+```
+
+```shell
+$ echo "chunk-size=?" | nc -U /tmp/gh-ost.test.sample_data_0.sock
+250
 ```
 
 ```shell
