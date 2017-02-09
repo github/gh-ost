@@ -85,32 +85,37 @@ func (this *Throttler) parseChangelogHeartbeat(heartbeatValue string) (err error
 }
 
 // collectReplicationLag reads the latest changelog heartbeat value
-func (this *Throttler) collectReplicationLag() {
+func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- bool) {
+	collectFunc := func() error {
+		if atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
+			return nil
+		}
+
+		if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
+			// when running on replica, the heartbeat injection is also done on the replica.
+			// This means we will always get a good heartbeat value.
+			// When runnign on replica, we should instead check the `SHOW SLAVE STATUS` output.
+			if lag, err := mysql.GetReplicationLag(this.inspector.connectionConfig); err != nil {
+				return log.Errore(err)
+			} else {
+				atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
+			}
+		} else {
+			if heartbeatValue, err := this.inspector.readChangelogState("heartbeat"); err != nil {
+				return log.Errore(err)
+			} else {
+				this.parseChangelogHeartbeat(heartbeatValue)
+			}
+		}
+		return nil
+	}
+
+	collectFunc()
+	firstThrottlingCollected <- true
+
 	ticker := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	for range ticker {
-		go func() error {
-			if atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
-				return nil
-			}
-
-			if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
-				// when running on replica, the heartbeat injection is also done on the replica.
-				// This means we will always get a good heartbeat value.
-				// When runnign on replica, we should instead check the `SHOW SLAVE STATUS` output.
-				if lag, err := mysql.GetReplicationLag(this.inspector.connectionConfig); err != nil {
-					return log.Errore(err)
-				} else {
-					atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
-				}
-			} else {
-				if heartbeatValue, err := this.inspector.readChangelogState("heartbeat"); err != nil {
-					return log.Errore(err)
-				} else {
-					this.parseChangelogHeartbeat(heartbeatValue)
-				}
-			}
-			return nil
-		}()
+		go collectFunc()
 	}
 }
 
@@ -171,9 +176,7 @@ func (this *Throttler) collectControlReplicasLag() {
 			// No need to read lag
 			return
 		}
-		if result := readControlReplicasLag(); result != nil {
-			this.migrationContext.SetControlReplicasLagResult(result)
-		}
+		this.migrationContext.SetControlReplicasLagResult(readControlReplicasLag())
 	}
 	aggressiveTicker := time.Tick(100 * time.Millisecond)
 	relaxedFactor := 10
@@ -285,13 +288,14 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 // that may affect throttling. There are several components, all running independently,
 // that collect such metrics.
 func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan<- bool) {
-	go this.collectReplicationLag()
+	go this.collectReplicationLag(firstThrottlingCollected)
 	go this.collectControlReplicasLag()
 
 	go func() {
-		throttlerMetricsTick := time.Tick(1 * time.Second)
 		this.collectGeneralThrottleMetrics()
 		firstThrottlingCollected <- true
+
+		throttlerMetricsTick := time.Tick(1 * time.Second)
 		for range throttlerMetricsTick {
 			this.collectGeneralThrottleMetrics()
 		}
