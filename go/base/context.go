@@ -561,7 +561,11 @@ func (this *MigrationContext) GetControlReplicasLagResult() mysql.ReplicationLag
 func (this *MigrationContext) SetControlReplicasLagResult(lagResult *mysql.ReplicationLagResult) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
-	this.controlReplicasLagResult = *lagResult
+	if lagResult == nil {
+		this.controlReplicasLagResult = *mysql.NewNoReplicationLagResult()
+	} else {
+		this.controlReplicasLagResult = *lagResult
+	}
 }
 
 func (this *MigrationContext) GetThrottleControlReplicaKeys() *mysql.InstanceKeyMap {

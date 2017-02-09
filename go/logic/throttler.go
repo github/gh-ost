@@ -176,9 +176,7 @@ func (this *Throttler) collectControlReplicasLag() {
 			// No need to read lag
 			return
 		}
-		if result := readControlReplicasLag(); result != nil {
-			this.migrationContext.SetControlReplicasLagResult(result)
-		}
+		this.migrationContext.SetControlReplicasLagResult(readControlReplicasLag())
 	}
 	aggressiveTicker := time.Tick(100 * time.Millisecond)
 	relaxedFactor := 10

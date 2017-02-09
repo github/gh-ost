@@ -22,6 +22,14 @@ type ReplicationLagResult struct {
 	Err error
 }
 
+func NewNoReplicationLagResult() *ReplicationLagResult {
+	return &ReplicationLagResult{Lag: 0, Err: nil}
+}
+
+func (this *ReplicationLagResult) HasLag() bool {
+	return this.Lag > 0
+}
+
 // GetReplicationLag returns replication lag for a given connection config; either by explicit query
 // or via SHOW SLAVE STATUS
 func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.Duration, err error) {
