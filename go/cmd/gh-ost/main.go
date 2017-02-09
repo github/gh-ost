@@ -242,5 +242,5 @@ func main() {
 		migrator.ExecOnFailureHook()
 		log.Fatale(err)
 	}
-        fmt.Fprintf(os.Stdout, "# Done\n")
+	fmt.Fprintf(os.Stdout, "# Done\n")
 }
