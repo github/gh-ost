@@ -600,7 +600,7 @@ func decodeBit(data []byte, nbits int, length int) (value int64, err error) {
 	return
 }
 
-func decodeTimestamp2(data []byte, dec uint16) (string, int, error) {
+func decodeTimestamp2(data []byte, dec uint16) (interface{}, int, error) {
 	//get timestamp binary length
 	n := int(4 + (dec+1)/2)
 	sec := int64(binary.BigEndian.Uint32(data[0:4]))
@@ -619,12 +619,12 @@ func decodeTimestamp2(data []byte, dec uint16) (string, int, error) {
 	}
 
 	t := time.Unix(sec, usec*1000)
-	return t.Format(TimeFormat), n, nil
+	return t, n, nil
 }
 
 const DATETIMEF_INT_OFS int64 = 0x8000000000
 
-func decodeDatetime2(data []byte, dec uint16) (string, int, error) {
+func decodeDatetime2(data []byte, dec uint16) (interface{}, int, error) {
 	//get datetime binary length
 	n := int(5 + (dec+1)/2)
 
@@ -666,9 +666,9 @@ func decodeDatetime2(data []byte, dec uint16) (string, int, error) {
 	hour := int((hms >> 12))
 
 	if secPart != 0 {
-		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%06d", year, month, day, hour, minute, second, secPart), n, nil
+		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%d", year, month, day, hour, minute, second, secPart), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
 	}
-	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second), n, nil
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
 }
 
 const TIMEF_OFS int64 = 0x800000000000
