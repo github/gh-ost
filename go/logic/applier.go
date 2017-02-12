@@ -882,6 +882,9 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query 
 	case binlog.DeleteDML:
 		{
 			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
+			log.Errorf("-------------- delete")
+			log.Errorf("query: %+v", query)
+			log.Errorf("argss: %+v", uniqueKeyArgs)
 			return query, uniqueKeyArgs, true, -1, err
 		}
 	case binlog.InsertDML:
@@ -898,14 +901,14 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query 
 		}
 	case binlog.UpdateDML:
 		{
-			// if this.migrationContext.UniqueKey.IsPrimary() {
-			// 	query, sharedArgs, err := sql.BuildPKInsertPreparedQuery(dmlEvent.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns.Names(), this.migrationContext.MappedSharedColumns.Names(), this.migrationContext.UniqueKey, dmlEvent.NewColumnValues.AbstractValues(), this.migrationContext.IsTransactionalTable())
-			// 	log.Errorf("-------------- update")
-			// 	log.Errorf("query: %+v", query)
-			// 	log.Errorf("argss: %+v", sharedArgs)
-			//
-			// 	return query, sharedArgs, false, 1, err
-			// }
+			if this.migrationContext.UniqueKey.IsPrimary() {
+				query, sharedArgs, err := sql.BuildPKInsertPreparedQuery(dmlEvent.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns.Names(), this.migrationContext.MappedSharedColumns.Names(), this.migrationContext.UniqueKey, dmlEvent.NewColumnValues.AbstractValues(), this.migrationContext.IsTransactionalTable())
+				log.Errorf("-------------- update")
+				log.Errorf("query: %+v", query)
+				log.Errorf("argss: %+v", sharedArgs)
+
+				return query, sharedArgs, false, 1, err
+			}
 			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
