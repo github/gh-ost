@@ -997,7 +997,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 			return rollback(err)
 		}
 		for _, dmlEvent := range dmlEvents {
-			query, args, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
+			query, args, _, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
 			if err != nil {
 				return rollback(err)
 			}
