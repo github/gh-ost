@@ -1051,8 +1051,10 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 
 		availableEvents := len(this.applyEventsQueue)
 		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
-		if availableEvents > batchSize {
-			availableEvents = batchSize
+		if availableEvents > batchSize-1 {
+			// The "- 1" is because we already consumed one event: the original event that led to this function getting called.
+			// So, if DMLBatchSize==1 we wish to not process any further events
+			availableEvents = batchSize - 1
 		}
 		for i := 0; i < availableEvents; i++ {
 			additionalStruct := <-this.applyEventsQueue
