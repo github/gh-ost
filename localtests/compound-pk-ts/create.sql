@@ -2,7 +2,7 @@ drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int auto_increment,
   i int not null,
-  ts0 timestamp default current_timestamp,
+  ts0 timestamp(6) default current_timestamp(6),
   updated tinyint unsigned default 0,
   primary key(id, ts0)
 ) auto_increment=1;
@@ -17,18 +17,24 @@ create event gh_ost_test
   enable
   do
 begin
-  insert into gh_ost_test values (null, 11, now(), 0);
+  insert into gh_ost_test values (null, 11, now(6), 0);
   update gh_ost_test set updated = 1 where i = 11 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 13,  now(), 0);
+  insert into gh_ost_test values (null, 13,  now(6), 0);
   update gh_ost_test set updated = 1 where i = 13 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 17, now(), 0);
+  insert into gh_ost_test values (null, 17, now(6), 0);
   update gh_ost_test set updated = 1 where i = 17 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 19, now(), 0);
+  insert into gh_ost_test values (null, 19, now(6), 0);
   update gh_ost_test set updated = 1 where i = 19 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 23, now(), 0);
+  insert into gh_ost_test values (null, 23, now(6), 0);
   update gh_ost_test set updated = 1 where i = 23 order by id desc limit 1;
+
+  insert into gh_ost_test values (null, 29, now(6), 0);
+  insert into gh_ost_test values (null, 31, now(6), 0);
+  insert into gh_ost_test values (null, 37, now(6), 0);
+  insert into gh_ost_test values (null, 41, now(6), 0);
+  delete from gh_ost_test where i = 31 order by id desc limit 1;
 end ;;
