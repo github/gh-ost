@@ -60,6 +60,7 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.applyBinlogFormat(); err != nil {
 		return err
 	}
+	log.Infof("Inspector initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.InspectorMySQLVersion)
 	return nil
 }
 
@@ -168,9 +169,9 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 
 // validateConnection issues a simple can-connect to MySQL
 func (this *Inspector) validateConnection() error {
-	query := `select @@global.port`
+	query := `select @@global.port, @@global.version`
 	var port int
-	if err := this.db.QueryRow(query).Scan(&port); err != nil {
+	if err := this.db.QueryRow(query).Scan(&port, &this.migrationContext.InspectorMySQLVersion); err != nil {
 		return err
 	}
 	if port != this.connectionConfig.Key.Port {
@@ -529,6 +530,11 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 				columnsList.SetUnsigned(columnName)
 			}
 		}
+		if strings.Contains(columnType, "mediumint") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.MediumIntColumnType
+			}
+		}
 		if strings.Contains(columnType, "timestamp") {
 			for _, columnsList := range columnsLists {
 				columnsList.GetColumn(columnName).Type = sql.TimestampColumnType
@@ -541,7 +547,7 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		}
 		if strings.HasPrefix(columnType, "enum") {
 			for _, columnsList := range columnsLists {
-				columnsList.GetColumn(columnName).Type = sql.EnumColumnValue
+				columnsList.GetColumn(columnName).Type = sql.EnumColumnType
 			}
 		}
 		if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {

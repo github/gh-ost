@@ -135,7 +135,9 @@ type MigrationContext struct {
 	OriginalBinlogFormat                   string
 	OriginalBinlogRowImage                 string
 	InspectorConnectionConfig              *mysql.ConnectionConfig
+	InspectorMySQLVersion                  string
 	ApplierConnectionConfig                *mysql.ConnectionConfig
+	ApplierMySQLVersion                    string
 	StartTime                              time.Time
 	RowCopyStartTime                       time.Time
 	RowCopyEndTime                         time.Time
@@ -148,6 +150,7 @@ type MigrationContext struct {
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
 	TotalDMLEventsApplied                  int64
+	DMLBatchSize                           int64
 	isThrottled                            bool
 	throttleReason                         string
 	throttleReasonHint                     ThrottleReasonHint
@@ -207,6 +210,7 @@ func newMigrationContext() *MigrationContext {
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
+		DMLBatchSize:                        10,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
@@ -417,6 +421,16 @@ func (this *MigrationContext) SetChunkSize(chunkSize int64) {
 	atomic.StoreInt64(&this.ChunkSize, chunkSize)
 }
 
+func (this *MigrationContext) SetDMLBatchSize(batchSize int64) {
+	if batchSize < 1 {
+		batchSize = 1
+	}
+	if batchSize > 100 {
+		batchSize = 100
+	}
+	atomic.StoreInt64(&this.DMLBatchSize, batchSize)
+}
+
 func (this *MigrationContext) SetThrottleGeneralCheckResult(checkResult *ThrottleCheckResult) *ThrottleCheckResult {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
@@ -547,7 +561,11 @@ func (this *MigrationContext) GetControlReplicasLagResult() mysql.ReplicationLag
 func (this *MigrationContext) SetControlReplicasLagResult(lagResult *mysql.ReplicationLagResult) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
-	this.controlReplicasLagResult = *lagResult
+	if lagResult == nil {
+		this.controlReplicasLagResult = *mysql.NewNoReplicationLagResult()
+	} else {
+		this.controlReplicasLagResult = *lagResult
+	}
 }
 
 func (this *MigrationContext) GetThrottleControlReplicaKeys() *mysql.InstanceKeyMap {

@@ -18,8 +18,11 @@ const (
 	UnknownColumnType   ColumnType = iota
 	TimestampColumnType            = iota
 	DateTimeColumnType             = iota
-	EnumColumnValue                = iota
+	EnumColumnType                 = iota
+	MediumIntColumnType            = iota
 )
+
+const maxMediumintUnsigned int32 = 16777215
 
 type TimezoneConvertion struct {
 	ToTimezone string
@@ -50,6 +53,14 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 			return uint16(i)
 		}
 		if i, ok := arg.(int32); ok {
+			if this.Type == MediumIntColumnType {
+				// problem with mediumint is that it's a 3-byte type. There is no compatible golang type to match that.
+				// So to convert from negative to positive we'd need to convert the value manually
+				if i >= 0 {
+					return i
+				}
+				return uint32(maxMediumintUnsigned + i + 1)
+			}
 			return uint32(i)
 		}
 		if i, ok := arg.(int64); ok {

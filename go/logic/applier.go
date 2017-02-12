@@ -70,14 +70,15 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.readTableColumns(); err != nil {
 		return err
 	}
+	log.Infof("Applier initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.ApplierMySQLVersion)
 	return nil
 }
 
 // validateConnection issues a simple can-connect to MySQL
 func (this *Applier) validateConnection(db *gosql.DB) error {
-	query := `select @@global.port`
+	query := `select @@global.port, @@global.version`
 	var port int
-	if err := db.QueryRow(query).Scan(&port); err != nil {
+	if err := db.QueryRow(query).Scan(&port, &this.migrationContext.ApplierMySQLVersion); err != nil {
 		return err
 	}
 	if port != this.connectionConfig.Key.Port {
@@ -969,5 +970,57 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 	if this.migrationContext.CountTableRows {
 		atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, rowDelta)
 	}
+	return nil
+}
+
+// ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
+func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
+
+	var totalDelta int64
+
+	err := func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		rollback := func(err error) error {
+			tx.Rollback()
+			return err
+		}
+
+		sessionQuery := `SET
+			SESSION time_zone = '+00:00',
+			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
+			`
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return rollback(err)
+		}
+		for _, dmlEvent := range dmlEvents {
+			query, args, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
+			if err != nil {
+				return rollback(err)
+			}
+			if _, err := tx.Exec(query, args...); err != nil {
+				err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), query, args)
+				return rollback(err)
+			}
+			totalDelta += rowDelta
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return nil
+	}()
+
+	if err != nil {
+		return log.Errore(err)
+	}
+	// no error
+	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, int64(len(dmlEvents)))
+	if this.migrationContext.CountTableRows {
+		atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, totalDelta)
+	}
+	log.Debugf("ApplyDMLEventQueries() applied %d events in one transaction", len(dmlEvents))
 	return nil
 }
