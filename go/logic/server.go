@@ -126,7 +126,7 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 	if len(tokens) > 1 {
 		arg = strings.TrimSpace(tokens[1])
 	}
-
+	argIsQuestion := (arg == "?")
 	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
 
 	if err := this.hooksExecutor.onInteractiveCommand(command); err != nil {
@@ -152,6 +152,7 @@ no-throttle                          # End forced throttling (other throttling m
 unpostpone                           # Bail out a cut-over postpone; proceed to cut-over
 panic                                # panic and quit without cleanup
 help                                 # This message
+- use '?' (question mark) as argument to get info rather than set. e.g. "max-load=?" will just print out current max-load.
 `)
 		}
 	case "sup":
@@ -160,6 +161,10 @@ help                                 # This message
 		return ForcePrintStatusAndHintRule, nil
 	case "chunk-size":
 		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%+v\n", atomic.LoadInt64(&this.migrationContext.ChunkSize))
+				return NoPrintStatusRule, nil
+			}
 			if chunkSize, err := strconv.Atoi(arg); err != nil {
 				return NoPrintStatusRule, err
 			} else {
@@ -169,6 +174,10 @@ help                                 # This message
 		}
 	case "max-lag-millis":
 		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%+v\n", atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold))
+				return NoPrintStatusRule, nil
+			}
 			if maxLagMillis, err := strconv.Atoi(arg); err != nil {
 				return NoPrintStatusRule, err
 			} else {
@@ -182,6 +191,10 @@ help                                 # This message
 		}
 	case "nice-ratio":
 		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetNiceRatio())
+				return NoPrintStatusRule, nil
+			}
 			if niceRatio, err := strconv.ParseFloat(arg, 64); err != nil {
 				return NoPrintStatusRule, err
 			} else {
@@ -191,6 +204,11 @@ help                                 # This message
 		}
 	case "max-load":
 		{
+			if argIsQuestion {
+				maxLoad := this.migrationContext.GetMaxLoad()
+				fmt.Fprintf(writer, "%s\n", maxLoad.String())
+				return NoPrintStatusRule, nil
+			}
 			if err := this.migrationContext.ReadMaxLoad(arg); err != nil {
 				return NoPrintStatusRule, err
 			}
@@ -198,6 +216,11 @@ help                                 # This message
 		}
 	case "critical-load":
 		{
+			if argIsQuestion {
+				criticalLoad := this.migrationContext.GetCriticalLoad()
+				fmt.Fprintf(writer, "%s\n", criticalLoad.String())
+				return NoPrintStatusRule, nil
+			}
 			if err := this.migrationContext.ReadCriticalLoad(arg); err != nil {
 				return NoPrintStatusRule, err
 			}
@@ -205,12 +228,20 @@ help                                 # This message
 		}
 	case "throttle-query":
 		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetThrottleQuery())
+				return NoPrintStatusRule, nil
+			}
 			this.migrationContext.SetThrottleQuery(arg)
 			fmt.Fprintf(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "throttle-control-replicas":
 		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%s\n", this.migrationContext.GetThrottleControlReplicaKeys().ToCommaDelimitedList())
+				return NoPrintStatusRule, nil
+			}
 			if err := this.migrationContext.ReadThrottleControlReplicaKeys(arg); err != nil {
 				return NoPrintStatusRule, err
 			}

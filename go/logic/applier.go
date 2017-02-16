@@ -70,14 +70,15 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.readTableColumns(); err != nil {
 		return err
 	}
+	log.Infof("Applier initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.ApplierMySQLVersion)
 	return nil
 }
 
 // validateConnection issues a simple can-connect to MySQL
 func (this *Applier) validateConnection(db *gosql.DB) error {
-	query := `select @@global.port`
+	query := `select @@global.port, @@global.version`
 	var port int
-	if err := db.QueryRow(query).Scan(&port); err != nil {
+	if err := db.QueryRow(query).Scan(&port, &this.migrationContext.ApplierMySQLVersion); err != nil {
 		return err
 	}
 	if port != this.connectionConfig.Key.Port {

@@ -791,6 +791,12 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 			throttleQuery,
 		))
 	}
+	if throttleControlReplicaKeys := this.migrationContext.GetThrottleControlReplicaKeys(); throttleControlReplicaKeys.Len() > 0 {
+		fmt.Fprintln(w, fmt.Sprintf("# throttle-control-replicas count: %+v",
+			throttleControlReplicaKeys.Len(),
+		))
+	}
+
 	if this.migrationContext.PostponeCutOverFlagFile != "" {
 		setIndicator := ""
 		if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
@@ -970,7 +976,9 @@ func (this *Migrator) initiateThrottler() error {
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")
-	<-this.firstThrottlingCollected
+	<-this.firstThrottlingCollected // replication lag
+	<-this.firstThrottlingCollected // other metrics
+	log.Infof("First throttle metrics collected")
 	go this.throttler.initiateThrottlerChecks()
 
 	return nil

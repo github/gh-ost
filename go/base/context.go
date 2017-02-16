@@ -135,7 +135,9 @@ type MigrationContext struct {
 	OriginalBinlogFormat                   string
 	OriginalBinlogRowImage                 string
 	InspectorConnectionConfig              *mysql.ConnectionConfig
+	InspectorMySQLVersion                  string
 	ApplierConnectionConfig                *mysql.ConnectionConfig
+	ApplierMySQLVersion                    string
 	StartTime                              time.Time
 	RowCopyStartTime                       time.Time
 	RowCopyEndTime                         time.Time
@@ -559,7 +561,11 @@ func (this *MigrationContext) GetControlReplicasLagResult() mysql.ReplicationLag
 func (this *MigrationContext) SetControlReplicasLagResult(lagResult *mysql.ReplicationLagResult) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
-	this.controlReplicasLagResult = *lagResult
+	if lagResult == nil {
+		this.controlReplicasLagResult = *mysql.NewNoReplicationLagResult()
+	} else {
+		this.controlReplicasLagResult = *lagResult
+	}
 }
 
 func (this *MigrationContext) GetThrottleControlReplicaKeys() *mysql.InstanceKeyMap {
