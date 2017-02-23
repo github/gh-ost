@@ -1,7 +1,7 @@
 package replication
 
 import (
-	. "gopkg.in/check.v1"
+	. "github.com/pingcap/check"
 )
 
 func (t *testSyncerSuite) TestIndexOutOfRange(c *C) {

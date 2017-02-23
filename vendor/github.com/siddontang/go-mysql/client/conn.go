@@ -1,6 +1,7 @@
 package client
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
@@ -14,9 +15,10 @@ import (
 type Conn struct {
 	*packet.Conn
 
-	user     string
-	password string
-	db       string
+	user      string
+	password  string
+	db        string
+	TLSConfig *tls.Config
 
 	capability uint32
 
@@ -38,7 +40,8 @@ func getNetProto(addr string) string {
 }
 
 // Connect to a MySQL server, addr can be ip:port, or a unix socket domain like /var/sock.
-func Connect(addr string, user string, password string, dbName string) (*Conn, error) {
+// Accepts a series of configuration functions as a variadic argument.
+func Connect(addr string, user string, password string, dbName string, options ...func(*Conn)) (*Conn, error) {
 	proto := getNetProto(addr)
 
 	c := new(Conn)
@@ -56,6 +59,11 @@ func Connect(addr string, user string, password string, dbName string) (*Conn, e
 
 	//use default charset here, utf-8
 	c.charset = DEFAULT_CHARSET
+
+	// Apply configuration functions.
+	for i := range options {
+		options[i](c)
+	}
 
 	if err = c.handshake(); err != nil {
 		return nil, errors.Trace(err)
