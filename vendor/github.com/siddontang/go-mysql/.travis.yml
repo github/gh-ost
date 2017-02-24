@@ -1,0 +1,32 @@
+language: go
+
+go:
+  - 1.6
+  - 1.7
+
+dist: trusty
+sudo: required
+addons:
+  apt:
+    packages:
+    - mysql-server-5.6
+    - mysql-client-core-5.6
+    - mysql-client-5.6
+
+before_script:
+  # stop mysql and use row-based format binlog
+  - "sudo /etc/init.d/mysql stop || true"
+  - "echo '[mysqld]'            | sudo tee /etc/mysql/conf.d/replication.cnf"
+  - "echo 'server-id=1'         | sudo tee -a /etc/mysql/conf.d/replication.cnf"
+  - "echo 'log-bin=mysql'       | sudo tee -a /etc/mysql/conf.d/replication.cnf"
+  - "echo 'binlog-format = row' | sudo tee -a /etc/mysql/conf.d/replication.cnf"
+
+  # Start mysql (avoid errors to have logs)
+  - "sudo /etc/init.d/mysql start || true"
+  - "sudo tail -1000 /var/log/syslog"
+
+  - mysql -e "CREATE DATABASE IF NOT EXISTS test;" -uroot
+
+
+script:
+  - make test
