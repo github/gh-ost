@@ -1,16 +1,19 @@
 package client
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
+	"strings"
 	"testing"
 
-	. "gopkg.in/check.v1"
+	. "github.com/pingcap/check"
 
 	"github.com/siddontang/go-mysql/mysql"
 )
 
-var testAddr = flag.String("addr", "127.0.0.1:3306", "MySQL server address")
+var testHost = flag.String("host", "127.0.0.1", "MySQL server host")
+var testPort = flag.Int("port", 3306, "MySQL server port")
 var testUser = flag.String("user", "root", "MySQL user")
 var testPassword = flag.String("pass", "", "MySQL password")
 var testDB = flag.String("db", "test", "MySQL test database")
@@ -27,7 +30,8 @@ var _ = Suite(&clientTestSuite{})
 
 func (s *clientTestSuite) SetUpSuite(c *C) {
 	var err error
-	s.c, err = Connect(*testAddr, *testUser, *testPassword, *testDB)
+	addr := fmt.Sprintf("%s:%d", *testHost, *testPort)
+	s.c, err = Connect(addr, *testUser, *testPassword, *testDB)
 	if err != nil {
 		c.Fatal(err)
 	}
@@ -72,6 +76,23 @@ func (s *clientTestSuite) testConn_CreateTable(c *C) {
 func (s *clientTestSuite) TestConn_Ping(c *C) {
 	err := s.c.Ping()
 	c.Assert(err, IsNil)
+}
+
+func (s *clientTestSuite) TestConn_TLS(c *C) {
+	// Verify that the provided tls.Config is used when attempting to connect to mysql.
+	// An empty tls.Config will result in a connection error.
+	addr := fmt.Sprintf("%s:%d", *testHost, *testPort)
+	_, err := Connect(addr, *testUser, *testPassword, *testDB, func(c *Conn) {
+		c.TLSConfig = &tls.Config{}
+	})
+	if err == nil {
+		c.Fatal("expected error")
+	}
+
+	expected := "either ServerName or InsecureSkipVerify must be specified in the tls.Config"
+	if !strings.Contains(err.Error(), expected) {
+		c.Fatal("expected '%s' to contain '%s'", err.Error(), expected)
+	}
 }
 
 func (s *clientTestSuite) TestConn_Insert(c *C) {
