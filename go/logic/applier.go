@@ -882,9 +882,6 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query 
 	case binlog.DeleteDML:
 		{
 			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
-			log.Errorf("-------------- delete")
-			log.Errorf("query: %+v", query)
-			log.Errorf("argss: %+v", uniqueKeyArgs)
 			return query, uniqueKeyArgs, true, -1, err
 		}
 	case binlog.InsertDML:
