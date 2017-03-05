@@ -6,6 +6,8 @@ import (
 	"path"
 	"time"
 
+	"golang.org/x/net/context"
+
 	"github.com/juju/errors"
 	. "github.com/siddontang/go-mysql/mysql"
 )
@@ -18,7 +20,8 @@ func (b *BinlogSyncer) StartBackup(backupDir string, p Position, timeout time.Du
 		timeout = 30 * 3600 * 24 * time.Second
 	}
 
-	b.SetRawMode(true)
+	// Force use raw mode
+	b.parser.SetRawMode(true)
 
 	os.MkdirAll(backupDir, 0755)
 
@@ -38,11 +41,15 @@ func (b *BinlogSyncer) StartBackup(backupDir string, p Position, timeout time.Du
 	}()
 
 	for {
-		e, err := s.GetEventTimeout(timeout)
-		if errors.Cause(err) == ErrGetEventTimeout {
-			// for backward compatibility
-			return ErrGetEventTimeout
-		} else if err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		e, err := s.GetEvent(ctx)
+		cancel()
+
+		if err == context.DeadlineExceeded {
+			return nil
+		}
+
+		if err != nil {
 			return errors.Trace(err)
 		}
 

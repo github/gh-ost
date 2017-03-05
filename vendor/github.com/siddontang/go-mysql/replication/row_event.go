@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	. "github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go/hack"
 )
@@ -155,7 +156,8 @@ func (e *TableMapEvent) decodeMeta(data []byte) error {
 		case MYSQL_TYPE_BLOB,
 			MYSQL_TYPE_DOUBLE,
 			MYSQL_TYPE_FLOAT,
-			MYSQL_TYPE_GEOMETRY:
+			MYSQL_TYPE_GEOMETRY,
+			MYSQL_TYPE_JSON:
 			e.ColumnMeta[i] = uint16(data[pos])
 			pos++
 		case MYSQL_TYPE_TIME2,
@@ -180,6 +182,7 @@ func (e *TableMapEvent) decodeMeta(data []byte) error {
 
 func (e *TableMapEvent) Dump(w io.Writer) {
 	fmt.Fprintf(w, "TableID: %d\n", e.TableID)
+	fmt.Fprintf(w, "TableID size: %d\n", e.tableIDSize)
 	fmt.Fprintf(w, "Flags: %d\n", e.Flags)
 	fmt.Fprintf(w, "Schema: %s\n", e.Schema)
 	fmt.Fprintf(w, "Table: %s\n", e.Table)
@@ -188,6 +191,9 @@ func (e *TableMapEvent) Dump(w io.Writer) {
 	fmt.Fprintf(w, "NULL bitmap: \n%s", hex.Dump(e.NullBitmap))
 	fmt.Fprintln(w)
 }
+
+// RowsEventStmtEndFlag is set in the end of the statement.
+const RowsEventStmtEndFlag = 0x01
 
 type RowsEvent struct {
 	//0, 1, 2
@@ -257,13 +263,13 @@ func (e *RowsEvent) Decode(data []byte) error {
 	var err error
 
 	// ... repeat rows until event-end
-	// Why using pos < len(data) - 1 instead of origin pos < len(data) to check?
-	// See mysql
-	//  https://github.com/mysql/mysql-server/blob/5.7/sql/log_event.cc#L9006
-	//	https://github.com/mysql/mysql-server/blob/5.7/sql/log_event.cc#L2492
-	// A user panics here but he can't give me more information, and using len(data) - 1
-	// fixes this panic, so I will try to construct a test case for this later.
-	for pos < len(data)-1 {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Fatalf("parse rows event panic %v, data %q, parsed rows %#v, table map %#v\n%s", r, data, e, e.Table, Pstack())
+		}
+	}()
+
+	for pos < len(data) {
 		if n, err = e.decodeRows(data[pos:], e.Table, e.ColumnBitmap1); err != nil {
 			return errors.Trace(err)
 		}
@@ -280,12 +286,23 @@ func (e *RowsEvent) Decode(data []byte) error {
 	return nil
 }
 
+func isBitSet(bitmap []byte, i int) bool {
+	return bitmap[i>>3]&(1<<(uint(i)&7)) > 0
+}
+
 func (e *RowsEvent) decodeRows(data []byte, table *TableMapEvent, bitmap []byte) (int, error) {
 	row := make([]interface{}, e.ColumnCount)
 
 	pos := 0
 
-	count := (bitCount(bitmap) + 7) / 8
+	// refer: https://github.com/alibaba/canal/blob/c3e38e50e269adafdd38a48c63a1740cde304c67/dbsync/src/main/java/com/taobao/tddl/dbsync/binlog/event/RowsLogBuffer.java#L63
+	count := 0
+	for i := 0; i < int(e.ColumnCount); i++ {
+		if isBitSet(bitmap, i) {
+			count++
+		}
+	}
+	count = (count + 7) / 8
 
 	nullBitmap := data[pos : pos+count]
 	pos += count
@@ -295,26 +312,24 @@ func (e *RowsEvent) decodeRows(data []byte, table *TableMapEvent, bitmap []byte)
 	var n int
 	var err error
 	for i := 0; i < int(e.ColumnCount); i++ {
-		if bitGet(bitmap, i) == 0 {
+		if !isBitSet(bitmap, i) {
 			continue
 		}
 
 		isNull := (uint32(nullBitmap[nullbitIndex/8]) >> uint32(nullbitIndex%8)) & 0x01
+		nullbitIndex++
 
 		if isNull > 0 {
 			row[i] = nil
-			nullbitIndex++
 			continue
 		}
 
 		row[i], n, err = e.decodeValue(data[pos:], table.ColumnType[i], table.ColumnMeta[i])
 
 		if err != nil {
-			return 0, nil
+			return 0, err
 		}
 		pos += n
-
-		nullbitIndex++
 	}
 
 	e.Rows = append(e.Rows, row)
@@ -436,37 +451,31 @@ func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{
 			err = fmt.Errorf("Unknown ENUM packlen=%d", l)
 		}
 	case MYSQL_TYPE_SET:
-		nbits := meta & 0xFF
-		n = int(nbits+7) / 8
+		n = int(meta & 0xFF)
+		nbits := n * 8
 
-		v, err = decodeBit(data, int(nbits), n)
+		v, err = decodeBit(data, nbits, n)
 	case MYSQL_TYPE_BLOB:
-		switch meta {
-		case 1:
-			length = int(data[0])
-			v = data[1 : 1+length]
-			n = length + 1
-		case 2:
-			length = int(binary.LittleEndian.Uint16(data))
-			v = data[2 : 2+length]
-			n = length + 2
-		case 3:
-			length = int(FixedLengthInt(data[0:3]))
-			v = data[3 : 3+length]
-			n = length + 3
-		case 4:
-			length = int(binary.LittleEndian.Uint32(data))
-			v = data[4 : 4+length]
-			n = length + 4
-		default:
-			err = fmt.Errorf("invalid blob packlen = %d", meta)
-		}
+		v, n, err = decodeBlob(data, meta)
 	case MYSQL_TYPE_VARCHAR,
 		MYSQL_TYPE_VAR_STRING:
 		length = int(meta)
 		v, n = decodeString(data, length)
 	case MYSQL_TYPE_STRING:
 		v, n = decodeString(data, length)
+	case MYSQL_TYPE_JSON:
+		// Refer https://github.com/shyiko/mysql-binlog-connector-java/blob/8f9132ee773317e00313204beeae8ddcaa43c1b4/src/main/java/com/github/shyiko/mysql/binlog/event/deserialization/AbstractRowsEventDataDeserializer.java#L344
+		length = int(binary.LittleEndian.Uint32(data[0:]))
+		n = length + int(meta)
+		v, err = decodeJsonBinary(data[meta:n])
+	case MYSQL_TYPE_GEOMETRY:
+		// MySQL saves Geometry as Blob in binlog
+		// Seem that the binary format is SRID (4 bytes) + WKB, outer can use
+		// MySQL GeoFromWKB or others to create the geometry data.
+		// Refer https://dev.mysql.com/doc/refman/5.7/en/gis-wkb-functions.html
+		// I also find some go libs to handle WKB if possible
+		// see https://github.com/twpayne/go-geom or https://github.com/paulmach/go.geo
+		v, n, err = decodeBlob(data, meta)
 	default:
 		err = fmt.Errorf("unsupport type %d in binlog and don't know how to handle", tp)
 	}
@@ -641,7 +650,6 @@ func decodeDatetime2(data []byte, dec uint16) (interface{}, int, error) {
 		tmp = -tmp
 	}
 
-	//ingore second part, no precision now
 	var secPart int64 = tmp % (1 << 24)
 	ymdhms := tmp >> 24
 
@@ -733,17 +741,44 @@ func decodeTime2(data []byte, dec uint16) (string, int, error) {
 		sign = "-"
 	}
 
-	//ingore second part, no precision now
-	//var secPart int64 = tmp % (1 << 24)
-
 	hms = tmp >> 24
 
 	hour := (hms >> 12) % (1 << 10) /* 10 bits starting at 12th */
 	minute := (hms >> 6) % (1 << 6) /* 6 bits starting at 6th   */
 	second := hms % (1 << 6)        /* 6 bits starting at 0th   */
-	// 	secondPart := tmp % (1 << 24)
+	secPart := tmp % (1 << 24)
+
+	if secPart != 0 {
+		return fmt.Sprintf("%s%02d:%02d:%02d.%06d", sign, hour, minute, second, secPart), n, nil
+	}
 
 	return fmt.Sprintf("%s%02d:%02d:%02d", sign, hour, minute, second), n, nil
+}
+
+func decodeBlob(data []byte, meta uint16) (v []byte, n int, err error) {
+	var length int
+	switch meta {
+	case 1:
+		length = int(data[0])
+		v = data[1 : 1+length]
+		n = length + 1
+	case 2:
+		length = int(binary.LittleEndian.Uint16(data))
+		v = data[2 : 2+length]
+		n = length + 2
+	case 3:
+		length = int(FixedLengthInt(data[0:3]))
+		v = data[3 : 3+length]
+		n = length + 3
+	case 4:
+		length = int(binary.LittleEndian.Uint32(data))
+		v = data[4 : 4+length]
+		n = length + 4
+	default:
+		err = fmt.Errorf("invalid blob packlen = %d", meta)
+	}
+
+	return
 }
 
 func (e *RowsEvent) Dump(w io.Writer) {
