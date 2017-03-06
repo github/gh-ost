@@ -2,10 +2,12 @@ package client
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/binary"
 
 	"github.com/juju/errors"
 	. "github.com/siddontang/go-mysql/mysql"
+	"github.com/siddontang/go-mysql/packet"
 )
 
 func (c *Conn) readInitialHandshake() error {
@@ -72,6 +74,12 @@ func (c *Conn) writeAuthHandshake() error {
 	capability := CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION |
 		CLIENT_LONG_PASSWORD | CLIENT_TRANSACTIONS | CLIENT_LONG_FLAG
 
+	// To enable TLS / SSL
+	if c.TLSConfig != nil {
+		capability |= CLIENT_PLUGIN_AUTH
+		capability |= CLIENT_SSL
+	}
+
 	capability &= c.capability
 
 	//packet length
@@ -95,6 +103,9 @@ func (c *Conn) writeAuthHandshake() error {
 		length += len(c.db) + 1
 	}
 
+	// mysql_native_password + null-terminated
+	length += 21 + 1
+
 	c.capability = capability
 
 	data := make([]byte, length+4)
@@ -115,6 +126,25 @@ func (c *Conn) writeAuthHandshake() error {
 	//use default collation id 33 here, is utf-8
 	data[12] = byte(DEFAULT_COLLATION_ID)
 
+	// SSL Connection Request Packet
+	// http://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::SSLRequest
+	if c.TLSConfig != nil {
+		// Send TLS / SSL request packet
+		if err := c.WritePacket(data[:(4+4+1+23)+4]); err != nil {
+			return err
+		}
+
+		// Switch to TLS
+		tlsConn := tls.Client(c.Conn.Conn, c.TLSConfig)
+		if err := tlsConn.Handshake(); err != nil {
+			return err
+		}
+
+		currentSequence := c.Sequence
+		c.Conn = packet.NewConn(tlsConn)
+		c.Sequence = currentSequence
+	}
+
 	//Filler [23 bytes] (all 0x00)
 	pos := 13 + 23
 
@@ -122,7 +152,7 @@ func (c *Conn) writeAuthHandshake() error {
 	if len(c.user) > 0 {
 		pos += copy(data[pos:], c.user)
 	}
-	//data[pos] = 0x00
+	data[pos] = 0x00
 	pos++
 
 	// auth [length encoded integer]
@@ -132,8 +162,13 @@ func (c *Conn) writeAuthHandshake() error {
 	// db [null terminated string]
 	if len(c.db) > 0 {
 		pos += copy(data[pos:], c.db)
-		//data[pos] = 0x00
+		data[pos] = 0x00
+		pos++
 	}
+
+	// Assume native client during response
+	pos += copy(data[pos:], "mysql_native_password")
+	data[pos] = 0x00
 
 	return c.WritePacket(data)
 }

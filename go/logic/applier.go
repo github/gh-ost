@@ -142,6 +142,10 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 			return err
 		}
 	}
+	if len(this.migrationContext.GetOldTableName()) > mysql.MaxTableNameLength {
+		log.Fatalf("--timestamp-old-table defined, but resulting table name (%s) is too long (only %d characters allowed)", this.migrationContext.GetOldTableName(), mysql.MaxTableNameLength)
+	}
+
 	if this.tableExists(this.migrationContext.GetOldTableName()) {
 		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-old-table to force dropping it, though I really prefer that you drop it or rename it away", sql.EscapeName(this.migrationContext.GetOldTableName()))
 	}
