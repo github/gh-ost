@@ -16,6 +16,8 @@ import (
 	"github.com/outbrain/golib/sqlutils"
 )
 
+const MaxTableNameLength = 64
+
 type ReplicationLagResult struct {
 	Key InstanceKey
 	Lag time.Duration
