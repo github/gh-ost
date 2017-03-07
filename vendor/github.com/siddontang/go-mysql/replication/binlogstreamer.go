@@ -1,24 +1,27 @@
 package replication
 
 import (
-	"time"
+	"golang.org/x/net/context"
 
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 )
 
 var (
-	ErrGetEventTimeout = errors.New("Get event timeout, try get later")
-	ErrNeedSyncAgain   = errors.New("Last sync error or closed, try sync and get event again")
-	ErrSyncClosed      = errors.New("Sync was closed")
+	ErrNeedSyncAgain = errors.New("Last sync error or closed, try sync and get event again")
+	ErrSyncClosed    = errors.New("Sync was closed")
 )
 
+// BinlogStreamer gets the streaming event.
 type BinlogStreamer struct {
 	ch  chan *BinlogEvent
 	ech chan error
 	err error
 }
 
-func (s *BinlogStreamer) GetEvent() (*BinlogEvent, error) {
+// GetEvent gets the binlog event one by one, it will block until Syncer receives any events from MySQL
+// or meets a sync error. You can pass a context (like Cancel or Timeout) to break the block.
+func (s *BinlogStreamer) GetEvent(ctx context.Context) (*BinlogEvent, error) {
 	if s.err != nil {
 		return nil, ErrNeedSyncAgain
 	}
@@ -28,23 +31,8 @@ func (s *BinlogStreamer) GetEvent() (*BinlogEvent, error) {
 		return c, nil
 	case s.err = <-s.ech:
 		return nil, s.err
-	}
-}
-
-// if timeout, ErrGetEventTimeout will returns
-// timeout value won't be set too large, otherwise it may waste lots of memory
-func (s *BinlogStreamer) GetEventTimeout(d time.Duration) (*BinlogEvent, error) {
-	if s.err != nil {
-		return nil, ErrNeedSyncAgain
-	}
-
-	select {
-	case c := <-s.ch:
-		return c, nil
-	case s.err = <-s.ech:
-		return nil, s.err
-	case <-time.After(d):
-		return nil, ErrGetEventTimeout
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -56,6 +44,7 @@ func (s *BinlogStreamer) closeWithError(err error) {
 	if err == nil {
 		err = ErrSyncClosed
 	}
+	log.Errorf("close sync with err: %v", err)
 	select {
 	case s.ech <- err:
 	default:
@@ -65,7 +54,7 @@ func (s *BinlogStreamer) closeWithError(err error) {
 func newBinlogStreamer() *BinlogStreamer {
 	s := new(BinlogStreamer)
 
-	s.ch = make(chan *BinlogEvent, 1024)
+	s.ch = make(chan *BinlogEvent, 10240)
 	s.ech = make(chan error, 4)
 
 	return s

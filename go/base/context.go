@@ -121,6 +121,7 @@ type MigrationContext struct {
 	OkToDropTable                bool
 	InitiallyDropOldTable        bool
 	InitiallyDropGhostTable      bool
+	TimestampOldTable            bool // Should old table name include a timestamp
 	CutOverType                  CutOver
 	ReplicaServerId              uint
 
@@ -135,7 +136,9 @@ type MigrationContext struct {
 	OriginalBinlogFormat                   string
 	OriginalBinlogRowImage                 string
 	InspectorConnectionConfig              *mysql.ConnectionConfig
+	InspectorMySQLVersion                  string
 	ApplierConnectionConfig                *mysql.ConnectionConfig
+	ApplierMySQLVersion                    string
 	StartTime                              time.Time
 	RowCopyStartTime                       time.Time
 	RowCopyEndTime                         time.Time
@@ -232,11 +235,12 @@ func (this *MigrationContext) GetGhostTableName() string {
 
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (this *MigrationContext) GetOldTableName() string {
-	if this.TestOnReplica {
-		return fmt.Sprintf("_%s_ght", this.OriginalTableName)
-	}
-	if this.MigrateOnReplica {
-		return fmt.Sprintf("_%s_ghr", this.OriginalTableName)
+	if this.TimestampOldTable {
+		t := this.StartTime
+		timestamp := fmt.Sprintf("%d%02d%02d%02d%02d%02d",
+			t.Year(), t.Month(), t.Day(),
+			t.Hour(), t.Minute(), t.Second())
+		return fmt.Sprintf("_%s_%s_del", this.OriginalTableName, timestamp)
 	}
 	return fmt.Sprintf("_%s_del", this.OriginalTableName)
 }
@@ -559,7 +563,11 @@ func (this *MigrationContext) GetControlReplicasLagResult() mysql.ReplicationLag
 func (this *MigrationContext) SetControlReplicasLagResult(lagResult *mysql.ReplicationLagResult) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
-	this.controlReplicasLagResult = *lagResult
+	if lagResult == nil {
+		this.controlReplicasLagResult = *mysql.NewNoReplicationLagResult()
+	} else {
+		this.controlReplicasLagResult = *lagResult
+	}
 }
 
 func (this *MigrationContext) GetThrottleControlReplicaKeys() *mysql.InstanceKeyMap {

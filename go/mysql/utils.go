@@ -16,10 +16,20 @@ import (
 	"github.com/outbrain/golib/sqlutils"
 )
 
+const MaxTableNameLength = 64
+
 type ReplicationLagResult struct {
 	Key InstanceKey
 	Lag time.Duration
 	Err error
+}
+
+func NewNoReplicationLagResult() *ReplicationLagResult {
+	return &ReplicationLagResult{Lag: 0, Err: nil}
+}
+
+func (this *ReplicationLagResult) HasLag() bool {
+	return this.Lag > 0
 }
 
 // GetReplicationLag returns replication lag for a given connection config; either by explicit query
@@ -32,9 +42,11 @@ func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.
 	}
 
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
+		slaveIORunning := m.GetString("Slave_IO_Running")
+		slaveSQLRunning := m.GetString("Slave_SQL_Running")
 		secondsBehindMaster := m.GetNullInt64("Seconds_Behind_Master")
 		if !secondsBehindMaster.Valid {
-			return fmt.Errorf("replication not running")
+			return fmt.Errorf("replication not running; Slave_IO_Running=%+v, Slave_SQL_Running=%+v", slaveIORunning, slaveSQLRunning)
 		}
 		replicationLag = time.Duration(secondsBehindMaster.Int64) * time.Second
 		return nil

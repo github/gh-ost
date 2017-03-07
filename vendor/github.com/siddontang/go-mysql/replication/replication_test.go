@@ -8,15 +8,18 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/net/context"
+
+	. "github.com/pingcap/check"
+	uuid "github.com/satori/go.uuid"
 	"github.com/siddontang/go-mysql/client"
 	"github.com/siddontang/go-mysql/mysql"
-	. "gopkg.in/check.v1"
 )
 
 // Use docker mysql to test, mysql is 3306, mariadb is 3316
 var testHost = flag.String("host", "127.0.0.1", "MySQL master host")
 
-var testOutputLogs = flag.Bool("out", true, "output binlog event")
+var testOutputLogs = flag.Bool("out", false, "output binlog event")
 
 func TestBinLogSyncer(t *testing.T) {
 	TestingT(t)
@@ -69,14 +72,18 @@ func (t *testSyncerSuite) testSync(c *C, s *BinlogStreamer) {
 			return
 		}
 
+		eventCount := 0
 		for {
-			e, err := s.GetEventTimeout(2 * time.Second)
-			if err != nil {
-				if err != ErrGetEventTimeout {
-					c.Fatal(err)
-				}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			e, err := s.GetEvent(ctx)
+			cancel()
+
+			if err == context.DeadlineExceeded {
+				eventCount += 1
 				return
 			}
+
+			c.Assert(err, IsNil)
 
 			if *testOutputLogs {
 				e.Dump(os.Stdout)
@@ -91,26 +98,26 @@ func (t *testSyncerSuite) testSync(c *C, s *BinlogStreamer) {
 	str := `DROP TABLE IF EXISTS test_replication`
 	t.testExecute(c, str)
 
-	str = `CREATE TABLE IF NOT EXISTS test_replication (
-	         id BIGINT(64) UNSIGNED  NOT NULL AUTO_INCREMENT,
-	         str VARCHAR(256),
-	         f FLOAT,
-	         d DOUBLE,
-	         de DECIMAL(10,2),
-	         i INT,
-	         bi BIGINT,
-	         e enum ("e1", "e2"),
-	         b BIT(8),
-	         y YEAR,
-	         da DATE,
-	         ts TIMESTAMP,
-	         dt DATETIME,
-	         tm TIME,
-	         t TEXT,
-	         bb BLOB,
-	         se SET('a', 'b', 'c'),
-	      PRIMARY KEY (id)
-	       ) ENGINE=InnoDB DEFAULT CHARSET=utf8`
+	str = `CREATE TABLE test_replication (
+			id BIGINT(64) UNSIGNED  NOT NULL AUTO_INCREMENT,
+			str VARCHAR(256),
+			f FLOAT,
+			d DOUBLE,
+			de DECIMAL(10,2),
+			i INT,
+			bi BIGINT,
+			e enum ("e1", "e2"),
+			b BIT(8),
+			y YEAR,
+			da DATE,
+			ts TIMESTAMP,
+			dt DATETIME,
+			tm TIME,
+			t TEXT,
+			bb BLOB,
+			se SET('a', 'b', 'c'),
+			PRIMARY KEY (id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8`
 
 	t.testExecute(c, str)
 
@@ -130,6 +137,97 @@ func (t *testSyncerSuite) testSync(c *C, s *BinlogStreamer) {
 		t.testExecute(c, fmt.Sprintf(`INSERT INTO test_replication (id, str, f, i, bb, de) VALUES (%d, "4", -3.14, 100, "abc", -45635.64)`, id))
 		t.testExecute(c, fmt.Sprintf(`UPDATE test_replication SET f = -12.14, de = 555.34 WHERE id = %d`, id))
 		t.testExecute(c, fmt.Sprintf(`DELETE FROM test_replication WHERE id = %d`, id))
+	}
+
+	// check whether we can create the table including the json field
+	str = `DROP TABLE IF EXISTS test_json`
+	t.testExecute(c, str)
+
+	str = `CREATE TABLE test_json (
+			id BIGINT(64) UNSIGNED  NOT NULL AUTO_INCREMENT,
+			c1 JSON,
+			c2 DECIMAL(10, 0),
+			PRIMARY KEY (id)
+			) ENGINE=InnoDB`
+
+	if _, err := t.c.Execute(str); err == nil {
+		t.testExecute(c, `INSERT INTO test_json (c2) VALUES (1)`)
+		t.testExecute(c, `INSERT INTO test_json (c1, c2) VALUES ('{"key1": "value1", "key2": "value2"}', 1)`)
+	}
+
+	t.testExecute(c, "DROP TABLE IF EXISTS test_json_v2")
+
+	str = `CREATE TABLE test_json_v2 (
+			id INT, 
+			c JSON, 
+			PRIMARY KEY (id)
+			) ENGINE=InnoDB`
+
+	if _, err := t.c.Execute(str); err == nil {
+		tbls := []string{
+			// Refer: https://github.com/shyiko/mysql-binlog-connector-java/blob/c8e81c879710dc19941d952f9031b0a98f8b7c02/src/test/java/com/github/shyiko/mysql/binlog/event/deserialization/json/JsonBinaryValueIntegrationTest.java#L84
+			// License: https://github.com/shyiko/mysql-binlog-connector-java#license
+			`INSERT INTO test_json_v2 VALUES (0, NULL)`,
+			`INSERT INTO test_json_v2 VALUES (1, '{\"a\": 2}')`,
+			`INSERT INTO test_json_v2 VALUES (2, '[1,2]')`,
+			`INSERT INTO test_json_v2 VALUES (3, '{\"a\":\"b\", \"c\":\"d\",\"ab\":\"abc\", \"bc\": [\"x\", \"y\"]}')`,
+			`INSERT INTO test_json_v2 VALUES (4, '[\"here\", [\"I\", \"am\"], \"!!!\"]')`,
+			`INSERT INTO test_json_v2 VALUES (5, '\"scalar string\"')`,
+			`INSERT INTO test_json_v2 VALUES (6, 'true')`,
+			`INSERT INTO test_json_v2 VALUES (7, 'false')`,
+			`INSERT INTO test_json_v2 VALUES (8, 'null')`,
+			`INSERT INTO test_json_v2 VALUES (9, '-1')`,
+			`INSERT INTO test_json_v2 VALUES (10, CAST(CAST(1 AS UNSIGNED) AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (11, '32767')`,
+			`INSERT INTO test_json_v2 VALUES (12, '32768')`,
+			`INSERT INTO test_json_v2 VALUES (13, '-32768')`,
+			`INSERT INTO test_json_v2 VALUES (14, '-32769')`,
+			`INSERT INTO test_json_v2 VALUES (15, '2147483647')`,
+			`INSERT INTO test_json_v2 VALUES (16, '2147483648')`,
+			`INSERT INTO test_json_v2 VALUES (17, '-2147483648')`,
+			`INSERT INTO test_json_v2 VALUES (18, '-2147483649')`,
+			`INSERT INTO test_json_v2 VALUES (19, '18446744073709551615')`,
+			`INSERT INTO test_json_v2 VALUES (20, '18446744073709551616')`,
+			`INSERT INTO test_json_v2 VALUES (21, '3.14')`,
+			`INSERT INTO test_json_v2 VALUES (22, '{}')`,
+			`INSERT INTO test_json_v2 VALUES (23, '[]')`,
+			`INSERT INTO test_json_v2 VALUES (24, CAST(CAST('2015-01-15 23:24:25' AS DATETIME) AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (25, CAST(CAST('23:24:25' AS TIME) AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (125, CAST(CAST('23:24:25.12' AS TIME(3)) AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (225, CAST(CAST('23:24:25.0237' AS TIME(3)) AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (26, CAST(CAST('2015-01-15' AS DATE) AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (27, CAST(TIMESTAMP'2015-01-15 23:24:25' AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (127, CAST(TIMESTAMP'2015-01-15 23:24:25.12' AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (227, CAST(TIMESTAMP'2015-01-15 23:24:25.0237' AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (327, CAST(UNIX_TIMESTAMP('2015-01-15 23:24:25') AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (28, CAST(ST_GeomFromText('POINT(1 1)') AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (29, CAST('[]' AS CHAR CHARACTER SET 'ascii'))`,
+			// TODO: 30 and 31 are BIT type from JSON_TYPE, may support later.
+			`INSERT INTO test_json_v2 VALUES (30, CAST(x'cafe' AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (31, CAST(x'cafebabe' AS JSON))`,
+			`INSERT INTO test_json_v2 VALUES (100, CONCAT('{\"', REPEAT('a', 64 * 1024 - 1), '\":123}'))`,
+		}
+
+		for _, query := range tbls {
+			t.testExecute(c, query)
+		}
+
+		// If MySQL supports JSON, it must supports GEOMETRY.
+		t.testExecute(c, "DROP TABLE IF EXISTS test_geo")
+
+		str = `CREATE TABLE test_geo (g GEOMETRY)`
+		_, err = t.c.Execute(str)
+		c.Assert(err, IsNil)
+
+		tbls = []string{
+			`INSERT INTO test_geo VALUES (POINT(1, 1))`,
+			`INSERT INTO test_geo VALUES (LINESTRING(POINT(0,0), POINT(1,1), POINT(2,2)))`,
+			// TODO: add more geometry tests
+		}
+
+		for _, query := range tbls {
+			t.testExecute(c, query)
+		}
 	}
 
 	t.wg.Wait()
@@ -164,10 +262,16 @@ func (t *testSyncerSuite) setupTest(c *C, flavor string) {
 		t.b.Close()
 	}
 
-	t.b = NewBinlogSyncer(100, flavor)
+	cfg := BinlogSyncerConfig{
+		ServerID: 100,
+		Flavor:   flavor,
+		Host:     *testHost,
+		Port:     port,
+		User:     "root",
+		Password: "",
+	}
 
-	err = t.b.RegisterSlave(*testHost, port, "root", "")
-	c.Assert(err, IsNil)
+	t.b = NewBinlogSyncer(&cfg)
 }
 
 func (t *testSyncerSuite) testPositionSync(c *C) {
@@ -179,6 +283,11 @@ func (t *testSyncerSuite) testPositionSync(c *C) {
 
 	s, err := t.b.StartSync(mysql.Position{binFile, uint32(binPos)})
 	c.Assert(err, IsNil)
+
+	// Test re-sync.
+	time.Sleep(100 * time.Millisecond)
+	t.b.c.SetReadDeadline(time.Now().Add(time.Millisecond))
+	time.Sleep(100 * time.Millisecond)
 
 	t.testSync(c, s)
 }
@@ -198,8 +307,14 @@ func (t *testSyncerSuite) TestMysqlGTIDSync(c *C) {
 		c.Skip("GTID mode is not ON")
 	}
 
-	masterUuid, err := t.b.GetMasterUUID()
+	r, err = t.c.Execute("SHOW GLOBAL VARIABLES LIKE 'SERVER_UUID'")
 	c.Assert(err, IsNil)
+
+	var masterUuid uuid.UUID
+	if s, _ := r.GetString(0, 1); len(s) > 0 && s != "NONE" {
+		masterUuid, err = uuid.FromString(s)
+		c.Assert(err, IsNil)
+	}
 
 	set, _ := mysql.ParseMysqlGTIDSet(fmt.Sprintf("%s:%d-%d", masterUuid.String(), 1, 2))
 
@@ -234,10 +349,7 @@ func (t *testSyncerSuite) TestMariadbGTIDSync(c *C) {
 func (t *testSyncerSuite) TestMysqlSemiPositionSync(c *C) {
 	t.setupTest(c, mysql.MySQLFlavor)
 
-	err := t.b.EnableSemiSync()
-	if err != nil {
-		c.Skip(fmt.Sprintf("mysql doest not support semi synchronous replication %v", err))
-	}
+	t.b.cfg.SemiSyncEnabled = true
 
 	t.testPositionSync(c)
 }
@@ -249,6 +361,7 @@ func (t *testSyncerSuite) TestMysqlBinlogCodec(c *C) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
+	defer wg.Wait()
 
 	go func() {
 		defer wg.Done()
@@ -263,7 +376,7 @@ func (t *testSyncerSuite) TestMysqlBinlogCodec(c *C) {
 	os.RemoveAll("./var")
 
 	err := t.b.StartBackup("./var", mysql.Position{"", uint32(0)}, 2*time.Second)
-	c.Check(err, Equals, ErrGetEventTimeout)
+	c.Assert(err, IsNil)
 
 	p := NewBinlogParser()
 

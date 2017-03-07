@@ -70,14 +70,15 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.readTableColumns(); err != nil {
 		return err
 	}
+	log.Infof("Applier initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.ApplierMySQLVersion)
 	return nil
 }
 
 // validateConnection issues a simple can-connect to MySQL
 func (this *Applier) validateConnection(db *gosql.DB) error {
-	query := `select @@global.port`
+	query := `select @@global.port, @@global.version`
 	var port int
-	if err := db.QueryRow(query).Scan(&port); err != nil {
+	if err := db.QueryRow(query).Scan(&port, &this.migrationContext.ApplierMySQLVersion); err != nil {
 		return err
 	}
 	if port != this.connectionConfig.Key.Port {
@@ -141,6 +142,10 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 			return err
 		}
 	}
+	if len(this.migrationContext.GetOldTableName()) > mysql.MaxTableNameLength {
+		log.Fatalf("--timestamp-old-table defined, but resulting table name (%s) is too long (only %d characters allowed)", this.migrationContext.GetOldTableName(), mysql.MaxTableNameLength)
+	}
+
 	if this.tableExists(this.migrationContext.GetOldTableName()) {
 		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-old-table to force dropping it, though I really prefer that you drop it or rename it away", sql.EscapeName(this.migrationContext.GetOldTableName()))
 	}
