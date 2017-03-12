@@ -44,6 +44,7 @@ The full list of supported hooks is best found in code: [hooks.go](https://githu
 - `gh-ost-on-interactive-command`
 - `gh-ost-on-row-copy-complete`
 - `gh-ost-on-stop-replication`
+- `gh-ost-on-start-replication`
 - `gh-ost-on-begin-postponed`
 - `gh-ost-on-before-cut-over`
 - `gh-ost-on-success`
