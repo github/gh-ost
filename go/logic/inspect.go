@@ -8,8 +8,10 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
@@ -18,6 +20,8 @@ import (
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
 )
+
+const startSlavePostWaitMilliseconds = 500 * time.Millisecond
 
 // Inspector reads data from the read-MySQL-server (typically a replica, but can be the master)
 // It is used for gaining initial status and structure, and later also follow up on progress and changelog
@@ -56,6 +60,7 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.applyBinlogFormat(); err != nil {
 		return err
 	}
+	log.Infof("Inspector initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.InspectorMySQLVersion)
 	return nil
 }
 
@@ -83,7 +88,7 @@ func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (colum
 	if len(uniqueKeys) == 0 {
 		return columns, uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
 	}
-	columns, err = this.getTableColumns(this.migrationContext.DatabaseName, tableName)
+	columns, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, tableName)
 	if err != nil {
 		return columns, uniqueKeys, err
 	}
@@ -93,15 +98,21 @@ func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (colum
 
 func (this *Inspector) InspectOriginalTable() (err error) {
 	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
-	if err == nil {
+	if err != nil {
 		return err
 	}
 	return nil
 }
 
-// InspectOriginalAndGhostTables compares original and ghost tables to see whether the migration
+// inspectOriginalAndGhostTables compares original and ghost tables to see whether the migration
 // makes sense and is valid. It extracts the list of shared columns and the chosen migration unique key
-func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
+func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
+	originalNamesOnApplier := this.migrationContext.OriginalTableColumnsOnApplier.Names()
+	originalNames := this.migrationContext.OriginalTableColumns.Names()
+	if !reflect.DeepEqual(originalNames, originalNamesOnApplier) {
+		return fmt.Errorf("It seems like table structure is not identical between master and replica. This scenario is not supported.")
+	}
+
 	this.migrationContext.GhostTableColumns, this.migrationContext.GhostTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.GetGhostTableName())
 	if err != nil {
 		return err
@@ -136,6 +147,7 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 	// the `getTableColumns()` function, but it's a later patch and introduces some complexity; I feel
 	// comfortable in doing this as a separate step.
 	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
+	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &this.migrationContext.UniqueKey.Columns)
 	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
 
 	for i := range this.migrationContext.SharedColumns.Columns() {
@@ -157,9 +169,9 @@ func (this *Inspector) InspectOriginalAndGhostTables() (err error) {
 
 // validateConnection issues a simple can-connect to MySQL
 func (this *Inspector) validateConnection() error {
-	query := `select @@global.port`
+	query := `select @@global.port, @@global.version`
 	var port int
-	if err := this.db.QueryRow(query).Scan(&port); err != nil {
+	if err := this.db.QueryRow(query).Scan(&port, &this.migrationContext.InspectorMySQLVersion); err != nil {
 		return err
 	}
 	if port != this.connectionConfig.Key.Port {
@@ -249,6 +261,8 @@ func (this *Inspector) restartReplication() error {
 	if startError != nil {
 		return startError
 	}
+	time.Sleep(startSlavePostWaitMilliseconds)
+
 	log.Debugf("Replication restarted")
 	return nil
 }
@@ -327,12 +341,27 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	if err := this.db.QueryRow(query).Scan(&logSlaveUpdates); err != nil {
 		return err
 	}
-	if !logSlaveUpdates && !this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.IsTungsten {
-		return fmt.Errorf("%s:%d must have log_slave_updates enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+
+	if logSlaveUpdates {
+		log.Infof("log_slave_updates validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return nil
 	}
 
-	log.Infof("binary logs updates validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
-	return nil
+	if this.migrationContext.IsTungsten {
+		log.Warningf("log_slave_updates not found on %s:%d, but --tungsten provided, so I'm proceeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return nil
+	}
+
+	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
+		return fmt.Errorf("%s:%d must have log_slave_updates enabled for testing/migrating on replica", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	}
+
+	if this.migrationContext.InspectorIsAlsoApplier() {
+		log.Warningf("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return nil
+	}
+
+	return fmt.Errorf("%s:%d must have log_slave_updates enabled for executing migration", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 }
 
 // validateTable makes sure the table we need to operate on actually exists
@@ -364,6 +393,10 @@ func (this *Inspector) validateTable() error {
 
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
 func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error {
+	if this.migrationContext.SkipForeignKeyChecks {
+		log.Warning("--skip-foreign-key-checks provided: will not check for foreign keys")
+		return nil
+	}
 	query := `
 		SELECT
 			SUM(REFERENCED_TABLE_NAME IS NOT NULL AND TABLE_SCHEMA=? AND TABLE_NAME=?) as num_child_side_fk,
@@ -478,31 +511,6 @@ func (this *Inspector) CountTableRows() error {
 	return nil
 }
 
-// getTableColumns reads column list from given table
-func (this *Inspector) getTableColumns(databaseName, tableName string) (*sql.ColumnList, error) {
-	query := fmt.Sprintf(`
-		show columns from %s.%s
-		`,
-		sql.EscapeName(databaseName),
-		sql.EscapeName(tableName),
-	)
-	columnNames := []string{}
-	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		columnNames = append(columnNames, rowMap.GetString("Field"))
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(columnNames) == 0 {
-		return nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
-			sql.EscapeName(databaseName),
-			sql.EscapeName(tableName),
-		)
-	}
-	return sql.NewColumnList(columnNames), nil
-}
-
 // applyColumnTypes
 func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsLists ...*sql.ColumnList) error {
 	query := `
@@ -522,6 +530,11 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 				columnsList.SetUnsigned(columnName)
 			}
 		}
+		if strings.Contains(columnType, "mediumint") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.MediumIntColumnType
+			}
+		}
 		if strings.Contains(columnType, "timestamp") {
 			for _, columnsList := range columnsLists {
 				columnsList.GetColumn(columnName).Type = sql.TimestampColumnType
@@ -530,6 +543,11 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		if strings.Contains(columnType, "datetime") {
 			for _, columnsList := range columnsLists {
 				columnsList.GetColumn(columnName).Type = sql.DateTimeColumnType
+			}
+		}
+		if strings.HasPrefix(columnType, "enum") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.EnumColumnType
 			}
 		}
 		if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
@@ -668,22 +686,30 @@ func (this *Inspector) showCreateTable(tableName string) (createTableStatement s
 }
 
 // readChangelogState reads changelog hints
-func (this *Inspector) readChangelogState() (map[string]string, error) {
+func (this *Inspector) readChangelogState(hint string) (string, error) {
 	query := fmt.Sprintf(`
-		select hint, value from %s.%s where id <= 255
+		select hint, value from %s.%s where hint = ? and id <= 255
 		`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
-	result := make(map[string]string)
+	result := ""
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
-		result[m.GetString("hint")] = m.GetString("value")
+		result = m.GetString("value")
 		return nil
-	})
+	}, hint)
 	return result, err
 }
 
 func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
+	log.Infof("Recursively searching for replication master")
 	visitedKeys := mysql.NewInstanceKeyMap()
 	return mysql.GetMasterConnectionConfigSafe(this.connectionConfig, visitedKeys, this.migrationContext.AllowedMasterMaster)
+}
+
+func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err error) {
+	replicationLag, err = mysql.GetReplicationLag(
+		this.migrationContext.InspectorConnectionConfig,
+	)
+	return replicationLag, err
 }

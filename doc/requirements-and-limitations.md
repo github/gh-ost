@@ -4,7 +4,7 @@
 
 - You will need to have one server serving Row Based Replication (RBR) format binary logs. Right now `FULL` row image is supported. `MINIMAL` to be supported in the near future. `gh-ost` prefers to work with replicas. You may [still have your master configured with Statement Based Replication](migrating-with-sbr.md) (SBR).
 
-- If you are using a replica, the table must have an identical schema between the master and replica. 
+- If you are using a replica, the table must have an identical schema between the master and replica.
 
 - `gh-ost` requires an account with these privileges:
 
@@ -28,11 +28,14 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 - MySQL 5.7 generated columns are not supported. They may be supported in the future.
 
-- The two _before_ & _after_ tables must share some `UNIQUE KEY`. Such key would be used by `gh-ost` to iterate the table.
-  - As an example, if your table has a single `UNIQUE KEY` and no `PRIMARY KEY`, and you wish to replace it with a `PRIMARY KEY`, you will need two migrations: one to add the `PRIMARY KEY` (this migration will use the existing `UNIQUE KEY`), another to drop the now redundant `UNIQUE KEY` (this migration will use the `PRIMARY KEY`).
+- MySQL 5.7 `JSON` columns are not supported. They are likely to be supported shortly.
 
-- The chosen migration key must not include columns with `NULL` values.
-  - `gh-ost` will do its best to pick a migration key with non-nullable columns. It will by default refuse a migration where the only possible `UNIQUE KEY` includes nullable-columns. You may override this refusal via `--allow-nullable-unique-key` but **you must** be sure there are no actual `NULL` values in those columns. Such `NULL` values would cause a data integrity problem and potentially a corrupted migration.
+- The two _before_ & _after_ tables must share a `PRIMARY KEY` or other `UNIQUE KEY`. This key will be used by `gh-ost` to iterate through the table rows when copying. [Read more](shared-key.md)
+  - The migration key must not include columns with NULL values. This means either:
+    1. The columns are `NOT NULL`, or
+    2. The columns are nullable but don't contain any NULL values.
+  - by default, `gh-ost` will not run if the only `UNIQUE KEY` includes nullable columns.
+    - You may override this via `--allow-nullable-unique-key` but make sure there are no actual `NULL` values in those columns. Existing NULL values can't guarantee data integrity on the migrated table.
 
 - It is not allowed to migrate a table where another table exists with same name and different upper/lower case.
   - For example, you may not migrate `MyTable` if another table called `MYtable` exists in the same schema.
@@ -43,3 +46,7 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 - Multisource is not supported when migrating via replica. It _should_ work (but never tested) when connecting directly to master (`--allow-on-master`)
 
 - Master-master setup is only supported in active-passive setup. Active-active (where table is being written to on both masters concurrently) is unsupported. It may be supported in the future.
+
+- If you have en `enum` field as part of your migration key (typically the `PRIMARY KEY`), migration performance will be degraded and potentially bad. [Read more](https://github.com/github/gh-ost/pull/277#issuecomment-254811520)
+
+- Migrating a `FEDERATED` table is unsupported and is irrelevant to the problem `gh-ost` tackles.

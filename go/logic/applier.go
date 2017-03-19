@@ -67,14 +67,18 @@ func (this *Applier) InitDBConnections() (err error) {
 	} else {
 		this.connectionConfig.ImpliedKey = impliedKey
 	}
+	if err := this.readTableColumns(); err != nil {
+		return err
+	}
+	log.Infof("Applier initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.ApplierMySQLVersion)
 	return nil
 }
 
 // validateConnection issues a simple can-connect to MySQL
 func (this *Applier) validateConnection(db *gosql.DB) error {
-	query := `select @@global.port`
+	query := `select @@global.port, @@global.version`
 	var port int
-	if err := db.QueryRow(query).Scan(&port); err != nil {
+	if err := db.QueryRow(query).Scan(&port, &this.migrationContext.ApplierMySQLVersion); err != nil {
 		return err
 	}
 	if port != this.connectionConfig.Key.Port {
@@ -92,6 +96,16 @@ func (this *Applier) validateAndReadTimeZone() error {
 	}
 
 	log.Infof("will use time_zone='%s' on applier", this.migrationContext.ApplierTimeZone)
+	return nil
+}
+
+// readTableColumns reads table columns on applier
+func (this *Applier) readTableColumns() (err error) {
+	log.Infof("Examining table structure on applier")
+	this.migrationContext.OriginalTableColumnsOnApplier, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -128,6 +142,10 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 			return err
 		}
 	}
+	if len(this.migrationContext.GetOldTableName()) > mysql.MaxTableNameLength {
+		log.Fatalf("--timestamp-old-table defined, but resulting table name (%s) is too long (only %d characters allowed)", this.migrationContext.GetOldTableName(), mysql.MaxTableNameLength)
+	}
+
 	if this.tableExists(this.migrationContext.GetOldTableName()) {
 		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-old-table to force dropping it, though I really prefer that you drop it or rename it away", sql.EscapeName(this.migrationContext.GetOldTableName()))
 	}
@@ -292,6 +310,9 @@ func (this *Applier) InitiateHeartbeat() {
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
 		// have this block the loop rather than spam the master in the event something
 		// goes wrong
+		if throttle, _, reasonHint := this.migrationContext.IsThrottled(); throttle && (reasonHint == base.UserCommandThrottleReasonHint) {
+			continue
+		}
 		if err := injectHeartbeat(); err != nil {
 			return
 		}
@@ -315,7 +336,7 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 // ReadMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns.Names())
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
 	if err != nil {
 		return err
 	}
@@ -336,7 +357,7 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 // ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey.Columns.Names())
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
 	if err != nil {
 		return err
 	}
@@ -377,7 +398,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 	query, explodedArgs, err := sql.BuildUniqueKeyRangeEndPreparedQuery(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
-		this.migrationContext.UniqueKey.Columns.Names(),
+		&this.migrationContext.UniqueKey.Columns,
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 		this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
@@ -419,7 +440,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.SharedColumns.Names(),
 		this.migrationContext.MappedSharedColumns.Names(),
 		this.migrationContext.UniqueKey.Name,
-		this.migrationContext.UniqueKey.Columns.Names(),
+		&this.migrationContext.UniqueKey.Columns,
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
 		this.migrationContext.GetIteration() == 0,
@@ -572,11 +593,22 @@ func (this *Applier) RenameTablesRollback() (renameError error) {
 // and have them written to the binary log, so that we can then read them via streamer.
 func (this *Applier) StopSlaveIOThread() error {
 	query := `stop /* gh-ost */ slave io_thread`
-	log.Infof("Stopping replication")
+	log.Infof("Stopping replication IO thread")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
-	log.Infof("Replication stopped")
+	log.Infof("Replication IO thread stopped")
+	return nil
+}
+
+// StartSlaveIOThread is applicable with --test-on-replica
+func (this *Applier) StartSlaveIOThread() error {
+	query := `start /* gh-ost */ slave io_thread`
+	log.Infof("Starting replication IO thread")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	log.Infof("Replication IO thread started")
 	return nil
 }
 
@@ -616,6 +648,18 @@ func (this *Applier) StopReplication() error {
 		return err
 	}
 	log.Infof("Replication IO thread at %+v. SQL thread is at %+v", *readBinlogCoordinates, *executeBinlogCoordinates)
+	return nil
+}
+
+// StartReplication is used by `--test-on-replica` on cut-over failure
+func (this *Applier) StartReplication() error {
+	if err := this.StartSlaveIOThread(); err != nil {
+		return err
+	}
+	if err := this.StartSlaveSQLThread(); err != nil {
+		return err
+	}
+	log.Infof("Replication started")
 	return nil
 }
 
@@ -678,8 +722,7 @@ func (this *Applier) DropAtomicCutOverSentryTableIfExists() error {
 	return this.dropTable(tableName)
 }
 
-// DropAtomicCutOverSentryTableIfExists checks if the "old" table name
-// happens to be a cut-over magic table; if so, it drops it.
+// CreateAtomicCutOverSentryTable
 func (this *Applier) CreateAtomicCutOverSentryTable() error {
 	if err := this.DropAtomicCutOverSentryTableIfExists(); err != nil {
 		return err
@@ -688,10 +731,11 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s (
 			id int auto_increment primary key
-		) comment='%s'
+		) engine=%s comment='%s'
 		`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
+		this.migrationContext.TableEngine,
 		atomicCutOverMagicHint,
 	)
 	log.Infof("Creating magic cut-over table %s.%s",
@@ -932,5 +976,57 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 	if this.migrationContext.CountTableRows {
 		atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, rowDelta)
 	}
+	return nil
+}
+
+// ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
+func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
+
+	var totalDelta int64
+
+	err := func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		rollback := func(err error) error {
+			tx.Rollback()
+			return err
+		}
+
+		sessionQuery := `SET
+			SESSION time_zone = '+00:00',
+			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
+			`
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return rollback(err)
+		}
+		for _, dmlEvent := range dmlEvents {
+			query, args, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
+			if err != nil {
+				return rollback(err)
+			}
+			if _, err := tx.Exec(query, args...); err != nil {
+				err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), query, args)
+				return rollback(err)
+			}
+			totalDelta += rowDelta
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return nil
+	}()
+
+	if err != nil {
+		return log.Errore(err)
+	}
+	// no error
+	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, int64(len(dmlEvents)))
+	if this.migrationContext.CountTableRows {
+		atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, totalDelta)
+	}
+	log.Debugf("ApplyDMLEventQueries() applied %d events in one transaction", len(dmlEvents))
 	return nil
 }

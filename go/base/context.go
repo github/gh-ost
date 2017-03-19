@@ -37,6 +37,13 @@ const (
 	CutOverTwoStep         = iota
 )
 
+type ThrottleReasonHint string
+
+const (
+	NoThrottleReasonHint          ThrottleReasonHint = "NoThrottleReasonHint"
+	UserCommandThrottleReasonHint                    = "UserCommandThrottleReasonHint"
+)
+
 var (
 	envVariableRegexp = regexp.MustCompile("[$][{](.*)[}]")
 )
@@ -44,12 +51,14 @@ var (
 type ThrottleCheckResult struct {
 	ShouldThrottle bool
 	Reason         string
+	ReasonHint     ThrottleReasonHint
 }
 
-func NewThrottleCheckResult(throttle bool, reason string) *ThrottleCheckResult {
+func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleReasonHint) *ThrottleCheckResult {
 	return &ThrottleCheckResult{
 		ShouldThrottle: throttle,
 		Reason:         reason,
+		ReasonHint:     reasonHint,
 	}
 }
 
@@ -66,24 +75,26 @@ type MigrationContext struct {
 	AllowedMasterMaster      bool
 	SwitchToRowBinlogFormat  bool
 	AssumeRBR                bool
+	SkipForeignKeyChecks     bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
 
-	config      ContextConfig
-	configMutex *sync.Mutex
-	ConfigFile  string
-	CliUser     string
-	CliPassword string
+	config            ContextConfig
+	configMutex       *sync.Mutex
+	ConfigFile        string
+	CliUser           string
+	CliPassword       string
+	CliMasterUser     string
+	CliMasterPassword string
 
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
 	ChunkSize                           int64
 	niceRatio                           float64
 	MaxLagMillisecondsThrottleThreshold int64
-	replicationLagQuery                 string
 	throttleControlReplicaKeys          *mysql.InstanceKeyMap
 	ThrottleFlagFile                    string
 	ThrottleAdditionalFlagFile          string
@@ -110,7 +121,9 @@ type MigrationContext struct {
 	OkToDropTable                bool
 	InitiallyDropOldTable        bool
 	InitiallyDropGhostTable      bool
+	TimestampOldTable            bool // Should old table name include a timestamp
 	CutOverType                  CutOver
+	ReplicaServerId              uint
 
 	Hostname                               string
 	AssumeMasterHostname                   string
@@ -123,7 +136,9 @@ type MigrationContext struct {
 	OriginalBinlogFormat                   string
 	OriginalBinlogRowImage                 string
 	InspectorConnectionConfig              *mysql.ConnectionConfig
+	InspectorMySQLVersion                  string
 	ApplierConnectionConfig                *mysql.ConnectionConfig
+	ApplierMySQLVersion                    string
 	StartTime                              time.Time
 	RowCopyStartTime                       time.Time
 	RowCopyEndTime                         time.Time
@@ -136,8 +151,10 @@ type MigrationContext struct {
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
 	TotalDMLEventsApplied                  int64
+	DMLBatchSize                           int64
 	isThrottled                            bool
 	throttleReason                         string
+	throttleReasonHint                     ThrottleReasonHint
 	throttleGeneralCheckResult             ThrottleCheckResult
 	throttleMutex                          *sync.Mutex
 	IsPostponingCutOver                    int64
@@ -145,8 +162,11 @@ type MigrationContext struct {
 	AllEventsUpToLockProcessedInjectedFlag int64
 	CleanupImminentFlag                    int64
 	UserCommandedUnpostponeFlag            int64
+	CutOverCompleteFlag                    int64
+	InCutOverCriticalSectionFlag           int64
 	PanicAbort                             chan error
 
+	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
 	GhostTableColumns                *sql.ColumnList
@@ -191,6 +211,7 @@ func newMigrationContext() *MigrationContext {
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
+		DMLBatchSize:                        10,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
@@ -214,11 +235,12 @@ func (this *MigrationContext) GetGhostTableName() string {
 
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (this *MigrationContext) GetOldTableName() string {
-	if this.TestOnReplica {
-		return fmt.Sprintf("_%s_ght", this.OriginalTableName)
-	}
-	if this.MigrateOnReplica {
-		return fmt.Sprintf("_%s_ghr", this.OriginalTableName)
+	if this.TimestampOldTable {
+		t := this.StartTime
+		timestamp := fmt.Sprintf("%d%02d%02d%02d%02d%02d",
+			t.Year(), t.Month(), t.Day(),
+			t.Hour(), t.Minute(), t.Second())
+		return fmt.Sprintf("_%s_%s_del", this.OriginalTableName, timestamp)
 	}
 	return fmt.Sprintf("_%s_del", this.OriginalTableName)
 }
@@ -401,6 +423,16 @@ func (this *MigrationContext) SetChunkSize(chunkSize int64) {
 	atomic.StoreInt64(&this.ChunkSize, chunkSize)
 }
 
+func (this *MigrationContext) SetDMLBatchSize(batchSize int64) {
+	if batchSize < 1 {
+		batchSize = 1
+	}
+	if batchSize > 100 {
+		batchSize = 100
+	}
+	atomic.StoreInt64(&this.DMLBatchSize, batchSize)
+}
+
 func (this *MigrationContext) SetThrottleGeneralCheckResult(checkResult *ThrottleCheckResult) *ThrottleCheckResult {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
@@ -415,34 +447,28 @@ func (this *MigrationContext) GetThrottleGeneralCheckResult() *ThrottleCheckResu
 	return &result
 }
 
-func (this *MigrationContext) SetThrottled(throttle bool, reason string) {
+func (this *MigrationContext) SetThrottled(throttle bool, reason string, reasonHint ThrottleReasonHint) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 	this.isThrottled = throttle
 	this.throttleReason = reason
+	this.throttleReasonHint = reasonHint
 }
 
-func (this *MigrationContext) IsThrottled() (bool, string) {
-	this.throttleMutex.Lock()
-	defer this.throttleMutex.Unlock()
-	return this.isThrottled, this.throttleReason
-}
-
-func (this *MigrationContext) GetReplicationLagQuery() string {
-	var query string
-
+func (this *MigrationContext) IsThrottled() (bool, string, ThrottleReasonHint) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
-	query = this.replicationLagQuery
-	return query
-}
-
-func (this *MigrationContext) SetReplicationLagQuery(newQuery string) {
-	this.throttleMutex.Lock()
-	defer this.throttleMutex.Unlock()
-
-	this.replicationLagQuery = newQuery
+	// we don't throttle when cutting over. We _do_ throttle:
+	// - during copy phase
+	// - just before cut-over
+	// - in between cut-over retries
+	// When cutting over, we need to be aggressive. Cut-over holds table locks.
+	// We need to release those asap.
+	if atomic.LoadInt64(&this.InCutOverCriticalSectionFlag) > 0 {
+		return false, "critical section", NoThrottleReasonHint
+	}
+	return this.isThrottled, this.throttleReason, this.throttleReasonHint
 }
 
 func (this *MigrationContext) GetThrottleQuery() string {
@@ -537,7 +563,11 @@ func (this *MigrationContext) GetControlReplicasLagResult() mysql.ReplicationLag
 func (this *MigrationContext) SetControlReplicasLagResult(lagResult *mysql.ReplicationLagResult) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
-	this.controlReplicasLagResult = *lagResult
+	if lagResult == nil {
+		this.controlReplicasLagResult = *mysql.NewNoReplicationLagResult()
+	} else {
+		this.controlReplicasLagResult = *lagResult
+	}
 }
 
 func (this *MigrationContext) GetThrottleControlReplicaKeys() *mysql.InstanceKeyMap {
