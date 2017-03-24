@@ -5,6 +5,7 @@
 - No `SUPER` privileges.
 - `gh-ost` runs should be setup use [`--assume-rbr`][assume_rbr_docs] and use `binlog_format=ROW`.
 - Aurora does not allow editing of the `read_only` parameter. While it is defined as `{TrueIfReplica}`, the parameter is non-modifiable field.
+- In order to have binlogs enabled, the backup window must be set to greater than 1 day.
 
 ## Aurora
 
