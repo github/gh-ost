@@ -7,6 +7,7 @@ package logic
 
 import (
 	"fmt"
+	"net/http"
 	"sync/atomic"
 	"time"
 
@@ -40,6 +41,11 @@ func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint 
 	generalCheckResult := this.migrationContext.GetThrottleGeneralCheckResult()
 	if generalCheckResult.ShouldThrottle {
 		return generalCheckResult.ShouldThrottle, generalCheckResult.Reason, generalCheckResult.ReasonHint
+	}
+	// HTTP throttle
+	statusCode := atomic.LoadInt64(&this.migrationContext.ThrottleHTTPStatusCode)
+	if statusCode != 0 && statusCode != http.StatusOK {
+		return true, fmt.Sprintf("http=%d", statusCode), base.NoThrottleReasonHint
 	}
 	// Replication lag throttle
 	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
@@ -213,6 +219,32 @@ func (this *Throttler) criticalLoadIsMet() (met bool, variableName string, value
 	return false, variableName, value, threshold, nil
 }
 
+// collectReplicationLag reads the latest changelog heartbeat value
+func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<- bool) {
+	collectFunc := func() (sleep bool, err error) {
+		url := this.migrationContext.GetThrottleHTTP()
+		if url == "" {
+			return true, nil
+		}
+		resp, err := http.Get(url)
+		if err != nil {
+			return false, err
+		}
+		atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(resp.StatusCode))
+		return false, nil
+	}
+
+	collectFunc()
+	firstThrottlingCollected <- true
+
+	ticker := time.Tick(100 * time.Millisecond)
+	for range ticker {
+		if sleep, _ := collectFunc(); sleep {
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
 // collectGeneralThrottleMetrics reads the once-per-sec metrics, and stores them onto this.migrationContext
 func (this *Throttler) collectGeneralThrottleMetrics() error {
 
@@ -290,6 +322,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan<- bool) {
 	go this.collectReplicationLag(firstThrottlingCollected)
 	go this.collectControlReplicasLag()
+	go this.collectThrottleHTTPStatus(firstThrottlingCollected)
 
 	go func() {
 		this.collectGeneralThrottleMetrics()
