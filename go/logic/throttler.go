@@ -226,7 +226,7 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 		if url == "" {
 			return true, nil
 		}
-		resp, err := http.Get(url)
+		resp, err := http.Head(url)
 		if err != nil {
 			return false, err
 		}
