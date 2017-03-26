@@ -385,8 +385,38 @@ func (this *Migrator) ExecOnFailureHook() (err error) {
 	return this.hooksExecutor.onFailure()
 }
 
+func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
+	if this.migrationContext.TestOnReplica {
+		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
+		this.applier.RenameTablesRollback()
+	}
+	if cutOverError == nil {
+		return nil
+	}
+	// Only on error:
+
+	if this.migrationContext.TestOnReplica {
+		// With `--test-on-replica` we stop replication thread, and then proceed to use
+		// the same cut-over phase as the master would use. That means we take locks
+		// and swap the tables.
+		// The difference is that we will later swap the tables back.
+		if err := this.hooksExecutor.onStartReplication(); err != nil {
+			return log.Errore(err)
+		}
+		if this.migrationContext.TestOnReplicaSkipReplicaStop {
+			log.Warningf("--test-on-replica-skip-replica-stop enabled, we are not starting replication.")
+		} else {
+			log.Debugf("testing on replica. Starting replication IO thread after cut-over failure")
+			if err := this.retryOperation(this.applier.StartReplication); err != nil {
+				return log.Errore(err)
+			}
+		}
+	}
+	return nil
+}
+
 // cutOver performs the final step of migration, based on migration
-// type (on replica? bumpy? safe?)
+// type (on replica? atomic? safe?)
 func (this *Migrator) cutOver() (err error) {
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really swapping tables")
@@ -441,18 +471,18 @@ func (this *Migrator) cutOver() (err error) {
 				return err
 			}
 		}
-		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
-		defer this.applier.RenameTablesRollback()
-		// We further proceed to do the cutover by normal means; the 'defer' above will rollback the swap
 	}
 	if this.migrationContext.CutOverType == base.CutOverAtomic {
 		// Atomic solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
 		err := this.atomicCutOver()
+		this.handleCutOverResult(err)
 		return err
 	}
 	if this.migrationContext.CutOverType == base.CutOverTwoStep {
-		return this.cutOverTwoStep()
+		err := this.cutOverTwoStep()
+		this.handleCutOverResult(err)
+		return err
 	}
 	return log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 }
@@ -1000,11 +1030,13 @@ func (this *Migrator) iterateChunks() error {
 	for {
 		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
 			// Done
+			// There's another such check down the line
 			return nil
 		}
 		copyRowsFunc := func() error {
 			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
-				// Done
+				// Done.
+				// There's another such check down the line
 				return nil
 			}
 			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
@@ -1016,6 +1048,17 @@ func (this *Migrator) iterateChunks() error {
 			}
 			// Copy task:
 			applyCopyRowsFunc := func() error {
+				if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+					// No need for more writes.
+					// This is the de-facto place where we avoid writing in the event of completed cut-over.
+					// There could _still_ be a race condition, but that's as close as we can get.
+					// What about the race condition? Well, there's actually no data integrity issue.
+					// when rowCopyCompleteFlag==1 that means **guaranteed** all necessary rows have been copied.
+					// But some are still then collected at the binary log, and these are the ones we're trying to
+					// not apply here. If the race condition wins over us, then we just attempt to apply onto the
+					// _ghost_ table, which no longer exists. So, bothering error messages and all, but no damage.
+					return nil
+				}
 				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
 					return terminateRowIteration(err)

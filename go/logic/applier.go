@@ -142,6 +142,10 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 			return err
 		}
 	}
+	if len(this.migrationContext.GetOldTableName()) > mysql.MaxTableNameLength {
+		log.Fatalf("--timestamp-old-table defined, but resulting table name (%s) is too long (only %d characters allowed)", this.migrationContext.GetOldTableName(), mysql.MaxTableNameLength)
+	}
+
 	if this.tableExists(this.migrationContext.GetOldTableName()) {
 		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-old-table to force dropping it, though I really prefer that you drop it or rename it away", sql.EscapeName(this.migrationContext.GetOldTableName()))
 	}
@@ -589,11 +593,22 @@ func (this *Applier) RenameTablesRollback() (renameError error) {
 // and have them written to the binary log, so that we can then read them via streamer.
 func (this *Applier) StopSlaveIOThread() error {
 	query := `stop /* gh-ost */ slave io_thread`
-	log.Infof("Stopping replication")
+	log.Infof("Stopping replication IO thread")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
-	log.Infof("Replication stopped")
+	log.Infof("Replication IO thread stopped")
+	return nil
+}
+
+// StartSlaveIOThread is applicable with --test-on-replica
+func (this *Applier) StartSlaveIOThread() error {
+	query := `start /* gh-ost */ slave io_thread`
+	log.Infof("Starting replication IO thread")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	log.Infof("Replication IO thread started")
 	return nil
 }
 
@@ -633,6 +648,18 @@ func (this *Applier) StopReplication() error {
 		return err
 	}
 	log.Infof("Replication IO thread at %+v. SQL thread is at %+v", *readBinlogCoordinates, *executeBinlogCoordinates)
+	return nil
+}
+
+// StartReplication is used by `--test-on-replica` on cut-over failure
+func (this *Applier) StartReplication() error {
+	if err := this.StartSlaveIOThread(); err != nil {
+		return err
+	}
+	if err := this.StartSlaveSQLThread(); err != nil {
+		return err
+	}
+	log.Infof("Replication started")
 	return nil
 }
 
