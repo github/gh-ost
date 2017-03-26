@@ -31,6 +31,7 @@ Both interfaces may serve at the same time. Both respond to simple text command,
     - `nice-ratio=0.5` will cause `gh-ost` to sleep for `50ms` immediately following.
     - `nice-ratio=1` will cause `gh-ost` to sleep for `100ms`, effectively doubling runtime
     - value of `2` will effectively triple the runtime; etc.
+- `throttle-http`: change throttle HTTP endpoint
 - `throttle-query`: change throttle query
 - `throttle-control-replicas='replica1,replica2'`: change list of throttle-control replicas, these are replicas `gh-ost` will check. This takes a comma separated list of replica's to check and replaces the previous list.
 - `throttle`: force migration suspend
