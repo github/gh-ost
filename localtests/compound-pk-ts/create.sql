@@ -17,24 +17,24 @@ create event gh_ost_test
   enable
   do
 begin
-  insert into gh_ost_test values (null, 11, now(6), 0);
+  insert into gh_ost_test values (null, 11, sysdate(6), 0);
   update gh_ost_test set updated = 1 where i = 11 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 13,  now(6), 0);
+  insert into gh_ost_test values (null, 13,  sysdate(6), 0);
   update gh_ost_test set updated = 1 where i = 13 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 17, now(6), 0);
+  insert into gh_ost_test values (null, 17, sysdate(6), 0);
   update gh_ost_test set updated = 1 where i = 17 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 19, now(6), 0);
+  insert into gh_ost_test values (null, 19, sysdate(6), 0);
   update gh_ost_test set updated = 1 where i = 19 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 23, now(6), 0);
+  insert into gh_ost_test values (null, 23, sysdate(6), 0);
   update gh_ost_test set updated = 1 where i = 23 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 29, now(6), 0);
-  insert into gh_ost_test values (null, 31, now(6), 0);
-  insert into gh_ost_test values (null, 37, now(6), 0);
-  insert into gh_ost_test values (null, 41, now(6), 0);
+  insert into gh_ost_test values (null, 29, sysdate(6), 0);
+  insert into gh_ost_test values (null, 31, sysdate(6), 0);
+  insert into gh_ost_test values (null, 37, sysdate(6), 0);
+  insert into gh_ost_test values (null, 41, sysdate(6), 0);
   delete from gh_ost_test where i = 31 order by id desc limit 1;
 end ;;

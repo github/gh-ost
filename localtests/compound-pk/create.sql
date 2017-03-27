@@ -31,4 +31,10 @@ begin
 
   insert into gh_ost_test values (null, 23, 'twenty three', 0);
   update gh_ost_test set updated = 1 where i = 23 order by id desc limit 1;
+
+  insert into gh_ost_test values (null, 29, 'twenty nine', 0);
+  insert into gh_ost_test values (null, 31, 'thirty one', 0);
+  insert into gh_ost_test values (null, 37, 'thirty seven', 0);
+  insert into gh_ost_test values (null, 41, 'forty one', 0);
+  delete from gh_ost_test where i = 31 order by id desc limit 1;
 end ;;
