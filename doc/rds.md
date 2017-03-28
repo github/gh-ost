@@ -1,3 +1,5 @@
+`gh-ost` has been updated to work with Amazon RDS however due to GitHub not relying using AWS for databases, this documentation is community driven so if you find a bug please [open an issue][new_issue]!
+
 # Amazon RDS
 
 ## Limitations
@@ -25,6 +27,7 @@ If you use `pt-table-checksum` as a part of your data integrity checks, you migh
 This tool requires binlog_format=STATEMENT, but the current binlog_format is set to ROW and an error occurred while attempting to change it.  If running MySQL 5.1.29 or newer, setting binlog_format requires the SUPER privilege.  You will need to manually set binlog_format to 'STATEMENT' before running this tool.
 ```
 
+[new_issue]: https://github.com/github/gh-ost/issues/new
 [assume_rbr_docs]: https://github.com/github/gh-ost/blob/master/doc/command-line-flags.md#assume-rbr
 [migrate_test_on_replica_docs]: https://github.com/github/gh-ost/blob/master/doc/cheatsheet.md#c-migratetest-on-replica
 [aws_replication_docs]: http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Aurora.Overview.Replication.MySQLReplication.html
