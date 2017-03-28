@@ -7,7 +7,6 @@
 - No `SUPER` privileges.
 - `gh-ost` runs should be setup use [`--assume-rbr`][assume_rbr_docs] and use `binlog_format=ROW`.
 - Aurora does not allow editing of the `read_only` parameter. While it is defined as `{TrueIfReplica}`, the parameter is non-modifiable field.
-- In order to have binlogs enabled, the backup window must be set to greater than 1 day.
 
 ## Aurora
 
@@ -26,6 +25,15 @@ If you use `pt-table-checksum` as a part of your data integrity checks, you migh
 
 This tool requires binlog_format=STATEMENT, but the current binlog_format is set to ROW and an error occurred while attempting to change it.  If running MySQL 5.1.29 or newer, setting binlog_format requires the SUPER privilege.  You will need to manually set binlog_format to 'STATEMENT' before running this tool.
 ```
+
+#### Preflight checklist
+
+Before trying to run any `gh-ost` migrations you will want to confirm the following:
+
+- [ ] You have a secondary cluster available that will act as a replica. Rule of thumb here has been a 1 instance per cluster to mimic MySQL-style replication as opposed to Aurora style.
+- [ ] The database instance parameters and database cluster parameters are consistent between your master and replicas
+- [ ] Executing `SHOW SLAVE STATUS\G` on your replica cluster displays the correct master host, binlog position, etc. 
+- [ ] Database backup retention is greater than 1 day to enable binlogs
 
 [new_issue]: https://github.com/github/gh-ost/issues/new
 [assume_rbr_docs]: https://github.com/github/gh-ost/blob/master/doc/command-line-flags.md#assume-rbr
