@@ -146,6 +146,7 @@ max-lag-millis=<max-lag>             # Set a new replication lag threshold
 replication-lag-query=<query>        # Set a new query that determines replication lag (no quotes)
 max-load=<load>                      # Set a new set of max-load thresholds
 throttle-query=<query>               # Set a new throttle-query (no quotes)
+throttle-http=<URL>                  # Set a new throttle URL
 throttle-control-replicas=<replicas> # Set a new comma delimited list of throttle control replicas
 throttle                             # Force throttling
 no-throttle                          # End forced throttling (other throttling may still apply)
@@ -233,6 +234,16 @@ help                                 # This message
 				return NoPrintStatusRule, nil
 			}
 			this.migrationContext.SetThrottleQuery(arg)
+			fmt.Fprintf(writer, throttleHint)
+			return ForcePrintStatusAndHintRule, nil
+		}
+	case "throttle-http":
+		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetThrottleHTTP())
+				return NoPrintStatusRule, nil
+			}
+			this.migrationContext.SetThrottleHTTP(arg)
 			fmt.Fprintf(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}

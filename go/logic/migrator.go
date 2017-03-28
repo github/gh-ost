@@ -96,7 +96,7 @@ func NewMigrator() *Migrator {
 		migrationContext:           base.GetMigrationContext(),
 		parser:                     sql.NewParser(),
 		ghostTableMigrated:         make(chan bool),
-		firstThrottlingCollected:   make(chan bool, 1),
+		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan string),
 
@@ -977,7 +977,8 @@ func (this *Migrator) initiateThrottler() error {
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")
 	<-this.firstThrottlingCollected // replication lag
-	<-this.firstThrottlingCollected // other metrics
+	<-this.firstThrottlingCollected // HTTP status
+	<-this.firstThrottlingCollected // other, general metrics
 	log.Infof("First throttle metrics collected")
 	go this.throttler.initiateThrottlerChecks()
 
