@@ -41,5 +41,5 @@ Before trying to run any `gh-ost` migrations you will want to confirm the follow
 [migrate_test_on_replica_docs]: https://github.com/github/gh-ost/blob/master/doc/cheatsheet.md#c-migratetest-on-replica
 [aws_replication_docs]: http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Aurora.Overview.Replication.MySQLReplication.html
 [percona_toolkit_patch]: https://github.com/jacobbednarz/percona-toolkit/commit/0271ba6a094da446a5e5bb8d99b5c26f1777f2b9
-[ghost_hooks]: https://envato.slack.com/archives/C08KD4AQJ/p1491197511461443
+[ghost_hooks]: https://github.com/github/gh-ost/blob/master/doc/hooks.md
 [ghost_rds_issue_tracking]: https://github.com/github/gh-ost/issues/163
