@@ -64,6 +64,7 @@ Also see:
 - [what if?](doc/what-if.md)
 - [the fine print](doc/the-fine-print.md)
 - [Community questions](https://github.com/github/gh-ost/issues?q=label%3Aquestion)
+- [Using `gh-ost` on AWS RDS](doc/rds.md)
 
 ## What's in a name?
 
