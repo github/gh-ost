@@ -14,15 +14,18 @@ import (
 var (
 	sanitizeQuotesRegexp = regexp.MustCompile("('[^']*')")
 	renameColumnRegexp   = regexp.MustCompile(`(?i)\bchange\s+(column\s+|)([\S]+)\s+([\S]+)\s+`)
+	dropColumnRegexp     = regexp.MustCompile(`(?i)\bdrop\s+(column\s+|)([\S]+)$`)
 )
 
 type Parser struct {
 	columnRenameMap map[string]string
+	droppedColumns  map[string]bool
 }
 
 func NewParser() *Parser {
 	return &Parser{
 		columnRenameMap: make(map[string]string),
+		droppedColumns:  make(map[string]bool),
 	}
 }
 
@@ -59,10 +62,9 @@ func (this *Parser) sanitizeQuotesFromAlterStatement(alterStatement string) (str
 	return strippedStatement
 }
 
-func (this *Parser) ParseAlterStatement(alterStatement string) (err error) {
-	alterTokens, _ := this.tokenizeAlterStatement(alterStatement)
-	for _, alterToken := range alterTokens {
-		alterToken = this.sanitizeQuotesFromAlterStatement(alterToken)
+func (this *Parser) parseAlterToken(alterToken string) (err error) {
+	{
+		// rename
 		allStringSubmatch := renameColumnRegexp.FindAllStringSubmatch(alterToken, -1)
 		for _, submatch := range allStringSubmatch {
 			if unquoted, err := strconv.Unquote(submatch[2]); err == nil {
@@ -71,9 +73,27 @@ func (this *Parser) ParseAlterStatement(alterStatement string) (err error) {
 			if unquoted, err := strconv.Unquote(submatch[3]); err == nil {
 				submatch[3] = unquoted
 			}
-
 			this.columnRenameMap[submatch[2]] = submatch[3]
 		}
+	}
+	{
+		// drop
+		allStringSubmatch := dropColumnRegexp.FindAllStringSubmatch(alterToken, -1)
+		for _, submatch := range allStringSubmatch {
+			if unquoted, err := strconv.Unquote(submatch[2]); err == nil {
+				submatch[2] = unquoted
+			}
+			this.droppedColumns[submatch[2]] = true
+		}
+	}
+	return nil
+}
+
+func (this *Parser) ParseAlterStatement(alterStatement string) (err error) {
+	alterTokens, _ := this.tokenizeAlterStatement(alterStatement)
+	for _, alterToken := range alterTokens {
+		alterToken = this.sanitizeQuotesFromAlterStatement(alterToken)
+		this.parseAlterToken(alterToken)
 	}
 	return nil
 }
