@@ -111,3 +111,7 @@ func (this *Parser) GetNonTrivialRenames() map[string]string {
 func (this *Parser) HasNonTrivialRenames() bool {
 	return len(this.GetNonTrivialRenames()) > 0
 }
+
+func (this *Parser) DroppedColumnsMap() map[string]bool {
+	return this.droppedColumns
+}
