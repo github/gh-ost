@@ -98,8 +98,13 @@ func (this *Server) Serve() (err error) {
 }
 
 func (this *Server) handleConnection(conn net.Conn) (err error) {
-	defer conn.Close()
+	if conn != nil {
+		defer conn.Close()
+	}
 	command, _, err := bufio.NewReader(conn).ReadLine()
+	if err != nil {
+		return err
+	}
 	return this.onServerCommand(string(command), bufio.NewWriter(conn))
 }
 
