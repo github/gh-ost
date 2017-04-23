@@ -47,7 +47,7 @@ func (this *HooksExecutor) initHooks() error {
 	return nil
 }
 
-func (this *HooksExecutor) applyEnvironmentVairables(extraVariables ...string) []string {
+func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []string {
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("GH_OST_DATABASE_NAME=%s", this.migrationContext.DatabaseName))
 	env = append(env, fmt.Sprintf("GH_OST_TABLE_NAME=%s", this.migrationContext.OriginalTableName))
@@ -75,7 +75,7 @@ func (this *HooksExecutor) applyEnvironmentVairables(extraVariables ...string) [
 // combined output & error are printed to gh-ost's standard error.
 func (this *HooksExecutor) executeHook(hook string, extraVariables ...string) error {
 	cmd := exec.Command(hook)
-	cmd.Env = this.applyEnvironmentVairables(extraVariables...)
+	cmd.Env = this.applyEnvironmentVariables(extraVariables...)
 
 	combinedOutput, err := cmd.CombinedOutput()
 	fmt.Fprintln(os.Stderr, string(combinedOutput))
