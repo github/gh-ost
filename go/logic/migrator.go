@@ -396,6 +396,10 @@ func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
 	// Only on error:
 
 	if this.migrationContext.TestOnReplica {
+		if err := this.hooksExecutor.onTestReplicaComplete(); err != nil {
+			return log.Errore(err)
+		}
+
 		// With `--test-on-replica` we stop replication thread, and then proceed to use
 		// the same cut-over phase as the master would use. That means we take locks
 		// and swap the tables.
