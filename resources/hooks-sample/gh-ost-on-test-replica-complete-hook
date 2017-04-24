@@ -1,0 +1,9 @@
+#!/bin/bash
+
+# Sample hook file for gh-ost-on-test-replica-complete-hook
+
+table_checksum=$(mysql -e 'select * from $GH_OST_DATABASE_NAME.$GH_OST_TABLE_NAME' | md5sum)
+ghost_table_checksum=$(mysql -e 'select * from $GH_OST_DATABASE_NAME.$GH_OST_GHOST_TABLE_NAME' | md5sum)
+
+echo "$(date) gh-ost-on-test-replica-complete table checksum: $table_checksum" >> /tmp/gh-ost.log
+echo "$(date) gh-ost-on-test-replica-complete gh-ost table checksum: $ghost_table_checksum" >> /tmp/gh-ost.log

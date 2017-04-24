@@ -49,6 +49,7 @@ The full list of supported hooks is best found in code: [hooks.go](https://githu
 - `gh-ost-on-before-cut-over`
 - `gh-ost-on-success`
 - `gh-ost-on-failure`
+- `gh-ost-on-test-replica-complete`
 
 ### Context
 
