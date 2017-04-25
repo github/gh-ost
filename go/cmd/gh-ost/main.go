@@ -109,7 +109,7 @@ func main() {
 
 	flag.UintVar(&migrationContext.ReplicaServerId, "replica-server-id", 99999, "server id used by gh-ost process. Default: 99999")
 
-	flag.BoolVar(&migrationContext.Cleanup, "cleanup", false, "Remove left over gh-ost migration or changelog tables")
+	flag.BoolVar(&migrationContext.Cleanup, "cleanup", false, "Remove left over gh-ost migration and changelog tables")
 
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")
@@ -162,8 +162,11 @@ func main() {
 	if migrationContext.OriginalTableName == "" {
 		log.Fatalf("--table must be provided and table name must not be empty")
 	}
-	if migrationContext.AlterStatement == "" {
+	if migrationContext.AlterStatement == "" && !migrationContext.Cleanup {
 		log.Fatalf("--alter must be provided and statement must not be empty")
+	}
+	if migrationContext.AlterStatement != "" && migrationContext.Cleanup {
+		log.Fatalf("--alter and --cleanup are mutually exclusive")
 	}
 	migrationContext.Noop = !(*executeFlag)
 	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {
