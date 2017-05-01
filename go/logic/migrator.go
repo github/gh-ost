@@ -248,6 +248,7 @@ func (this *Migrator) validateStatement() (err error) {
 		}
 		log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", this.parser.GetNonTrivialRenames())
 	}
+	this.migrationContext.DroppedColumnsMap = this.parser.DroppedColumnsMap()
 	return nil
 }
 

@@ -120,3 +120,42 @@ func TestSanitizeQuotesFromAlterStatement(t *testing.T) {
 		test.S(t).ExpectEquals(strippedStatement, "change column i int ''")
 	}
 }
+
+func TestParseAlterStatementDroppedColumns(t *testing.T) {
+
+	{
+		parser := NewParser()
+		statement := "drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(len(parser.droppedColumns), 1)
+		test.S(t).ExpectTrue(parser.droppedColumns["b"])
+	}
+	{
+		parser := NewParser()
+		statement := "drop column b, drop key c_idx, drop column `d`"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(len(parser.droppedColumns), 2)
+		test.S(t).ExpectTrue(parser.droppedColumns["b"])
+		test.S(t).ExpectTrue(parser.droppedColumns["d"])
+	}
+	{
+		parser := NewParser()
+		statement := "drop column b, drop key c_idx, drop column `d`, drop `e`, drop primary key, drop foreign key fk_1"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(len(parser.droppedColumns), 3)
+		test.S(t).ExpectTrue(parser.droppedColumns["b"])
+		test.S(t).ExpectTrue(parser.droppedColumns["d"])
+		test.S(t).ExpectTrue(parser.droppedColumns["e"])
+	}
+	{
+		parser := NewParser()
+		statement := "drop column b, drop bad statement, add column i int"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(len(parser.droppedColumns), 1)
+		test.S(t).ExpectTrue(parser.droppedColumns["b"])
+	}
+}
