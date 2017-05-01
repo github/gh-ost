@@ -181,6 +181,7 @@ type MigrationContext struct {
 	UniqueKey                        *sql.UniqueKey
 	SharedColumns                    *sql.ColumnList
 	ColumnRenameMap                  map[string]string
+	DroppedColumnsMap                map[string]bool
 	MappedSharedColumns              *sql.ColumnList
 	MigrationRangeMinValues          *sql.ColumnValues
 	MigrationRangeMaxValues          *sql.ColumnValues
