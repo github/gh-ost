@@ -1,5 +1,7 @@
 #!/bin/bash
 
+./script/env
+
 retval=0
 
 for testsuite in base mysql sql
