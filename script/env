@@ -1,0 +1,9 @@
+#!/bin/bash
+
+## Set all environmental variables here.
+
+export ROOTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+export GOPATH=$ROOTDIR/.gopath
+export GOPATH=$GOPATH:$ROOTDIR/vendor/:$ROOTDIR/.vendor/go17/usr/local/go/
+export GOROOT=$ROOTDIR/.vendor/go17/usr/local/go/
+export GOCMD=$ROOTDIR/.vendor/go17/usr/local/go/bin/go
