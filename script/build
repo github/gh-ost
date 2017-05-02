@@ -1,7 +1,7 @@
 #!/bin/bash
 
 set -e
-
+. script/env
 . script/bootstrap
 
 mkdir -p bin
@@ -13,7 +13,6 @@ scriptdir="$PWD"/script
 version=$(git rev-parse HEAD)
 describe=$(git describe --tags --always --dirty)
 
-export GOPATH="$PWD/.gopath"
 cd .gopath/src/github.com/github/gh-ost
 
 # We put the binaries directly into the bindir, because we have no need for shim wrappers
