@@ -1,6 +1,6 @@
 #!/bin/bash
 
-./script/env
+. ./script/env
 
 retval=0
 
