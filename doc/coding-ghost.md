@@ -13,11 +13,10 @@ Getting started with gh-ost development is simple!
 `script/cibuild` performs the following actions:
 
 - It runs `script/bootstrap`
-- `script/bootstrap` run `script/ensure-go-installed`
-- `script/ensure-go-installed` installs go locally if (go is not installed) || (go is not version 1.7). It also will not install go if it is already installed locally.
-- `script/build` builds the binary and places in in `bin/`
+- `script/bootstrap` runs `script/ensure-go-installed`
+- `script/ensure-go-installed` installs go locally if (go is not installed) || (go is not version 1.7). It will not install go if it is already installed locally and at the correct version.
+- `script/build` builds the `gh-ost` binary and places in in `bin/`
 
 ## Notes:
 
 Currently, `script/ensure-go-installed` will install `go` for Mac OS X and Linux. We welcome PR's to add other platforms.
-
