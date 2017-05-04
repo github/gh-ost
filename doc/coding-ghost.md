@@ -4,18 +4,15 @@
 
 Getting started with gh-ost development is simple!
 
-- First clone the repository.
+- First obtain the repository with `git clone` or `go get`.
 - From inside of the repository run `script/cibuild`
 - This will bootstrap the environment if needed, format the code, build the code, and then run the unit test.
 
 ## CI build workflow
 
-`script/cibuild` performs the following actions:
+`script/cibuild` performs the following actions will bootstrap the environment to build `gh-ost` correctly, build, perform syntax checks and run unit tests.
 
-- It runs `script/bootstrap`
-- `script/bootstrap` runs `script/ensure-go-installed`
-- `script/ensure-go-installed` installs go locally if (go is not installed) || (go is not version 1.7). It will not install go if it is already installed locally and at the correct version.
-- `script/build` builds the `gh-ost` binary and places in in `bin/`
+If additional steps are needed, please add them into this workflow so that the workflow remains simple.
 
 ## Notes:
 
