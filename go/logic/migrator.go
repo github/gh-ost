@@ -234,7 +234,11 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 // listenOnPanicAbort aborts on abort request
 func (this *Migrator) listenOnPanicAbort() {
 	err := <-this.migrationContext.PanicAbort
+
+	//should cleanup before exit.
+	this.finalCleanup()
 	log.Fatale(err)
+
 }
 
 // validateStatement validates the `alter` statement meets criteria.

@@ -264,10 +264,15 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 	if err != nil {
 		return setThrottle(true, fmt.Sprintf("%s %s", variableName, err), base.NoThrottleReasonHint)
 	}
-	if criticalLoadMet && this.migrationContext.CriticalLoadIntervalMilliseconds == 0 {
+
+	// we don't throttle even critical-load when cutting over.
+	isThrottle, _, _ := this.migrationContext.IsThrottled()
+	isThrottle = true
+
+	if isThrottle && criticalLoadMet && this.migrationContext.CriticalLoadIntervalMilliseconds == 0 {
 		this.migrationContext.PanicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
 	}
-	if criticalLoadMet && this.migrationContext.CriticalLoadIntervalMilliseconds > 0 {
+	if isThrottle && criticalLoadMet && this.migrationContext.CriticalLoadIntervalMilliseconds > 0 {
 		log.Errorf("critical-load met once: %s=%d, >=%d. Will check again in %d millis", variableName, value, threshold, this.migrationContext.CriticalLoadIntervalMilliseconds)
 		go func() {
 			timer := time.NewTimer(time.Millisecond * time.Duration(this.migrationContext.CriticalLoadIntervalMilliseconds))
