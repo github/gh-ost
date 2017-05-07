@@ -281,6 +281,18 @@ func (this *Migrator) countTableRows() (err error) {
 	return countRowsFunc()
 }
 
+func (this *Migrator) createFlagFiles() (err error) {
+	if this.migrationContext.PostponeCutOverFlagFile != "" {
+		if !base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
+			if err := base.TouchFile(this.migrationContext.PostponeCutOverFlagFile); err != nil {
+				return err
+			}
+			log.Infof("Created postpone-cut-over-flag-file: %s", this.migrationContext.PostponeCutOverFlagFile)
+		}
+	}
+	return nil
+}
+
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
 	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -310,6 +322,9 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	if err := this.initiateApplier(); err != nil {
+		return err
+	}
+	if err := this.createFlagFiles(); err != nil {
 		return err
 	}
 

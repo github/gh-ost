@@ -33,6 +33,15 @@ func FileExists(fileName string) bool {
 	return false
 }
 
+func TouchFile(fileName string) error {
+	f, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE, 0755)
+	if err != nil {
+		return (err)
+	}
+	defer f.Close()
+	return nil
+}
+
 // StringContainsAll returns true if `s` contains all non empty given `substrings`
 // The function returns `false` if no non-empty arguments are given.
 func StringContainsAll(s string, substrings ...string) bool {
