@@ -144,6 +144,7 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 			fmt.Fprintln(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
+coordinates													 # Print the currently inspected coordinates
 chunk-size=<newsize>                 # Set a new chunk-size
 nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is agrressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
 critical-load=<load>                 # Set a new set of max-load thresholds
@@ -165,6 +166,14 @@ help                                 # This message
 		return ForcePrintStatusOnlyRule, nil
 	case "info", "status":
 		return ForcePrintStatusAndHintRule, nil
+	case "coordinates":
+		{
+			if argIsQuestion || arg == "" {
+				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetRecentBinlogCoordinates())
+				return NoPrintStatusRule, nil
+			}
+			return NoPrintStatusRule, fmt.Errorf("coordinates are read-only")
+		}
 	case "chunk-size":
 		{
 			if argIsQuestion {

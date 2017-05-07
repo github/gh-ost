@@ -953,6 +953,13 @@ func (this *Migrator) initiateStreaming() error {
 		}
 		log.Debugf("Done streaming")
 	}()
+
+	go func() {
+		ticker := time.Tick(1 * time.Second)
+		for range ticker {
+			this.migrationContext.SetRecentBinlogCoordinates(*this.eventsStreamer.GetCurrentBinlogCoordinates())
+		}
+	}()
 	return nil
 }
 
