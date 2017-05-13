@@ -1,0 +1,6 @@
+#!/bin/bash
+
+# Sample hook file for gh-ost-on-start-replication
+# Useful for RDS/Aurora setups, see https://github.com/github/gh-ost/issues/163
+
+echo "$(date) gh-ost-on-start-replication $GH_OST_DATABASE_NAME.$GH_OST_TABLE_NAME $GH_OST_MIGRATED_HOST" >> /tmp/gh-ost.log

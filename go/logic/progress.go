@@ -6,110 +6,64 @@
 package logic
 
 import (
+	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
-
-	"github.com/github/gh-ost/go/base"
 )
 
-const maxHistoryDuration time.Duration = time.Hour
+const minProgressRatio float64 = 0.001
+const alpha float64 = 0.25
 
 type ProgressState struct {
-	mark       time.Time
-	rowsCopied int64
+	elapsedTime           time.Duration
+	progressRatio         float64
+	expectedTotalDuration time.Duration
 }
 
-func NewProgressState(rowsCopied int64) *ProgressState {
+func NewProgressState(elapsedTime time.Duration, progressRatio float64, expectedTotalDuration time.Duration) *ProgressState {
 	result := &ProgressState{
-		mark:       time.Now(),
-		rowsCopied: rowsCopied,
+		elapsedTime:           elapsedTime,
+		progressRatio:         progressRatio,
+		expectedTotalDuration: expectedTotalDuration,
 	}
 	return result
 }
 
 type ProgressHistory struct {
-	migrationContext *base.MigrationContext
-	history          [](*ProgressState)
-	historyMutex     *sync.Mutex
+	lastProgressState *ProgressState
+	historyMutex      *sync.Mutex
+	eta               time.Time
 }
 
 func NewProgressHistory() *ProgressHistory {
 	result := &ProgressHistory{
-		history:          make([](*ProgressState), 0),
-		historyMutex:     &sync.Mutex{},
-		migrationContext: base.GetMigrationContext(),
+		lastProgressState: nil,
+		historyMutex:      &sync.Mutex{},
 	}
 	return result
 }
 
-func (this *ProgressHistory) oldestState() *ProgressState {
-	if len(this.history) == 0 {
-		return nil
+func (this *ProgressHistory) markState(elapsedTime time.Duration, progressRatio float64) (expectedTotalDuration time.Duration, err error) {
+	if progressRatio < minProgressRatio || elapsedTime == 0 {
+		return expectedTotalDuration, fmt.Errorf("eta n/a")
 	}
-	return this.history[0]
-}
 
-func (this *ProgressHistory) newestState() *ProgressState {
-	if len(this.history) == 0 {
-		return nil
-	}
-	return this.history[len(this.history)-1]
-}
-
-func (this *ProgressHistory) oldestMark() (mark time.Time) {
-	if oldest := this.oldestState(); oldest != nil {
-		return oldest.mark
-	}
-	return mark
-}
-
-func (this *ProgressHistory) markState() {
 	this.historyMutex.Lock()
 	defer this.historyMutex.Unlock()
 
-	state := NewProgressState(this.migrationContext.GetTotalRowsCopied())
-	this.history = append(this.history, state)
-	for time.Since(this.oldestMark()) > maxHistoryDuration {
-		if len(this.history) == 0 {
-			return
-		}
-		this.history = this.history[1:]
+	newExpectedTotalDuration := float64(elapsedTime.Nanoseconds()) / progressRatio
+	if this.lastProgressState != nil {
+		newExpectedTotalDuration = alpha*float64(this.lastProgressState.expectedTotalDuration.Nanoseconds()) + (1.0-alpha)*newExpectedTotalDuration
 	}
+	expectedTotalDuration = time.Duration(int64(newExpectedTotalDuration))
+	this.lastProgressState = NewProgressState(elapsedTime, progressRatio, expectedTotalDuration)
+	this.eta = time.Now().Add(expectedTotalDuration - elapsedTime)
+	return expectedTotalDuration, nil
 }
 
-// hasEnoughData tells us whether there's at all enough information to predict an ETA
-// this function is not concurrent-safe
-func (this *ProgressHistory) hasEnoughData() bool {
-	oldest := this.oldestState()
-	if oldest == nil {
-		return false
-	}
-	newest := this.newestState()
+func (this *ProgressHistory) GetETA() time.Time {
+	this.historyMutex.Lock()
+	defer this.historyMutex.Unlock()
 
-	if !oldest.mark.Before(newest.mark) {
-		// single point in time; cannot extrapolate
-		return false
-	}
-	if oldest.rowsCopied == newest.rowsCopied {
-		// Nothing really happened; cannot extrapolate
-		return false
-	}
-	return true
-}
-
-func (this *ProgressHistory) getETA() (eta time.Time) {
-	if !this.hasEnoughData() {
-		return eta
-	}
-
-	oldest := this.oldestState()
-	newest := this.newestState()
-	rowsEstimate := atomic.LoadInt64(&this.migrationContext.RowsEstimate) + atomic.LoadInt64(&this.migrationContext.RowsDeltaEstimate)
-	ratio := float64(rowsEstimate-oldest.rowsCopied) / float64(newest.rowsCopied-oldest.rowsCopied)
-	// ratio is also float64(totaltime-oldest.mark) / float64(newest.mark-oldest.mark)
-	totalTimeNanosecondsFromOldestMark := ratio * float64(newest.mark.Sub(oldest.mark).Nanoseconds())
-	eta = oldest.mark.Add(time.Duration(totalTimeNanosecondsFromOldestMark))
-
-	return eta
+	return this.eta
 }

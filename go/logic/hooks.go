@@ -30,6 +30,7 @@ const (
 	onFailure            = "gh-ost-on-failure"
 	onStatus             = "gh-ost-on-status"
 	onStopReplication    = "gh-ost-on-stop-replication"
+	onStartReplication   = "gh-ost-on-start-replication"
 )
 
 type HooksExecutor struct {
@@ -151,4 +152,8 @@ func (this *HooksExecutor) onStatus(statusMessage string) error {
 
 func (this *HooksExecutor) onStopReplication() error {
 	return this.executeHooks(onStopReplication)
+}
+
+func (this *HooksExecutor) onStartReplication() error {
+	return this.executeHooks(onStartReplication)
 }

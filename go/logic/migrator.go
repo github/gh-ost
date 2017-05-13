@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -26,11 +27,30 @@ import (
 type ChangelogState string
 
 const (
-	TablesInPlace              ChangelogState = "TablesInPlace"
+	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
 )
 
+func ReadChangelogState(s string) ChangelogState {
+	return ChangelogState(strings.Split(s, ":")[0])
+}
+
 type tableWriteFunc func() error
+
+type applyEventStruct struct {
+	writeFunc *tableWriteFunc
+	dmlEvent  *binlog.BinlogDMLEvent
+}
+
+func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
+	result := &applyEventStruct{writeFunc: writeFunc}
+	return result
+}
+
+func newApplyEventStructByDML(dmlEvent *binlog.BinlogDMLEvent) *applyEventStruct {
+	result := &applyEventStruct{dmlEvent: dmlEvent}
+	return result
+}
 
 const (
 	applyEventsQueueBuffer = 100
@@ -58,16 +78,15 @@ type Migrator struct {
 	migrationContext *base.MigrationContext
 
 	firstThrottlingCollected   chan bool
-	tablesInPlace              chan bool
+	ghostTableMigrated         chan bool
 	rowCopyComplete            chan bool
-	allEventsUpToLockProcessed chan bool
+	allEventsUpToLockProcessed chan string
 
-	rowCopyCompleteFlag         int64
-	inCutOverCriticalActionFlag int64
+	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
-	applyEventsQueue chan tableWriteFunc
+	applyEventsQueue chan *applyEventStruct
 
 	handledChangelogStates map[string]bool
 
@@ -78,13 +97,13 @@ func NewMigrator() *Migrator {
 	migrator := &Migrator{
 		migrationContext:           base.GetMigrationContext(),
 		parser:                     sql.NewParser(),
-		tablesInPlace:              make(chan bool),
+		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 1),
 		rowCopyComplete:            make(chan bool),
-		allEventsUpToLockProcessed: make(chan bool),
+		allEventsUpToLockProcessed: make(chan string),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan tableWriteFunc, applyEventsQueueBuffer),
+		applyEventsQueue:       make(chan *applyEventStruct, applyEventsQueueBuffer),
 		handledChangelogStates: make(map[string]bool),
 		progressHistory:        NewProgressHistory(),
 	}
@@ -174,7 +193,7 @@ func (this *Migrator) consumeRowCopyComplete() {
 }
 
 func (this *Migrator) canStopStreaming() bool {
-	return false
+	return atomic.LoadInt64(&this.migrationContext.CutOverCompleteFlag) != 0
 }
 
 // onChangelogStateEvent is called when a binlog event operation on the changelog table is intercepted.
@@ -183,16 +202,18 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
 		return nil
 	}
-	changelogState := ChangelogState(dmlEvent.NewColumnValues.StringColumn(3))
+	changelogStateString := dmlEvent.NewColumnValues.StringColumn(3)
+	changelogState := ReadChangelogState(changelogStateString)
+	log.Infof("Intercepted changelog state %s", changelogState)
 	switch changelogState {
-	case TablesInPlace:
+	case GhostTableMigrated:
 		{
-			this.tablesInPlace <- true
+			this.ghostTableMigrated <- true
 		}
 	case AllEventsUpToLockProcessed:
 		{
-			applyEventFunc := func() error {
-				this.allEventsUpToLockProcessed <- true
+			var applyEventFunc tableWriteFunc = func() error {
+				this.allEventsUpToLockProcessed <- changelogStateString
 				return nil
 			}
 			// at this point we know all events up to lock have been read from the streamer,
@@ -201,7 +222,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 			// So as not to create a potential deadlock, we write this func to applyEventsQueue
 			// asynchronously, understanding it doesn't really matter.
 			go func() {
-				this.applyEventsQueue <- applyEventFunc
+				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
 		}
 	default:
@@ -209,7 +230,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 			return fmt.Errorf("Unknown changelog state: %+v", changelogState)
 		}
 	}
-	log.Debugf("Received state %+v", changelogState)
+	log.Infof("Handled changelog state %s", changelogState)
 	return nil
 }
 
@@ -226,7 +247,7 @@ func (this *Migrator) validateStatement() (err error) {
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
 		if !this.migrationContext.ApproveRenamedColumns {
-			return fmt.Errorf("gh-ost believes the ALTER statement renames columns, as follows: %v; as precation, you are asked to confirm gh-ost is correct, and provide with `--approve-renamed-columns`, and we're all happy. Or you can skip renamed columns via `--skip-renamed-columns`, in which case column data may be lost", this.parser.GetNonTrivialRenames())
+			return fmt.Errorf("gh-ost believes the ALTER statement renames columns, as follows: %v; as precaution, you are asked to confirm gh-ost is correct, and provide with `--approve-renamed-columns`, and we're all happy. Or you can skip renamed columns via `--skip-renamed-columns`, in which case column data may be lost", this.parser.GetNonTrivialRenames())
 		}
 		log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", this.parser.GetNonTrivialRenames())
 	}
@@ -294,14 +315,15 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
-	log.Infof("Waiting for tables to be in place")
-	<-this.tablesInPlace
-	log.Debugf("Tables are in place")
+	initialLag, _ := this.inspector.getReplicationLag()
+	log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
+	<-this.ghostTableMigrated
+	log.Debugf("ghost table migrated")
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
 	// When running on replica, this means the replica has those tables. When running
 	// on master this is always true, of course, and yet it also implies this knowledge
 	// is in the binlogs.
-	if err := this.inspector.InspectOriginalAndGhostTables(); err != nil {
+	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
 		return err
 	}
 	// Validation complete! We're good to execute this migration
@@ -345,9 +367,10 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
 	}
-	if err := this.cutOver(); err != nil {
+	if err := this.retryOperation(this.cutOver); err != nil {
 		return err
 	}
+	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 
 	if err := this.finalCleanup(); err != nil {
 		return nil
@@ -365,8 +388,38 @@ func (this *Migrator) ExecOnFailureHook() (err error) {
 	return this.hooksExecutor.onFailure()
 }
 
+func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
+	if this.migrationContext.TestOnReplica {
+		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
+		this.applier.RenameTablesRollback()
+	}
+	if cutOverError == nil {
+		return nil
+	}
+	// Only on error:
+
+	if this.migrationContext.TestOnReplica {
+		// With `--test-on-replica` we stop replication thread, and then proceed to use
+		// the same cut-over phase as the master would use. That means we take locks
+		// and swap the tables.
+		// The difference is that we will later swap the tables back.
+		if err := this.hooksExecutor.onStartReplication(); err != nil {
+			return log.Errore(err)
+		}
+		if this.migrationContext.TestOnReplicaSkipReplicaStop {
+			log.Warningf("--test-on-replica-skip-replica-stop enabled, we are not starting replication.")
+		} else {
+			log.Debugf("testing on replica. Starting replication IO thread after cut-over failure")
+			if err := this.retryOperation(this.applier.StartReplication); err != nil {
+				return log.Errore(err)
+			}
+		}
+	}
+	return nil
+}
+
 // cutOver performs the final step of migration, based on migration
-// type (on replica? bumpy? safe?)
+// type (on replica? atomic? safe?)
 func (this *Migrator) cutOver() (err error) {
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really swapping tables")
@@ -378,16 +431,18 @@ func (this *Migrator) cutOver() (err error) {
 	})
 
 	this.migrationContext.MarkPointOfInterest()
+	log.Debugf("checking for cut-over postpone")
 	this.sleepWhileTrue(
 		func() (bool, error) {
 			if this.migrationContext.PostponeCutOverFlagFile == "" {
 				return false, nil
 			}
 			if atomic.LoadInt64(&this.migrationContext.UserCommandedUnpostponeFlag) > 0 {
+				atomic.StoreInt64(&this.migrationContext.UserCommandedUnpostponeFlag, 0)
 				return false, nil
 			}
 			if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
-				// Throttle file defined and exists!
+				// Postpone file defined and exists!
 				if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) == 0 {
 					if err := this.hooksExecutor.onBeginPostponed(); err != nil {
 						return true, err
@@ -401,6 +456,7 @@ func (this *Migrator) cutOver() (err error) {
 	)
 	atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 0)
 	this.migrationContext.MarkPointOfInterest()
+	log.Debugf("checking for cut-over postpone: complete")
 
 	if this.migrationContext.TestOnReplica {
 		// With `--test-on-replica` we stop replication thread, and then proceed to use
@@ -418,26 +474,17 @@ func (this *Migrator) cutOver() (err error) {
 				return err
 			}
 		}
-		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
-		defer this.applier.RenameTablesRollback()
-		// We further proceed to do the cutover by normal means; the 'defer' above will rollback the swap
 	}
 	if this.migrationContext.CutOverType == base.CutOverAtomic {
 		// Atomic solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
-		err := this.retryOperation(
-			func() error {
-				return this.executeAndThrottleOnError(this.atomicCutOver)
-			},
-		)
+		err := this.atomicCutOver()
+		this.handleCutOverResult(err)
 		return err
 	}
 	if this.migrationContext.CutOverType == base.CutOverTwoStep {
-		err := this.retryOperation(
-			func() error {
-				return this.executeAndThrottleOnError(this.cutOverTwoStep)
-			},
-		)
+		err := this.cutOverTwoStep()
+		this.handleCutOverResult(err)
 		return err
 	}
 	return log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
@@ -446,16 +493,35 @@ func (this *Migrator) cutOver() (err error) {
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
 func (this *Migrator) waitForEventsUpToLock() (err error) {
+	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
+
 	this.migrationContext.MarkPointOfInterest()
 	waitForEventsUpToLockStartTime := time.Now()
 
-	log.Infof("Writing changelog state: %+v", AllEventsUpToLockProcessed)
-	if _, err := this.applier.WriteChangelogState(string(AllEventsUpToLockProcessed)); err != nil {
+	allEventsUpToLockProcessedChallenge := fmt.Sprintf("%s:%d", string(AllEventsUpToLockProcessed), waitForEventsUpToLockStartTime.UnixNano())
+	log.Infof("Writing changelog state: %+v", allEventsUpToLockProcessedChallenge)
+	if _, err := this.applier.WriteChangelogState(allEventsUpToLockProcessedChallenge); err != nil {
 		return err
 	}
 	log.Infof("Waiting for events up to lock")
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 1)
-	<-this.allEventsUpToLockProcessed
+	for found := false; !found; {
+		select {
+		case <-timeout.C:
+			{
+				return log.Errorf("Timeout while waiting for events up to lock")
+			}
+		case state := <-this.allEventsUpToLockProcessed:
+			{
+				if state == allEventsUpToLockProcessedChallenge {
+					log.Infof("Waiting for events up to lock: got %s", state)
+					found = true
+				} else {
+					log.Infof("Waiting for events up to lock: skipping %s", state)
+				}
+			}
+		}
+	}
 	waitForEventsUpToLockDuration := time.Since(waitForEventsUpToLockStartTime)
 
 	log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
@@ -469,8 +535,8 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 // There is a point in time where the "original" table does not exist and queries are non-blocked
 // and failing.
 func (this *Migrator) cutOverTwoStep() (err error) {
-	atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 1)
-	defer atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 0)
+	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
+	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
 	if err := this.retryOperation(this.applier.LockOriginalTable); err != nil {
@@ -495,10 +561,12 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 
 // atomicCutOver
 func (this *Migrator) atomicCutOver() (err error) {
-	atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 1)
-	defer atomic.StoreInt64(&this.inCutOverCriticalActionFlag, 0)
+	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
+	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
+	okToUnlockTable := make(chan bool, 4)
 	defer func() {
+		okToUnlockTable <- true
 		this.applier.DropAtomicCutOverSentryTableIfExists()
 	}()
 
@@ -506,7 +574,6 @@ func (this *Migrator) atomicCutOver() (err error) {
 
 	lockOriginalSessionIdChan := make(chan int64, 2)
 	tableLocked := make(chan error, 2)
-	okToUnlockTable := make(chan bool, 3)
 	tableUnlocked := make(chan error, 2)
 	go func() {
 		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
@@ -520,7 +587,9 @@ func (this *Migrator) atomicCutOver() (err error) {
 	log.Infof("Session locking original & magic tables is %+v", lockOriginalSessionId)
 	// At this point we know the original table is locked.
 	// We know any newly incoming DML on original table is blocked.
-	this.waitForEventsUpToLock()
+	if err := this.waitForEventsUpToLock(); err != nil {
+		return log.Errore(err)
+	}
 
 	// Step 2
 	// We now attempt an atomic RENAME on original & ghost tables, and expect it to block.
@@ -632,6 +701,12 @@ func (this *Migrator) initiateInspector() (err error) {
 			return err
 		}
 		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.DuplicateCredentials(*key)
+		if this.migrationContext.CliMasterUser != "" {
+			this.migrationContext.ApplierConnectionConfig.User = this.migrationContext.CliMasterUser
+		}
+		if this.migrationContext.CliMasterPassword != "" {
+			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
+		}
 		log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	}
 	// validate configs
@@ -684,8 +759,9 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		*this.inspector.connectionConfig.ImpliedKey,
 		this.migrationContext.Hostname,
 	))
-	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v",
+	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v; time now is %+v",
 		this.migrationContext.StartTime.Format(time.RubyDate),
+		time.Now().Format(time.RubyDate),
 	))
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
@@ -696,11 +772,6 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		criticalLoad.String(),
 		this.migrationContext.GetNiceRatio(),
 	))
-	if replicationLagQuery := this.migrationContext.GetReplicationLagQuery(); replicationLagQuery != "" {
-		fmt.Fprintln(w, fmt.Sprintf("# replication-lag-query: %+v",
-			replicationLagQuery,
-		))
-	}
 	if this.migrationContext.ThrottleFlagFile != "" {
 		setIndicator := ""
 		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
@@ -724,6 +795,12 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 			throttleQuery,
 		))
 	}
+	if throttleControlReplicaKeys := this.migrationContext.GetThrottleControlReplicaKeys(); throttleControlReplicaKeys.Len() > 0 {
+		fmt.Fprintln(w, fmt.Sprintf("# throttle-control-replicas count: %+v",
+			throttleControlReplicaKeys.Len(),
+		))
+	}
+
 	if this.migrationContext.PostponeCutOverFlagFile != "" {
 		setIndicator := ""
 		if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
@@ -766,11 +843,11 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		// and there is no further need to keep updating the value.
 		rowsEstimate = totalRowsCopied
 	}
-	var progressPct float64
+	var progressRatio float64
 	if rowsEstimate == 0 {
-		progressPct = 100.0
+		progressRatio = 1.0
 	} else {
-		progressPct = 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
+		progressRatio = float64(totalRowsCopied) / float64(rowsEstimate)
 	}
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
 	shouldPrintMigrationStatusHint := (elapsedSeconds%600 == 0)
@@ -785,27 +862,27 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	}
 
 	var etaSeconds float64 = math.MaxFloat64
-	this.progressHistory.markState()
-	eta := "N/A"
-	if progressPct >= 100.0 {
-		eta = "due"
-	} else if etaTime := this.progressHistory.getETA(); progressPct >= 0.1 && !etaTime.IsZero() {
-		etaDuration := etaTime.Sub(time.Now())
-		eta = base.PrettifyDurationOutput(etaDuration)
-		etaSeconds = etaDuration.Seconds()
-	}
 
-	if etaSeconds < 0 {
-		eta = "due"
+	visualETA := "N/A"
+	if progressRatio >= 1.0 {
+		visualETA = "due"
+	} else if _, err := this.progressHistory.markState(this.migrationContext.ElapsedRowCopyTime(), progressRatio); err == nil {
+		eta := this.progressHistory.GetETA()
+		etaDuration := eta.Sub(time.Now())
+		etaSeconds = etaDuration.Seconds()
+		visualETA = base.PrettifyDurationOutput(etaDuration)
+	}
+	if etaSeconds <= 0 {
+		visualETA = "due"
 	}
 
 	state := "migrating"
 	if atomic.LoadInt64(&this.migrationContext.CountingRowsFlag) > 0 && !this.migrationContext.ConcurrentCountTableRows {
 		state = "counting rows"
 	} else if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
-		eta = "due"
+		visualETA = "due"
 		state = "postponing cut-over"
-	} else if isThrottled, throttleReason := this.migrationContext.IsThrottled(); isThrottled {
+	} else if isThrottled, throttleReason, _ := this.migrationContext.IsThrottled(); isThrottled {
 		state = fmt.Sprintf("throttled, %s", throttleReason)
 	}
 
@@ -834,6 +911,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
+	progressPct := progressRatio * 100.0
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
@@ -841,7 +919,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
 		state,
-		eta,
+		visualETA,
 	)
 	this.applier.WriteChangelog(
 		fmt.Sprintf("copy iteration %d at %d", this.migrationContext.GetIteration(), time.Now().Unix()),
@@ -889,11 +967,7 @@ func (this *Migrator) addDMLEventsListener() error {
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
-			applyEventFunc := func() error {
-				return this.applier.ApplyDMLEventQuery(dmlEvent)
-			}
-			this.applyEventsQueue <- applyEventFunc
+			this.applyEventsQueue <- newApplyEventStructByDML(dmlEvent)
 			return nil
 		},
 	)
@@ -906,7 +980,9 @@ func (this *Migrator) initiateThrottler() error {
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")
-	<-this.firstThrottlingCollected
+	<-this.firstThrottlingCollected // replication lag
+	<-this.firstThrottlingCollected // other metrics
+	log.Infof("First throttle metrics collected")
 	go this.throttler.initiateThrottlerChecks()
 
 	return nil
@@ -928,12 +1004,13 @@ func (this *Migrator) initiateApplier() error {
 		log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
 		return err
 	}
+
 	if err := this.applier.AlterGhost(); err != nil {
 		log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
 		return err
 	}
 
-	this.applier.WriteChangelogState(string(TablesInPlace))
+	this.applier.WriteChangelogState(string(GhostTableMigrated))
 	go this.applier.InitiateHeartbeat()
 	return nil
 }
@@ -957,11 +1034,13 @@ func (this *Migrator) iterateChunks() error {
 	for {
 		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
 			// Done
+			// There's another such check down the line
 			return nil
 		}
 		copyRowsFunc := func() error {
 			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
-				// Done
+				// Done.
+				// There's another such check down the line
 				return nil
 			}
 			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
@@ -973,6 +1052,17 @@ func (this *Migrator) iterateChunks() error {
 			}
 			// Copy task:
 			applyCopyRowsFunc := func() error {
+				if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+					// No need for more writes.
+					// This is the de-facto place where we avoid writing in the event of completed cut-over.
+					// There could _still_ be a race condition, but that's as close as we can get.
+					// What about the race condition? Well, there's actually no data integrity issue.
+					// when rowCopyCompleteFlag==1 that means **guaranteed** all necessary rows have been copied.
+					// But some are still then collected at the binary log, and these are the ones we're trying to
+					// not apply here. If the race condition wins over us, then we just attempt to apply onto the
+					// _ghost_ table, which no longer exists. So, bothering error messages and all, but no damage.
+					return nil
+				}
 				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
 					return terminateRowIteration(err)
@@ -989,6 +1079,57 @@ func (this *Migrator) iterateChunks() error {
 	return nil
 }
 
+func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
+	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
+		if eventStruct.writeFunc != nil {
+			if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
+				return log.Errore(err)
+			}
+		}
+		return nil
+	}
+	if eventStruct.dmlEvent == nil {
+		return handleNonDMLEventStruct(eventStruct)
+	}
+	if eventStruct.dmlEvent != nil {
+		dmlEvents := [](*binlog.BinlogDMLEvent){}
+		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
+		var nonDmlStructToApply *applyEventStruct
+
+		availableEvents := len(this.applyEventsQueue)
+		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
+		if availableEvents > batchSize-1 {
+			// The "- 1" is because we already consumed one event: the original event that led to this function getting called.
+			// So, if DMLBatchSize==1 we wish to not process any further events
+			availableEvents = batchSize - 1
+		}
+		for i := 0; i < availableEvents; i++ {
+			additionalStruct := <-this.applyEventsQueue
+			if additionalStruct.dmlEvent == nil {
+				// Not a DML. We don't group this, and we don't batch any further
+				nonDmlStructToApply = additionalStruct
+				break
+			}
+			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
+		}
+		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
+		var applyEventFunc tableWriteFunc = func() error {
+			return this.applier.ApplyDMLEventQueries(dmlEvents)
+		}
+		if err := this.retryOperation(applyEventFunc); err != nil {
+			return log.Errore(err)
+		}
+		if nonDmlStructToApply != nil {
+			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
+			// We need to handle it!
+			if err := handleNonDMLEventStruct(nonDmlStructToApply); err != nil {
+				return log.Errore(err)
+			}
+		}
+	}
+	return nil
+}
+
 // executeWriteFuncs writes data via applier: both the rowcopy and the events backlog.
 // This is where the ghost table gets the data. The function fills the data single-threaded.
 // Both event backlog and rowcopy events are polled; the backlog events have precedence.
@@ -998,22 +1139,15 @@ func (this *Migrator) executeWriteFuncs() error {
 		return nil
 	}
 	for {
-		if atomic.LoadInt64(&this.inCutOverCriticalActionFlag) == 0 {
-			// we don't throttle when cutting over. We _do_ throttle:
-			// - during copy phase
-			// - just before cut-over
-			// - in between cut-over retries
-			this.throttler.throttle(nil)
-			// When cutting over, we need to be aggressive. Cut-over holds table locks.
-			// We need to release those asap.
-		}
+		this.throttler.throttle(nil)
+
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
 		select {
-		case applyEventFunc := <-this.applyEventsQueue:
+		case eventStruct := <-this.applyEventsQueue:
 			{
-				if err := this.retryOperation(applyEventFunc); err != nil {
-					return log.Errore(err)
+				if err := this.onApplyEventStruct(eventStruct); err != nil {
+					return err
 				}
 			}
 		default:
@@ -1058,6 +1192,9 @@ func (this *Migrator) finalCleanup() error {
 		} else {
 			log.Errore(err)
 		}
+	}
+	if err := this.eventsStreamer.Close(); err != nil {
+		log.Errore(err)
 	}
 
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {

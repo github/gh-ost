@@ -63,6 +63,19 @@ Optional. Default is `safe`. See more discussion in [cut-over](cut-over.md)
 
 At this time (10-2016) `gh-ost` does not support foreign keys on migrated tables (it bails out when it notices a FK on the migrated table). However, it is able to support _dropping_ of foreign keys via this flag. If you're trying to get rid of foreign keys in your environment, this is a useful flag.
 
+See also: [`skip-foreign-key-checks`](#skip-foreign-key-checks)
+
+
+### dml-batch-size
+
+`gh-ost` reads event from the binary log and applies them onto the _ghost_ table. It does so in batched writes: grouping multiple events to apply in a single transaction. This gives better write throughput as we don't need to sync the transaction log to disk for each event.
+
+The `--dml-batch-size` flag controls the size of the batched write. Allowed values are `1 - 100`, where `1` means no batching (every event from the binary log is applied onto the _ghost_ table on its own transaction). Default value is `10`.
+
+Why is this behavior configurable? Different workloads have different characteristics. Some workloads have very large writes, such that aggregating even `50` writes into a transaction makes for a significant transaction size. On other workloads write rate is high such that one just can't allow for a hundred more syncs to disk per second. The default value of `10` is a modest compromise that should probably work very well for most workloads. Your mileage may vary.
+
+Noteworthy is that setting `--dml-batch-size` to higher value _does not_ mean `gh-ost` blocks or waits on writes. The batch size is an upper limit on transaction size, not a minimal one. If `gh-ost` doesn't have "enough" events in the pipe, it does not wait on the binary log, it just writes what it already has. This conveniently suggests that if write load is light enough for `gh-ost` to only see a few events in the binary log at a given time, then it is also light neough for `gh-ost` to apply a fraction of the batch size.
+
 ### exact-rowcount
 
 A `gh-ost` execution need to copy whatever rows you have in your existing table onto the ghost table. This can, and often be, a large number. Exactly what that number is?
@@ -71,7 +84,8 @@ A `gh-ost` execution need to copy whatever rows you have in your existing table 
 `gh-ost` also supports the `--exact-rowcount` flag. When this flag is given, two things happen:
 - An initial, authoritative `select count(*) from your_table`.
   This query may take a long time to complete, but is performed before we begin the massive operations.
-  When `--concurrent-rowcount` is also specified, this runs in paralell to row copy.
+  When `--concurrent-rowcount` is also specified, this runs in parallel to row copy.
+  Note: `--concurrent-rowcount` now defaults to `true`.
 - A continuous update to the estimate as we make progress applying events.
   We heuristically update the number of rows based on the queries we process from the binlogs.
 
@@ -97,16 +111,17 @@ On a replication topology, this is perhaps the most important migration throttli
 
 When using [Connect to replica, migrate on master](cheatsheet.md), this lag is primarily tested on the very replica `gh-ost` operates on. Lag is measured by checking the heartbeat events injected by `gh-ost` itself on the utility changelog table. That is, to measure this replica's lag, `gh-ost` doesn't need to issue `show slave status` nor have any external heartbeat mechanism.
 
-When `--throttle-control-replicas` is provided, throttling also considers lag on specified hosts. Measuring lag on these hosts works as follows:
-
-- If `--replication-lag-query` is provided, use the query, trust its result to indicate lag seconds (fraction, i.e. float, allowed)
-- Otherwise, issue `show slave status` and read `Seconds_behind_master` (`1sec` granularity)
+When `--throttle-control-replicas` is provided, throttling also considers lag on specified hosts. Lag measurements on listed hosts is done by querying `gh-ost`'s _changelog_ table, where `gh-ost` injects a heartbeat.
 
 See also: [Sub-second replication lag throttling](subsecond-lag.md)
 
 ### migrate-on-replica
 
 Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but other issue no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
+
+### skip-foreign-key-checks
+
+By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not referenece other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
 
 ### skip-renamed-columns
 
@@ -115,3 +130,7 @@ See `approve-renamed-columns`
 ### test-on-replica
 
 Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [testing-on-replica](testing-on-replica.md)
+
+### timestamp-old-table
+
+Makes the _old_ table include a timestamp value. The _old_ table is what the original table is renamed to at the end of a successful migration. For example, if the table is `gh_ost_test`, then the _old_ table would normally be `_gh_ost_test_del`. With `--timestamp-old-table` it would be, for example, `_gh_ost_test_20170221103147_del`.

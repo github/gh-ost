@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/juju/errors"
@@ -141,7 +142,7 @@ func (p RowData) ParseBinary(f []*Field) ([]interface{}, error) {
 			continue
 
 		case MYSQL_TYPE_DOUBLE:
-			data[i] = ParseBinaryFloat64(p[pos : pos+4])
+			data[i] = ParseBinaryFloat64(p[pos : pos+8])
 			pos += 8
 			continue
 
@@ -292,9 +293,27 @@ func (r *Resultset) GetUint(row, column int) (uint64, error) {
 	}
 
 	switch v := d.(type) {
-	case uint64:
-		return v, nil
+	case int:
+		return uint64(v), nil
+	case int8:
+		return uint64(v), nil
+	case int16:
+		return uint64(v), nil
+	case int32:
+		return uint64(v), nil
 	case int64:
+		return uint64(v), nil
+	case uint:
+		return uint64(v), nil
+	case uint8:
+		return uint64(v), nil
+	case uint16:
+		return uint64(v), nil
+	case uint32:
+		return uint64(v), nil
+	case uint64:
+		return uint64(v), nil
+	case float32:
 		return uint64(v), nil
 	case float64:
 		return uint64(v), nil
@@ -342,12 +361,30 @@ func (r *Resultset) GetFloat(row, column int) (float64, error) {
 	}
 
 	switch v := d.(type) {
-	case float64:
-		return v, nil
-	case uint64:
+	case int:
+		return float64(v), nil
+	case int8:
+		return float64(v), nil
+	case int16:
+		return float64(v), nil
+	case int32:
 		return float64(v), nil
 	case int64:
 		return float64(v), nil
+	case uint:
+		return float64(v), nil
+	case uint8:
+		return float64(v), nil
+	case uint16:
+		return float64(v), nil
+	case uint32:
+		return float64(v), nil
+	case uint64:
+		return float64(v), nil
+	case float32:
+		return float64(v), nil
+	case float64:
+		return v, nil
 	case string:
 		return strconv.ParseFloat(v, 64)
 	case []byte:
@@ -378,10 +415,11 @@ func (r *Resultset) GetString(row, column int) (string, error) {
 		return v, nil
 	case []byte:
 		return hack.String(v), nil
-	case int64:
-		return strconv.FormatInt(v, 10), nil
-	case uint64:
-		return strconv.FormatUint(v, 10), nil
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprintf("%d", v), nil
+	case float32:
+		return strconv.FormatFloat(float64(v), 'f', -1, 64), nil
 	case float64:
 		return strconv.FormatFloat(v, 'f', -1, 64), nil
 	case nil:

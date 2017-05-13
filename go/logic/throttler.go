@@ -12,7 +12,9 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
+	"github.com/github/gh-ost/go/sql"
 	"github.com/outbrain/golib/log"
+	"github.com/outbrain/golib/sqlutils"
 )
 
 // Throttler collects metrics related to throttling and makes informed decisison
@@ -34,16 +36,16 @@ func NewThrottler(applier *Applier, inspector *Inspector) *Throttler {
 // shouldThrottle performs checks to see whether we should currently be throttling.
 // It merely observes the metrics collected by other components, it does not issue
 // its own metric collection.
-func (this *Throttler) shouldThrottle() (result bool, reason string) {
+func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint base.ThrottleReasonHint) {
 	generalCheckResult := this.migrationContext.GetThrottleGeneralCheckResult()
 	if generalCheckResult.ShouldThrottle {
-		return generalCheckResult.ShouldThrottle, generalCheckResult.Reason
+		return generalCheckResult.ShouldThrottle, generalCheckResult.Reason, generalCheckResult.ReasonHint
 	}
 	// Replication lag throttle
 	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
 	lag := atomic.LoadInt64(&this.migrationContext.CurrentLag)
 	if time.Duration(lag) > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
-		return true, fmt.Sprintf("lag=%fs", time.Duration(lag).Seconds())
+		return true, fmt.Sprintf("lag=%fs", time.Duration(lag).Seconds()), base.NoThrottleReasonHint
 	}
 	checkThrottleControlReplicas := true
 	if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag) > 0) {
@@ -52,66 +54,134 @@ func (this *Throttler) shouldThrottle() (result bool, reason string) {
 	if checkThrottleControlReplicas {
 		lagResult := this.migrationContext.GetControlReplicasLagResult()
 		if lagResult.Err != nil {
-			return true, fmt.Sprintf("%+v %+v", lagResult.Key, lagResult.Err)
+			return true, fmt.Sprintf("%+v %+v", lagResult.Key, lagResult.Err), base.NoThrottleReasonHint
 		}
 		if lagResult.Lag > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
-			return true, fmt.Sprintf("%+v replica-lag=%fs", lagResult.Key, lagResult.Lag.Seconds())
+			return true, fmt.Sprintf("%+v replica-lag=%fs", lagResult.Key, lagResult.Lag.Seconds()), base.NoThrottleReasonHint
 		}
 	}
 	// Got here? No metrics indicates we need throttling.
-	return false, ""
+	return false, "", base.NoThrottleReasonHint
 }
 
-// parseChangelogHeartbeat is called when a heartbeat event is intercepted
-func (this *Throttler) parseChangelogHeartbeat(heartbeatValue string) (err error) {
+// parseChangelogHeartbeat parses a string timestamp and deduces replication lag
+func parseChangelogHeartbeat(heartbeatValue string) (lag time.Duration, err error) {
 	heartbeatTime, err := time.Parse(time.RFC3339Nano, heartbeatValue)
 	if err != nil {
-		return log.Errore(err)
+		return lag, err
 	}
-	lag := time.Since(heartbeatTime)
-	atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
-	return nil
+	lag = time.Since(heartbeatTime)
+	return lag, nil
 }
 
-// collectHeartbeat reads the latest changelog heartbeat value
-func (this *Throttler) collectHeartbeat() {
-	ticker := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
-	for range ticker {
-		go func() error {
-			if atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
-				return nil
-			}
-			changelogState, err := this.inspector.readChangelogState()
-			if err != nil {
+// parseChangelogHeartbeat parses a string timestamp and deduces replication lag
+func (this *Throttler) parseChangelogHeartbeat(heartbeatValue string) (err error) {
+	if lag, err := parseChangelogHeartbeat(heartbeatValue); err != nil {
+		return log.Errore(err)
+	} else {
+		atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
+		return nil
+	}
+}
+
+// collectReplicationLag reads the latest changelog heartbeat value
+func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- bool) {
+	collectFunc := func() error {
+		if atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
+			return nil
+		}
+
+		if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
+			// when running on replica, the heartbeat injection is also done on the replica.
+			// This means we will always get a good heartbeat value.
+			// When runnign on replica, we should instead check the `SHOW SLAVE STATUS` output.
+			if lag, err := mysql.GetReplicationLag(this.inspector.connectionConfig); err != nil {
 				return log.Errore(err)
+			} else {
+				atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
 			}
-			if heartbeatValue, ok := changelogState["heartbeat"]; ok {
+		} else {
+			if heartbeatValue, err := this.inspector.readChangelogState("heartbeat"); err != nil {
+				return log.Errore(err)
+			} else {
 				this.parseChangelogHeartbeat(heartbeatValue)
 			}
-			return nil
-		}()
+		}
+		return nil
+	}
+
+	collectFunc()
+	firstThrottlingCollected <- true
+
+	ticker := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
+	for range ticker {
+		go collectFunc()
 	}
 }
 
 // collectControlReplicasLag polls all the control replicas to get maximum lag value
 func (this *Throttler) collectControlReplicasLag() {
-	readControlReplicasLag := func(replicationLagQuery string) error {
-		if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag) > 0) {
-			return nil
+
+	replicationLagQuery := fmt.Sprintf(`
+		select value from %s.%s where hint = 'heartbeat' and id <= 255
+		`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+
+	readReplicaLag := func(connectionConfig *mysql.ConnectionConfig) (lag time.Duration, err error) {
+		dbUri := connectionConfig.GetDBUri("information_schema")
+
+		var heartbeatValue string
+		if db, _, err := sqlutils.GetDB(dbUri); err != nil {
+			return lag, err
+		} else if err = db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
+			return lag, err
 		}
-		lagResult := mysql.GetMaxReplicationLag(
-			this.migrationContext.InspectorConnectionConfig,
-			this.migrationContext.GetThrottleControlReplicaKeys(),
-			replicationLagQuery,
-		)
-		this.migrationContext.SetControlReplicasLagResult(lagResult)
-		return nil
+		lag, err = parseChangelogHeartbeat(heartbeatValue)
+		return lag, err
+	}
+
+	readControlReplicasLag := func() (result *mysql.ReplicationLagResult) {
+		instanceKeyMap := this.migrationContext.GetThrottleControlReplicaKeys()
+		if instanceKeyMap.Len() == 0 {
+			return result
+		}
+		lagResults := make(chan *mysql.ReplicationLagResult, instanceKeyMap.Len())
+		for replicaKey := range *instanceKeyMap {
+			connectionConfig := this.migrationContext.InspectorConnectionConfig.Duplicate()
+			connectionConfig.Key = replicaKey
+
+			lagResult := &mysql.ReplicationLagResult{Key: connectionConfig.Key}
+			go func() {
+				lagResult.Lag, lagResult.Err = readReplicaLag(connectionConfig)
+				lagResults <- lagResult
+			}()
+		}
+		for range *instanceKeyMap {
+			lagResult := <-lagResults
+			if result == nil {
+				result = lagResult
+			} else if lagResult.Err != nil {
+				result = lagResult
+			} else if lagResult.Lag.Nanoseconds() > result.Lag.Nanoseconds() {
+				result = lagResult
+			}
+		}
+		return result
+	}
+
+	checkControlReplicasLag := func() {
+		if (this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica) && (atomic.LoadInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag) > 0) {
+			// No need to read lag
+			return
+		}
+		this.migrationContext.SetControlReplicasLagResult(readControlReplicasLag())
 	}
 	aggressiveTicker := time.Tick(100 * time.Millisecond)
 	relaxedFactor := 10
 	counter := 0
 	shouldReadLagAggressively := false
-	replicationLagQuery := ""
 
 	for range aggressiveTicker {
 		if counter%relaxedFactor == 0 {
@@ -119,12 +189,11 @@ func (this *Throttler) collectControlReplicasLag() {
 			// do not typically change at all throughout the migration, but nonetheless we check them.
 			counter = 0
 			maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
-			replicationLagQuery = this.migrationContext.GetReplicationLagQuery()
-			shouldReadLagAggressively = (replicationLagQuery != "" && maxLagMillisecondsThrottleThreshold < 1000)
+			shouldReadLagAggressively = (maxLagMillisecondsThrottleThreshold < 1000)
 		}
 		if counter == 0 || shouldReadLagAggressively {
 			// We check replication lag every so often, or if we wish to be aggressive
-			readControlReplicasLag(replicationLagQuery)
+			checkControlReplicasLag()
 		}
 		counter++
 	}
@@ -147,8 +216,8 @@ func (this *Throttler) criticalLoadIsMet() (met bool, variableName string, value
 // collectGeneralThrottleMetrics reads the once-per-sec metrics, and stores them onto this.migrationContext
 func (this *Throttler) collectGeneralThrottleMetrics() error {
 
-	setThrottle := func(throttle bool, reason string) error {
-		this.migrationContext.SetThrottleGeneralCheckResult(base.NewThrottleCheckResult(throttle, reason))
+	setThrottle := func(throttle bool, reason string, reasonHint base.ThrottleReasonHint) error {
+		this.migrationContext.SetThrottleGeneralCheckResult(base.NewThrottleCheckResult(throttle, reason, reasonHint))
 		return nil
 	}
 
@@ -161,7 +230,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 
 	criticalLoadMet, variableName, value, threshold, err := this.criticalLoadIsMet()
 	if err != nil {
-		return setThrottle(true, fmt.Sprintf("%s %s", variableName, err))
+		return setThrottle(true, fmt.Sprintf("%s %s", variableName, err), base.NoThrottleReasonHint)
 	}
 	if criticalLoadMet && this.migrationContext.CriticalLoadIntervalMilliseconds == 0 {
 		this.migrationContext.PanicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
@@ -181,18 +250,18 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 
 	// User-based throttle
 	if atomic.LoadInt64(&this.migrationContext.ThrottleCommandedByUser) > 0 {
-		return setThrottle(true, "commanded by user")
+		return setThrottle(true, "commanded by user", base.UserCommandThrottleReasonHint)
 	}
 	if this.migrationContext.ThrottleFlagFile != "" {
 		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
 			// Throttle file defined and exists!
-			return setThrottle(true, "flag-file")
+			return setThrottle(true, "flag-file", base.NoThrottleReasonHint)
 		}
 	}
 	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
 		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
 			// 2nd Throttle file defined and exists!
-			return setThrottle(true, "flag-file")
+			return setThrottle(true, "flag-file", base.NoThrottleReasonHint)
 		}
 	}
 
@@ -200,32 +269,33 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 	for variableName, threshold := range maxLoad {
 		value, err := this.applier.ShowStatusVariable(variableName)
 		if err != nil {
-			return setThrottle(true, fmt.Sprintf("%s %s", variableName, err))
+			return setThrottle(true, fmt.Sprintf("%s %s", variableName, err), base.NoThrottleReasonHint)
 		}
 		if value >= threshold {
-			return setThrottle(true, fmt.Sprintf("max-load %s=%d >= %d", variableName, value, threshold))
+			return setThrottle(true, fmt.Sprintf("max-load %s=%d >= %d", variableName, value, threshold), base.NoThrottleReasonHint)
 		}
 	}
 	if this.migrationContext.GetThrottleQuery() != "" {
 		if res, _ := this.applier.ExecuteThrottleQuery(); res > 0 {
-			return setThrottle(true, "throttle-query")
+			return setThrottle(true, "throttle-query", base.NoThrottleReasonHint)
 		}
 	}
 
-	return setThrottle(false, "")
+	return setThrottle(false, "", base.NoThrottleReasonHint)
 }
 
 // initiateThrottlerMetrics initiates the various processes that collect measurements
 // that may affect throttling. There are several components, all running independently,
 // that collect such metrics.
 func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan<- bool) {
-	go this.collectHeartbeat()
+	go this.collectReplicationLag(firstThrottlingCollected)
 	go this.collectControlReplicasLag()
 
 	go func() {
-		throttlerMetricsTick := time.Tick(1 * time.Second)
 		this.collectGeneralThrottleMetrics()
 		firstThrottlingCollected <- true
+
+		throttlerMetricsTick := time.Tick(1 * time.Second)
 		for range throttlerMetricsTick {
 			this.collectGeneralThrottleMetrics()
 		}
@@ -237,8 +307,8 @@ func (this *Throttler) initiateThrottlerChecks() error {
 	throttlerTick := time.Tick(100 * time.Millisecond)
 
 	throttlerFunction := func() {
-		alreadyThrottling, currentReason := this.migrationContext.IsThrottled()
-		shouldThrottle, throttleReason := this.shouldThrottle()
+		alreadyThrottling, currentReason, _ := this.migrationContext.IsThrottled()
+		shouldThrottle, throttleReason, throttleReasonHint := this.shouldThrottle()
 		if shouldThrottle && !alreadyThrottling {
 			// New throttling
 			this.applier.WriteAndLogChangelog("throttle", throttleReason)
@@ -249,7 +319,7 @@ func (this *Throttler) initiateThrottlerChecks() error {
 			// End of throttling
 			this.applier.WriteAndLogChangelog("throttle", "done throttling")
 		}
-		this.migrationContext.SetThrottled(shouldThrottle, throttleReason)
+		this.migrationContext.SetThrottled(shouldThrottle, throttleReason, throttleReasonHint)
 	}
 	throttlerFunction()
 	for range throttlerTick {
@@ -265,7 +335,7 @@ func (this *Throttler) throttle(onThrottled func()) {
 	for {
 		// IsThrottled() is non-blocking; the throttling decision making takes place asynchronously.
 		// Therefore calling IsThrottled() is cheap
-		if shouldThrottle, _ := this.migrationContext.IsThrottled(); !shouldThrottle {
+		if shouldThrottle, _, _ := this.migrationContext.IsThrottled(); !shouldThrottle {
 			return
 		}
 		if onThrottled != nil {
