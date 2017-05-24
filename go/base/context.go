@@ -40,8 +40,9 @@ const (
 type ThrottleReasonHint string
 
 const (
-	NoThrottleReasonHint          ThrottleReasonHint = "NoThrottleReasonHint"
-	UserCommandThrottleReasonHint                    = "UserCommandThrottleReasonHint"
+	NoThrottleReasonHint                 ThrottleReasonHint = "NoThrottleReasonHint"
+	UserCommandThrottleReasonHint                           = "UserCommandThrottleReasonHint"
+	LeavingHibernationThrottleReasonHint                    = "LeavingHibernationThrottleReasonHint"
 )
 
 const (

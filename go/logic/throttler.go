@@ -289,6 +289,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 		log.Errorf("critical-load met. Will hibernate for the duration of %+v, until %+v", hibernateDuration, hibernateUntilTime)
 		go func() {
 			time.Sleep(hibernateDuration)
+			this.migrationContext.SetThrottleGeneralCheckResult(base.NewThrottleCheckResult(true, "leaving hibernation", base.LeavingHibernationThrottleReasonHint))
 			atomic.StoreInt64(&this.migrationContext.HibernateUntil, 0)
 		}()
 		return nil
