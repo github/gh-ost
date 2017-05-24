@@ -282,11 +282,11 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 		return setThrottle(true, fmt.Sprintf("%s %s", variableName, err), base.NoThrottleReasonHint)
 	}
 
-	if this.migrationContext.CriticalLoadHibernateSeconds > 0 {
+	if criticalLoadMet && this.migrationContext.CriticalLoadHibernateSeconds > 0 {
 		hibernateDuration := time.Duration(this.migrationContext.CriticalLoadHibernateSeconds) * time.Second
 		hibernateUntilTime := time.Now().Add(hibernateDuration)
 		atomic.StoreInt64(&this.migrationContext.HibernateUntil, hibernateUntilTime.UnixNano())
-		log.Errorf("critical-load met. Will hibernate for the duration of %+v, until %+v", hibernateDuration, hibernateUntilTime)
+		log.Errorf("critical-load met: %s=%d, >=%d. Will hibernate for the duration of %+v, until %+v", variableName, value, threshold, hibernateDuration, hibernateUntilTime)
 		go func() {
 			time.Sleep(hibernateDuration)
 			this.migrationContext.SetThrottleGeneralCheckResult(base.NewThrottleCheckResult(true, "leaving hibernation", base.LeavingHibernationThrottleReasonHint))
