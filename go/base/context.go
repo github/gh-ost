@@ -189,6 +189,8 @@ type MigrationContext struct {
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 
+	recentBinlogCoordinates mysql.BinlogCoordinates
+
 	CanStopStreaming func() bool
 }
 
@@ -542,6 +544,19 @@ func (this *MigrationContext) SetNiceRatio(newRatio float64) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 	this.niceRatio = newRatio
+}
+
+func (this *MigrationContext) GetRecentBinlogCoordinates() mysql.BinlogCoordinates {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	return this.recentBinlogCoordinates
+}
+
+func (this *MigrationContext) SetRecentBinlogCoordinates(coordinates mysql.BinlogCoordinates) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.recentBinlogCoordinates = coordinates
 }
 
 // ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
