@@ -1,20 +1,20 @@
 # http://docs.travis-ci.com/user/languages/go/
 language: go
 
-go: 1.8
+go: 1.7
 
 os:
   - linux
 
-env:
-- MYSQL_USER=root
-
 before_install:
-  - mysql -e 'CREATE DATABASE IF NOT EXISTS test;'
+  - travis/01-install-mysql.sh
 
-install: true
+install:
+  - travis/02-install-ghost.sh
 
-script: script/cibuild
+script:
+  - travis/03-run-unittests.sh
+  - travis/04-run-localtests.sh
 
 notifications:
   email: false
