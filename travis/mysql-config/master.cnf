@@ -1,0 +1,13 @@
+[mysqld]
+server-id     = 1
+port          = 20001
+datadir       = /home/travis/.mysql/master/data
+socket        = /home/travis/.mysql/master/mysql.sock
+bind-address  = 127.0.0.1
+binlog_format = ROW
+log-bin       = mysqld-bin
+log-error     = /home/travis/.mysql/master/data/mysql.err
+sync-binlog   = 1
+gtid-mode     = ON
+log-slave-updates
+enforce-gtid-consistency

@@ -6,6 +6,15 @@ go: 1.7
 os:
   - linux
 
+addons:
+  apt:
+    sources:
+      - sourceline: "deb http://repo.percona.com/apt precise main"
+        key_url: "https://www.percona.com/downloads/RPM-GPG-KEY-percona"
+    packages:
+      - percona-server-client-5.7
+      - percona-server-server-5.7
+
 before_install:
   - travis/01-install-mysql.sh
 
@@ -15,6 +24,12 @@ install:
 script:
   - travis/03-run-unittests.sh
   - travis/04-run-localtests.sh
+
+after_failure:
+  - travis/05-shutdown-mysql.sh
+
+after_script:
+  - travis/05-shutdown-mysql.sh
 
 notifications:
   email: false
