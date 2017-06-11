@@ -40,8 +40,9 @@ const (
 type ThrottleReasonHint string
 
 const (
-	NoThrottleReasonHint          ThrottleReasonHint = "NoThrottleReasonHint"
-	UserCommandThrottleReasonHint                    = "UserCommandThrottleReasonHint"
+	NoThrottleReasonHint                 ThrottleReasonHint = "NoThrottleReasonHint"
+	UserCommandThrottleReasonHint                           = "UserCommandThrottleReasonHint"
+	LeavingHibernationThrottleReasonHint                    = "LeavingHibernationThrottleReasonHint"
 )
 
 const (
@@ -105,9 +106,11 @@ type MigrationContext struct {
 	throttleQuery                       string
 	throttleHTTP                        string
 	ThrottleCommandedByUser             int64
+	HibernateUntil                      int64
 	maxLoad                             LoadMap
 	criticalLoad                        LoadMap
 	CriticalLoadIntervalMilliseconds    int64
+	CriticalLoadHibernateSeconds        int64
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
 	ForceNamedCutOverCommand            bool
