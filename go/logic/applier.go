@@ -293,6 +293,9 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 func (this *Applier) InitiateHeartbeat() {
 	var numSuccessiveFailures int64
 	injectHeartbeat := func() error {
+		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
+			return nil
+		}
 		if _, err := this.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339Nano)); err != nil {
 			numSuccessiveFailures++
 			if numSuccessiveFailures > this.migrationContext.MaxRetries() {

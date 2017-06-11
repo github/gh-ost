@@ -1,5 +1,7 @@
 # gh-ost
 
+[![build status](https://travis-ci.org/github/gh-ost.svg)](https://travis-ci.org/github/gh-ost) [![downloads](https://img.shields.io/github/downloads/github/gh-ost/total.svg)](https://github.com/github/gh-ost/releases) [![release](https://img.shields.io/github/release/github/gh-ost.svg)](https://github.com/github/gh-ost/releases)
+
 #### GitHub's online schema migration for MySQL <img src="doc/images/gh-ost-logo-light-160.png" align="right">
 
  `gh-ost` is a triggerless online schema migration solution for MySQL. It is testable and provides pausability, dynamic control/reconfiguration, auditing, and many operational perks.
@@ -62,6 +64,7 @@ Also see:
 - [what if?](doc/what-if.md)
 - [the fine print](doc/the-fine-print.md)
 - [Community questions](https://github.com/github/gh-ost/issues?q=label%3Aquestion)
+- [Using `gh-ost` on AWS RDS](doc/rds.md)
 
 ## What's in a name?
 
@@ -80,6 +83,8 @@ But then a rare genetic mutation happened, and the `c` transformed into `t`. And
 `gh-ost` is released at a stable state, but with mileage to go. We are [open to pull requests](https://github.com/github/gh-ost/blob/master/.github/CONTRIBUTING.md). Please first discuss your intentions via [Issues](https://github.com/github/gh-ost/issues).
 
 We develop `gh-ost` at GitHub and for the community. We may have different priorities than others. From time to time we may suggest a contribution that is not on our immediate roadmap but which may appeal to others.
+
+Please see [Coding gh-ost](https://github.com/github/gh-ost/blob/develdocs/doc/coding-ghost.md) for a guide to getting started developing with gh-ost.
 
 ## Download/binaries/source
 

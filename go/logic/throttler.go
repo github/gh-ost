@@ -7,6 +7,7 @@ package logic
 
 import (
 	"fmt"
+	"net/http"
 	"sync/atomic"
 	"time"
 
@@ -37,9 +38,18 @@ func NewThrottler(applier *Applier, inspector *Inspector) *Throttler {
 // It merely observes the metrics collected by other components, it does not issue
 // its own metric collection.
 func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint base.ThrottleReasonHint) {
+	if hibernateUntil := atomic.LoadInt64(&this.migrationContext.HibernateUntil); hibernateUntil > 0 {
+		hibernateUntilTime := time.Unix(0, hibernateUntil)
+		return true, fmt.Sprintf("critical-load-hibernate until %+v", hibernateUntilTime), base.NoThrottleReasonHint
+	}
 	generalCheckResult := this.migrationContext.GetThrottleGeneralCheckResult()
 	if generalCheckResult.ShouldThrottle {
 		return generalCheckResult.ShouldThrottle, generalCheckResult.Reason, generalCheckResult.ReasonHint
+	}
+	// HTTP throttle
+	statusCode := atomic.LoadInt64(&this.migrationContext.ThrottleHTTPStatusCode)
+	if statusCode != 0 && statusCode != http.StatusOK {
+		return true, fmt.Sprintf("http=%d", statusCode), base.NoThrottleReasonHint
 	}
 	// Replication lag throttle
 	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
@@ -90,6 +100,9 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 		if atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
 			return nil
 		}
+		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
+			return nil
+		}
 
 		if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
 			// when running on replica, the heartbeat injection is also done on the replica.
@@ -121,6 +134,10 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 
 // collectControlReplicasLag polls all the control replicas to get maximum lag value
 func (this *Throttler) collectControlReplicasLag() {
+
+	if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
+		return
+	}
 
 	replicationLagQuery := fmt.Sprintf(`
 		select value from %s.%s where hint = 'heartbeat' and id <= 255
@@ -213,8 +230,40 @@ func (this *Throttler) criticalLoadIsMet() (met bool, variableName string, value
 	return false, variableName, value, threshold, nil
 }
 
+// collectReplicationLag reads the latest changelog heartbeat value
+func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<- bool) {
+	collectFunc := func() (sleep bool, err error) {
+		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
+			return true, nil
+		}
+		url := this.migrationContext.GetThrottleHTTP()
+		if url == "" {
+			return true, nil
+		}
+		resp, err := http.Head(url)
+		if err != nil {
+			return false, err
+		}
+		atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(resp.StatusCode))
+		return false, nil
+	}
+
+	collectFunc()
+	firstThrottlingCollected <- true
+
+	ticker := time.Tick(100 * time.Millisecond)
+	for range ticker {
+		if sleep, _ := collectFunc(); sleep {
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
 // collectGeneralThrottleMetrics reads the once-per-sec metrics, and stores them onto this.migrationContext
 func (this *Throttler) collectGeneralThrottleMetrics() error {
+	if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
+		return nil
+	}
 
 	setThrottle := func(throttle bool, reason string, reasonHint base.ThrottleReasonHint) error {
 		this.migrationContext.SetThrottleGeneralCheckResult(base.NewThrottleCheckResult(throttle, reason, reasonHint))
@@ -232,6 +281,20 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 	if err != nil {
 		return setThrottle(true, fmt.Sprintf("%s %s", variableName, err), base.NoThrottleReasonHint)
 	}
+
+	if criticalLoadMet && this.migrationContext.CriticalLoadHibernateSeconds > 0 {
+		hibernateDuration := time.Duration(this.migrationContext.CriticalLoadHibernateSeconds) * time.Second
+		hibernateUntilTime := time.Now().Add(hibernateDuration)
+		atomic.StoreInt64(&this.migrationContext.HibernateUntil, hibernateUntilTime.UnixNano())
+		log.Errorf("critical-load met: %s=%d, >=%d. Will hibernate for the duration of %+v, until %+v", variableName, value, threshold, hibernateDuration, hibernateUntilTime)
+		go func() {
+			time.Sleep(hibernateDuration)
+			this.migrationContext.SetThrottleGeneralCheckResult(base.NewThrottleCheckResult(true, "leaving hibernation", base.LeavingHibernationThrottleReasonHint))
+			atomic.StoreInt64(&this.migrationContext.HibernateUntil, 0)
+		}()
+		return nil
+	}
+
 	if criticalLoadMet && this.migrationContext.CriticalLoadIntervalMilliseconds == 0 {
 		this.migrationContext.PanicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
 	}
@@ -290,6 +353,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan<- bool) {
 	go this.collectReplicationLag(firstThrottlingCollected)
 	go this.collectControlReplicasLag()
+	go this.collectThrottleHTTPStatus(firstThrottlingCollected)
 
 	go func() {
 		this.collectGeneralThrottleMetrics()
