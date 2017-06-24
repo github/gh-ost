@@ -94,7 +94,9 @@ Please see [Coding gh-ost](https://github.com/github/gh-ost/blob/develdocs/doc/c
 
 [Download latest release here](https://github.com/github/gh-ost/releases/latest)
 
-`gh-ost` is a Go project; it is built with Go 1.5 with "experimental vendor". Soon to migrate to Go 1.6. See and use [build file](https://github.com/github/gh-ost/blob/master/build.sh) for compiling it on your own.
+`gh-ost` is a Go project; it is built with Go `1.8` (though `1.7` should work as well). To build on your own, use either:
+- [script/build](https://github.com/github/gh-ost/blob/master/script/build) - this is the same build script used by CI hence the authoritative; artifact is `./bin/gh-ost` binary.
+- [build.sh](https://github.com/github/gh-ost/blob/master/build.sh) for building `tar.gz` artifacts in `/tmp/gh-ost`
 
 Generally speaking, `master` branch is stable, but only [releases](https://github.com/github/gh-ost/releases) are to be used in production.
 
