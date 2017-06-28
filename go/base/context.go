@@ -47,6 +47,7 @@ const (
 
 const (
 	HTTPStatusOK = 200
+	maxBatchSize = 5000
 )
 
 var (
@@ -441,8 +442,8 @@ func (this *MigrationContext) SetDMLBatchSize(batchSize int64) {
 	if batchSize < 1 {
 		batchSize = 1
 	}
-	if batchSize > 100 {
-		batchSize = 100
+	if batchSize > maxBatchSize {
+		batchSize = maxBatchSize
 	}
 	atomic.StoreInt64(&this.DMLBatchSize, batchSize)
 }
