@@ -662,7 +662,14 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 	}
 	sharedColumnNames := []string{}
 	for _, originalColumn := range originalColumns.Names() {
+		isSharedColumn := false
 		if columnsInGhost[originalColumn] || columnsInGhost[columnRenameMap[originalColumn]] {
+			isSharedColumn = true
+		}
+		if this.migrationContext.DroppedColumnsMap[originalColumn] {
+			isSharedColumn = false
+		}
+		if isSharedColumn {
 			sharedColumnNames = append(sharedColumnNames, originalColumn)
 		}
 	}

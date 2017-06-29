@@ -17,6 +17,7 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `help`: shows a brief list of available commands
 - `status`: returns a detailed status summary of migration progress and configuration
 - `sup`: returns a brief status summary of migration progress
+- `coordinates`: returns recent (though not exactly up to date) binary log coordinates of the inspected server
 - `chunk-size=<newsize>`: modify the `chunk-size`; applies on next running copy-iteration
 - `max-lag-millis=<max-lag>`: modify the maximum replication lag threshold (milliseconds, minimum value is `100`, i.e. `0.1` second)
 - `max-load=<max-load-thresholds>`: modify the `max-load` config; applies on next running copy-iteration
