@@ -16,6 +16,4 @@ This PR [briefly explain what is does]
 > In case this PR introduced Go code changes:
 
 - [ ] contributed code is using same conventions as original code
-- [ ] code is formatted via `gofmt` (please avoid `goimports`)
-- [ ] code is built via `./build.sh`
-- [ ] code is tested via `./test.sh`
+- [ ] `script/cibuild` returns with no formatting errors, build errors or unit test errors.

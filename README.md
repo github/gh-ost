@@ -1,5 +1,7 @@
 # gh-ost
 
+[![build status](https://travis-ci.org/github/gh-ost.svg)](https://travis-ci.org/github/gh-ost) [![downloads](https://img.shields.io/github/downloads/github/gh-ost/total.svg)](https://github.com/github/gh-ost/releases) [![release](https://img.shields.io/github/release/github/gh-ost.svg)](https://github.com/github/gh-ost/releases)
+
 #### GitHub's online schema migration for MySQL <img src="doc/images/gh-ost-logo-light-160.png" align="right">
 
  `gh-ost` is a triggerless online schema migration solution for MySQL. It is testable and provides pausability, dynamic control/reconfiguration, auditing, and many operational perks.
@@ -62,6 +64,7 @@ Also see:
 - [what if?](doc/what-if.md)
 - [the fine print](doc/the-fine-print.md)
 - [Community questions](https://github.com/github/gh-ost/issues?q=label%3Aquestion)
+- [Using `gh-ost` on AWS RDS](doc/rds.md)
 
 ## What's in a name?
 
@@ -81,6 +84,8 @@ But then a rare genetic mutation happened, and the `c` transformed into `t`. And
 
 We develop `gh-ost` at GitHub and for the community. We may have different priorities than others. From time to time we may suggest a contribution that is not on our immediate roadmap but which may appeal to others.
 
+Please see [Coding gh-ost](https://github.com/github/gh-ost/blob/develdocs/doc/coding-ghost.md) for a guide to getting started developing with gh-ost.
+
 ## Download/binaries/source
 
 `gh-ost` is now GA and stable.
@@ -89,7 +94,9 @@ We develop `gh-ost` at GitHub and for the community. We may have different prior
 
 [Download latest release here](https://github.com/github/gh-ost/releases/latest)
 
-`gh-ost` is a Go project; it is built with Go 1.5 with "experimental vendor". Soon to migrate to Go 1.6. See and use [build file](https://github.com/github/gh-ost/blob/master/build.sh) for compiling it on your own.
+`gh-ost` is a Go project; it is built with Go `1.8` (though `1.7` should work as well). To build on your own, use either:
+- [script/build](https://github.com/github/gh-ost/blob/master/script/build) - this is the same build script used by CI hence the authoritative; artifact is `./bin/gh-ost` binary.
+- [build.sh](https://github.com/github/gh-ost/blob/master/build.sh) for building `tar.gz` artifacts in `/tmp/gh-ost`
 
 Generally speaking, `master` branch is stable, but only [releases](https://github.com/github/gh-ost/releases) are to be used in production.
 
