@@ -47,7 +47,7 @@ const (
 
 const (
 	HTTPStatusOK = 200
-	maxBatchSize = 5000
+	maxBatchSize = 1000
 )
 
 var (
