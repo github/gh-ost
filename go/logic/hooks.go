@@ -1,5 +1,4 @@
 /*
-/*
    Copyright 2016 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
@@ -18,19 +17,20 @@ import (
 )
 
 const (
-	onStartup            = "gh-ost-on-startup"
-	onValidated          = "gh-ost-on-validated"
-	onRowCountComplete   = "gh-ost-on-rowcount-complete"
-	onBeforeRowCopy      = "gh-ost-on-before-row-copy"
-	onRowCopyComplete    = "gh-ost-on-row-copy-complete"
-	onBeginPostponed     = "gh-ost-on-begin-postponed"
-	onBeforeCutOver      = "gh-ost-on-before-cut-over"
-	onInteractiveCommand = "gh-ost-on-interactive-command"
-	onSuccess            = "gh-ost-on-success"
-	onFailure            = "gh-ost-on-failure"
-	onStatus             = "gh-ost-on-status"
-	onStopReplication    = "gh-ost-on-stop-replication"
-	onStartReplication   = "gh-ost-on-start-replication"
+	onStartup             = "gh-ost-on-startup"
+	onValidated           = "gh-ost-on-validated"
+	onRowCountComplete    = "gh-ost-on-rowcount-complete"
+	onBeforeRowCopy       = "gh-ost-on-before-row-copy"
+	onRowCopyComplete     = "gh-ost-on-row-copy-complete"
+	onBeginPostponed      = "gh-ost-on-begin-postponed"
+	onBeforeCutOver       = "gh-ost-on-before-cut-over"
+	onInteractiveCommand  = "gh-ost-on-interactive-command"
+	onSuccess             = "gh-ost-on-success"
+	onFailure             = "gh-ost-on-failure"
+	onStatus              = "gh-ost-on-status"
+	onStopReplication     = "gh-ost-on-stop-replication"
+	onStartReplication    = "gh-ost-on-start-replication"
+	onTestReplicaComplete = "gh-ost-on-test-replica-complete"
 )
 
 type HooksExecutor struct {
@@ -156,4 +156,8 @@ func (this *HooksExecutor) onStopReplication() error {
 
 func (this *HooksExecutor) onStartReplication() error {
 	return this.executeHooks(onStartReplication)
+}
+
+func (this *HooksExecutor) onTestReplicaComplete() error {
+	return this.executeHooks(onTestReplicaComplete)
 }
