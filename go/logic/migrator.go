@@ -96,7 +96,7 @@ func NewMigrator() *Migrator {
 		migrationContext:           base.GetMigrationContext(),
 		parser:                     sql.NewParser(),
 		ghostTableMigrated:         make(chan bool),
-		firstThrottlingCollected:   make(chan bool, 1),
+		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan bool),
 		allEventsUpToLockProcessed: make(chan string),
 
@@ -248,6 +248,7 @@ func (this *Migrator) validateStatement() (err error) {
 		}
 		log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", this.parser.GetNonTrivialRenames())
 	}
+	this.migrationContext.DroppedColumnsMap = this.parser.DroppedColumnsMap()
 	return nil
 }
 
@@ -952,6 +953,13 @@ func (this *Migrator) initiateStreaming() error {
 		}
 		log.Debugf("Done streaming")
 	}()
+
+	go func() {
+		ticker := time.Tick(1 * time.Second)
+		for range ticker {
+			this.migrationContext.SetRecentBinlogCoordinates(*this.eventsStreamer.GetCurrentBinlogCoordinates())
+		}
+	}()
 	return nil
 }
 
@@ -977,7 +985,8 @@ func (this *Migrator) initiateThrottler() error {
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")
 	<-this.firstThrottlingCollected // replication lag
-	<-this.firstThrottlingCollected // other metrics
+	<-this.firstThrottlingCollected // HTTP status
+	<-this.firstThrottlingCollected // other, general metrics
 	log.Infof("First throttle metrics collected")
 	go this.throttler.initiateThrottlerChecks()
 

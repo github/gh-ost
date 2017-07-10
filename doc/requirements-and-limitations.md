@@ -40,8 +40,8 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 - It is not allowed to migrate a table where another table exists with same name and different upper/lower case.
   - For example, you may not migrate `MyTable` if another table called `MYtable` exists in the same schema.
 
-- Amazon RDS and Google Cloud SQL are currently not supported
-  - We began working towards removing this limitation. See tracking issue: https://github.com/github/gh-ost/issues/163
+- Amazon RDS works, but has it's own [limitations](rds.md).
+- Google Cloud SQL is currently not supported
 
 - Multisource is not supported when migrating via replica. It _should_ work (but never tested) when connecting directly to master (`--allow-on-master`)
 
