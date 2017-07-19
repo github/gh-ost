@@ -187,6 +187,19 @@ help                                 # This message
 				return ForcePrintStatusAndHintRule, nil
 			}
 		}
+	case "dml-batch-size":
+		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%+v\n", atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
+				return NoPrintStatusRule, nil
+			}
+			if dmlBatchSize, err := strconv.Atoi(arg); err != nil {
+				return NoPrintStatusRule, err
+			} else {
+				this.migrationContext.SetDMLBatchSize(int64(dmlBatchSize))
+				return ForcePrintStatusAndHintRule, nil
+			}
+		}
 	case "max-lag-millis":
 		{
 			if argIsQuestion {
