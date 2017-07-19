@@ -23,5 +23,5 @@ begin
   insert into gh_ost_test values (null, 11, '2016-10-31 11:22:33.0123', now(), '2016-10-31 11:22:33.0369', 0);
   update gh_ost_test set dt1='2016-10-31 11:22:33.0246', updated = 1 where i = 11 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 13, '2016-10-31 11:22:33.0123', now(6), '2016-10-31 11:22:33.0369', 0);
+  insert into gh_ost_test values (null, 13, '2016-10-31 11:22:33.0123', '2016-10-31 11:22:33.789', '2016-10-31 11:22:33.0369', 0);
 end ;;
