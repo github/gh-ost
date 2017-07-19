@@ -656,18 +656,21 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
 func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
-	columnsInGhost := make(map[string]bool)
-	for _, ghostColumn := range ghostColumns.Names() {
-		columnsInGhost[ghostColumn] = true
-	}
 	sharedColumnNames := []string{}
 	for _, originalColumn := range originalColumns.Names() {
 		isSharedColumn := false
-		if columnsInGhost[originalColumn] || columnsInGhost[columnRenameMap[originalColumn]] {
-			isSharedColumn = true
+		for _, ghostColumn := range ghostColumns.Names() {
+			if strings.EqualFold(originalColumn, ghostColumn) {
+				isSharedColumn = true
+			}
+			if strings.EqualFold(columnRenameMap[originalColumn], ghostColumn) {
+				isSharedColumn = true
+			}
 		}
-		if this.migrationContext.DroppedColumnsMap[originalColumn] {
-			isSharedColumn = false
+		for droppedColumn := range this.migrationContext.DroppedColumnsMap {
+			if strings.EqualFold(originalColumn, droppedColumn) {
+				isSharedColumn = false
+			}
 		}
 		if isSharedColumn {
 			sharedColumnNames = append(sharedColumnNames, originalColumn)
