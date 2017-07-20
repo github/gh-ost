@@ -46,8 +46,8 @@ const (
 )
 
 const (
-	HTTPStatusOK = 200
-	maxBatchSize = 1000
+	HTTPStatusOK       = 200
+	MaxEventsBatchSize = 1000
 )
 
 var (
@@ -243,9 +243,18 @@ func GetMigrationContext() *MigrationContext {
 	return context
 }
 
+func getSafeTableName(baseName string, suffix string) string {
+	name := fmt.Sprintf("_%s_%s", baseName, suffix)
+	if len(name) <= mysql.MaxTableNameLength {
+		return name
+	}
+	extraCharacters := len(name) - mysql.MaxTableNameLength
+	return fmt.Sprintf("_%s_%s", baseName[0:len(baseName)-extraCharacters], suffix)
+}
+
 // GetGhostTableName generates the name of ghost table, based on original table name
 func (this *MigrationContext) GetGhostTableName() string {
-	return fmt.Sprintf("_%s_gho", this.OriginalTableName)
+	return getSafeTableName(this.OriginalTableName, "gho")
 }
 
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
@@ -255,14 +264,14 @@ func (this *MigrationContext) GetOldTableName() string {
 		timestamp := fmt.Sprintf("%d%02d%02d%02d%02d%02d",
 			t.Year(), t.Month(), t.Day(),
 			t.Hour(), t.Minute(), t.Second())
-		return fmt.Sprintf("_%s_%s_del", this.OriginalTableName, timestamp)
+		return getSafeTableName(this.OriginalTableName, fmt.Sprintf("%s_del", timestamp))
 	}
-	return fmt.Sprintf("_%s_del", this.OriginalTableName)
+	return getSafeTableName(this.OriginalTableName, "del")
 }
 
 // GetChangelogTableName generates the name of changelog table, based on original table name
 func (this *MigrationContext) GetChangelogTableName() string {
-	return fmt.Sprintf("_%s_ghc", this.OriginalTableName)
+	return getSafeTableName(this.OriginalTableName, "ghc")
 }
 
 // GetVoluntaryLockName returns a name of a voluntary lock to be used throughout
@@ -442,8 +451,8 @@ func (this *MigrationContext) SetDMLBatchSize(batchSize int64) {
 	if batchSize < 1 {
 		batchSize = 1
 	}
-	if batchSize > maxBatchSize {
-		batchSize = maxBatchSize
+	if batchSize > MaxEventsBatchSize {
+		batchSize = MaxEventsBatchSize
 	}
 	atomic.StoreInt64(&this.DMLBatchSize, batchSize)
 }
