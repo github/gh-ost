@@ -84,7 +84,7 @@ But then a rare genetic mutation happened, and the `c` transformed into `t`. And
 
 We develop `gh-ost` at GitHub and for the community. We may have different priorities than others. From time to time we may suggest a contribution that is not on our immediate roadmap but which may appeal to others.
 
-Please see [Coding gh-ost](https://github.com/github/gh-ost/blob/develdocs/doc/coding-ghost.md) for a guide to getting started developing with gh-ost.
+Please see [Coding gh-ost](doc/coding-ghost.md) for a guide to getting started developing with gh-ost.
 
 ## Download/binaries/source
 
