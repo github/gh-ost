@@ -192,6 +192,7 @@ type MigrationContext struct {
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
+	ForceTmpTableName                string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
@@ -253,25 +254,42 @@ func getSafeTableName(baseName string, suffix string) string {
 }
 
 // GetGhostTableName generates the name of ghost table, based on original table name
+// or a given table name
 func (this *MigrationContext) GetGhostTableName() string {
-	return getSafeTableName(this.OriginalTableName, "gho")
+	if this.ForceTmpTableName != "" {
+		return getSafeTableName(this.ForceTmpTableName, "gho")
+	} else {
+		return getSafeTableName(this.OriginalTableName, "gho")
+	}
 }
 
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (this *MigrationContext) GetOldTableName() string {
+	var tableName string
+	if this.ForceTmpTableName != "" {
+		tableName = this.ForceTmpTableName
+	} else {
+		tableName = this.OriginalTableName
+	}
+
 	if this.TimestampOldTable {
 		t := this.StartTime
 		timestamp := fmt.Sprintf("%d%02d%02d%02d%02d%02d",
 			t.Year(), t.Month(), t.Day(),
 			t.Hour(), t.Minute(), t.Second())
-		return getSafeTableName(this.OriginalTableName, fmt.Sprintf("%s_del", timestamp))
+		return getSafeTableName(tableName, fmt.Sprintf("%s_del", timestamp))
 	}
-	return getSafeTableName(this.OriginalTableName, "del")
+	return getSafeTableName(tableName, "del")
 }
 
 // GetChangelogTableName generates the name of changelog table, based on original table name
+// or a given table name.
 func (this *MigrationContext) GetChangelogTableName() string {
-	return getSafeTableName(this.OriginalTableName, "ghc")
+	if this.ForceTmpTableName != "" {
+		return getSafeTableName(this.ForceTmpTableName, "ghc")
+	} else {
+		return getSafeTableName(this.OriginalTableName, "ghc")
+	}
 }
 
 // GetVoluntaryLockName returns a name of a voluntary lock to be used throughout

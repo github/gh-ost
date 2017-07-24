@@ -44,4 +44,12 @@ func TestGetTableNames(t *testing.T) {
 		oldTableName := context.GetOldTableName()
 		test.S(t).ExpectEquals(oldTableName, "_a1234567890123456789012345678901234567890123_20130203195400_del")
 	}
+	{
+		context.OriginalTableName = "foo_bar_baz"
+		context.ForceTmpTableName = "tmp"
+		context.TimestampOldTable = false
+		test.S(t).ExpectEquals(context.GetOldTableName(), "_tmp_del")
+		test.S(t).ExpectEquals(context.GetGhostTableName(), "_tmp_gho")
+		test.S(t).ExpectEquals(context.GetChangelogTableName(), "_tmp_ghc")
+	}
 }
