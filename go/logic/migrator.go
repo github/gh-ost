@@ -83,6 +83,8 @@ type Migrator struct {
 	applyEventsQueue chan *applyEventStruct
 
 	handledChangelogStates map[string]bool
+
+	finishedMigrating bool
 }
 
 func NewMigrator(context *base.MigrationContext) *Migrator {
@@ -97,6 +99,7 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
 		handledChangelogStates: make(map[string]bool),
+		finishedMigrating:      false,
 	}
 	return migrator
 }
@@ -718,6 +721,9 @@ func (this *Migrator) initiateStatus() error {
 	this.printStatus(ForcePrintStatusAndHintRule)
 	statusTick := time.Tick(1 * time.Second)
 	for range statusTick {
+		if this.finishedMigrating {
+			return nil
+		}
 		go this.printStatus(HeuristicPrintStatusRule)
 	}
 
@@ -942,6 +948,9 @@ func (this *Migrator) initiateStreaming() error {
 	go func() {
 		ticker := time.Tick(1 * time.Second)
 		for range ticker {
+			if this.finishedMigrating {
+				return
+			}
 			this.migrationContext.SetRecentBinlogCoordinates(*this.eventsStreamer.GetCurrentBinlogCoordinates())
 		}
 	}()
@@ -1132,6 +1141,10 @@ func (this *Migrator) executeWriteFuncs() error {
 		return nil
 	}
 	for {
+		if this.finishedMigrating {
+			return nil
+		}
+
 		this.throttler.throttle(nil)
 
 		// We give higher priority to event processing, then secondary priority to
@@ -1208,6 +1221,9 @@ func (this *Migrator) finalCleanup() error {
 			return err
 		}
 	}
+
+	this.finishedMigrating = true
+	this.applier.FinalCleanup()
 
 	return nil
 }

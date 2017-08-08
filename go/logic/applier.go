@@ -30,16 +30,18 @@ const (
 // Applier is the one to actually write row data and apply binlog events onto the ghost table.
 // It is where the ghost & changelog tables get created. It is where the cut-over phase happens.
 type Applier struct {
-	connectionConfig *mysql.ConnectionConfig
-	db               *gosql.DB
-	singletonDB      *gosql.DB
-	migrationContext *base.MigrationContext
+	connectionConfig  *mysql.ConnectionConfig
+	db                *gosql.DB
+	singletonDB       *gosql.DB
+	migrationContext  *base.MigrationContext
+	finishedMigrating bool
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	return &Applier{
-		connectionConfig: migrationContext.ApplierConnectionConfig,
-		migrationContext: migrationContext,
+		connectionConfig:  migrationContext.ApplierConnectionConfig,
+		migrationContext:  migrationContext,
+		finishedMigrating: false,
 	}
 }
 
@@ -288,6 +290,10 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 	return this.WriteAndLogChangelog("state", value)
 }
 
+func (this *Applier) FinalCleanup() {
+	this.finishedMigrating = true
+}
+
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
 // This is done asynchronously
 func (this *Applier) InitiateHeartbeat() {
@@ -310,6 +316,9 @@ func (this *Applier) InitiateHeartbeat() {
 
 	heartbeatTick := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	for range heartbeatTick {
+		if this.finishedMigrating {
+			return
+		}
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
 		// have this block the loop rather than spam the master in the event something
 		// goes wrong
