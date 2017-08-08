@@ -10,10 +10,8 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/signal"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/github/gh-ost/go/base"
@@ -101,21 +99,6 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 		handledChangelogStates: make(map[string]bool),
 	}
 	return migrator
-}
-
-// acceptSignals registers for OS signals
-func (this *Migrator) acceptSignals() {
-	c := make(chan os.Signal, 1)
-
-	signal.Notify(c, syscall.SIGHUP)
-	go func() {
-		for sig := range c {
-			switch sig {
-			case syscall.SIGHUP:
-				log.Debugf("Received SIGHUP. Reloading configuration")
-			}
-		}
-	}()
 }
 
 // initiateHooksExecutor
