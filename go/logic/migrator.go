@@ -87,9 +87,9 @@ type Migrator struct {
 	handledChangelogStates map[string]bool
 }
 
-func NewMigrator() *Migrator {
+func NewMigrator(context *base.MigrationContext) *Migrator {
 	migrator := &Migrator{
-		migrationContext:           base.GetMigrationContext(),
+		migrationContext:           context,
 		parser:                     sql.NewParser(),
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
@@ -120,7 +120,7 @@ func (this *Migrator) acceptSignals() {
 
 // initiateHooksExecutor
 func (this *Migrator) initiateHooksExecutor() (err error) {
-	this.hooksExecutor = NewHooksExecutor()
+	this.hooksExecutor = NewHooksExecutor(this.migrationContext)
 	if err := this.hooksExecutor.initHooks(); err != nil {
 		return err
 	}
@@ -655,7 +655,7 @@ func (this *Migrator) initiateServer() (err error) {
 	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
 		this.printStatus(rule, writer)
 	}
-	this.server = NewServer(this.hooksExecutor, f)
+	this.server = NewServer(this.migrationContext, this.hooksExecutor, f)
 	if err := this.server.BindSocketFile(); err != nil {
 		return err
 	}
@@ -675,7 +675,7 @@ func (this *Migrator) initiateServer() (err error) {
 // - heartbeat
 // When `--allow-on-master` is supplied, the inspector is actually the master.
 func (this *Migrator) initiateInspector() (err error) {
-	this.inspector = NewInspector()
+	this.inspector = NewInspector(this.migrationContext)
 	if err := this.inspector.InitDBConnections(); err != nil {
 		return err
 	}
@@ -934,7 +934,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 // initiateStreaming begins treaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
-	this.eventsStreamer = NewEventsStreamer()
+	this.eventsStreamer = NewEventsStreamer(this.migrationContext)
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
@@ -982,7 +982,7 @@ func (this *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (this *Migrator) initiateThrottler() error {
-	this.throttler = NewThrottler(this.applier, this.inspector)
+	this.throttler = NewThrottler(this.migrationContext, this.applier, this.inspector)
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")
@@ -996,7 +996,7 @@ func (this *Migrator) initiateThrottler() error {
 }
 
 func (this *Migrator) initiateApplier() error {
-	this.applier = NewApplier()
+	this.applier = NewApplier(this.migrationContext)
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}

@@ -29,14 +29,14 @@ type GoMySQLReader struct {
 	MigrationContext         *base.MigrationContext
 }
 
-func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *GoMySQLReader, err error) {
+func NewGoMySQLReader(migrationContext *base.MigrationContext, connectionConfig *mysql.ConnectionConfig) (binlogReader *GoMySQLReader, err error) {
 	binlogReader = &GoMySQLReader{
 		connectionConfig:        connectionConfig,
 		currentCoordinates:      mysql.BinlogCoordinates{},
 		currentCoordinatesMutex: &sync.Mutex{},
 		binlogSyncer:            nil,
 		binlogStreamer:          nil,
-		MigrationContext:        base.GetMigrationContext(),
+		MigrationContext:        migrationContext,
 	}
 
 	serverId := uint32(binlogReader.MigrationContext.ReplicaServerId)

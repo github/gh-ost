@@ -36,10 +36,10 @@ type Applier struct {
 	migrationContext *base.MigrationContext
 }
 
-func NewApplier() *Applier {
+func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	return &Applier{
-		connectionConfig: base.GetMigrationContext().ApplierConnectionConfig,
-		migrationContext: base.GetMigrationContext(),
+		connectionConfig: migrationContext.ApplierConnectionConfig,
+		migrationContext: migrationContext,
 	}
 }
 

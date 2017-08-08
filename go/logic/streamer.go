@@ -45,10 +45,10 @@ type EventsStreamer struct {
 	binlogReader             *binlog.GoMySQLReader
 }
 
-func NewEventsStreamer() *EventsStreamer {
+func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer {
 	return &EventsStreamer{
-		connectionConfig: base.GetMigrationContext().InspectorConnectionConfig,
-		migrationContext: base.GetMigrationContext(),
+		connectionConfig: migrationContext.InspectorConnectionConfig,
+		migrationContext: migrationContext,
 		listeners:        [](*BinlogEventListener){},
 		listenersMutex:   &sync.Mutex{},
 		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
@@ -122,7 +122,7 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 
 // initBinlogReader creates and connects the reader: we hook up to a MySQL server as a replica
 func (this *EventsStreamer) initBinlogReader(binlogCoordinates *mysql.BinlogCoordinates) error {
-	goMySQLReader, err := binlog.NewGoMySQLReader(this.migrationContext.InspectorConnectionConfig)
+	goMySQLReader, err := binlog.NewGoMySQLReader(this.migrationContext, this.migrationContext.InspectorConnectionConfig)
 	if err != nil {
 		return err
 	}
