@@ -26,28 +26,26 @@ type GoMySQLReader struct {
 	currentCoordinates       mysql.BinlogCoordinates
 	currentCoordinatesMutex  *sync.Mutex
 	LastAppliedRowsEventHint mysql.BinlogCoordinates
-	MigrationContext         *base.MigrationContext
 }
 
-func NewGoMySQLReader(migrationContext *base.MigrationContext, connectionConfig *mysql.ConnectionConfig) (binlogReader *GoMySQLReader, err error) {
+func NewGoMySQLReader(migrationContext *base.MigrationContext) (binlogReader *GoMySQLReader, err error) {
 	binlogReader = &GoMySQLReader{
-		connectionConfig:        connectionConfig,
+		connectionConfig:        migrationContext.InspectorConnectionConfig,
 		currentCoordinates:      mysql.BinlogCoordinates{},
 		currentCoordinatesMutex: &sync.Mutex{},
 		binlogSyncer:            nil,
 		binlogStreamer:          nil,
-		MigrationContext:        migrationContext,
 	}
 
-	serverId := uint32(binlogReader.MigrationContext.ReplicaServerId)
+	serverId := uint32(migrationContext.ReplicaServerId)
 
 	binlogSyncerConfig := &replication.BinlogSyncerConfig{
 		ServerID: serverId,
 		Flavor:   "mysql",
-		Host:     connectionConfig.Key.Hostname,
-		Port:     uint16(connectionConfig.Key.Port),
-		User:     connectionConfig.User,
-		Password: connectionConfig.Password,
+		Host:     binlogReader.connectionConfig.Key.Hostname,
+		Port:     uint16(binlogReader.connectionConfig.Key.Port),
+		User:     binlogReader.connectionConfig.User,
+		Password: binlogReader.connectionConfig.Password,
 	}
 	binlogReader.binlogSyncer = replication.NewBinlogSyncer(binlogSyncerConfig)
 
