@@ -22,6 +22,6 @@ begin
   insert into gh_ost_test (id, i, j) values (null, 17, '{"is-it": true, "count": 3, "elements": []}');
 
   update gh_ost_test set j = '{"updated": 11}', updated = 1 where i = 11 and updated = 0;
-  update gh_ost_test set j = json_set(j, '$.count', 13), updated = 1 where i = 13 and updated = 0;
+  update gh_ost_test set j = json_set(j, '$.count', 13, '$.id', id), updated = 1 where i = 13 and updated = 0;
   delete from gh_ost_test where i = 17;
 end ;;
