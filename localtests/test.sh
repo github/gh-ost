@@ -91,6 +91,7 @@ test_single() {
     --postpone-cut-over-flag-file=/tmp/gh-ost.test.postpone.flag \
     --test-on-replica \
     --default-retries=1 \
+    --chunk-size=10 \
     --verbose \
     --debug \
     --stack \
