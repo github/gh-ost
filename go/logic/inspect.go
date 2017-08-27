@@ -156,6 +156,10 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		if column.Name == mappedColumn.Name && column.Type == sql.DateTimeColumnType && mappedColumn.Type == sql.TimestampColumnType {
 			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.migrationContext.ApplierTimeZone)
 		}
+		if column.Name == mappedColumn.Name && column.Charset != "" && column.Charset == mappedColumn.Charset {
+			this.migrationContext.SharedColumns.SetCharsetUnchanged(column.Name)
+			this.migrationContext.MappedSharedColumns.SetCharsetUnchanged(column.Name)
+		}
 	}
 
 	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {

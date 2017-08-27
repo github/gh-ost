@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/outbrain/golib/log"
 )
 
 type ColumnType int
@@ -32,15 +34,23 @@ type Column struct {
 	Name               string
 	IsUnsigned         bool
 	Charset            string
+	CharsetUnchanged   bool
 	Type               ColumnType
 	timezoneConversion *TimezoneConvertion
 }
 
 func (this *Column) convertArg(arg interface{}) interface{} {
 	if s, ok := arg.(string); ok {
+		if this.CharsetUnchanged {
+			log.Errorf("============== charset unchanged for %+v: %+v, <%+v>", this.Name, this.Charset, arg)
+			// return []byte(s)
+			//return s
+		}
+		log.Errorf("============== charset for %+v: %+v, <%+v>", this.Name, this.Charset, arg)
 		// string, charset conversion
 		if encoding, ok := charsetEncodingMap[this.Charset]; ok {
 			arg, _ = encoding.NewDecoder().String(s)
+			log.Errorf("============== charset converted for %+v: %+v, <%+v>", this.Name, this.Charset, arg)
 		}
 		return arg
 	}
@@ -151,6 +161,10 @@ func (this *ColumnList) SetUnsigned(columnName string) {
 
 func (this *ColumnList) IsUnsigned(columnName string) bool {
 	return this.GetColumn(columnName).IsUnsigned
+}
+
+func (this *ColumnList) SetCharsetUnchanged(columnName string) {
+	this.GetColumn(columnName).CharsetUnchanged = true
 }
 
 func (this *ColumnList) SetCharset(columnName string, charset string) {
