@@ -291,6 +291,11 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.validateStatement(); err != nil {
 		return err
 	}
+
+	// After this point, we'll need to teardown anything that's been started
+	//   so we don't leave things hanging around
+	defer this.teardown()
+
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
@@ -1223,10 +1228,26 @@ func (this *Migrator) finalCleanup() error {
 		}
 	}
 
-	this.finishedMigrating = true
-	this.applier.FinalCleanup()
-	this.eventsStreamer.FinalCleanup()
-	sqlutils.ResetDBCache()
-
 	return nil
+}
+
+func (this *Migrator) teardown() {
+	this.finishedMigrating = true
+
+	if this.inspector != nil {
+		log.Infof("Tearing down inspector")
+		this.inspector.Teardown()
+	}
+
+	if this.applier != nil {
+		log.Infof("Tearing down applier")
+		this.applier.Teardown()
+	}
+
+	if this.eventsStreamer != nil {
+		log.Infof("Tearing down streamer")
+		this.eventsStreamer.Teardown()
+	}
+
+	sqlutils.ResetDBCache()
 }

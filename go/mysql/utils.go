@@ -40,6 +40,7 @@ func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.
 	if db, _, err = sqlutils.GetDB(dbUri); err != nil {
 		return replicationLag, err
 	}
+	defer db.Close()
 
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
 		slaveIORunning := m.GetString("Slave_IO_Running")
@@ -52,7 +53,6 @@ func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.
 		return nil
 	})
 
-	db.Close()
 	return replicationLag, err
 }
 

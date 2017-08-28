@@ -187,6 +187,7 @@ func (this *Throttler) collectControlReplicasLag() {
 		} else if err = db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
 			return lag, err
 		}
+
 		lag, err = parseChangelogHeartbeat(heartbeatValue)
 		return lag, err
 	}

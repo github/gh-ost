@@ -290,12 +290,6 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 	return this.WriteAndLogChangelog("state", value)
 }
 
-func (this *Applier) FinalCleanup() {
-	this.db.Close()
-	this.singletonDB.Close()
-	this.finishedMigrating = true
-}
-
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
 // This is done asynchronously
 func (this *Applier) InitiateHeartbeat() {
@@ -1043,4 +1037,11 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 	}
 	log.Debugf("ApplyDMLEventQueries() applied %d events in one transaction", len(dmlEvents))
 	return nil
+}
+
+func (this *Applier) Teardown() {
+	log.Debugf("Tearing down...")
+	this.db.Close()
+	this.singletonDB.Close()
+	this.finishedMigrating = true
 }

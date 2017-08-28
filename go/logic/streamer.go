@@ -231,7 +231,7 @@ func (this *EventsStreamer) Close() (err error) {
 	return err
 }
 
-func (this *EventsStreamer) FinalCleanup() {
+func (this *EventsStreamer) Teardown() {
 	this.db.Close()
 	return
 }

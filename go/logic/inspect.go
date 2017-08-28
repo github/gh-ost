@@ -723,3 +723,8 @@ func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err er
 	)
 	return replicationLag, err
 }
+
+func (this *Inspector) Teardown() {
+	this.db.Close()
+	return
+}
