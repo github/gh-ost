@@ -144,6 +144,17 @@ func GetDB(mysql_uri string) (*sql.DB, bool, error) {
 	return knownDBs[mysql_uri], exists, nil
 }
 
+// Resets the knownDBs cache, used when the DB connections have been closed,
+//   and new connections are needed to access the DB
+func ResetDBCache() {
+	knownDBsMutex.Lock()
+	defer func() {
+		knownDBsMutex.Unlock()
+	}()
+
+	knownDBs = make(map[string]*sql.DB)
+}
+
 // RowToArray is a convenience function, typically not called directly, which maps a
 // single read database row into a NullString
 func RowToArray(rows *sql.Rows, columns []string) []CellData {

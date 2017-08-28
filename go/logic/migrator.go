@@ -20,6 +20,7 @@ import (
 	"github.com/github/gh-ost/go/sql"
 
 	"github.com/outbrain/golib/log"
+	"github.com/outbrain/golib/sqlutils"
 )
 
 type ChangelogState string
@@ -1225,6 +1226,7 @@ func (this *Migrator) finalCleanup() error {
 	this.finishedMigrating = true
 	this.applier.FinalCleanup()
 	this.eventsStreamer.FinalCleanup()
+	sqlutils.ResetDBCache()
 
 	return nil
 }
