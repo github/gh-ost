@@ -1224,6 +1224,7 @@ func (this *Migrator) finalCleanup() error {
 
 	this.finishedMigrating = true
 	this.applier.FinalCleanup()
+	this.eventsStreamer.FinalCleanup()
 
 	return nil
 }

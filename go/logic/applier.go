@@ -291,6 +291,8 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 }
 
 func (this *Applier) FinalCleanup() {
+	this.db.Close()
+	this.singletonDB.Close()
 	this.finishedMigrating = true
 }
 

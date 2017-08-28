@@ -51,6 +51,8 @@ func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.
 		replicationLag = time.Duration(secondsBehindMaster.Int64) * time.Second
 		return nil
 	})
+
+	db.Close()
 	return replicationLag, err
 }
 

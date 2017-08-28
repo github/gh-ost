@@ -192,7 +192,14 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	var successiveFailures int64
 	var lastAppliedRowsEventHint mysql.BinlogCoordinates
 	for {
+		if canStopStreaming() {
+			return nil
+		}
 		if err := this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel); err != nil {
+			if canStopStreaming() {
+				return nil
+			}
+
 			log.Infof("StreamEvents encountered unexpected error: %+v", err)
 			this.migrationContext.MarkPointOfInterest()
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
@@ -222,4 +229,9 @@ func (this *EventsStreamer) Close() (err error) {
 	err = this.binlogReader.Close()
 	log.Infof("Closed streamer connection. err=%+v", err)
 	return err
+}
+
+func (this *EventsStreamer) FinalCleanup() {
+	this.db.Close()
+	return
 }
