@@ -10,10 +10,8 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/signal"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/github/gh-ost/go/base"
@@ -85,11 +83,13 @@ type Migrator struct {
 	applyEventsQueue chan *applyEventStruct
 
 	handledChangelogStates map[string]bool
+
+	finishedMigrating bool
 }
 
-func NewMigrator() *Migrator {
+func NewMigrator(context *base.MigrationContext) *Migrator {
 	migrator := &Migrator{
-		migrationContext:           base.GetMigrationContext(),
+		migrationContext:           context,
 		parser:                     sql.NewParser(),
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
@@ -99,28 +99,14 @@ func NewMigrator() *Migrator {
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
 		handledChangelogStates: make(map[string]bool),
+		finishedMigrating:      false,
 	}
 	return migrator
 }
 
-// acceptSignals registers for OS signals
-func (this *Migrator) acceptSignals() {
-	c := make(chan os.Signal, 1)
-
-	signal.Notify(c, syscall.SIGHUP)
-	go func() {
-		for sig := range c {
-			switch sig {
-			case syscall.SIGHUP:
-				log.Debugf("Received SIGHUP. Reloading configuration")
-			}
-		}
-	}()
-}
-
 // initiateHooksExecutor
 func (this *Migrator) initiateHooksExecutor() (err error) {
-	this.hooksExecutor = NewHooksExecutor()
+	this.hooksExecutor = NewHooksExecutor(this.migrationContext)
 	if err := this.hooksExecutor.initHooks(); err != nil {
 		return err
 	}
@@ -655,7 +641,7 @@ func (this *Migrator) initiateServer() (err error) {
 	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
 		this.printStatus(rule, writer)
 	}
-	this.server = NewServer(this.hooksExecutor, f)
+	this.server = NewServer(this.migrationContext, this.hooksExecutor, f)
 	if err := this.server.BindSocketFile(); err != nil {
 		return err
 	}
@@ -675,7 +661,7 @@ func (this *Migrator) initiateServer() (err error) {
 // - heartbeat
 // When `--allow-on-master` is supplied, the inspector is actually the master.
 func (this *Migrator) initiateInspector() (err error) {
-	this.inspector = NewInspector()
+	this.inspector = NewInspector(this.migrationContext)
 	if err := this.inspector.InitDBConnections(); err != nil {
 		return err
 	}
@@ -735,6 +721,9 @@ func (this *Migrator) initiateStatus() error {
 	this.printStatus(ForcePrintStatusAndHintRule)
 	statusTick := time.Tick(1 * time.Second)
 	for range statusTick {
+		if this.finishedMigrating {
+			return nil
+		}
 		go this.printStatus(HeuristicPrintStatusRule)
 	}
 
@@ -934,7 +923,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 // initiateStreaming begins treaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
-	this.eventsStreamer = NewEventsStreamer()
+	this.eventsStreamer = NewEventsStreamer(this.migrationContext)
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
@@ -959,6 +948,9 @@ func (this *Migrator) initiateStreaming() error {
 	go func() {
 		ticker := time.Tick(1 * time.Second)
 		for range ticker {
+			if this.finishedMigrating {
+				return
+			}
 			this.migrationContext.SetRecentBinlogCoordinates(*this.eventsStreamer.GetCurrentBinlogCoordinates())
 		}
 	}()
@@ -982,7 +974,7 @@ func (this *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (this *Migrator) initiateThrottler() error {
-	this.throttler = NewThrottler(this.applier, this.inspector)
+	this.throttler = NewThrottler(this.migrationContext, this.applier, this.inspector)
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")
@@ -996,7 +988,7 @@ func (this *Migrator) initiateThrottler() error {
 }
 
 func (this *Migrator) initiateApplier() error {
-	this.applier = NewApplier()
+	this.applier = NewApplier(this.migrationContext)
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}
@@ -1149,6 +1141,10 @@ func (this *Migrator) executeWriteFuncs() error {
 		return nil
 	}
 	for {
+		if this.finishedMigrating {
+			return nil
+		}
+
 		this.throttler.throttle(nil)
 
 		// We give higher priority to event processing, then secondary priority to
@@ -1225,6 +1221,10 @@ func (this *Migrator) finalCleanup() error {
 			return err
 		}
 	}
+
+	this.finishedMigrating = true
+	this.applier.FinalCleanup()
+	this.eventsStreamer.FinalCleanup()
 
 	return nil
 }

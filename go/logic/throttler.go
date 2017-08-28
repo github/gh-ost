@@ -47,9 +47,9 @@ type Throttler struct {
 	inspector        *Inspector
 }
 
-func NewThrottler(applier *Applier, inspector *Inspector) *Throttler {
+func NewThrottler(migrationContext *base.MigrationContext, applier *Applier, inspector *Inspector) *Throttler {
 	return &Throttler{
-		migrationContext: base.GetMigrationContext(),
+		migrationContext: migrationContext,
 		applier:          applier,
 		inspector:        inspector,
 	}

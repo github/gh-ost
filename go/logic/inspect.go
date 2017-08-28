@@ -31,10 +31,10 @@ type Inspector struct {
 	migrationContext *base.MigrationContext
 }
 
-func NewInspector() *Inspector {
+func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 	return &Inspector{
-		connectionConfig: base.GetMigrationContext().InspectorConnectionConfig,
-		migrationContext: base.GetMigrationContext(),
+		connectionConfig: migrationContext.InspectorConnectionConfig,
+		migrationContext: migrationContext,
 	}
 }
 

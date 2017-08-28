@@ -45,10 +45,10 @@ type EventsStreamer struct {
 	binlogReader             *binlog.GoMySQLReader
 }
 
-func NewEventsStreamer() *EventsStreamer {
+func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer {
 	return &EventsStreamer{
-		connectionConfig: base.GetMigrationContext().InspectorConnectionConfig,
-		migrationContext: base.GetMigrationContext(),
+		connectionConfig: migrationContext.InspectorConnectionConfig,
+		migrationContext: migrationContext,
 		listeners:        [](*BinlogEventListener){},
 		listenersMutex:   &sync.Mutex{},
 		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
@@ -122,7 +122,7 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 
 // initBinlogReader creates and connects the reader: we hook up to a MySQL server as a replica
 func (this *EventsStreamer) initBinlogReader(binlogCoordinates *mysql.BinlogCoordinates) error {
-	goMySQLReader, err := binlog.NewGoMySQLReader(this.migrationContext.InspectorConnectionConfig)
+	goMySQLReader, err := binlog.NewGoMySQLReader(this.migrationContext)
 	if err != nil {
 		return err
 	}
@@ -192,7 +192,14 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	var successiveFailures int64
 	var lastAppliedRowsEventHint mysql.BinlogCoordinates
 	for {
+		if canStopStreaming() {
+			return nil
+		}
 		if err := this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel); err != nil {
+			if canStopStreaming() {
+				return nil
+			}
+
 			log.Infof("StreamEvents encountered unexpected error: %+v", err)
 			this.migrationContext.MarkPointOfInterest()
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
@@ -222,4 +229,9 @@ func (this *EventsStreamer) Close() (err error) {
 	err = this.binlogReader.Close()
 	log.Infof("Closed streamer connection. err=%+v", err)
 	return err
+}
+
+func (this *EventsStreamer) FinalCleanup() {
+	this.db.Close()
+	return
 }

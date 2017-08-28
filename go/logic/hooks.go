@@ -37,9 +37,9 @@ type HooksExecutor struct {
 	migrationContext *base.MigrationContext
 }
 
-func NewHooksExecutor() *HooksExecutor {
+func NewHooksExecutor(migrationContext *base.MigrationContext) *HooksExecutor {
 	return &HooksExecutor{
-		migrationContext: base.GetMigrationContext(),
+		migrationContext: migrationContext,
 	}
 }
 
