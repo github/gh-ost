@@ -545,6 +545,11 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 				columnsList.GetColumn(columnName).Type = sql.DateTimeColumnType
 			}
 		}
+		if strings.Contains(columnType, "json") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.JSONColumnType
+			}
+		}
 		if strings.HasPrefix(columnType, "enum") {
 			for _, columnsList := range columnsLists {
 				columnsList.GetColumn(columnName).Type = sql.EnumColumnType
