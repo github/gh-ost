@@ -121,10 +121,33 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	if err != nil {
 		return err
 	}
-	if len(sharedUniqueKeys) == 0 {
+	for i, sharedUniqueKey := range sharedUniqueKeys {
+		this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &sharedUniqueKey.Columns)
+		uniqueKeyIsValid := true
+		for _, column := range sharedUniqueKey.Columns.Columns() {
+			switch column.Type {
+			case sql.FloatColumnType:
+				{
+					log.Warning("Will not use %+v as shared key due to FLOAT data type", sharedUniqueKey.Name)
+					uniqueKeyIsValid = false
+				}
+			case sql.JSONColumnType:
+				{
+					// Noteworthy that at this time MySQL does not allow JSON indexing anyhow, but this code
+					// will remain in place to potentially handle the future case where JSON is supported in indexes.
+					log.Warning("Will not use %+v as shared key due to JSON data type", sharedUniqueKey.Name)
+					uniqueKeyIsValid = false
+				}
+			}
+		}
+		if uniqueKeyIsValid {
+			this.migrationContext.UniqueKey = sharedUniqueKeys[i]
+			break
+		}
+	}
+	if this.migrationContext.UniqueKey == nil {
 		return fmt.Errorf("No shared unique key can be found after ALTER! Bailing out")
 	}
-	this.migrationContext.UniqueKey = sharedUniqueKeys[0]
 	log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
 	if this.migrationContext.UniqueKey.HasNullable {
 		if this.migrationContext.NullableUniqueKeyAllowed {
@@ -548,6 +571,11 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		if strings.Contains(columnType, "json") {
 			for _, columnsList := range columnsLists {
 				columnsList.GetColumn(columnName).Type = sql.JSONColumnType
+			}
+		}
+		if strings.Contains(columnType, "float") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.FloatColumnType
 			}
 		}
 		if strings.HasPrefix(columnType, "enum") {
