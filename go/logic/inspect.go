@@ -195,16 +195,10 @@ func (this *Inspector) validateConnection() error {
 	if len(this.connectionConfig.Password) > mysql.MaxReplicationPasswordLength {
 		return fmt.Errorf("MySQL replication length limited to 32 characters. See https://dev.mysql.com/doc/refman/5.7/en/assigning-passwords.html")
 	}
-	query := `select @@global.port, @@global.version`
-	var port int
-	if err := this.db.QueryRow(query).Scan(&port, &this.migrationContext.InspectorMySQLVersion); err != nil {
-		return err
-	}
-	if port != this.connectionConfig.Key.Port {
-		return fmt.Errorf("Unexpected database port reported: %+v", port)
-	}
-	log.Infof("connection validated on %+v", this.connectionConfig.Key)
-	return nil
+
+	version, err := base.ValidateConnection(this.db, this.connectionConfig)
+	this.migrationContext.InspectorMySQLVersion = version
+	return err
 }
 
 // validateGrants verifies the user by which we're executing has necessary grants
