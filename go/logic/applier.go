@@ -200,7 +200,7 @@ func (this *Applier) CreateChangelogTable() error {
 			id bigint auto_increment,
 			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			hint varchar(64) charset ascii not null,
-			value varchar(255) charset ascii not null,
+			value varchar(4096) charset ascii not null,
 			primary key(id),
 			unique key hint_uidx(hint)
 		) auto_increment=256
