@@ -20,6 +20,8 @@ const (
 	DateTimeColumnType             = iota
 	EnumColumnType                 = iota
 	MediumIntColumnType            = iota
+	JSONColumnType                 = iota
+	FloatColumnType                = iota
 )
 
 const maxMediumintUnsigned int32 = 16777215

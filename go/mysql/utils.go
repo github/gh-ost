@@ -17,6 +17,7 @@ import (
 )
 
 const MaxTableNameLength = 64
+const MaxReplicationPasswordLength = 32
 
 type ReplicationLagResult struct {
 	Key InstanceKey

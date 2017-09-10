@@ -202,7 +202,7 @@ func (this *Applier) CreateChangelogTable() error {
 			id bigint auto_increment,
 			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			hint varchar(64) charset ascii not null,
-			value varchar(255) charset ascii not null,
+			value varchar(4096) charset ascii not null,
 			primary key(id),
 			unique key hint_uidx(hint)
 		) auto_increment=256
@@ -403,35 +403,41 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
 		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
 	}
-	query, explodedArgs, err := sql.BuildUniqueKeyRangeEndPreparedQuery(
-		this.migrationContext.DatabaseName,
-		this.migrationContext.OriginalTableName,
-		&this.migrationContext.UniqueKey.Columns,
-		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
-		this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
-		atomic.LoadInt64(&this.migrationContext.ChunkSize),
-		this.migrationContext.GetIteration() == 0,
-		fmt.Sprintf("iteration:%d", this.migrationContext.GetIteration()),
-	)
-	if err != nil {
-		return hasFurtherRange, err
-	}
-	rows, err := this.db.Query(query, explodedArgs...)
-	if err != nil {
-		return hasFurtherRange, err
-	}
-	iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
-	for rows.Next() {
-		if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
+	for i := 0; i < 2; i++ {
+		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
+		if i == 1 {
+			buildFunc = sql.BuildUniqueKeyRangeEndPreparedQueryViaTemptable
+		}
+		query, explodedArgs, err := buildFunc(
+			this.migrationContext.DatabaseName,
+			this.migrationContext.OriginalTableName,
+			&this.migrationContext.UniqueKey.Columns,
+			this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
+			this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
+			atomic.LoadInt64(&this.migrationContext.ChunkSize),
+			this.migrationContext.GetIteration() == 0,
+			fmt.Sprintf("iteration:%d", this.migrationContext.GetIteration()),
+		)
+		if err != nil {
 			return hasFurtherRange, err
 		}
-		hasFurtherRange = true
+		rows, err := this.db.Query(query, explodedArgs...)
+		if err != nil {
+			return hasFurtherRange, err
+		}
+		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
+		for rows.Next() {
+			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
+				return hasFurtherRange, err
+			}
+			hasFurtherRange = true
+		}
+		if hasFurtherRange {
+			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
+			return hasFurtherRange, nil
+		}
 	}
-	if !hasFurtherRange {
-		log.Debugf("Iteration complete: no further range to iterate")
-		return hasFurtherRange, nil
-	}
-	this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
+	log.Debugf("Iteration complete: no further range to iterate")
 	return hasFurtherRange, nil
 }
 
