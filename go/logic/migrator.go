@@ -915,7 +915,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	}
 }
 
-// initiateStreaming begins treaming of binary log events and registers listeners for such events
+// initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
 	this.eventsStreamer = NewEventsStreamer()
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
