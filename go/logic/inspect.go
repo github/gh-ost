@@ -26,9 +26,10 @@ const startSlavePostWaitMilliseconds = 500 * time.Millisecond
 // Inspector reads data from the read-MySQL-server (typically a replica, but can be the master)
 // It is used for gaining initial status and structure, and later also follow up on progress and changelog
 type Inspector struct {
-	connectionConfig *mysql.ConnectionConfig
-	db               *gosql.DB
-	migrationContext *base.MigrationContext
+	connectionConfig    *mysql.ConnectionConfig
+	db                  *gosql.DB
+	informationSchemaDb *gosql.DB
+	migrationContext    *base.MigrationContext
 }
 
 func NewInspector(migrationContext *base.MigrationContext) *Inspector {
@@ -40,9 +41,15 @@ func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 
 func (this *Inspector) InitDBConnections() (err error) {
 	inspectorUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = sqlutils.GetDB(inspectorUri); err != nil {
+	if this.db, _, err = this.migrationContext.GetDB(inspectorUri); err != nil {
 		return err
 	}
+
+	informationSchemaUri := this.connectionConfig.GetDBUri("information_schema")
+	if this.informationSchemaDb, _, err = this.migrationContext.GetDB(informationSchemaUri); err != nil {
+		return err
+	}
+
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
@@ -755,6 +762,7 @@ func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.Connect
 
 func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err error) {
 	replicationLag, err = mysql.GetReplicationLag(
+		this.informationSchemaDb,
 		this.migrationContext.InspectorConnectionConfig,
 	)
 	return replicationLag, err
@@ -762,5 +770,6 @@ func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err er
 
 func (this *Inspector) Teardown() {
 	this.db.Close()
+	this.informationSchemaDb.Close()
 	return
 }

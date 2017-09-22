@@ -104,7 +104,7 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 
 func (this *EventsStreamer) InitDBConnections() (err error) {
 	EventsStreamerUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = sqlutils.GetDB(EventsStreamerUri); err != nil {
+	if this.db, _, err = this.migrationContext.GetDB(EventsStreamerUri); err != nil {
 		return err
 	}
 	if err := this.validateConnection(); err != nil {

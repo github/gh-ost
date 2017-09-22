@@ -20,7 +20,6 @@ import (
 	"github.com/github/gh-ost/go/sql"
 
 	"github.com/outbrain/golib/log"
-	"github.com/outbrain/golib/sqlutils"
 )
 
 type ChangelogState string
@@ -1248,6 +1247,4 @@ func (this *Migrator) teardown() {
 		log.Infof("Tearing down streamer")
 		this.eventsStreamer.Teardown()
 	}
-
-	sqlutils.ResetDBCache()
 }

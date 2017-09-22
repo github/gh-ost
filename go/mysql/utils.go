@@ -35,15 +35,8 @@ func (this *ReplicationLagResult) HasLag() bool {
 
 // GetReplicationLag returns replication lag for a given connection config; either by explicit query
 // or via SHOW SLAVE STATUS
-func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.Duration, err error) {
-	dbUri := connectionConfig.GetDBUri("information_schema")
-	var db *gosql.DB
-	if db, _, err = sqlutils.GetDB(dbUri); err != nil {
-		return replicationLag, err
-	}
-	defer db.Close()
-
-	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
+func GetReplicationLag(informationSchemaDb *gosql.DB, connectionConfig *ConnectionConfig) (replicationLag time.Duration, err error) {
+	err = sqlutils.QueryRowsMap(informationSchemaDb, `show slave status`, func(m sqlutils.RowMap) error {
 		slaveIORunning := m.GetString("Slave_IO_Running")
 		slaveSQLRunning := m.GetString("Slave_SQL_Running")
 		secondsBehindMaster := m.GetNullInt64("Seconds_Behind_Master")
@@ -59,7 +52,10 @@ func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.
 
 func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
 	currentUri := connectionConfig.GetDBUri("information_schema")
-	db, _, err := sqlutils.GetDB(currentUri)
+	// This function is only called once, okay to not have a cached connection pool
+	db, err := sqlutils.GetDB(currentUri)
+	defer db.Close()
+
 	if err != nil {
 		return nil, err
 	}

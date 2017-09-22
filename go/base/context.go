@@ -14,8 +14,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	gosql "database/sql"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
+
+	"github.com/outbrain/golib/sqlutils"
 
 	"gopkg.in/gcfg.v1"
 	gcfgscanner "gopkg.in/gcfg.v1/scanner"
@@ -197,6 +200,9 @@ type MigrationContext struct {
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
 	CanStopStreaming func() bool
+
+	knownDBs      map[string]*gosql.DB
+	knownDBsMutex *sync.Mutex
 }
 
 type ContextConfig struct {
@@ -230,6 +236,8 @@ func NewMigrationContext() *MigrationContext {
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
+		knownDBsMutex:                       &sync.Mutex{},
+		knownDBs:                            make(map[string]*gosql.DB),
 	}
 }
 
@@ -240,6 +248,23 @@ func getSafeTableName(baseName string, suffix string) string {
 	}
 	extraCharacters := len(name) - mysql.MaxTableNameLength
 	return fmt.Sprintf("_%s_%s", baseName[0:len(baseName)-extraCharacters], suffix)
+}
+
+// GetDB returns a DB instance based on uri.
+// bool result indicates whether the DB was returned from cache; err
+func (this *MigrationContext) GetDB(mysql_uri string) (*gosql.DB, bool, error) {
+	this.knownDBsMutex.Lock()
+	defer this.knownDBsMutex.Unlock()
+
+	var exists bool
+	if _, exists = this.knownDBs[mysql_uri]; !exists {
+		if db, err := sqlutils.GetDB(mysql_uri); err == nil {
+			this.knownDBs[mysql_uri] = db
+		} else {
+			return db, exists, err
+		}
+	}
+	return this.knownDBs[mysql_uri], exists, nil
 }
 
 // GetGhostTableName generates the name of ghost table, based on original table name
