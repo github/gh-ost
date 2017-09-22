@@ -34,14 +34,14 @@ type Applier struct {
 	db                *gosql.DB
 	singletonDB       *gosql.DB
 	migrationContext  *base.MigrationContext
-	finishedMigrating bool
+	finishedMigrating int64
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	return &Applier{
 		connectionConfig:  migrationContext.ApplierConnectionConfig,
 		migrationContext:  migrationContext,
-		finishedMigrating: false,
+		finishedMigrating: 0,
 	}
 }
 
@@ -312,7 +312,7 @@ func (this *Applier) InitiateHeartbeat() {
 
 	heartbeatTick := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	for range heartbeatTick {
-		if this.finishedMigrating {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
@@ -1049,5 +1049,5 @@ func (this *Applier) Teardown() {
 	log.Debugf("Tearing down...")
 	this.db.Close()
 	this.singletonDB.Close()
-	this.finishedMigrating = true
+	atomic.StoreInt64(&this.finishedMigrating, 1)
 }

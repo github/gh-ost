@@ -85,7 +85,7 @@ type Migrator struct {
 
 	handledChangelogStates map[string]bool
 
-	finishedMigrating bool
+	finishedMigrating int64
 }
 
 func NewMigrator(context *base.MigrationContext) *Migrator {
@@ -100,7 +100,7 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
 		handledChangelogStates: make(map[string]bool),
-		finishedMigrating:      false,
+		finishedMigrating:      0,
 	}
 	return migrator
 }
@@ -727,7 +727,7 @@ func (this *Migrator) initiateStatus() error {
 	this.printStatus(ForcePrintStatusAndHintRule)
 	statusTick := time.Tick(1 * time.Second)
 	for range statusTick {
-		if this.finishedMigrating {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return nil
 		}
 		go this.printStatus(HeuristicPrintStatusRule)
@@ -954,7 +954,7 @@ func (this *Migrator) initiateStreaming() error {
 	go func() {
 		ticker := time.Tick(1 * time.Second)
 		for range ticker {
-			if this.finishedMigrating {
+			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}
 			this.migrationContext.SetRecentBinlogCoordinates(*this.eventsStreamer.GetCurrentBinlogCoordinates())
@@ -1147,7 +1147,7 @@ func (this *Migrator) executeWriteFuncs() error {
 		return nil
 	}
 	for {
-		if this.finishedMigrating {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return nil
 		}
 
@@ -1232,7 +1232,7 @@ func (this *Migrator) finalCleanup() error {
 }
 
 func (this *Migrator) teardown() {
-	this.finishedMigrating = true
+	atomic.StoreInt64(&this.finishedMigrating, 1)
 
 	if this.inspector != nil {
 		log.Infof("Tearing down inspector")

@@ -129,9 +129,7 @@ var knownDBsMutex = &sync.Mutex{}
 // bool result indicates whether the DB was returned from cache; err
 func GetDB(mysql_uri string) (*sql.DB, bool, error) {
 	knownDBsMutex.Lock()
-	defer func() {
-		knownDBsMutex.Unlock()
-	}()
+	defer knownDBsMutex.Unlock()
 
 	var exists bool
 	if _, exists = knownDBs[mysql_uri]; !exists {
@@ -148,9 +146,7 @@ func GetDB(mysql_uri string) (*sql.DB, bool, error) {
 //   and new connections are needed to access the DB
 func ResetDBCache() {
 	knownDBsMutex.Lock()
-	defer func() {
-		knownDBsMutex.Unlock()
-	}()
+	defer knownDBsMutex.Unlock()
 
 	knownDBs = make(map[string]*sql.DB)
 }
