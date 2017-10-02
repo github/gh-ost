@@ -1,10 +1,10 @@
 package canal
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,10 +16,7 @@ import (
 	"github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/replication"
 	"github.com/siddontang/go-mysql/schema"
-	"github.com/siddontang/go/sync2"
 )
-
-var errCanalClosed = errors.New("canal was closed")
 
 // Canal can sync your MySQL data into everywhere, like Elasticsearch, Redis, etc...
 // MySQL must open row format for binlog
@@ -28,50 +25,42 @@ type Canal struct {
 
 	cfg *Config
 
+	useGTID bool
+
 	master     *masterInfo
 	dumper     *dump.Dumper
 	dumpDoneCh chan struct{}
 	syncer     *replication.BinlogSyncer
 
-	rsLock     sync.Mutex
-	rsHandlers []RowsEventHandler
+	eventHandler EventHandler
 
 	connLock sync.Mutex
 	conn     *client.Conn
 
 	wg sync.WaitGroup
 
-	tableLock sync.Mutex
+	tableLock sync.RWMutex
 	tables    map[string]*schema.Table
 
-	quit   chan struct{}
-	closed sync2.AtomicBool
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func NewCanal(cfg *Config) (*Canal, error) {
 	c := new(Canal)
 	c.cfg = cfg
-	c.closed.Set(false)
-	c.quit = make(chan struct{})
 
-	os.MkdirAll(cfg.DataDir, 0755)
+	c.ctx, c.cancel = context.WithCancel(context.Background())
 
 	c.dumpDoneCh = make(chan struct{})
-	c.rsHandlers = make([]RowsEventHandler, 0, 4)
+	c.eventHandler = &DummyEventHandler{}
+
 	c.tables = make(map[string]*schema.Table)
+	c.master = &masterInfo{}
 
 	var err error
-	if c.master, err = loadMasterInfo(c.masterInfoPath()); err != nil {
-		return nil, errors.Trace(err)
-	} else if len(c.master.Addr) != 0 && c.master.Addr != c.cfg.Addr {
-		log.Infof("MySQL addr %s in old master.info, but new %s, reset", c.master.Addr, c.cfg.Addr)
-		// may use another MySQL, reset
-		c.master = &masterInfo{}
-	}
 
-	c.master.Addr = c.cfg.Addr
-
-	if err := c.prepareDumper(); err != nil {
+	if err = c.prepareDumper(); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -114,6 +103,12 @@ func (c *Canal) prepareDumper() error {
 		c.dumper.AddTables(tableDB, tables...)
 	}
 
+	charset := c.cfg.Charset
+	c.dumper.SetCharset(charset)
+
+	c.dumper.SkipMasterData(c.cfg.Dump.SkipMasterData)
+	c.dumper.SetMaxAllowedPacket(c.cfg.Dump.MaxAllowedPacketMB)
+
 	for _, ignoreTable := range c.cfg.Dump.IgnoreTables {
 		if seps := strings.Split(ignoreTable, ","); len(seps) == 2 {
 			c.dumper.AddIgnoreTables(seps[0], seps[1])
@@ -129,6 +124,8 @@ func (c *Canal) prepareDumper() error {
 	return nil
 }
 
+// Start will first try to dump all data from MySQL master `mysqldump`,
+// then sync from the binlog position in the dump data.
 func (c *Canal) Start() error {
 	c.wg.Add(1)
 	go c.run()
@@ -136,55 +133,57 @@ func (c *Canal) Start() error {
 	return nil
 }
 
-func (c *Canal) run() error {
-	defer c.wg.Done()
+// StartFrom will sync from the binlog position directly, ignore mysqldump.
+func (c *Canal) StartFrom(pos mysql.Position) error {
+	c.useGTID = false
+	c.master.Update(pos)
 
-	if err := c.tryDump(); err != nil {
+	return c.Start()
+}
+
+func (c *Canal) StartFromGTID(set mysql.GTIDSet) error {
+	c.useGTID = true
+	c.master.UpdateGTID(set)
+
+	return c.Start()
+}
+
+func (c *Canal) run() error {
+	defer func() {
+		c.wg.Done()
+		c.cancel()
+	}()
+
+	err := c.tryDump()
+	close(c.dumpDoneCh)
+
+	if err != nil {
 		log.Errorf("canal dump mysql err: %v", err)
 		return errors.Trace(err)
 	}
 
-	close(c.dumpDoneCh)
-
-	if err := c.startSyncBinlog(); err != nil {
-		if !c.isClosed() {
-			log.Errorf("canal start sync binlog err: %v", err)
-		}
+	if err = c.runSyncBinlog(); err != nil {
+		log.Errorf("canal start sync binlog err: %v", err)
 		return errors.Trace(err)
 	}
 
 	return nil
 }
 
-func (c *Canal) isClosed() bool {
-	return c.closed.Get()
-}
-
 func (c *Canal) Close() {
-	log.Infof("close canal")
+	log.Infof("closing canal")
 
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	if c.isClosed() {
-		return
-	}
-
-	c.closed.Set(true)
-
-	close(c.quit)
-
+	c.cancel()
 	c.connLock.Lock()
 	c.conn.Close()
 	c.conn = nil
 	c.connLock.Unlock()
+	c.syncer.Close()
 
-	if c.syncer != nil {
-		c.syncer.Close()
-		c.syncer = nil
-	}
-
-	c.master.Close()
+	c.eventHandler.OnPosSynced(c.master.Position(), true)
 
 	c.wg.Wait()
 }
@@ -193,11 +192,15 @@ func (c *Canal) WaitDumpDone() <-chan struct{} {
 	return c.dumpDoneCh
 }
 
+func (c *Canal) Ctx() context.Context {
+	return c.ctx
+}
+
 func (c *Canal) GetTable(db string, table string) (*schema.Table, error) {
 	key := fmt.Sprintf("%s.%s", db, table)
-	c.tableLock.Lock()
+	c.tableLock.RLock()
 	t, ok := c.tables[key]
-	c.tableLock.Unlock()
+	c.tableLock.RUnlock()
 
 	if ok {
 		return t, nil
@@ -205,6 +208,11 @@ func (c *Canal) GetTable(db string, table string) (*schema.Table, error) {
 
 	t, err := schema.NewTable(c, db, table)
 	if err != nil {
+		// check table not exists
+		if ok, err1 := schema.IsTableExist(c, db, table); err1 == nil && !ok {
+			return nil, schema.ErrTableNotExist
+		}
+
 		return nil, errors.Trace(err)
 	}
 
@@ -213,6 +221,14 @@ func (c *Canal) GetTable(db string, table string) (*schema.Table, error) {
 	c.tableLock.Unlock()
 
 	return t, nil
+}
+
+// ClearTableCache clear table cache
+func (c *Canal) ClearTableCache(db []byte, table []byte) {
+	key := fmt.Sprintf("%s.%s", db, table)
+	c.tableLock.Lock()
+	delete(c.tables, key)
+	c.tableLock.Unlock()
 }
 
 // Check MySQL binlog row image, must be in FULL, MINIMAL, NOBLOB
@@ -257,21 +273,20 @@ func (c *Canal) prepareSyncer() error {
 	}
 
 	cfg := replication.BinlogSyncerConfig{
-		ServerID: c.cfg.ServerID,
-		Flavor:   c.cfg.Flavor,
-		Host:     seps[0],
-		Port:     uint16(port),
-		User:     c.cfg.User,
-		Password: c.cfg.Password,
+		ServerID:        c.cfg.ServerID,
+		Flavor:          c.cfg.Flavor,
+		Host:            seps[0],
+		Port:            uint16(port),
+		User:            c.cfg.User,
+		Password:        c.cfg.Password,
+		Charset:         c.cfg.Charset,
+		HeartbeatPeriod: c.cfg.HeartbeatPeriod,
+		ReadTimeout:     c.cfg.ReadTimeout,
 	}
 
-	c.syncer = replication.NewBinlogSyncer(&cfg)
+	c.syncer = replication.NewBinlogSyncer(cfg)
 
 	return nil
-}
-
-func (c *Canal) masterInfoPath() string {
-	return path.Join(c.cfg.DataDir, "master.info")
 }
 
 // Execute a SQL
@@ -303,5 +318,5 @@ func (c *Canal) Execute(cmd string, args ...interface{}) (rr *mysql.Result, err 
 }
 
 func (c *Canal) SyncedPosition() mysql.Position {
-	return c.master.Pos()
+	return c.master.Position()
 }

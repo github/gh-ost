@@ -1,12 +1,11 @@
 package replication
 
 import (
+	"context"
 	"io"
 	"os"
 	"path"
 	"time"
-
-	"golang.org/x/net/context"
 
 	"github.com/juju/errors"
 	. "github.com/siddontang/go-mysql/mysql"

@@ -1,14 +1,13 @@
 package replication
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"sync"
 	"testing"
 	"time"
-
-	"golang.org/x/net/context"
 
 	. "github.com/pingcap/check"
 	uuid "github.com/satori/go.uuid"
@@ -230,6 +229,28 @@ func (t *testSyncerSuite) testSync(c *C, s *BinlogStreamer) {
 		}
 	}
 
+	str = `DROP TABLE IF EXISTS test_parse_time`
+	t.testExecute(c, str)
+
+	// Must allow zero time.
+	t.testExecute(c, `SET sql_mode=''`)
+	str = `CREATE TABLE test_parse_time (
+			a1 DATETIME, 
+			a2 DATETIME(3), 
+			a3 DATETIME(6), 
+			b1 TIMESTAMP, 
+			b2 TIMESTAMP(3) , 
+			b3 TIMESTAMP(6))`
+	t.testExecute(c, str)
+
+	t.testExecute(c, `INSERT INTO test_parse_time VALUES
+		("2014-09-08 17:51:04.123456", "2014-09-08 17:51:04.123456", "2014-09-08 17:51:04.123456", 
+		"2014-09-08 17:51:04.123456","2014-09-08 17:51:04.123456","2014-09-08 17:51:04.123456"),
+		("0000-00-00 00:00:00.000000", "0000-00-00 00:00:00.000000", "0000-00-00 00:00:00.000000",
+		"0000-00-00 00:00:00.000000", "0000-00-00 00:00:00.000000", "0000-00-00 00:00:00.000000"),
+		("2014-09-08 17:51:04.000456", "2014-09-08 17:51:04.000456", "2014-09-08 17:51:04.000456", 
+		"2014-09-08 17:51:04.000456","2014-09-08 17:51:04.000456","2014-09-08 17:51:04.000456")`)
+
 	t.wg.Wait()
 }
 
@@ -271,7 +292,7 @@ func (t *testSyncerSuite) setupTest(c *C, flavor string) {
 		Password: "",
 	}
 
-	t.b = NewBinlogSyncer(&cfg)
+	t.b = NewBinlogSyncer(cfg)
 }
 
 func (t *testSyncerSuite) testPositionSync(c *C) {

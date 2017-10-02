@@ -291,10 +291,12 @@ type MysqlGTIDSet struct {
 
 func ParseMysqlGTIDSet(str string) (GTIDSet, error) {
 	s := new(MysqlGTIDSet)
+	s.Sets = make(map[string]*UUIDSet)
+	if str == "" {
+		return s, nil
+	}
 
 	sp := strings.Split(str, ",")
-
-	s.Sets = make(map[string]*UUIDSet, len(sp))
 
 	//todo, handle redundant same uuid
 	for i := 0; i < len(sp); i++ {
@@ -334,6 +336,9 @@ func DecodeMysqlGTIDSet(data []byte) (*MysqlGTIDSet, error) {
 }
 
 func (s *MysqlGTIDSet) AddSet(set *UUIDSet) {
+	if set == nil {
+		return
+	}
 	sid := set.SID.String()
 	o, ok := s.Sets[sid]
 	if ok {
@@ -341,6 +346,17 @@ func (s *MysqlGTIDSet) AddSet(set *UUIDSet) {
 	} else {
 		s.Sets[sid] = set
 	}
+}
+
+func (s *MysqlGTIDSet) Update(GTIDStr string) error {
+	uuidSet, err := ParseUUIDSet(GTIDStr)
+	if err != nil {
+		return err
+	}
+
+	s.AddSet(uuidSet)
+
+	return nil
 }
 
 func (s *MysqlGTIDSet) Contain(o GTIDSet) bool {

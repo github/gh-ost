@@ -53,6 +53,16 @@ func GetPKValues(table *schema.Table, row []interface{}) ([]interface{}, error) 
 	return values, nil
 }
 
+// Get term column's value
+func GetColumnValue(table *schema.Table, column string, row []interface{}) (interface{}, error) {
+	index := table.FindColumn(column)
+	if index == -1 {
+		return nil, errors.Errorf("table %s has no column name %s", table, column)
+	}
+
+	return row[index], nil
+}
+
 // String implements fmt.Stringer interface.
 func (r *RowsEvent) String() string {
 	return fmt.Sprintf("%s %s %v", r.Action, r.Table, r.Rows)

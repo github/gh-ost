@@ -78,3 +78,14 @@ func (gtid MariadbGTID) Contain(o GTIDSet) bool {
 
 	return gtid.DomainID == other.DomainID && gtid.SequenceNumber >= other.SequenceNumber
 }
+
+func (gtid MariadbGTID) Update(GTIDStr string) error {
+	newGTID, err := ParseMariadbGTIDSet(GTIDStr)
+	if err != nil {
+		return err
+	}
+
+	gtid = newGTID.(MariadbGTID)
+
+	return nil
+}

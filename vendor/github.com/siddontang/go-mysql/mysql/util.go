@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/siddontang/go/hack"
 )
 
@@ -351,4 +352,7 @@ func init() {
 			EncodeMap[byte(i)] = to
 		}
 	}
+
+	// Disable highlight by default
+	log.SetHighlighting(false)
 }

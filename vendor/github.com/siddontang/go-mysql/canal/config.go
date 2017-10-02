@@ -7,6 +7,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/juju/errors"
+	"github.com/siddontang/go-mysql/mysql"
 )
 
 type DumpConfig struct {
@@ -25,6 +26,13 @@ type DumpConfig struct {
 
 	// If true, discard error msg, else, output to stderr
 	DiscardErr bool `toml:"discard_err"`
+
+	// Set true to skip --master-data if we have no privilege to do
+	// 'FLUSH TABLES WITH READ LOCK'
+	SkipMasterData bool `toml:"skip_master_data"`
+
+	// Set to change the default max_allowed_packet size
+	MaxAllowedPacketMB int `toml:"max_allowed_packet_mb"`
 }
 
 type Config struct {
@@ -32,9 +40,11 @@ type Config struct {
 	User     string `toml:"user"`
 	Password string `toml:"password"`
 
-	ServerID uint32 `toml:"server_id"`
-	Flavor   string `toml:"flavor"`
-	DataDir  string `toml:"data_dir"`
+	Charset         string        `toml:"charset"`
+	ServerID        uint32        `toml:"server_id"`
+	Flavor          string        `toml:"flavor"`
+	HeartbeatPeriod time.Duration `toml:"heartbeat_period"`
+	ReadTimeout     time.Duration `toml:"read_timeout"`
 
 	Dump DumpConfig `toml:"dump"`
 }
@@ -66,14 +76,15 @@ func NewDefaultConfig() *Config {
 	c.User = "root"
 	c.Password = ""
 
+	c.Charset = mysql.DEFAULT_CHARSET
 	rand.Seed(time.Now().Unix())
 	c.ServerID = uint32(rand.Intn(1000)) + 1001
 
 	c.Flavor = "mysql"
 
-	c.DataDir = "./var"
 	c.Dump.ExecutionPath = "mysqldump"
 	c.Dump.DiscardErr = true
+	c.Dump.SkipMasterData = false
 
 	return c
 }

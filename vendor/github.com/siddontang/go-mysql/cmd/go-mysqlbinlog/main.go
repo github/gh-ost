@@ -4,11 +4,10 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
-
-	"golang.org/x/net/context"
 
 	"github.com/juju/errors"
 	"github.com/siddontang/go-mysql/mysql"
@@ -41,11 +40,11 @@ func main() {
 		Port:            uint16(*port),
 		User:            *user,
 		Password:        *password,
-		RawModeEanbled:  *rawMode,
+		RawModeEnabled:  *rawMode,
 		SemiSyncEnabled: *semiSync,
 	}
 
-	b := replication.NewBinlogSyncer(&cfg)
+	b := replication.NewBinlogSyncer(cfg)
 
 	pos := mysql.Position{*file, uint32(*pos)}
 	if len(*backupPath) > 0 {

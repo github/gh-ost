@@ -1,41 +1,36 @@
 package canal
 
 import (
-	"github.com/juju/errors"
-	"github.com/ngaut/log"
 	"github.com/siddontang/go-mysql/mysql"
+	"github.com/siddontang/go-mysql/replication"
 )
 
-var (
-	ErrHandleInterrupted = errors.New("do handler error, interrupted")
-)
-
-type RowsEventHandler interface {
-	// Handle RowsEvent, if return ErrHandleInterrupted, canal will
-	// stop the sync
-	Do(e *RowsEvent) error
+type EventHandler interface {
+	OnRotate(roateEvent *replication.RotateEvent) error
+	OnDDL(nextPos mysql.Position, queryEvent *replication.QueryEvent) error
+	OnRow(e *RowsEvent) error
+	OnXID(nextPos mysql.Position) error
+	OnGTID(gtid mysql.GTIDSet) error
+	// OnPosSynced Use your own way to sync position. When force is true, sync position immediately.
+	OnPosSynced(pos mysql.Position, force bool) error
 	String() string
 }
 
-func (c *Canal) RegRowsEventHandler(h RowsEventHandler) {
-	c.rsLock.Lock()
-	c.rsHandlers = append(c.rsHandlers, h)
-	c.rsLock.Unlock()
+type DummyEventHandler struct {
 }
 
-func (c *Canal) travelRowsEventHandler(e *RowsEvent) error {
-	c.rsLock.Lock()
-	defer c.rsLock.Unlock()
-
-	var err error
-	for _, h := range c.rsHandlers {
-		if err = h.Do(e); err != nil && !mysql.ErrorEqual(err, ErrHandleInterrupted) {
-			log.Errorf("handle %v err: %v", h, err)
-		} else if mysql.ErrorEqual(err, ErrHandleInterrupted) {
-			log.Errorf("handle %v err, interrupted", h)
-			return ErrHandleInterrupted
-		}
-
-	}
+func (h *DummyEventHandler) OnRotate(*replication.RotateEvent) error { return nil }
+func (h *DummyEventHandler) OnDDL(mysql.Position, *replication.QueryEvent) error {
 	return nil
+}
+func (h *DummyEventHandler) OnRow(*RowsEvent) error                 { return nil }
+func (h *DummyEventHandler) OnXID(mysql.Position) error             { return nil }
+func (h *DummyEventHandler) OnGTID(mysql.GTIDSet) error             { return nil }
+func (h *DummyEventHandler) OnPosSynced(mysql.Position, bool) error { return nil }
+func (h *DummyEventHandler) String() string                         { return "DummyEventHandler" }
+
+// `SetEventHandler` registers the sync handler, you must register your
+// own handler before starting Canal.
+func (c *Canal) SetEventHandler(h EventHandler) {
+	c.eventHandler = h
 }

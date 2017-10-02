@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juju/errors"
+	. "github.com/siddontang/go-mysql/mysql"
 )
 
 // Unlick mysqldump, Dumper is designed for parsing and syning data easily.
@@ -25,9 +26,14 @@ type Dumper struct {
 
 	Databases []string
 
+	Charset string
+
 	IgnoreTables map[string][]string
 
 	ErrOut io.Writer
+
+	masterDataSkipped bool
+	maxAllowedPacket  int
 }
 
 func NewDumper(executionPath string, addr string, user string, password string) (*Dumper, error) {
@@ -47,15 +53,30 @@ func NewDumper(executionPath string, addr string, user string, password string) 
 	d.Password = password
 	d.Tables = make([]string, 0, 16)
 	d.Databases = make([]string, 0, 16)
+	d.Charset = DEFAULT_CHARSET
 	d.IgnoreTables = make(map[string][]string)
+	d.masterDataSkipped = false
 
 	d.ErrOut = os.Stderr
 
 	return d, nil
 }
 
+func (d *Dumper) SetCharset(charset string) {
+	d.Charset = charset
+}
+
 func (d *Dumper) SetErrOut(o io.Writer) {
 	d.ErrOut = o
+}
+
+// In some cloud MySQL, we have no privilege to use `--master-data`.
+func (d *Dumper) SkipMasterData(v bool) {
+	d.masterDataSkipped = v
+}
+
+func (d *Dumper) SetMaxAllowedPacket(i int) {
+	d.maxAllowedPacket = i
 }
 
 func (d *Dumper) AddDatabases(dbs ...string) {
@@ -97,7 +118,14 @@ func (d *Dumper) Dump(w io.Writer) error {
 	args = append(args, fmt.Sprintf("--user=%s", d.User))
 	args = append(args, fmt.Sprintf("--password=%s", d.Password))
 
-	args = append(args, "--master-data")
+	if !d.masterDataSkipped {
+		args = append(args, "--master-data")
+	}
+
+	if d.maxAllowedPacket > 0 {
+		args = append(args, fmt.Sprintf("--max_allowed_packet=%dM", d.maxAllowedPacket))
+	}
+
 	args = append(args, "--single-transaction")
 	args = append(args, "--skip-lock-tables")
 
@@ -133,6 +161,10 @@ func (d *Dumper) Dump(w io.Writer) error {
 		w.Write([]byte(fmt.Sprintf("USE `%s`;\n", d.TableDB)))
 	}
 
+	if len(d.Charset) != 0 {
+		args = append(args, fmt.Sprintf("--default-character-set=%s", d.Charset))
+	}
+
 	cmd := exec.Command(d.ExecutionPath, args...)
 
 	cmd.Stderr = d.ErrOut
@@ -147,7 +179,7 @@ func (d *Dumper) DumpAndParse(h ParseHandler) error {
 
 	done := make(chan error, 1)
 	go func() {
-		err := Parse(r, h)
+		err := Parse(r, h, !d.masterDataSkipped)
 		r.CloseWithError(err)
 		done <- err
 	}()

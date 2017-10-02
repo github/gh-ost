@@ -7,6 +7,7 @@ import (
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/siddontang/go-mysql/dump"
+	"github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/schema"
 )
 
@@ -23,8 +24,8 @@ func (h *dumpParseHandler) BinLog(name string, pos uint64) error {
 }
 
 func (h *dumpParseHandler) Data(db string, table string, values []string) error {
-	if h.c.isClosed() {
-		return errCanalClosed
+	if err := h.c.ctx.Err(); err != nil {
+		return err
 	}
 
 	tableInfo, err := h.c.GetTable(db, table)
@@ -63,7 +64,7 @@ func (h *dumpParseHandler) Data(db string, table string, values []string) error 
 	}
 
 	events := newRowsEvent(tableInfo, InsertAction, [][]interface{}{vs})
-	return h.c.travelRowsEventHandler(events)
+	return h.c.eventHandler.OnRow(events)
 }
 
 func (c *Canal) AddDumpDatabases(dbs ...string) {
@@ -91,9 +92,11 @@ func (c *Canal) AddDumpIgnoreTables(db string, tables ...string) {
 }
 
 func (c *Canal) tryDump() error {
-	if len(c.master.Name) > 0 && c.master.Position > 0 {
+	pos := c.master.Position()
+	gtid := c.master.GTID()
+	if (len(pos.Name) > 0 && pos.Pos > 0) || gtid != nil {
 		// we will sync with binlog name and position
-		log.Infof("skip dump, use last binlog replication pos (%s, %d)", c.master.Name, c.master.Position)
+		log.Infof("skip dump, use last binlog replication pos %s or GTID %s", pos, gtid)
 		return nil
 	}
 
@@ -104,6 +107,16 @@ func (c *Canal) tryDump() error {
 
 	h := &dumpParseHandler{c: c}
 
+	if c.cfg.Dump.SkipMasterData {
+		pos, err := c.GetMasterPos()
+		if err != nil {
+			return errors.Trace(err)
+		}
+		log.Infof("skip master data, get current binlog position %v", pos)
+		h.name = pos.Name
+		h.pos = uint64(pos.Pos)
+	}
+
 	start := time.Now()
 	log.Info("try dump MySQL and parse")
 	if err := c.dumper.DumpAndParse(h); err != nil {
@@ -113,8 +126,8 @@ func (c *Canal) tryDump() error {
 	log.Infof("dump MySQL and parse OK, use %0.2f seconds, start binlog replication at (%s, %d)",
 		time.Now().Sub(start).Seconds(), h.name, h.pos)
 
-	c.master.Update(h.name, uint32(h.pos))
-	c.master.Save(true)
-
+	pos = mysql.Position{h.name, uint32(h.pos)}
+	c.master.Update(pos)
+	c.eventHandler.OnPosSynced(pos, true)
 	return nil
 }

@@ -25,7 +25,7 @@ cfg := replication.BinlogSyncerConfig {
     User:     "root",
     Password: "",
 }
-syncer := replication.NewBinlogSyncer(&cfg)
+syncer := replication.NewBinlogSyncer(cfg)
 
 // Start sync with sepcified binlog file and position
 streamer, _ := syncer.StartSync(mysql.Position{binlogFile, binlogPos})
@@ -105,20 +105,21 @@ cfg.Dump.Tables = []string{"canal_test"}
 
 c, err := NewCanal(cfg)
 
-type myRowsEventHandler struct {
+type MyEventHandler struct {
+    DummyEventHandler
 }
 
-func (h *myRowsEventHandler) Do(e *RowsEvent) error {
+func (h *MyEventHandler) OnRow(e *RowsEvent) error {
     log.Infof("%s %v\n", e.Action, e.Rows)
     return nil
 }
 
-func (h *myRowsEventHandler) String() string {
-    return "myRowsEventHandler"
+func (h *MyEventHandler) String() string {
+    return "MyEventHandler"
 }
 
 // Register a handler to handle RowsEvent
-c.RegRowsEventHandler(&MyRowsEventHandler{})
+c.SetEventHandler(&MyEventHandler{})
 
 // Start canal
 c.Start()
@@ -220,6 +221,14 @@ func main() {
 ```
 
 We pass all tests in https://github.com/bradfitz/go-sql-test using go-mysql driver. :-)
+
+## Donate
+
+If you like the project and want to buy me a cola, you can through: 
+
+|PayPal|微信|
+|------|---|
+|[![](https://www.paypalobjects.com/webstatic/paypalme/images/pp_logo_small.png)](https://paypal.me/siddontang)|[![](https://github.com/siddontang/blog/blob/master/donate/weixin.png)|
 
 ## Feedback
 
