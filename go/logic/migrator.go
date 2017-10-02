@@ -10,10 +10,8 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/signal"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/github/gh-ost/go/base"
@@ -52,10 +50,6 @@ func newApplyEventStructByDML(dmlEvent *binlog.BinlogDMLEvent) *applyEventStruct
 	return result
 }
 
-const (
-	applyEventsQueueBuffer = 100
-)
-
 type PrintStatusRule int
 
 const (
@@ -79,7 +73,7 @@ type Migrator struct {
 
 	firstThrottlingCollected   chan bool
 	ghostTableMigrated         chan bool
-	rowCopyComplete            chan bool
+	rowCopyComplete            chan error
 	allEventsUpToLockProcessed chan string
 
 	rowCopyCompleteFlag int64
@@ -97,29 +91,14 @@ func NewMigrator() *Migrator {
 		parser:                     sql.NewParser(),
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
-		rowCopyComplete:            make(chan bool),
+		rowCopyComplete:            make(chan error),
 		allEventsUpToLockProcessed: make(chan string),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan *applyEventStruct, applyEventsQueueBuffer),
+		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
 		handledChangelogStates: make(map[string]bool),
 	}
 	return migrator
-}
-
-// acceptSignals registers for OS signals
-func (this *Migrator) acceptSignals() {
-	c := make(chan os.Signal, 1)
-
-	signal.Notify(c, syscall.SIGHUP)
-	go func() {
-		for sig := range c {
-			switch sig {
-			case syscall.SIGHUP:
-				log.Debugf("Received SIGHUP. Reloading configuration")
-			}
-		}
-	}()
 }
 
 // initiateHooksExecutor
@@ -180,11 +159,16 @@ func (this *Migrator) executeAndThrottleOnError(operation func() error) (err err
 // consumeRowCopyComplete blocks on the rowCopyComplete channel once, and then
 // consumes and drops any further incoming events that may be left hanging.
 func (this *Migrator) consumeRowCopyComplete() {
-	<-this.rowCopyComplete
+	if err := <-this.rowCopyComplete; err != nil {
+		this.migrationContext.PanicAbort <- err
+	}
 	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
 	this.migrationContext.MarkRowCopyEndTime()
 	go func() {
-		for <-this.rowCopyComplete {
+		for err := range this.rowCopyComplete {
+			if err != nil {
+				this.migrationContext.PanicAbort <- err
+			}
 		}
 	}()
 }
@@ -777,9 +761,10 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	))
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
-	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max-lag-millis: %+vms; max-load: %s; critical-load: %s; nice-ratio: %f",
+	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f",
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
+		atomic.LoadInt64(&this.migrationContext.DMLBatchSize),
 		maxLoad.String(),
 		criticalLoad.String(),
 		this.migrationContext.GetNiceRatio(),
@@ -945,7 +930,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	}
 }
 
-// initiateStreaming begins treaming of binary log events and registers listeners for such events
+// initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
 	this.eventsStreamer = NewEventsStreamer()
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
@@ -1039,7 +1024,7 @@ func (this *Migrator) initiateApplier() error {
 // a chunk of rows onto the ghost table.
 func (this *Migrator) iterateChunks() error {
 	terminateRowIteration := func(err error) error {
-		this.rowCopyComplete <- true
+		this.rowCopyComplete <- err
 		return log.Errore(err)
 	}
 	if this.migrationContext.Noop {
@@ -1091,7 +1076,10 @@ func (this *Migrator) iterateChunks() error {
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
 				return nil
 			}
-			return this.retryOperation(applyCopyRowsFunc)
+			if err := this.retryOperation(applyCopyRowsFunc); err != nil {
+				return terminateRowIteration(err)
+			}
+			return nil
 		}
 		// Enqueue copy operation; to be executed by executeWriteFuncs()
 		this.copyRowsQueue <- copyRowsFunc

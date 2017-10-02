@@ -90,6 +90,7 @@ test_single() {
     --initially-drop-socket-file \
     --test-on-replica \
     --default-retries=1 \
+    --chunk-size=10 \
     --verbose \
     --debug \
     --stack \

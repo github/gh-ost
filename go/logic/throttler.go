@@ -8,6 +8,7 @@ package logic
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +18,26 @@ import (
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
 )
+
+var (
+	httpStatusMessages map[int]string = map[int]string{
+		200: "OK",
+		404: "Not found",
+		417: "Expectation failed",
+		429: "Too many requests",
+		500: "Internal server error",
+	}
+	// See https://github.com/github/freno/blob/master/doc/http.md
+	httpStatusFrenoMessages map[int]string = map[int]string{
+		200: "OK",
+		404: "freno: unknown metric",
+		417: "freno: access forbidden",
+		429: "freno: threshold exceeded",
+		500: "freno: internal error",
+	}
+)
+
+const frenoMagicHint = "freno"
 
 // Throttler collects metrics related to throttling and makes informed decisison
 // whether throttling should take place.
@@ -34,6 +55,17 @@ func NewThrottler(applier *Applier, inspector *Inspector) *Throttler {
 	}
 }
 
+func (this *Throttler) throttleHttpMessage(statusCode int) string {
+	statusCodesMap := httpStatusMessages
+	if throttleHttp := this.migrationContext.GetThrottleHTTP(); strings.Contains(throttleHttp, frenoMagicHint) {
+		statusCodesMap = httpStatusFrenoMessages
+	}
+	if message, ok := statusCodesMap[statusCode]; ok {
+		return fmt.Sprintf("%s (http=%d)", message, statusCode)
+	}
+	return fmt.Sprintf("http=%d", statusCode)
+}
+
 // shouldThrottle performs checks to see whether we should currently be throttling.
 // It merely observes the metrics collected by other components, it does not issue
 // its own metric collection.
@@ -49,7 +81,7 @@ func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint 
 	// HTTP throttle
 	statusCode := atomic.LoadInt64(&this.migrationContext.ThrottleHTTPStatusCode)
 	if statusCode != 0 && statusCode != http.StatusOK {
-		return true, fmt.Sprintf("http=%d", statusCode), base.NoThrottleReasonHint
+		return true, this.throttleHttpMessage(int(statusCode)), base.NoThrottleReasonHint
 	}
 	// Replication lag throttle
 	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)

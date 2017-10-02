@@ -46,7 +46,8 @@ const (
 )
 
 const (
-	HTTPStatusOK = 200
+	HTTPStatusOK       = 200
+	MaxEventsBatchSize = 1000
 )
 
 var (
@@ -191,6 +192,7 @@ type MigrationContext struct {
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
+	ForceTmpTableName                string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
@@ -242,26 +244,52 @@ func GetMigrationContext() *MigrationContext {
 	return context
 }
 
+func getSafeTableName(baseName string, suffix string) string {
+	name := fmt.Sprintf("_%s_%s", baseName, suffix)
+	if len(name) <= mysql.MaxTableNameLength {
+		return name
+	}
+	extraCharacters := len(name) - mysql.MaxTableNameLength
+	return fmt.Sprintf("_%s_%s", baseName[0:len(baseName)-extraCharacters], suffix)
+}
+
 // GetGhostTableName generates the name of ghost table, based on original table name
+// or a given table name
 func (this *MigrationContext) GetGhostTableName() string {
-	return fmt.Sprintf("_%s_gho", this.OriginalTableName)
+	if this.ForceTmpTableName != "" {
+		return getSafeTableName(this.ForceTmpTableName, "gho")
+	} else {
+		return getSafeTableName(this.OriginalTableName, "gho")
+	}
 }
 
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (this *MigrationContext) GetOldTableName() string {
+	var tableName string
+	if this.ForceTmpTableName != "" {
+		tableName = this.ForceTmpTableName
+	} else {
+		tableName = this.OriginalTableName
+	}
+
 	if this.TimestampOldTable {
 		t := this.StartTime
 		timestamp := fmt.Sprintf("%d%02d%02d%02d%02d%02d",
 			t.Year(), t.Month(), t.Day(),
 			t.Hour(), t.Minute(), t.Second())
-		return fmt.Sprintf("_%s_%s_del", this.OriginalTableName, timestamp)
+		return getSafeTableName(tableName, fmt.Sprintf("%s_del", timestamp))
 	}
-	return fmt.Sprintf("_%s_del", this.OriginalTableName)
+	return getSafeTableName(tableName, "del")
 }
 
 // GetChangelogTableName generates the name of changelog table, based on original table name
+// or a given table name.
 func (this *MigrationContext) GetChangelogTableName() string {
-	return fmt.Sprintf("_%s_ghc", this.OriginalTableName)
+	if this.ForceTmpTableName != "" {
+		return getSafeTableName(this.ForceTmpTableName, "ghc")
+	} else {
+		return getSafeTableName(this.OriginalTableName, "ghc")
+	}
 }
 
 // GetVoluntaryLockName returns a name of a voluntary lock to be used throughout
@@ -441,8 +469,8 @@ func (this *MigrationContext) SetDMLBatchSize(batchSize int64) {
 	if batchSize < 1 {
 		batchSize = 1
 	}
-	if batchSize > 100 {
-		batchSize = 100
+	if batchSize > MaxEventsBatchSize {
+		batchSize = MaxEventsBatchSize
 	}
 	atomic.StoreInt64(&this.DMLBatchSize, batchSize)
 }
@@ -672,7 +700,7 @@ func (this *MigrationContext) ReadConfigFile() error {
 	gcfg.RelaxedParserMode = true
 	gcfgscanner.RelaxedScannerMode = true
 	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
-		return err
+		return fmt.Errorf("Error reading config file %s. Details: %s", this.ConfigFile, err.Error())
 	}
 
 	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull

@@ -121,10 +121,33 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	if err != nil {
 		return err
 	}
-	if len(sharedUniqueKeys) == 0 {
+	for i, sharedUniqueKey := range sharedUniqueKeys {
+		this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &sharedUniqueKey.Columns)
+		uniqueKeyIsValid := true
+		for _, column := range sharedUniqueKey.Columns.Columns() {
+			switch column.Type {
+			case sql.FloatColumnType:
+				{
+					log.Warning("Will not use %+v as shared key due to FLOAT data type", sharedUniqueKey.Name)
+					uniqueKeyIsValid = false
+				}
+			case sql.JSONColumnType:
+				{
+					// Noteworthy that at this time MySQL does not allow JSON indexing anyhow, but this code
+					// will remain in place to potentially handle the future case where JSON is supported in indexes.
+					log.Warning("Will not use %+v as shared key due to JSON data type", sharedUniqueKey.Name)
+					uniqueKeyIsValid = false
+				}
+			}
+		}
+		if uniqueKeyIsValid {
+			this.migrationContext.UniqueKey = sharedUniqueKeys[i]
+			break
+		}
+	}
+	if this.migrationContext.UniqueKey == nil {
 		return fmt.Errorf("No shared unique key can be found after ALTER! Bailing out")
 	}
-	this.migrationContext.UniqueKey = sharedUniqueKeys[0]
 	log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
 	if this.migrationContext.UniqueKey.HasNullable {
 		if this.migrationContext.NullableUniqueKeyAllowed {
@@ -169,6 +192,9 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 
 // validateConnection issues a simple can-connect to MySQL
 func (this *Inspector) validateConnection() error {
+	if len(this.connectionConfig.Password) > mysql.MaxReplicationPasswordLength {
+		return fmt.Errorf("MySQL replication length limited to 32 characters. See https://dev.mysql.com/doc/refman/5.7/en/assigning-passwords.html")
+	}
 	query := `select @@global.port, @@global.version`
 	var port int
 	if err := this.db.QueryRow(query).Scan(&port, &this.migrationContext.InspectorMySQLVersion); err != nil {
@@ -545,6 +571,16 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 				columnsList.GetColumn(columnName).Type = sql.DateTimeColumnType
 			}
 		}
+		if strings.Contains(columnType, "json") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.JSONColumnType
+			}
+		}
+		if strings.Contains(columnType, "float") {
+			for _, columnsList := range columnsLists {
+				columnsList.GetColumn(columnName).Type = sql.FloatColumnType
+			}
+		}
 		if strings.HasPrefix(columnType, "enum") {
 			for _, columnsList := range columnsLists {
 				columnsList.GetColumn(columnName).Type = sql.EnumColumnType
@@ -656,18 +692,21 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
 func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
-	columnsInGhost := make(map[string]bool)
-	for _, ghostColumn := range ghostColumns.Names() {
-		columnsInGhost[ghostColumn] = true
-	}
 	sharedColumnNames := []string{}
 	for _, originalColumn := range originalColumns.Names() {
 		isSharedColumn := false
-		if columnsInGhost[originalColumn] || columnsInGhost[columnRenameMap[originalColumn]] {
-			isSharedColumn = true
+		for _, ghostColumn := range ghostColumns.Names() {
+			if strings.EqualFold(originalColumn, ghostColumn) {
+				isSharedColumn = true
+			}
+			if strings.EqualFold(columnRenameMap[originalColumn], ghostColumn) {
+				isSharedColumn = true
+			}
 		}
-		if this.migrationContext.DroppedColumnsMap[originalColumn] {
-			isSharedColumn = false
+		for droppedColumn := range this.migrationContext.DroppedColumnsMap {
+			if strings.EqualFold(originalColumn, droppedColumn) {
+				isSharedColumn = false
+			}
 		}
 		if isSharedColumn {
 			sharedColumnNames = append(sharedColumnNames, originalColumn)

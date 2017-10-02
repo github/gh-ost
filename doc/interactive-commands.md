@@ -19,6 +19,7 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `sup`: returns a brief status summary of migration progress
 - `coordinates`: returns recent (though not exactly up to date) binary log coordinates of the inspected server
 - `chunk-size=<newsize>`: modify the `chunk-size`; applies on next running copy-iteration
+- `dml-batch-size=<newsize>`: modify the `dml-batch-size`; applies on next applying of binary log events
 - `max-lag-millis=<max-lag>`: modify the maximum replication lag threshold (milliseconds, minimum value is `100`, i.e. `0.1` second)
 - `max-load=<max-load-thresholds>`: modify the `max-load` config; applies on next running copy-iteration
   - The `max-load` format must be: `some_status=<numeric-threshold>[,some_status=<numeric-threshold>...]`'
@@ -52,7 +53,7 @@ While migration is running:
 $ echo status | nc -U /tmp/gh-ost.test.sample_data_0.sock
 # Migrating `test`.`sample_data_0`; Ghost table is `test`.`_sample_data_0_gst`
 # Migration started at Tue Jun 07 11:45:16 +0200 2016
-# chunk-size: 200; max lag: 1500ms; max-load: map[Threads_connected:20]
+# chunk-size: 200; max lag: 1500ms; dml-batch-size: 10; max-load: map[Threads_connected:20]
 # Throttle additional flag file: /tmp/gh-ost.throttle
 # Serving on unix socket: /tmp/gh-ost.test.sample_data_0.sock
 # Serving on TCP port: 10001
@@ -63,7 +64,7 @@ Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 40s(copy), 41s(total); s
 $ echo "chunk-size=250" | nc -U /tmp/gh-ost.test.sample_data_0.sock
 # Migrating `test`.`sample_data_0`; Ghost table is `test`.`_sample_data_0_gst`
 # Migration started at Tue Jun 07 11:56:03 +0200 2016
-# chunk-size: 250; max lag: 1500ms; max-load: map[Threads_connected:20]
+# chunk-size: 250; max lag: 1500ms; dml-batch-size: 10; max-load: map[Threads_connected:20]
 # Throttle additional flag file: /tmp/gh-ost.throttle
 # Serving on unix socket: /tmp/gh-ost.test.sample_data_0.sock
 # Serving on TCP port: 10001
