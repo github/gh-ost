@@ -714,7 +714,7 @@ func (this *MigrationContext) ReadConfigFile() error {
 	gcfg.RelaxedParserMode = true
 	gcfgscanner.RelaxedScannerMode = true
 	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
-		return err
+		return fmt.Errorf("Error reading config file %s. Details: %s", this.ConfigFile, err.Error())
 	}
 
 	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull
