@@ -49,7 +49,7 @@ func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *G
 		User:     connectionConfig.User,
 		Password: connectionConfig.Password,
 	}
-	binlogReader.binlogSyncer = replication.NewBinlogSyncer(binlogSyncerConfig)
+	binlogReader.binlogSyncer = replication.NewBinlogSyncer(*binlogSyncerConfig)
 
 	return binlogReader, err
 }
