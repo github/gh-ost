@@ -53,12 +53,14 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	this.singletonDB.SetMaxOpenConns(1)
-	if err := this.validateConnection(this.db); err != nil {
+	version, err := base.ValidateConnection(this.db, this.connectionConfig)
+	if err != nil {
 		return err
 	}
-	if err := this.validateConnection(this.singletonDB); err != nil {
+	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig); err != nil {
 		return err
 	}
+	this.migrationContext.ApplierMySQLVersion = version
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
 	}
@@ -71,20 +73,6 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	log.Infof("Applier initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.ApplierMySQLVersion)
-	return nil
-}
-
-// validateConnection issues a simple can-connect to MySQL
-func (this *Applier) validateConnection(db *gosql.DB) error {
-	query := `select @@global.port, @@global.version`
-	var port int
-	if err := db.QueryRow(query).Scan(&port, &this.migrationContext.ApplierMySQLVersion); err != nil {
-		return err
-	}
-	if port != this.connectionConfig.Key.Port {
-		return fmt.Errorf("Unexpected database port reported: %+v", port)
-	}
-	log.Infof("connection validated on %+v", this.connectionConfig.Key)
 	return nil
 }
 
