@@ -45,6 +45,8 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 func main() {
 	migrationContext := base.GetMigrationContext()
 
+	// override default stderr out to stdout for default flagset
+	flag.CommandLine.SetOutput(os.Stdout)
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unabel to determine the master")
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
@@ -128,7 +130,7 @@ func main() {
 		return
 	}
 	if *help {
-		fmt.Fprintf(os.Stderr, "Usage of gh-ost:\n")
+		fmt.Fprint(os.Stdout, "Usage of gh-ost:\n")
 		flag.PrintDefaults()
 		return
 	}
