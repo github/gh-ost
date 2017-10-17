@@ -11,6 +11,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	gosql "database/sql"
+	"github.com/github/gh-ost/go/mysql"
+	"github.com/outbrain/golib/log"
 )
 
 var (
@@ -49,4 +53,26 @@ func StringContainsAll(s string, substrings ...string) bool {
 		}
 	}
 	return nonEmptyStringsFound
+}
+
+func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig) (string, error) {
+	query := `select @@global.port, @@global.version`
+	var port, extraPort int
+	var version string
+	if err := db.QueryRow(query).Scan(&port, &version); err != nil {
+		return "", err
+	}
+	extraPortQuery := `select @@global.extra_port`
+	if err := db.QueryRow(extraPortQuery).Scan(&extraPort); err != nil {
+		// swallow this error. not all servers support extra_port
+	}
+
+	if connectionConfig.Key.Port == port || (extraPort > 0 && connectionConfig.Key.Port == extraPort) {
+		log.Infof("connection validated on %+v", connectionConfig.Key)
+		return version, nil
+	} else if extraPort == 0 {
+		return "", fmt.Errorf("Unexpected database port reported: %+v", port)
+	} else {
+		return "", fmt.Errorf("Unexpected database port reported: %+v / extra_port: %+v", port, extraPort)
+	}
 }
