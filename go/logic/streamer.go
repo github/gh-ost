@@ -107,7 +107,7 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if this.db, _, err = sqlutils.GetDB(EventsStreamerUri); err != nil {
 		return err
 	}
-	if err := this.validateConnection(); err != nil {
+	if _, err := base.ValidateConnection(this.db, this.connectionConfig); err != nil {
 		return err
 	}
 	if err := this.readCurrentBinlogCoordinates(); err != nil {
@@ -130,20 +130,6 @@ func (this *EventsStreamer) initBinlogReader(binlogCoordinates *mysql.BinlogCoor
 		return err
 	}
 	this.binlogReader = goMySQLReader
-	return nil
-}
-
-// validateConnection issues a simple can-connect to MySQL
-func (this *EventsStreamer) validateConnection() error {
-	query := `select @@global.port`
-	var port int
-	if err := this.db.QueryRow(query).Scan(&port); err != nil {
-		return err
-	}
-	if port != this.connectionConfig.Key.Port {
-		return fmt.Errorf("Unexpected database port reported: %+v", port)
-	}
-	log.Infof("connection validated on %+v", this.connectionConfig.Key)
 	return nil
 }
 

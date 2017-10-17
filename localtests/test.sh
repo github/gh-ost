@@ -29,6 +29,10 @@ verify_master_and_replica() {
     echo "Cannot verify gh-ost-test-mysql-replica"
     exit 1
   fi
+  if [ "$(gh-ost-test-mysql-replica -e "select @@global.binlog_format" -ss)" != "ROW" ] ; then
+    echo "Expecting test replica to have binlog_format=ROW"
+    exit 1
+  fi
   read replica_host replica_port <<< $(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
 }
 
@@ -42,6 +46,21 @@ echo_dot() {
   echo -n "."
 }
 
+start_replication() {
+  gh-ost-test-mysql-replica -e "stop slave; start slave;"
+  num_attempts=0
+  while gh-ost-test-mysql-replica -e "show slave status\G" | grep Seconds_Behind_Master | grep -q NULL ; do
+    ((num_attempts=num_attempts+1))
+    if [ $num_attempts -gt 10 ] ; then
+      echo
+      echo "ERROR replication failure"
+      exit 1
+    fi
+    echo_dot
+    sleep 1
+  done
+}
+
 test_single() {
   local test_name
   test_name="$1"
@@ -49,7 +68,7 @@ test_single() {
   echo -n "Testing: $test_name"
 
   echo_dot
-  gh-ost-test-mysql-replica -e "stop slave; start slave; do sleep(1)"
+  start_replication
   echo_dot
   gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
 
@@ -82,7 +101,7 @@ test_single() {
     --table=gh_ost_test \
     --alter='engine=innodb' \
     --exact-rowcount \
-    --switch-to-rbr \
+    --assume-rbr \
     --initially-drop-old-table \
     --initially-drop-ghost-table \
     --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \
