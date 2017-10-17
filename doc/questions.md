@@ -23,4 +23,8 @@ At this time there is no equivalent to `ALTER IGNORE`, where duplicates are impl
 
 It is therefore unlikely that `gh-ost` will support this behavior.
 
+### Run concurrent migrations?
+
+Yes. TL;DR if running all on same replica/master, make sure to provide `--replica-server-id`. [Read more](cheatsheet.md#concurrent-migrations)
+
 # Why

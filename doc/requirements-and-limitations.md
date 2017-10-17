@@ -28,7 +28,9 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 - MySQL 5.7 generated columns are not supported. They may be supported in the future.
 
-- MySQL 5.7 `JSON` columns are not supported. They are likely to be supported shortly.
+- MySQL 5.7 `POINT` column type is not supported.
+
+- MySQL 5.7 `JSON` columns are supported but not as part of `PRIMARY KEY`
 
 - The two _before_ & _after_ tables must share a `PRIMARY KEY` or other `UNIQUE KEY`. This key will be used by `gh-ost` to iterate through the table rows when copying. [Read more](shared-key.md)
   - The migration key must not include columns with NULL values. This means either:

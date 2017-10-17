@@ -3,8 +3,8 @@ create table gh_ost_test (
   id int auto_increment,
   i int not null,
   ts0 timestamp default current_timestamp,
-  ts1 timestamp,
-  ts2 timestamp,
+  ts1 timestamp default current_timestamp,
+  ts2 timestamp default current_timestamp,
   updated tinyint unsigned default 0,
   primary key(id),
   key i_idx(i)
