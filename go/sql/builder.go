@@ -509,3 +509,108 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	)
 	return result, sharedArgs, uniqueKeyArgs, nil
 }
+
+func BuildPKInsertQuery(databaseName, originalTableName, ghostTableName string, tableColumns *ColumnList, sharedColumns []string, mappedSharedColumns []string, uniqueKey *UniqueKey, pkValues []string, args []interface{}, transactionalTable bool) (result string, uniqueKeyArgs []interface{}, err error) {
+	if !uniqueKey.IsPrimary() {
+		return "", uniqueKeyArgs, fmt.Errorf("BuildPKInsertQuery only works for PRIMARY KEY")
+	}
+	uniqueKeyColumns := &uniqueKey.Columns
+	if len(sharedColumns) == 0 {
+		return "", uniqueKeyArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
+	}
+	databaseName = EscapeName(databaseName)
+	originalTableName = EscapeName(originalTableName)
+	ghostTableName = EscapeName(ghostTableName)
+
+	mappedSharedColumns = duplicateNames(mappedSharedColumns)
+	for i := range mappedSharedColumns {
+		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
+	}
+	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
+
+	sharedColumns = duplicateNames(sharedColumns)
+	for i := range sharedColumns {
+		sharedColumns[i] = EscapeName(sharedColumns[i])
+	}
+	sharedColumnsListing := strings.Join(sharedColumns, ", ")
+
+	uniqueKeyName := EscapeName(uniqueKey.Name)
+
+	equalsComparison, err := BuildEqualsComparison(uniqueKeyColumns.Names(), pkValues)
+	if err != nil {
+		return "", uniqueKeyArgs, err
+	}
+
+	for _, column := range uniqueKeyColumns.Columns() {
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal])
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+	}
+
+	transactionalClause := ""
+	if transactionalTable {
+		transactionalClause = "lock in share mode"
+	}
+	result = fmt.Sprintf(`
+      replace /* gh-ost %s.%s */ into %s.%s (%s)
+      (select %s from %s.%s force index (%s)
+        where (%s) %s
+      )
+    `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
+		sharedColumnsListing, databaseName, originalTableName, uniqueKeyName,
+		equalsComparison, transactionalClause)
+	return result, uniqueKeyArgs, nil
+}
+
+func BuildPKInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, tableColumns *ColumnList, sharedColumns []string, mappedSharedColumns []string, uniqueKey *UniqueKey, args []interface{}, transactionalTable bool) (result string, uniqueKeyArgs []interface{}, err error) {
+	pkValues := buildColumnsPreparedValues(&uniqueKey.Columns)
+	return BuildPKInsertQuery(databaseName, originalTableName, ghostTableName, tableColumns, sharedColumns, mappedSharedColumns, uniqueKey, pkValues, args, transactionalTable)
+}
+
+func BuildPKSelectQuery(databaseName, originalTableName string, tableColumns *ColumnList, sharedColumns []string, uniqueKey *UniqueKey, pkValues []string, args []interface{}, transactionalTable bool) (result string, uniqueKeyArgs []interface{}, err error) {
+	if !uniqueKey.IsPrimary() {
+		return "", uniqueKeyArgs, fmt.Errorf("BuildPKSelectQuery only works for PRIMARY KEY")
+	}
+	if len(sharedColumns) == 0 {
+		return "", uniqueKeyArgs, fmt.Errorf("Got 0 shared columns in BuildPKSelectQuery")
+	}
+	databaseName = EscapeName(databaseName)
+	originalTableName = EscapeName(originalTableName)
+
+	sharedColumns = duplicateNames(sharedColumns)
+	for i := range sharedColumns {
+		sharedColumns[i] = EscapeName(sharedColumns[i])
+	}
+	sharedColumnsListing := strings.Join(sharedColumns, ", ")
+
+	uniqueKeyName := EscapeName(uniqueKey.Name)
+
+	equalsComparison, err := BuildEqualsComparison(uniqueKey.Columns.Names(), pkValues)
+	if err != nil {
+		return "", uniqueKeyArgs, err
+	}
+
+	for _, column := range uniqueKey.Columns.Columns() {
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal])
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+	}
+
+	transactionalClause := ""
+	if transactionalTable {
+		transactionalClause = "lock in share mode"
+	}
+
+	result = fmt.Sprintf(`
+      select %s from %s.%s force index (%s)
+        where %s %s
+    `,
+		sharedColumnsListing, databaseName, originalTableName, uniqueKeyName,
+		equalsComparison, transactionalClause)
+	return result, uniqueKeyArgs, nil
+}
+
+func BuildPKSelectPreparedQuery(databaseName, originalTableName string, tableColumns *ColumnList, sharedColumns []string, uniqueKey *UniqueKey, args []interface{}, transactionalTable bool) (result string, uniqueKeyArgs []interface{}, err error) {
+	pkValues := buildColumnsPreparedValues(&uniqueKey.Columns)
+	return BuildPKSelectQuery(databaseName, originalTableName, tableColumns, sharedColumns, uniqueKey, pkValues, args, transactionalTable)
+}

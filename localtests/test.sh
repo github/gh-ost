@@ -11,6 +11,8 @@ tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
 ghost_binary=/tmp/gh-ost-test
 exec_command_file=/tmp/gh-ost-test.bash
+orig_table_csv_file=/tmp/gh-ost-test.orig.csv
+ghost_table_csv_file=/tmp/gh-ost-test.ghost.csv
 
 test_pattern="${1:-.}"
 
@@ -156,11 +158,15 @@ test_single() {
   ghost_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss | md5sum)
 
   if [ "$orig_checksum" != "$ghost_checksum" ] ; then
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test" -ss > ${orig_table_csv_file}
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho" -ss > ${ghost_table_csv_file}
     echo "ERROR $test_name: checksum mismatch"
     echo "---"
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test" -ss
+    cat ${orig_table_csv_file}
     echo "---"
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho" -ss
+    cat ${ghost_table_csv_file}
+    echo "---"
+    echo "diff ${orig_table_csv_file} ${ghost_table_csv_file}"
     return 1
   fi
 }
