@@ -235,7 +235,7 @@ func main() {
 	migrationContext.SetDefaultNumRetries(*defaultRetries)
 	migrationContext.ApplyCredentials()
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {
-		log.Errore(err)
+		log.Fatale(err)
 	}
 
 	log.Infof("starting gh-ost %+v", AppVersion)

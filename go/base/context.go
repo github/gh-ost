@@ -225,7 +225,6 @@ func newMigrationContext() *MigrationContext {
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1500,
-		CutOverLockTimeoutSeconds:           3,
 		DMLBatchSize:                        10,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
@@ -340,10 +339,10 @@ func (this *MigrationContext) HasMigrationRange() bool {
 
 func (this *MigrationContext) SetCutOverLockTimeoutSeconds(timeoutSeconds int64) error {
 	if timeoutSeconds < 1 {
-		return fmt.Errorf("Minimal timeout is 1sec. Timeout remains at %d", this.CutOverLockTimeoutSeconds)
+		return fmt.Errorf("Minimal timeout for cut-over-lock-timeout-seconds is 1sec.")
 	}
 	if timeoutSeconds > 10 {
-		return fmt.Errorf("Maximal timeout is 10sec. Timeout remains at %d", this.CutOverLockTimeoutSeconds)
+		return fmt.Errorf("Maximal timeout for cut-over-lock-timeout-seconds is 10sec.")
 	}
 	this.CutOverLockTimeoutSeconds = timeoutSeconds
 	return nil
