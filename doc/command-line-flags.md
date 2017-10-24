@@ -119,6 +119,12 @@ See also: [Sub-second replication lag throttling](subsecond-lag.md)
 
 Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but other issue no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
 
+### postpone-cut-over-flag-file
+
+Indicate a file name, such that the final [cut-over](cut-over.md) step does not take place as long as the file exists.
+When this flag is set, `gh-ost` expects the file to exist on startup, or else tries to create it. `gh-ost` exits with error if the file does not exist and `gh-ost` is unable to create it.
+With this flag set, the migration will cut-over upon deletion of the file or upon `cut-over` [interactive command](interactive-commands.md).
+
 ### skip-foreign-key-checks
 
 By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not referenece other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.

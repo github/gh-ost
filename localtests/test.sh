@@ -107,7 +107,6 @@ test_single() {
     --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
-    --postpone-cut-over-flag-file=/tmp/gh-ost.test.postpone.flag \
     --test-on-replica \
     --default-retries=1 \
     --chunk-size=10 \
