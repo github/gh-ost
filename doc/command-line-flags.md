@@ -125,6 +125,14 @@ Indicate a file name, such that the final [cut-over](cut-over.md) step does not 
 When this flag is set, `gh-ost` expects the file to exist on startup, or else tries to create it. `gh-ost` exits with error if the file does not exist and `gh-ost` is unable to create it.
 With this flag set, the migration will cut-over upon deletion of the file or upon `cut-over` [interactive command](interactive-commands.md).
 
+### replica-server-id
+
+Defaults to 99999. If you run multiple migrations then you must provide a different, unique `--replica-server-id` for each `gh-ost` process.
+Optionally involve the process ID, for example: `--replica-server-id`=$((1000000000+$$))
+
+It's on you to choose a number that does not collide with another `gh-ost` or another running replica.
+See also: https://github.com/github/gh-ost/blob/master/doc/cheatsheet.md#concurrent-migrations
+
 ### skip-foreign-key-checks
 
 By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not referenece other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
