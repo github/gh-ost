@@ -8,12 +8,11 @@ open my $fh, "-|", "git ls-tree -r HEAD"
 
 my %fs_sha1_path;
 
-while ( my $line = <$fh> ) {
+while ( my $line= <$fh> ) {
     chomp $line;
 
     if ( $line =~ m{ \A \d+ \s+ \w+ \s+ (\w+) \s+ (.*) \z }x ) {
-        my $sha1= $1;
-        my $path= $2;
+        my ( $sha1, $path )= ($1, $2 );
         if ( -f $path and !-l $path ) {
             my $fs= -s $path;
             $fs and push @{ $fs_sha1_path{ $fs }{ $sha1 } }, $path;
@@ -22,10 +21,11 @@ while ( my $line = <$fh> ) {
 }
 
 for my $fs ( sort { $a <=> $b } keys %fs_sha1_path ) {
-    for my $sha1 (keys %{ $fs_sha1_path{ $fs } } ) {
+    for my $sha1 ( sort keys %{ $fs_sha1_path{ $fs } } ) {
        if ( @{ $fs_sha1_path{ $fs }{ $sha1 } } > 1 ) {
            for my $path ( sort @{ $fs_sha1_path{ $fs }{ $sha1 } } ) {
-               say sprintf "%10d %s %s", $fs, substr($sha1,0,7)."..".substr($sha1,-3), $path;
+               say sprintf "%10d %s..%s %s",
+                 $fs, substr($sha1,0,7), substr($sha1,-3), $path;
             }
             say '-', ' -' x 39;
         }
@@ -35,4 +35,3 @@ for my $fs ( sort { $a <=> $b } keys %fs_sha1_path ) {
 exit;
 
 __END__
-
