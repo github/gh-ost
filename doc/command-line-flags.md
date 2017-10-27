@@ -41,7 +41,7 @@ password=123456
 
 ### concurrent-rowcount
 
-See `exact-rowcount`
+See [`exact-rowcount`](#exact-rowcount)
 
 ### critical-load-interval-millis
 
@@ -55,7 +55,7 @@ This is somewhat similar to a Nagios `n`-times test, where `n` in our case is al
 
 ### cut-over
 
-Optional. Default is `safe`. See more discussion in [cut-over](cut-over.md)
+Optional. Default is `safe`. See more discussion in [`cut-over`](cut-over.md)
 
 ### discard-foreign-keys
 
@@ -97,7 +97,7 @@ Without this parameter, migration is a _noop_: testing table creation and validi
 
 ### heartbeat-interval-millis
 
-Default 100. See [`subsecond-lag`](https://github.com/github/gh-ost/blob/master/doc/subsecond-lag.md) for details.
+Default 100. See [`subsecond-lag`](subsecond-lag.md) for details.
 
 ### initially-drop-ghost-table
 
@@ -107,7 +107,7 @@ We think `gh-ost` should not take chances or make assumptions about the user's t
 
 ### initially-drop-old-table
 
-See #initially-drop-ghost-table
+See [`initially-drop-ghost-table`](#initially-drop-ghost-table)
 
 ### max-lag-millis
 
@@ -135,7 +135,7 @@ Defaults to 99999. If you run multiple migrations then you must provide a differ
 Optionally involve the process ID, for example: `--replica-server-id`=$((1000000000+$$))
 
 It's on you to choose a number that does not collide with another `gh-ost` or another running replica.
-See also: [`cheatsheet:concurrent-migrations`](https://github.com/github/gh-ost/blob/master/doc/cheatsheet.md#concurrent-migrations)
+See also: [`cheatsheet concurrent-migrations`](cheatsheet.md#concurrent-migrations)
 
 ### skip-foreign-key-checks
 
@@ -143,11 +143,11 @@ By default `gh-ost` verifies no foreign keys exist on the migrated table. On ser
 
 ### skip-renamed-columns
 
-See `approve-renamed-columns`
+See [`approve-renamed-columns`](#approve-renamed-columns)
 
 ### test-on-replica
 
-Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [testing-on-replica](testing-on-replica.md)
+Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [`testing-on-replica`](testing-on-replica.md)
 
 ### throttle-control-replicas
 
