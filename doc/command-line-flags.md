@@ -43,11 +43,15 @@ password=123456
 
 See [`exact-rowcount`](#exact-rowcount)
 
-### critical-load-interval-millis
+### critical-load
+
+Comma delimited status-name=threshold, same format as [`--max-load`](#max-load).
 
 `--critical-load` defines a threshold that, when met, `gh-ost` panics and bails out. The default behavior is to bail out immediately when meeting this threshold.
 
 This may sometimes lead to migrations bailing out on a very short spike, that, while in itself is impacting production and is worth investigating, isn't reason enough to kill a 10 hour migration.
+
+### critical-load-interval-millis
 
 When `--critical-load-interval-millis` is specified (e.g. `--critical-load-interval-millis=2500`), `gh-ost` gives a second chance: when it meets `critical-load` threshold, it doesn't bail out. Instead, it starts a timer (in this example: `2.5` seconds) and re-checks `critical-load` when the timer expires. If `critical-load` is met again, `gh-ost` panics and bails out. If not, execution continues.
 
@@ -115,9 +119,13 @@ On a replication topology, this is perhaps the most important migration throttli
 
 When using [Connect to replica, migrate on master](cheatsheet.md), this lag is primarily tested on the very replica `gh-ost` operates on. Lag is measured by checking the heartbeat events injected by `gh-ost` itself on the utility changelog table. That is, to measure this replica's lag, `gh-ost` doesn't need to issue `show slave status` nor have any external heartbeat mechanism.
 
-When `--throttle-control-replicas` is provided, throttling also considers lag on specified hosts. Lag measurements on listed hosts is done by querying `gh-ost`'s _changelog_ table, where `gh-ost` injects a heartbeat.
+When [`--throttle-control-replicas`](#throttle-control-replicas) is provided, throttling also considers lag on specified hosts. Lag measurements on listed hosts is done by querying `gh-ost`'s _changelog_ table, where `gh-ost` injects a heartbeat.
 
 See also: [Sub-second replication lag throttling](subsecond-lag.md)
+
+### max-load
+
+List of metrics and threshold values; topping the threshold of any will cause throttler to kick in. See also: [`throttling`](throttling.md)
 
 ### migrate-on-replica
 
@@ -151,7 +159,7 @@ Issue the migration on a replica; do not modify data on master. Useful for valid
 
 ### throttle-control-replicas
 
-Provide a command delimited list of replicas; `gh-ost` will throttle when any of the given replicas lag beyond `--max-lag-millis`. The list can be queried and updated dynamically via [interactive commands](interactive-commands.md)
+Provide a command delimited list of replicas; `gh-ost` will throttle when any of the given replicas lag beyond [`--max-lag-millis`](#max-lag-millis). The list can be queried and updated dynamically via [interactive commands](interactive-commands.md)
 
 ### throttle-http
 
