@@ -24,7 +24,7 @@ If you think `gh-ost` is mistaken and that there's actually no _rename_ involved
 
 `gh-ost` infers the identity of the master server by crawling up the replication topology. You may explicitly tell `gh-ost` the identity of the master host via `--assume-master-host=the.master.com`. This is useful in:
 
-- master-master topologies (together with [`--allow-master-master`](#allow-master-master)), where `gh-ost` can arbitrarily pick one of the co-masters and you prefer that it picks a specific one
+- _master-master_ topologies (together with [`--allow-master-master`](#allow-master-master)), where `gh-ost` can arbitrarily pick one of the co-masters and you prefer that it picks a specific one
 - _tungsten replicator_ topologies (together with [`--tungsten`](#tungsten)), where `gh-ost` is unable to crawl and detect the master
 
 ### assume-rbr
