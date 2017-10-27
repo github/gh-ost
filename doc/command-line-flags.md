@@ -2,6 +2,10 @@
 
 A more in-depth discussion of various `gh-ost` command line flags: implementation, implication, use cases.
 
+### allow-master-master
+
+See [`--assume-master-host`](#assume-master-host).
+
 ### allow-on-master
 
 By default, `gh-ost` would like you to connect to a replica, from where it figures out the master by itself. This wiring is required should your master execute using `binlog_format=STATEMENT`.
@@ -14,20 +18,20 @@ When your migration issues a column rename (`change column old_name new_name ...
 
 `gh-ost` will print out what it thinks the _rename_ implied, but will not issue the migration unless you provide with `--approve-renamed-columns`.
 
-If you think `gh-ost` is mistaken and that there's actually no _rename_ involved, you may pass `--skip-renamed-columns` instead. This will cause `gh-ost` to disassociate the column values; data will not be copied between those columns.
+If you think `gh-ost` is mistaken and that there's actually no _rename_ involved, you may pass [`--skip-renamed-columns`](#skip-renamed-columns) instead. This will cause `gh-ost` to disassociate the column values; data will not be copied between those columns.
 
 ### assume-master-host
 
 `gh-ost` infers the identity of the master server by crawling up the replication topology. You may explicitly tell `gh-ost` the identity of the master host via `--assume-master-host=the.master.com`. This is useful in:
 
-- master-master topologies (together with `--allow-master-master`), where `gh-ost` can arbitrarily pick one of the co-master and you prefer that it picks a specific one
-- _tungsten replicator_ topologies (together with `--tungsten`), where `gh-ost` is unable to crawl and detect the master
+- master-master topologies (together with [`--allow-master-master`](#allow-master-master)), where `gh-ost` can arbitrarily pick one of the co-masters and you prefer that it picks a specific one
+- _tungsten replicator_ topologies (together with [`--tungsten`](#tungsten)), where `gh-ost` is unable to crawl and detect the master
 
 ### assume-rbr
 
 If you happen to _know_ your servers use RBR (Row Based Replication, i.e. `binlog_format=ROW`), you may specify `--assume-rbr`. This skips a verification step where `gh-ost` would issue a `STOP SLAVE; START SLAVE`.
 Skipping this step means `gh-ost` would not need the `SUPER` privilege in order to operate.
-You may want to use this on Amazon RDS
+You may want to use this on Amazon RDS.
 
 ### conf
 
@@ -41,7 +45,7 @@ password=123456
 
 ### concurrent-rowcount
 
-See [`exact-rowcount`](#exact-rowcount)
+Defaults to `true`. See [`exact-rowcount`](#exact-rowcount)
 
 ### critical-load
 
@@ -88,8 +92,8 @@ A `gh-ost` execution need to copy whatever rows you have in your existing table 
 `gh-ost` also supports the `--exact-rowcount` flag. When this flag is given, two things happen:
 - An initial, authoritative `select count(*) from your_table`.
   This query may take a long time to complete, but is performed before we begin the massive operations.
-  When `--concurrent-rowcount` is also specified, this runs in parallel to row copy.
-  Note: `--concurrent-rowcount` now defaults to `true`.
+  When [`--concurrent-rowcount`](#concurrent-rowcount) is also specified, this runs in parallel to row copy.
+  Note: [`--concurrent-rowcount`](#concurrent-rowcount) now defaults to `true`.
 - A continuous update to the estimate as we make progress applying events.
   We heuristically update the number of rows based on the queries we process from the binlogs.
 
@@ -117,7 +121,7 @@ See [`initially-drop-ghost-table`](#initially-drop-ghost-table)
 
 On a replication topology, this is perhaps the most important migration throttling factor: the maximum lag allowed for migration to work. If lag exceeds this value, migration throttles.
 
-When using [Connect to replica, migrate on master](cheatsheet.md), this lag is primarily tested on the very replica `gh-ost` operates on. Lag is measured by checking the heartbeat events injected by `gh-ost` itself on the utility changelog table. That is, to measure this replica's lag, `gh-ost` doesn't need to issue `show slave status` nor have any external heartbeat mechanism.
+When using [Connect to replica, migrate on master](cheatsheet.md#a-connect-to-replica-migrate-on-master), this lag is primarily tested on the very replica `gh-ost` operates on. Lag is measured by checking the heartbeat events injected by `gh-ost` itself on the utility changelog table. That is, to measure this replica's lag, `gh-ost` doesn't need to issue `show slave status` nor have any external heartbeat mechanism.
 
 When [`--throttle-control-replicas`](#throttle-control-replicas) is provided, throttling also considers lag on specified hosts. Lag measurements on listed hosts is done by querying `gh-ost`'s _changelog_ table, where `gh-ost` injects a heartbeat.
 
@@ -140,10 +144,10 @@ With this flag set, the migration will cut-over upon deletion of the file or upo
 ### replica-server-id
 
 Defaults to 99999. If you run multiple migrations then you must provide a different, unique `--replica-server-id` for each `gh-ost` process.
-Optionally involve the process ID, for example: `--replica-server-id`=$((1000000000+$$))
+Optionally involve the process ID, for example: `--replica-server-id=$((1000000000+$$))`.
 
 It's on you to choose a number that does not collide with another `gh-ost` or another running replica.
-See also: [`cheatsheet concurrent-migrations`](cheatsheet.md#concurrent-migrations)
+See also: [`concurrent-migrations`](cheatsheet.md#concurrent-migrations) on the cheatsheet.
 
 ### skip-foreign-key-checks
 
@@ -168,3 +172,7 @@ Provide a HTTP endpoint; `gh-ost` will issue `HEAD` requests on given URL and th
 ### timestamp-old-table
 
 Makes the _old_ table include a timestamp value. The _old_ table is what the original table is renamed to at the end of a successful migration. For example, if the table is `gh_ost_test`, then the _old_ table would normally be `_gh_ost_test_del`. With `--timestamp-old-table` it would be, for example, `_gh_ost_test_20170221103147_del`.
+
+### tungsten
+
+See [`tungsten`](cheatsheet.md#tungsten) on the cheatsheet.
