@@ -95,6 +95,10 @@ While the ongoing estimated number of rows is still heuristic, it's almost exact
 
 Without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
 
+### heartbeat-interval-millis
+
+Default 100. See [`subsecond-lag`](https://github.com/github/gh-ost/blob/master/doc/subsecond-lag.md) for details.
+
 ### initially-drop-ghost-table
 
 `gh-ost` maintains two tables while migrating: the _ghost_ table (which is synced from your original table and finally replaces it) and a changelog table, which is used internally for bookkeeping. By default, it panics and aborts if it sees those tables upon startup. Provide `--initially-drop-ghost-table` and `--initially-drop-old-table` to let `gh-ost` know it's OK to drop them beforehand.
@@ -131,7 +135,7 @@ Defaults to 99999. If you run multiple migrations then you must provide a differ
 Optionally involve the process ID, for example: `--replica-server-id`=$((1000000000+$$))
 
 It's on you to choose a number that does not collide with another `gh-ost` or another running replica.
-See also: https://github.com/github/gh-ost/blob/master/doc/cheatsheet.md#concurrent-migrations
+See also: [`cheatsheet:concurrent-migrations`](https://github.com/github/gh-ost/blob/master/doc/cheatsheet.md#concurrent-migrations)
 
 ### skip-foreign-key-checks
 
