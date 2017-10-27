@@ -125,7 +125,7 @@ See also: [Sub-second replication lag throttling](subsecond-lag.md)
 
 ### max-load
 
-List of metrics and threshold values; topping the threshold of any will cause throttler to kick in. See also: [`throttling`](throttling.md)
+List of metrics and threshold values; topping the threshold of any will cause throttler to kick in. See also: [`throttling`](throttle.md#status-thresholds)
 
 ### migrate-on-replica
 
