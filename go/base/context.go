@@ -358,6 +358,9 @@ func (this *MigrationContext) MarkRowCopyStartTime() {
 
 // ElapsedRowCopyTime returns time since starting to copy chunks of rows
 func (this *MigrationContext) ElapsedRowCopyTime() time.Duration {
+	// 获取当前的Job执行时间:
+	// 开始，结束, 中间状态
+	//
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 

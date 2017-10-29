@@ -921,17 +921,27 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query 
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
 		{
-			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
+			// 原始表的event翻译成为ghost表的event
+			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(),
+				this.migrationContext.OriginalTableColumns,
+				// 参考: UniqueKey
+				&this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
 			return query, uniqueKeyArgs, -1, err
 		}
 	case binlog.InsertDML:
 		{
-			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
+			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(),
+				this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns,
+				this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
 			return query, sharedArgs, 1, err
 		}
 	case binlog.UpdateDML:
 		{
-			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(),
+				this.migrationContext.OriginalTableColumns,
+				this.migrationContext.SharedColumns,
+				this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns,
+				dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
 			return query, args, 0, err
@@ -1008,6 +1018,10 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 			return err
 		}
 
+		// 时区, sql_mode
+		// 这个执行时间开销在: 1ms左右，因此后面的dmlEvents最好做批量执行
+		// 还好: sql是放在一个transaction内部执行的，这个1ms也省下来了
+		//
 		sessionQuery := `SET
 			SESSION time_zone = '+00:00',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
@@ -1015,7 +1029,10 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return rollback(err)
 		}
+
+		// 如何处理dmlEvents呢?
 		for _, dmlEvent := range dmlEvents {
+			// 如何convert dmlEvent --> SQL?
 			query, args, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
 			if err != nil {
 				return rollback(err)

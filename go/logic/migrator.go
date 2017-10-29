@@ -153,6 +153,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
 			// sleep after previous iteration
+			// 如果遇到异常，最好等待一段时间，否则retry也是失败
 			time.Sleep(1 * time.Second)
 		}
 		err = operation()
@@ -161,6 +162,8 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		}
 		// there's an error. Let's try again.
 	}
+
+	// 直接报错，中断执行
 	if len(notFatalHint) == 0 {
 		this.migrationContext.PanicAbort <- err
 	}
@@ -373,6 +376,7 @@ func (this *Migrator) Migrate() (err error) {
 	// 开始执行拷贝操作
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
+
 	this.migrationContext.MarkRowCopyStartTime()
 	go this.initiateStatus()
 
@@ -1108,6 +1112,7 @@ func (this *Migrator) iterateChunks() error {
 }
 
 func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
+	// 如何执行一个DML Event呢?
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
 		if eventStruct.writeFunc != nil {
 			if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
@@ -1120,7 +1125,10 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		return handleNonDMLEventStruct(eventStruct)
 	}
 	if eventStruct.dmlEvent != nil {
+		// 拷贝一份数据出来?
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
+
+		// 先消费一个Event
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
 		var nonDmlStructToApply *applyEventStruct
 
@@ -1131,22 +1139,30 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 			// So, if DMLBatchSize==1 we wish to not process any further events
 			availableEvents = batchSize - 1
 		}
+
+		// 是否考虑批量执行(把剩下可以执行的命令尽可能多地执行)
 		for i := 0; i < availableEvents; i++ {
 			additionalStruct := <-this.applyEventsQueue
 			if additionalStruct.dmlEvent == nil {
 				// Not a DML. We don't group this, and we don't batch any further
+				// 非DML, 那可能是什么情况呢?
 				nonDmlStructToApply = additionalStruct
 				break
 			}
 			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
 		}
+
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
+		// 如何实现一个RetryWrapper呢?
+		// 函数闭包，消除被Retry函数的特异性
+		//
 		var applyEventFunc tableWriteFunc = func() error {
 			return this.applier.ApplyDMLEventQueries(dmlEvents)
 		}
 		if err := this.retryOperation(applyEventFunc); err != nil {
 			return log.Errore(err)
 		}
+
 		if nonDmlStructToApply != nil {
 			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
 			// We need to handle it!
@@ -1171,9 +1187,11 @@ func (this *Migrator) executeWriteFuncs() error {
 
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
+		// 如何处理select/case的优先级问题
 		select {
 		case eventStruct := <-this.applyEventsQueue:
 			{
+				// 有新的Event, 则立马Apply
 				if err := this.onApplyEventStruct(eventStruct); err != nil {
 					return err
 				}
@@ -1183,6 +1201,7 @@ func (this *Migrator) executeWriteFuncs() error {
 				select {
 				case copyRowsFunc := <-this.copyRowsQueue:
 					{
+						// 否则执行Rows Copy的任务?
 						copyRowsStartTime := time.Now()
 						// Retries are handled within the copyRowsFunc
 						if err := copyRowsFunc(); err != nil {

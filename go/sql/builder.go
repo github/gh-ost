@@ -336,6 +336,9 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 	return query, nil
 }
 
+//
+// Original Table中删除数据，如何处理呢?
+//
 func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKeyColumns *ColumnList, args []interface{}) (result string, uniqueKeyArgs []interface{}, err error) {
 	if len(args) != tableColumns.Len() {
 		return result, uniqueKeyArgs, fmt.Errorf("args count differs from table column count in BuildDMLDeleteQuery")
@@ -343,9 +346,11 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	if uniqueKeyColumns.Len() == 0 {
 		return result, uniqueKeyArgs, fmt.Errorf("No unique key columns found in BuildDMLDeleteQuery")
 	}
+
+	// uniqueKeyColumns 是前后都完全一致的列?
 	for _, column := range uniqueKeyColumns.Columns() {
-		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal])
+		tableOrdinal := tableColumns.Ordinals[column.Name] // uniqueKey的位置
+		arg := column.convertArg(args[tableOrdinal])       // args: full row image
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 	databaseName = EscapeName(databaseName)
