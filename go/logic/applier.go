@@ -556,6 +556,8 @@ func (this *Applier) UnlockTables() error {
 // - rename original table to _old
 // - rename ghost table to original
 // There is a point in time in between where the table does not exist.
+// 为什么不一步到为呢?
+//
 func (this *Applier) SwapTablesQuickAndBumpy() error {
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -788,7 +790,8 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 }
 
 // AtomicCutOverMagicLock
-func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
+func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error,
+	okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
 	tx, err := this.db.Begin()
 	if err != nil {
 		tableLocked <- err
@@ -826,11 +829,14 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		return err
 	}
 
+	// 创建一个place holder table：sentry_table, old_table
 	if err := this.CreateAtomicCutOverSentryTable(); err != nil {
 		tableLocked <- err
 		return err
 	}
 
+	// 两个表同时锁住, 其实: sentry_table 就是顺便的事情，没有风险
+	//
 	query = fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write, %s.%s write`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
@@ -926,6 +932,8 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 		tablesRenamed <- err
 		return log.Errore(err)
 	}
+
+	// TODO: 什么时候Commit呢?
 	tablesRenamed <- nil
 	log.Infof("Tables renamed")
 	return nil

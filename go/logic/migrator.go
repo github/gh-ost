@@ -395,6 +395,7 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	this.printStatus(ForcePrintStatusRule)
 
+	// 执行完毕了，然后如何cutOver呢?
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
 	}
@@ -514,6 +515,7 @@ func (this *Migrator) cutOver() (err error) {
 		return err
 	}
 	if this.migrationContext.CutOverType == base.CutOverTwoStep {
+		// TODO: 表的交换可以一步到位的
 		err := this.cutOverTwoStep()
 		this.handleCutOverResult(err)
 		return err
@@ -529,6 +531,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	this.migrationContext.MarkPointOfInterest()
 	waitForEventsUpToLockStartTime := time.Now()
 
+	// 写入hint
 	allEventsUpToLockProcessedChallenge := fmt.Sprintf("%s:%d", string(AllEventsUpToLockProcessed), waitForEventsUpToLockStartTime.UnixNano())
 	log.Infof("Writing changelog state: %+v", allEventsUpToLockProcessedChallenge)
 	if _, err := this.applier.WriteChangelogState(allEventsUpToLockProcessedChallenge); err != nil {
@@ -544,6 +547,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 			}
 		case state := <-this.allEventsUpToLockProcessed:
 			{
+				// 通过binlog收到消息，表面lock之前所有的events都收到了
 				if state == allEventsUpToLockProcessedChallenge {
 					log.Infof("Waiting for events up to lock: got %s", state)
 					found = true
@@ -570,20 +574,27 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
+	// 1. Original Table锁定，不让写入数据
 	if err := this.retryOperation(this.applier.LockOriginalTable); err != nil {
 		return err
 	}
 
+	// 2. 确保lock之前所有的binlog已经收到，并且processed
 	if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
 		return err
 	}
+
+	// 3. 交换table
 	if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
 		return err
 	}
+
+	// 4. 当前Session释放locks
 	if err := this.retryOperation(this.applier.UnlockTables); err != nil {
 		return err
 	}
 
+	// 5. 打印执行情况
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
 	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
 	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -604,6 +615,8 @@ func (this *Migrator) atomicCutOver() (err error) {
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
 	lockOriginalSessionIdChan := make(chan int64, 2)
+
+	// 为什么要异步执行 AtomicCutOverMagicLock
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	go func() {
