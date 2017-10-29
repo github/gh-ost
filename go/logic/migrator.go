@@ -358,6 +358,8 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
+
+	// 获取key的range
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
@@ -367,6 +369,8 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
+
+	// 开始执行拷贝操作
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()

@@ -51,6 +51,8 @@ func (this *Inspector) InitDBConnections() (err error) {
 	} else {
 		this.connectionConfig.ImpliedKey = impliedKey
 	}
+
+	// 验证当前的授权是否OK
 	if err := this.validateGrants(); err != nil {
 		return err
 	}
@@ -129,6 +131,8 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	}
 	this.migrationContext.UniqueKey = sharedUniqueKeys[0]
 	log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
+
+	// 是否允许Nullable？
 	if this.migrationContext.UniqueKey.HasNullable {
 		if this.migrationContext.NullableUniqueKeyAllowed {
 			log.Warningf("Chosen key (%s) has nullable columns. You have supplied with --allow-nullable-unique-key and so this migration proceeds. As long as there aren't NULL values in this key's column, migration should be fine. NULL values will corrupt migration's data", this.migrationContext.UniqueKey)
@@ -136,22 +140,30 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 			return fmt.Errorf("Chosen key (%s) has nullable columns. Bailing out. To force this operation to continue, supply --allow-nullable-unique-key flag. Only do so if you are certain there are no actual NULL values in this key. As long as there aren't, migration should be fine. NULL values in columns of this key will corrupt migration's data", this.migrationContext.UniqueKey)
 		}
 	}
+
+	// 是否为Primary Key呢?
+	// 默认选择: binlog_row_image = full, 这样binlog中就有所需要的全部信息了
 	if !this.migrationContext.UniqueKey.IsPrimary() {
 		if this.migrationContext.OriginalBinlogRowImage != "FULL" {
 			return fmt.Errorf("binlog_row_image is '%s' and chosen key is %s, which is not the primary key. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again", this.migrationContext.OriginalBinlogRowImage, this.migrationContext.UniqueKey)
 		}
 	}
 
-	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.ColumnRenameMap)
+	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns,
+		this.migrationContext.GhostTableColumns,
+		this.migrationContext.ColumnRenameMap)
 	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
 	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
 
 	// This additional step looks at which columns are unsigned. We could have merged this within
 	// the `getTableColumns()` function, but it's a later patch and introduces some complexity; I feel
 	// comfortable in doing this as a separate step.
-	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
-	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &this.migrationContext.UniqueKey.Columns)
-	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
+	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName,
+		this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
+	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName,
+		&this.migrationContext.UniqueKey.Columns)
+	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(),
+		this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
 
 	for i := range this.migrationContext.SharedColumns.Columns() {
 		column := this.migrationContext.SharedColumns.Columns()[i]
@@ -186,6 +198,8 @@ func (this *Inspector) validateConnection() error {
 
 // validateGrants verifies the user by which we're executing has necessary grants
 // to do its thang.
+// 权限的验证
+//
 func (this *Inspector) validateGrants() error {
 	query := `show /* gh-ost */ grants for current_user()`
 	foundAll := false
@@ -194,12 +208,21 @@ func (this *Inspector) validateGrants() error {
 	foundReplicationSlave := false
 	foundDBAll := false
 
+	// 如何验证权限呢?
+	// GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES,
+	// LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'root'@'%' WITH GRANT OPTION
+	//
+	// ON *.* 表示 对当前用户开发的权限
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 		for _, grantData := range rowMap {
 			grant := grantData.String
+
+			// 1. 全部授权
+			//   *.* 这个问题如何解决?
 			if strings.Contains(grant, `GRANT ALL PRIVILEGES ON *.*`) {
 				foundAll = true
 			}
+			// 2. SUPER 全部
 			if strings.Contains(grant, `SUPER`) && strings.Contains(grant, ` ON *.*`) {
 				foundSuper = true
 			}
@@ -255,6 +278,10 @@ func (this *Inspector) restartReplication() error {
 		return nil
 	}
 
+	// stop slave
+	// stop slave io_thread
+	// stop slave sql_thread
+	//
 	var stopError, startError error
 	_, stopError = sqlutils.ExecNoPrepare(this.db, `stop slave`)
 	_, startError = sqlutils.ExecNoPrepare(this.db, `start slave`)
@@ -277,6 +304,10 @@ func (this *Inspector) applyBinlogFormat() error {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
 			return fmt.Errorf("Existing binlog_format is %s. Am not switching it to ROW unless you specify --switch-to-rbr", this.migrationContext.OriginalBinlogFormat)
 		}
+
+		// 修改global
+		// 修改session
+		// global才会导致所有其他session的binlog ok
 		if _, err := sqlutils.ExecNoPrepare(this.db, `set global binlog_format='ROW'`); err != nil {
 			return err
 		}
@@ -289,6 +320,7 @@ func (this *Inspector) applyBinlogFormat() error {
 		log.Debugf("'ROW' binlog format applied")
 		return nil
 	}
+
 	// We already have RBR, no explicit switch
 	if !this.migrationContext.AssumeRBR {
 		if err := this.restartReplication(); err != nil {
@@ -298,7 +330,12 @@ func (this *Inspector) applyBinlogFormat() error {
 	return nil
 }
 
+//
 // validateBinlogs checks that binary log configuration is good to go
+// binlog_row_image = "full"
+// has_binlog
+// binlog_format: row
+//
 func (this *Inspector) validateBinlogs() error {
 	query := `select @@global.log_bin, @@global.binlog_format`
 	var hasBinaryLogs bool
@@ -308,10 +345,14 @@ func (this *Inspector) validateBinlogs() error {
 	if !hasBinaryLogs {
 		return fmt.Errorf("%s:%d must have binary logs enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	}
+
+	// Binlog格式不正确; 是否自动切换呢?
 	if this.migrationContext.RequiresBinlogFormatChange() {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
 			return fmt.Errorf("You must be using ROW binlog format. I can switch it for you, provided --switch-to-rbr and that %s:%d doesn't have replicas", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 		}
+
+		// Replicas的个数
 		query := fmt.Sprintf(`show /* gh-ost */ slave hosts`)
 		countReplicas := 0
 		err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
@@ -321,6 +362,8 @@ func (this *Inspector) validateBinlogs() error {
 		if err != nil {
 			return err
 		}
+
+		// 如果有不少slave, 则不要轻易调整Row format, 其实调整了问题也不大
 		if countReplicas > 0 {
 			return fmt.Errorf("%s:%d has %s binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
 		}
@@ -527,10 +570,14 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 				table_schema=?
 				and table_name=?
 		`
+	// 目前为止: *sql.ColumnList 只有Column的Name信息，没有太的meta信息, 因此需要完善补充
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		columnName := m.GetString("COLUMN_NAME")
 		columnType := m.GetString("COLUMN_TYPE")
+
+		// 其他类型如何处理呢？例如：int, varchar.....
 		if strings.Contains(columnType, "unsigned") {
+			// 将对应的column：ColumnName 设置为unsigned
 			for _, columnsList := range columnsLists {
 				columnsList.SetUnsigned(columnName)
 			}
@@ -660,17 +707,25 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 }
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
+// 获取两个table的共享的columns
+// *sql.ColumnList <==>  *sql.ColumnList
+//
 func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
 	columnsInGhost := make(map[string]bool)
 	for _, ghostColumn := range ghostColumns.Names() {
 		columnsInGhost[ghostColumn] = true
 	}
+
+	// 共享的columns
+	// 1. 完全相同，或 renames
 	sharedColumnNames := []string{}
 	for _, originalColumn := range originalColumns.Names() {
 		if columnsInGhost[originalColumn] || columnsInGhost[columnRenameMap[originalColumn]] {
 			sharedColumnNames = append(sharedColumnNames, originalColumn)
 		}
 	}
+
+	// 2. ghost table中的对应的names
 	mappedSharedColumnNames := []string{}
 	for _, columnName := range sharedColumnNames {
 		if mapped, ok := columnRenameMap[columnName]; ok {
