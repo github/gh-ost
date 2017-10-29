@@ -313,6 +313,10 @@ func (this *Applier) InitiateHeartbeat() {
 	}
 	injectHeartbeat()
 
+	//
+	// 定时发送心跳数据，用于测量MySQL的同步延迟
+	// 如果MySQL的修改多大，那么可能会出现问题
+	//
 	heartbeatTick := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	for range heartbeatTick {
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
@@ -404,10 +408,15 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // itrating the range (and this done with copying row chunks)
 func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
+
+	// 1. 当前iteration的min value是上次iteration的max value
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
+	//    边界情况
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
 		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
 	}
+
+	// 2. 计算当前iteration的 MigrationIterationRangeMaxValues
 	query, explodedArgs, err := sql.BuildUniqueKeyRangeEndPreparedQuery(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
@@ -426,6 +435,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		return hasFurtherRange, err
 	}
 	iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
+	// 其实rows只有一行，因此也不用处理到底是if/else, 用for的好处是 可以随时通过break退出for loop
 	for rows.Next() {
 		if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
 			return hasFurtherRange, err
@@ -446,6 +456,8 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&this.migrationContext.ChunkSize)
 
+	// 如何执行区间的Insert呢?
+	// 注意控制一下时间: 5s可能是作为一个限制
 	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
@@ -459,6 +471,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.GetIteration() == 0,
 		this.migrationContext.IsTransactionalTable(),
 	)
+
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
 	}
@@ -468,6 +481,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err != nil {
 			return nil, err
 		}
+		// 首先是时区
 		sessionQuery := fmt.Sprintf(`SET
 			SESSION time_zone = '%s',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
@@ -475,12 +489,22 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
 		}
+
+		// 执行SQL语句
 		result, err := tx.Exec(query, explodedArgs...)
 		if err != nil {
 			return nil, err
 		}
+
+		// 提交事务
+		// 同一个DB内部，跨表是存在事务的
+		// 为什么不存在rollback呢?
+		// TODO:
 		if err := tx.Commit(); err != nil {
 			return nil, err
+		} else {
+			// TODO: 是否需要回滚呢?
+			tx.Rollback()
 		}
 		return result, nil
 	}()

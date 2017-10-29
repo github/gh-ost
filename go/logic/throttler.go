@@ -47,6 +47,8 @@ func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint 
 	if statusCode != 0 && statusCode != http.StatusOK {
 		return true, fmt.Sprintf("http=%d", statusCode), base.NoThrottleReasonHint
 	}
+
+	// 延迟太大了
 	// Replication lag throttle
 	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
 	lag := atomic.LoadInt64(&this.migrationContext.CurrentLag)
@@ -97,6 +99,10 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 			return nil
 		}
 
+		// 测试服务器上执行replica, 测量方法就不准确了
+		// heartbeat injection
+		// 直接退化成为利用show slave status??
+		//
 		if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
 			// when running on replica, the heartbeat injection is also done on the replica.
 			// This means we will always get a good heartbeat value.
@@ -117,6 +123,7 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 	}
 
 	collectFunc()
+	// 是否进行throttline呢?
 	firstThrottlingCollected <- true
 
 	ticker := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
@@ -320,7 +327,9 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 // that may affect throttling. There are several components, all running independently,
 // that collect such metrics.
 func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan<- bool) {
+	// 搜集:RelicationLag
 	go this.collectReplicationLag(firstThrottlingCollected)
+
 	go this.collectControlReplicasLag()
 	go this.collectThrottleHTTPStatus(firstThrottlingCollected)
 
@@ -342,6 +351,8 @@ func (this *Throttler) initiateThrottlerChecks() error {
 	throttlerFunction := func() {
 		alreadyThrottling, currentReason, _ := this.migrationContext.IsThrottled()
 		shouldThrottle, throttleReason, throttleReasonHint := this.shouldThrottle()
+
+		// 记录日志
 		if shouldThrottle && !alreadyThrottling {
 			// New throttling
 			this.applier.WriteAndLogChangelog("throttle", throttleReason)
@@ -352,8 +363,12 @@ func (this *Throttler) initiateThrottlerChecks() error {
 			// End of throttling
 			this.applier.WriteAndLogChangelog("throttle", "done throttling")
 		}
+
+		// 修改系统状态
 		this.migrationContext.SetThrottled(shouldThrottle, throttleReason, throttleReasonHint)
 	}
+
+	// 定时检查Metrics, 判断是否应该throttler呢?
 	throttlerFunction()
 	for range throttlerTick {
 		throttlerFunction()
@@ -368,6 +383,7 @@ func (this *Throttler) throttle(onThrottled func()) {
 	for {
 		// IsThrottled() is non-blocking; the throttling decision making takes place asynchronously.
 		// Therefore calling IsThrottled() is cheap
+		// 处于Throttle状态时，整个工具都在Sleep, 对数据库压力很低
 		if shouldThrottle, _, _ := this.migrationContext.IsThrottled(); !shouldThrottle {
 			return
 		}

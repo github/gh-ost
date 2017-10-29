@@ -185,7 +185,7 @@ type MigrationContext struct {
 	MigrationRangeMinValues          *sql.ColumnValues // 相对于UniqueKey的最小value和最大value
 	MigrationRangeMaxValues          *sql.ColumnValues // 相对于UniqueKey的最小value和最大value
 	Iteration                        int64
-	MigrationIterationRangeMinValues *sql.ColumnValues
+	MigrationIterationRangeMinValues *sql.ColumnValues // 单次iteration的最小value
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 
 	CanStopStreaming func() bool

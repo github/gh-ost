@@ -184,9 +184,12 @@ func (this *Migrator) executeAndThrottleOnError(operation func() error) (err err
 // consumes and drops any further incoming events that may be left hanging.
 func (this *Migrator) consumeRowCopyComplete() {
 	<-this.rowCopyComplete
+
+	// 拷贝完毕，则标记结束
 	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
 	this.migrationContext.MarkRowCopyEndTime()
 	go func() {
+		// 消费多余的 rowCopyComplete
 		for <-this.rowCopyComplete {
 		}
 	}()
@@ -346,6 +349,7 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
+	// 创建Server/删除socket file
 	if err := this.initiateServer(); err != nil {
 		return err
 	}
@@ -374,13 +378,16 @@ func (this *Migrator) Migrate() (err error) {
 	}
 
 	// 开始执行拷贝操作
+	// 1. binlog的同步
 	go this.executeWriteFuncs()
+	// 2. 批量操作
 	go this.iterateChunks()
 
 	this.migrationContext.MarkRowCopyStartTime()
 	go this.initiateStatus()
 
 	log.Debugf("Operating until row copy is complete")
+	// 等待迁移完毕
 	this.consumeRowCopyComplete()
 	log.Infof("Row copy complete")
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
@@ -681,9 +688,13 @@ func (this *Migrator) initiateServer() (err error) {
 		this.printStatus(rule, writer)
 	}
 	this.server = NewServer(this.hooksExecutor, f)
+
+	// 绑定socket
 	if err := this.server.BindSocketFile(); err != nil {
 		return err
 	}
+
+	// 绑定tcp
 	if err := this.server.BindTCPPort(); err != nil {
 		return err
 	}
@@ -1043,6 +1054,8 @@ func (this *Migrator) initiateApplier() error {
 
 	// Ghost表准备好了
 	this.applier.WriteChangelogState(string(GhostTableMigrated))
+
+	// 定时写入Heartbeat
 	go this.applier.InitiateHeartbeat()
 	return nil
 }
@@ -1051,6 +1064,7 @@ func (this *Migrator) initiateApplier() error {
 // a chunk of rows onto the ghost table.
 func (this *Migrator) iterateChunks() error {
 	terminateRowIteration := func(err error) error {
+		// 不管是什么原因，总算结束了
 		this.rowCopyComplete <- true
 		return log.Errore(err)
 	}
@@ -1075,6 +1089,8 @@ func (this *Migrator) iterateChunks() error {
 				// There's another such check down the line
 				return nil
 			}
+
+			// 计算当前iteration的range
 			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
 			if err != nil {
 				return terminateRowIteration(err)
@@ -1099,10 +1115,14 @@ func (this *Migrator) iterateChunks() error {
 				if err != nil {
 					return terminateRowIteration(err)
 				}
+
+				// 更改统计数据
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
 				return nil
 			}
+
+			// 注意: try的实现
 			return this.retryOperation(applyCopyRowsFunc)
 		}
 		// Enqueue copy operation; to be executed by executeWriteFuncs()

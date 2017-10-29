@@ -36,6 +36,7 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 	values := make([]string, columns.Len(), columns.Len())
 	for i, column := range columns.Columns() {
 		var token string
+		// 时区问题如何处理呢?
 		if column.timezoneConversion != nil {
 			token = fmt.Sprintf("convert_tz(?, '%s', '%s')", column.timezoneConversion.ToTimezone, "+00:00")
 		} else {
@@ -114,7 +115,10 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 	return strings.Join(setTokens, ", "), nil
 }
 
-func BuildRangeComparison(columns []string, values []string, args []interface{}, comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
+// 构建向量 > 或者 >= 条件
+func BuildRangeComparison(columns []string, values []string, args []interface{},
+	comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
+
 	if len(columns) == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in GetRangeComparison")
 	}
@@ -135,8 +139,10 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 	}
 	comparisons := []string{}
 
+	// (a[0], a[1], a[2], a[3]) > (1, 2, 3, 4) = value
 	for i, column := range columns {
-		//
+		// (a[0:i] == value[0:i] && a[i] > value[i]) OR ((a[0:ii] == value[0:ii] && a[ii] > value[ii])) OR ...
+		// 边界不包含?
 		value := values[i]
 		rangeComparison, err := BuildValueComparison(column, value, comparisonSign)
 		if err != nil {
@@ -165,17 +171,23 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 		comparisons = append(comparisons, comparison)
 		explodedArgs = append(explodedArgs, args...)
 	}
+
 	result = strings.Join(comparisons, " or ")
 	result = fmt.Sprintf("(%s)", result)
 	return result, explodedArgs, nil
 }
 
-func BuildRangePreparedComparison(columns *ColumnList, args []interface{}, comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
+func BuildRangePreparedComparison(columns *ColumnList, args []interface{}, comparisonSign ValueComparisonSign) (
+	result string, explodedArgs []interface{}, err error) {
 	values := buildColumnsPreparedValues(columns)
 	return BuildRangeComparison(columns.Names(), values, args, comparisonSign)
 }
 
-func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string,
+	mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList,
+	rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{},
+	includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+
 	if len(sharedColumns) == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
@@ -200,12 +212,14 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	if includeRangeStartValues {
 		minRangeComparisonSign = GreaterThanOrEqualsComparisonSign
 	}
-	rangeStartComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns.Names(), rangeStartValues, rangeStartArgs, minRangeComparisonSign)
+	rangeStartComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns.Names(),
+		rangeStartValues, rangeStartArgs, minRangeComparisonSign)
 	if err != nil {
 		return "", explodedArgs, err
 	}
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
-	rangeEndComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns.Names(), rangeEndValues, rangeEndArgs, LessThanOrEqualsComparisonSign)
+	rangeEndComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns.Names(),
+		rangeEndValues, rangeEndArgs, LessThanOrEqualsComparisonSign)
 	if err != nil {
 		return "", explodedArgs, err
 	}
@@ -214,6 +228,10 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	if transactionalTable {
 		transactionalClause = "lock in share mode"
 	}
+
+	// insert ignore into 如果之前插入了重复元素，则直接忽略
+	// DML Event随时都在监控中，新的修改总会同步到ghost table中
+	//
 	result = fmt.Sprintf(`
       insert /* gh-ost %s.%s */ ignore into %s.%s (%s)
       (select %s from %s.%s force index (%s)
@@ -225,34 +243,55 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	return result, explodedArgs, nil
 }
 
-func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string,
+	sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList,
+	rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool,
+	transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+
 	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
 	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
-	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
+
+	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns,
+		uniqueKey, uniqueKeyColumns,
+		rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs,
+		includeRangeStartValues, transactionalTable)
 }
 
-func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
+func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList,
+	rangeStartArgs, rangeEndArgs []interface{}, // 区间限制: （start, end]
+	chunkSize int64,
+	includeRangeStartValues bool, hint string) (
+	result string, explodedArgs []interface{}, err error) {
+
 	if uniqueKeyColumns.Len() == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
+	// > vs. >=
 	var startRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
 	if includeRangeStartValues {
 		startRangeComparisonSign = GreaterThanOrEqualsComparisonSign
 	}
+
+	// 两组条件的筛选: 1
+	// a > (1, 1, 2, 3)
 	rangeStartComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeStartArgs, startRangeComparisonSign)
 	if err != nil {
 		return "", explodedArgs, err
 	}
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+
+	// 两组条件的筛选: 2
+	// a < (100, 100, 100, 1212)
 	rangeEndComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeEndArgs, LessThanOrEqualsComparisonSign)
 	if err != nil {
 		return "", explodedArgs, err
 	}
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
 
+	// 合并条件，生成SQL
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
 	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
 	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
@@ -282,9 +321,11 @@ func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueK
 				%s
 			limit 1
     `, databaseName, tableName, hint, strings.Join(uniqueKeyColumnNames, ", "),
+		// 内部查询，选择最从min-range开始的: chunkSize个元素
 		strings.Join(uniqueKeyColumnNames, ", "), databaseName, tableName,
 		rangeStartComparison, rangeEndComparison,
 		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
+		// 按照降序排列，选择最大的value
 		strings.Join(uniqueKeyColumnDescending, ", "),
 	)
 	return result, explodedArgs, nil

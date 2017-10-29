@@ -45,6 +45,8 @@ func (this *Server) BindSocketFile() (err error) {
 	if this.migrationContext.DropServeSocket && base.FileExists(this.migrationContext.ServeSocketFile) {
 		os.Remove(this.migrationContext.ServeSocketFile)
 	}
+
+	// unix socket如何创建?
 	this.unixListener, err = net.Listen("unix", this.migrationContext.ServeSocketFile)
 	if err != nil {
 		return err
@@ -72,6 +74,7 @@ func (this *Server) BindTCPPort() (err error) {
 
 // Serve begins listening & serving on whichever device was configured
 func (this *Server) Serve() (err error) {
+
 	go func() {
 		for {
 			conn, err := this.unixListener.Accept()
@@ -97,10 +100,12 @@ func (this *Server) Serve() (err error) {
 	return nil
 }
 
+// net.Conn 是不太区分unix socket还是tcp socket
 func (this *Server) handleConnection(conn net.Conn) (err error) {
 	if conn != nil {
 		defer conn.Close()
 	}
+	// ReadLine
 	command, _, err := bufio.NewReader(conn).ReadLine()
 	if err != nil {
 		return err
