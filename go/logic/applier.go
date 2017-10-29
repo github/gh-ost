@@ -34,12 +34,14 @@ type Applier struct {
 	db               *gosql.DB
 	singletonDB      *gosql.DB
 	migrationContext *base.MigrationContext
+	name             string
 }
 
 func NewApplier() *Applier {
 	return &Applier{
 		connectionConfig: base.GetMigrationContext().ApplierConnectionConfig,
 		migrationContext: base.GetMigrationContext(),
+		name:             "applier",
 	}
 }
 
@@ -53,11 +55,11 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	this.singletonDB.SetMaxOpenConns(1)
-	version, err := base.ValidateConnection(this.db, this.connectionConfig)
+	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.name)
 	if err != nil {
 		return err
 	}
-	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig); err != nil {
+	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig, this.name); err != nil {
 		return err
 	}
 	this.migrationContext.ApplierMySQLVersion = version

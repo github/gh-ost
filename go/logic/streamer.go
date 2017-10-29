@@ -43,6 +43,7 @@ type EventsStreamer struct {
 	listenersMutex           *sync.Mutex
 	eventsChannel            chan *binlog.BinlogEntry
 	binlogReader             *binlog.GoMySQLReader
+	name                     string
 }
 
 func NewEventsStreamer() *EventsStreamer {
@@ -52,6 +53,7 @@ func NewEventsStreamer() *EventsStreamer {
 		listeners:        [](*BinlogEventListener){},
 		listenersMutex:   &sync.Mutex{},
 		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
+		name:             "streamer",
 	}
 }
 
@@ -107,7 +109,7 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if this.db, _, err = sqlutils.GetDB(EventsStreamerUri); err != nil {
 		return err
 	}
-	if _, err := base.ValidateConnection(this.db, this.connectionConfig); err != nil {
+	if _, err := base.ValidateConnection(this.db, this.connectionConfig, this.name); err != nil {
 		return err
 	}
 	if err := this.readCurrentBinlogCoordinates(); err != nil {
