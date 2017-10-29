@@ -352,8 +352,13 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	if err != nil {
 		return err
 	}
+
+	// 如何使用for形式只读取一条数据呢?
 	for rows.Next() {
+		// 如何scan一组数据呢?
 		this.migrationContext.MigrationRangeMinValues = sql.NewColumnValues(uniqueKey.Len())
+
+		// 通过Pointer来读取一组数据
 		if err = rows.Scan(this.migrationContext.MigrationRangeMinValues.ValuesPointers...); err != nil {
 			return err
 		}

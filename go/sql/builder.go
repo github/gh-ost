@@ -290,10 +290,12 @@ func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueK
 	return result, explodedArgs, nil
 }
 
+// Key Min
 func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList) (string, error) {
 	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "asc")
 }
 
+// Key Max
 func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList) (string, error) {
 	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "desc")
 }
@@ -307,14 +309,19 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
 	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
+
+	// 寻找一个唯一索引
 	for i, column := range uniqueKeyColumns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
+			// enum: concat关系?
 			uniqueKeyColumnOrder[i] = fmt.Sprintf("concat(%s) %s", uniqueKeyColumnNames[i], order)
 		} else {
 			uniqueKeyColumnOrder[i] = fmt.Sprintf("%s %s", uniqueKeyColumnNames[i], order)
 		}
 	}
+
+	// 选择某个条件的1条记录
 	query := fmt.Sprintf(`
       select /* gh-ost %s.%s */ %s
 				from

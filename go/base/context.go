@@ -182,8 +182,8 @@ type MigrationContext struct {
 	SharedColumns                    *sql.ColumnList
 	ColumnRenameMap                  map[string]string
 	MappedSharedColumns              *sql.ColumnList
-	MigrationRangeMinValues          *sql.ColumnValues
-	MigrationRangeMaxValues          *sql.ColumnValues
+	MigrationRangeMinValues          *sql.ColumnValues // 相对于UniqueKey的最小value和最大value
+	MigrationRangeMaxValues          *sql.ColumnValues // 相对于UniqueKey的最小value和最大value
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues

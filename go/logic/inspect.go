@@ -117,6 +117,9 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	if err != nil {
 		return err
 	}
+
+	// 如何选择一组可靠的Uniq Keys呢?
+	// 可能由于删除字段，导致两者无法共有一组相同的UniqKey, 导致迁移无法j进行
 	sharedUniqueKeys, err := this.getSharedUniqueKeys(this.migrationContext.OriginalTableUniqueKeys, this.migrationContext.GhostTableUniqueKeys)
 	if err != nil {
 		return err
