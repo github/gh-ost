@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	// 引入驱动
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/outbrain/golib/log"
 	"strconv"

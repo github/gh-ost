@@ -492,6 +492,8 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 }
 
 // CountTableRows counts exact number of rows on the original table
+// 目前的这种模式比较适合在从库上执行: select count(*), 主库上设置有max-execution-time, 容易失败
+//
 func (this *Inspector) CountTableRows() error {
 	atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 0)

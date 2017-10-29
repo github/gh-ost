@@ -25,7 +25,7 @@ type GoMySQLReader struct {
 	binlogStreamer           *replication.BinlogStreamer
 	currentCoordinates       mysql.BinlogCoordinates
 	currentCoordinatesMutex  *sync.Mutex
-	LastAppliedRowsEventHint mysql.BinlogCoordinates
+	LastAppliedRowsEventHint mysql.BinlogCoordinates // binlog的坐标
 	MigrationContext         *base.MigrationContext
 }
 
@@ -76,7 +76,10 @@ func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinate
 }
 
 // StreamEvents
-func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
+// 处理Row Event
+func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent,
+	entriesChannel chan<- *BinlogEntry) error {
+
 	if this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
 		log.Debugf("Skipping handled query at %+v", this.currentCoordinates)
 		return nil
@@ -86,18 +89,27 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 	if dml == NotDML {
 		return fmt.Errorf("Unknown DML type: %s", ev.Header.EventType.String())
 	}
+
 	for i, row := range rowsEvent.Rows {
+		// UpdateDML 两个Row一组数据，不处理奇数组数据
 		if dml == UpdateDML && i%2 == 1 {
 			// An update has two rows (WHERE+SET)
 			// We do both at the same time
 			continue
 		}
+
+		// 封装binlogEntry
+		// pos, schema, table, dml
 		binlogEntry := NewBinlogEntryAt(this.currentCoordinates)
 		binlogEntry.DmlEvent = NewBinlogDMLEvent(
 			string(rowsEvent.Table.Schema),
 			string(rowsEvent.Table.Table),
 			dml,
 		)
+
+		// Insert    --> NewColumnValues
+		// UpdateDML --> WhereColumnValues & NewColumnValues
+		// DeleteDML --> WhereColumnValues
 		switch dml {
 		case InsertDML:
 			{
@@ -119,6 +131,8 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 		// In reality, reads will be synchronous
 		entriesChannel <- binlogEntry
 	}
+
+	// 记录执行过的RowEvent的地址
 	this.LastAppliedRowsEventHint = this.currentCoordinates
 	return nil
 }
@@ -129,18 +143,24 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 		return nil
 	}
 	for {
+		// 任何时候都可以中断
 		if canStopStreaming() {
 			break
 		}
+
+		// 获取event
 		ev, err := this.binlogStreamer.GetEvent(context.Background())
 		if err != nil {
 			return err
 		}
+		// 更新LogPos
 		func() {
 			this.currentCoordinatesMutex.Lock()
 			defer this.currentCoordinatesMutex.Unlock()
 			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
 		}()
+
+		// 如果是binlog文件rotate, 则更新LogFile
 		if rotateEvent, ok := ev.Event.(*replication.RotateEvent); ok {
 			func() {
 				this.currentCoordinatesMutex.Lock()
@@ -149,6 +169,7 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			}()
 			log.Infof("rotate to next log name: %s", rotateEvent.NextLogName)
 		} else if rowsEvent, ok := ev.Event.(*replication.RowsEvent); ok {
+			// 普通的rowsEvent如何处理呢?
 			if err := this.handleRowsEvent(ev, rowsEvent, entriesChannel); err != nil {
 				return err
 			}

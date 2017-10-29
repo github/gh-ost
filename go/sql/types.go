@@ -230,8 +230,8 @@ func (this *UniqueKey) String() string {
 }
 
 type ColumnValues struct {
-	abstractValues []interface{}
-	ValuesPointers []interface{}
+	abstractValues []interface{} // 原始的Values?
+	ValuesPointers []interface{} // 为什么要使用指针呢?
 }
 
 func NewColumnValues(length int) *ColumnValues {

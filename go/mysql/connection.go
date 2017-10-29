@@ -15,7 +15,7 @@ type ConnectionConfig struct {
 	Key        InstanceKey
 	User       string
 	Password   string
-	ImpliedKey *InstanceKey
+	ImpliedKey *InstanceKey // 这是是做什么的呢？
 }
 
 func NewConnectionConfig() *ConnectionConfig {
@@ -56,5 +56,7 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 		// Wrap IPv6 literals in square brackets
 		hostname = fmt.Sprintf("[%s]", hostname)
 	}
+
+	// 如何自适应选择某种encoding
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4,utf8,latin1", this.User, this.Password, hostname, this.Key.Port, databaseName)
 }

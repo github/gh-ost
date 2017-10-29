@@ -239,8 +239,10 @@ func main() {
 	log.Infof("starting gh-ost %+v", AppVersion)
 	acceptSignals(migrationContext)
 
+	// 如何执行Migrate呢?
 	migrator := logic.NewMigrator()
 	err := migrator.Migrate()
+
 	if err != nil {
 		migrator.ExecOnFailureHook()
 		log.Fatale(err)

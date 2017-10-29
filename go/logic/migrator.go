@@ -195,13 +195,17 @@ func (this *Migrator) canStopStreaming() bool {
 
 // onChangelogStateEvent is called when a binlog event operation on the changelog table is intercepted.
 func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+	// 如何处理binlog的变化呢?
 	// Hey, I created the changlog table, I know the type of columns it has!
+
+	// 只关注state变化的Event
 	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
 		return nil
 	}
 	changelogStateString := dmlEvent.NewColumnValues.StringColumn(3)
 	changelogState := ReadChangelogState(changelogStateString)
 	log.Infof("Intercepted changelog state %s", changelogState)
+
 	switch changelogState {
 	case GhostTableMigrated:
 		{
@@ -243,6 +247,7 @@ func (this *Migrator) listenOnPanicAbort() {
 func (this *Migrator) validateStatement() (err error) {
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
+		// 一般情况下，数据库不要做rename字段；因为已有的代码可能会继续修改被rename的字段，造成大量的错误
 		if !this.migrationContext.ApproveRenamedColumns {
 			return fmt.Errorf("gh-ost believes the ALTER statement renames columns, as follows: %v; as precaution, you are asked to confirm gh-ost is correct, and provide with `--approve-renamed-columns`, and we're all happy. Or you can skip renamed columns via `--skip-renamed-columns`, in which case column data may be lost", this.parser.GetNonTrivialRenames())
 		}
@@ -262,6 +267,7 @@ func (this *Migrator) countTableRows() (err error) {
 	}
 
 	countRowsFunc := func() error {
+		// 目前的这种模式比较适合在从库上执行: select count(*), 主库上设置有max-execution-time, 容易失败
 		if err := this.inspector.CountTableRows(); err != nil {
 			return err
 		}
@@ -288,6 +294,7 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
+	// 执行过程中，如果出错，就直接报错，然后退出
 	go this.listenOnPanicAbort()
 
 	if err := this.initiateHooksExecutor(); err != nil {
@@ -296,15 +303,23 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onStartup(); err != nil {
 		return err
 	}
+
+	// 1. Parse要执行的语句
 	if err := this.parser.ParseAlterStatement(this.migrationContext.AlterStatement); err != nil {
 		return err
 	}
+	// 2. 验证? 怎么做呢?
+	// 一般情况下，数据库不要做rename字段；因为已有的代码可能会继续修改被rename的字段，造成大量的错误
 	if err := this.validateStatement(); err != nil {
 		return err
 	}
+
+	// 3. 监控
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
+
+	// 4.
 	if err := this.initiateStreaming(); err != nil {
 		return err
 	}
@@ -333,9 +348,13 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	defer this.server.RemoveSocketFile()
 
+	//
+	// 准备migrate!!!!!
+	//
 	if err := this.countTableRows(); err != nil {
 		return err
 	}
+
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
@@ -931,22 +950,27 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 // initiateStreaming begins treaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
+	// 关注一下: NewEventsStreamer
 	this.eventsStreamer = NewEventsStreamer()
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
 	this.eventsStreamer.AddListener(
-		false,
+		false, // 同步处理binlog的变化
 		this.migrationContext.DatabaseName,
+		// gt-ost 应用场景: 一次只改一个table, 因此不需要关注其他的tables的变化
 		this.migrationContext.GetChangelogTableName(),
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
+			// 监听state变化
 			return this.onChangelogStateEvent(dmlEvent)
 		},
 	)
 
+	// 如何开始streaming呢?
 	go func() {
 		log.Debugf("Beginning streaming")
 		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
+		// 出错，就直接PanicAbort
 		if err != nil {
 			this.migrationContext.PanicAbort <- err
 		}
@@ -993,6 +1017,8 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.ValidateOrDropExistingTables(); err != nil {
 		return err
 	}
+
+	// Changelog 和 Ghost的关系?
 	if err := this.applier.CreateChangelogTable(); err != nil {
 		log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
 		return err
@@ -1007,6 +1033,7 @@ func (this *Migrator) initiateApplier() error {
 		return err
 	}
 
+	// Ghost表准备好了
 	this.applier.WriteChangelogState(string(GhostTableMigrated))
 	go this.applier.InitiateHeartbeat()
 	return nil

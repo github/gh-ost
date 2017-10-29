@@ -155,6 +155,7 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 
 // CreateGhostTable creates the ghost table on the applier host
 func (this *Applier) CreateGhostTable() error {
+	// 1. create table like ...., 创建一个schema完全一样的table
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s like %s.%s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
@@ -165,6 +166,8 @@ func (this *Applier) CreateGhostTable() error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
+
+	// 2. 直接执行query
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
@@ -174,6 +177,9 @@ func (this *Applier) CreateGhostTable() error {
 
 // AlterGhost applies `alter` statement on ghost table
 func (this *Applier) AlterGhost() error {
+	// alter语句如何生效呢？
+	// alter table xxx alter_statement
+	//
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s %s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
@@ -196,6 +202,8 @@ func (this *Applier) CreateChangelogTable() error {
 	if err := this.DropChangelogTable(); err != nil {
 		return err
 	}
+
+	// changelog包含哪些信息?
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s (
 			id bigint auto_increment,
 			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

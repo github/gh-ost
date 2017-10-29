@@ -20,6 +20,8 @@ const (
 	DeleteDML          = "Delete"
 )
 
+// DML:
+// 添加，删除，更新
 func ToEventDML(description string) EventDML {
 	// description can be a statement (`UPDATE my_table ...`) or a RBR event name (`UpdateRowsEventV2`)
 	description = strings.TrimSpace(strings.Split(description, " ")[0])
