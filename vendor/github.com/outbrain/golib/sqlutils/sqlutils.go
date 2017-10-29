@@ -279,6 +279,7 @@ func ExecNoPrepare(db *sql.DB, query string, args ...interface{}) (sql.Result, e
 	}()
 
 	var res sql.Result
+	// auto-commit模式吧?
 	res, err = db.Exec(query, args...)
 	if err != nil {
 		log.Errore(err)

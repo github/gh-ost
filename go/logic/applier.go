@@ -32,7 +32,7 @@ const (
 type Applier struct {
 	connectionConfig *mysql.ConnectionConfig
 	db               *gosql.DB
-	singletonDB      *gosql.DB
+	singletonDB      *gosql.DB // 专门用于lock db等操作的?
 	migrationContext *base.MigrationContext
 }
 
@@ -48,6 +48,8 @@ func (this *Applier) InitDBConnections() (err error) {
 	if this.db, _, err = sqlutils.GetDB(applierUri); err != nil {
 		return err
 	}
+
+	// 设置timeout, 并且尽量和 this.db 保持不一样
 	singletonApplierUri := fmt.Sprintf("%s?timeout=0", applierUri)
 	if this.singletonDB, _, err = sqlutils.GetDB(singletonApplierUri); err != nil {
 		return err
@@ -477,10 +479,20 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	}
 
 	sqlResult, err := func() (gosql.Result, error) {
+		// 1. 构建一个Transaction
+		//    tx中会包含一个connection
+		//
 		tx, err := this.db.Begin()
 		if err != nil {
 			return nil, err
 		}
+
+		// by fei.wang 如果出现错误，则拯救connection
+		// 1. 如果调用了tx.Commit, 再调用 tx.Rollback()是会有error返回的，但是无视接口
+		// 2. 如果tx.Exec 执行过程中，连接断开了，那么Rollback也没有意义了
+		// 3. 如果后面的SQL比较简单，基本上不大可能出错，因此可以可以省略Rollback
+		defer tx.Rollback()
+
 		// 首先是时区
 		sessionQuery := fmt.Sprintf(`SET
 			SESSION time_zone = '%s',
@@ -502,9 +514,6 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		// TODO:
 		if err := tx.Commit(); err != nil {
 			return nil, err
-		} else {
-			// TODO: 是否需要回滚呢?
-			tx.Rollback()
 		}
 		return result, nil
 	}()
