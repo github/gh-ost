@@ -263,19 +263,21 @@ func (this *Inspector) validateGrants() error {
 	this.migrationContext.HasSuperPrivilege = foundSuper
 
 	if foundAll {
-		log.Infof("User has ALL privileges")
+		log.Infof(color.GreenString("User has ALL privileges"))
 		return nil
 	}
 	if foundSuper && foundReplicationSlave && foundDBAll {
-		log.Infof("User has SUPER, REPLICATION SLAVE privileges, and has ALL privileges on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+		log.Infof(color.GreenString("User has SUPER, REPLICATION SLAVE privileges, and has ALL privileges on %s.*"), sql.EscapeName(this.migrationContext.DatabaseName))
 		return nil
 	}
 	if foundReplicationClient && foundReplicationSlave && foundDBAll {
-		log.Infof("User has REPLICATION CLIENT, REPLICATION SLAVE privileges, and has ALL privileges on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+		log.Infof(color.GreenString("User has REPLICATION CLIENT, REPLICATION SLAVE privileges, and has ALL privileges on %s.*"), sql.EscapeName(this.migrationContext.DatabaseName))
 		return nil
 	}
 	log.Debugf("Privileges: Super: %t, REPLICATION CLIENT: %t, REPLICATION SLAVE: %t, ALL on *.*: %t, ALL on %s.*: %t", foundSuper, foundReplicationClient, foundReplicationSlave, foundAll, sql.EscapeName(this.migrationContext.DatabaseName), foundDBAll)
-	return log.Errorf("User has insufficient privileges for migration. Needed: SUPER|REPLICATION CLIENT, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+	msg := fmt.Sprintf("User has insufficient privileges for migration. Needed: SUPER|REPLICATION CLIENT, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+	log.Errorf(color.RedString("权限不够: ") + msg)
+	return log.Errorf(msg)
 }
 
 // restartReplication is required so that we are _certain_ the binlog format and

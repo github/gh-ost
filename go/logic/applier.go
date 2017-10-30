@@ -165,7 +165,7 @@ func (this *Applier) CreateGhostTable() error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 	)
-	log.Infof("Creating ghost table %s.%s",
+	log.Infof(color.BlueString("Creating ghost table")+" %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
@@ -188,7 +188,7 @@ func (this *Applier) AlterGhost() error {
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 		this.migrationContext.AlterStatement,
 	)
-	log.Infof("Altering ghost table %s.%s",
+	log.Infof(color.BlueString("Altering ghost table")+" %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
@@ -219,7 +219,7 @@ func (this *Applier) CreateChangelogTable() error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
-	log.Infof("Creating changelog table %s.%s",
+	log.Infof(color.BlueString("Creating changelog table")+" %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
