@@ -48,16 +48,23 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 func main() {
 	migrationContext := base.GetMigrationContext()
 
+	dbAlias := flag.String("db_alias", "", "db alias in db conf file")
+	dbConfigFile := flag.String("db_conf", "", "db config file")
+
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
+
+	// 主动告知master(可以不告知的)
 	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unabel to determine the master")
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
+
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
 	flag.StringVar(&migrationContext.CliMasterUser, "master-user", "", "MySQL user on master, if different from that on replica. Requires --assume-master-host")
 	flag.StringVar(&migrationContext.CliMasterPassword, "master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
 
-	// 配置文件的作用?
+	// XXX: 配置文件的作用?
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
+
 	// 可以不指定密码，每次由运维来主动输入
 	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
 
@@ -197,8 +204,21 @@ func main() {
 	}
 
 	if migrationContext.DatabaseName == "" {
+		if len(*dbConfigFile) > 0 && base.FileExists(*dbConfigFile) {
+			// 读取配置文件
+			config, err := base.NewConfigWithFile(*dbConfigFile)
+			if err != nil {
+				log.Fatalf("db config file invalid: %s", *dbConfigFile)
+			}
+			// 实现alias到db的映射
+			db, host, port := config.GetDB(*dbAlias)
+			migrationContext.InspectorConnectionConfig.Key.Hostname = host
+			migrationContext.InspectorConnectionConfig.Key.Port = port
+			migrationContext.DatabaseName = db
+		}
 		log.Fatalf("--database must be provided and database name must not be empty")
 	}
+
 	if migrationContext.OriginalTableName == "" {
 		log.Fatalf("--table must be provided and table name must not be empty")
 	}
