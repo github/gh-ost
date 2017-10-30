@@ -783,6 +783,7 @@ func (this *Inspector) readChangelogState(hint string) (string, error) {
 	return result, err
 }
 
+// 如何搜索Master呢?
 func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
 	log.Infof("Recursively searching for replication master")
 	visitedKeys := mysql.NewInstanceKeyMap()

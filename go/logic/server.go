@@ -43,6 +43,8 @@ func (this *Server) BindSocketFile() (err error) {
 	if this.migrationContext.ServeSocketFile == "" {
 		return nil
 	}
+
+	// 启动时删除: DropServeSocket
 	if this.migrationContext.DropServeSocket && base.FileExists(this.migrationContext.ServeSocketFile) {
 		os.Remove(this.migrationContext.ServeSocketFile)
 	}
@@ -50,6 +52,8 @@ func (this *Server) BindSocketFile() (err error) {
 	// unix socket如何创建?
 	this.unixListener, err = net.Listen("unix", this.migrationContext.ServeSocketFile)
 	if err != nil {
+		log.Errorf("Perhaps socket exists: %s, you can delete it by "+color.GreenString("--initially-drop-socket-file")+" or "+color.GreenString("--initially-drop-socket-file=1"),
+			this.migrationContext.ServeSocketFile)
 		return err
 	}
 	log.Infof("Listening on unix socket file: %s, socket usage: "+color.CyanString("https://github.com/github/gh-ost/blob/master/doc/interactive-commands.md"),

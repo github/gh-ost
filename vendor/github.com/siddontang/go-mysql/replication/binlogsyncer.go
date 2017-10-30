@@ -76,7 +76,7 @@ type BinlogSyncer struct {
 func NewBinlogSyncer(cfg *BinlogSyncerConfig) *BinlogSyncer {
 
 	data, _ := json.Marshal(cfg)
-	log.Infof("create BinlogSyncer with config %s", color.RedString(string(data)))
+	log.Infof("create BinlogSyncer with config %s", color.BlueString(string(data)))
 
 	b := new(BinlogSyncer)
 
@@ -135,7 +135,7 @@ func (b *BinlogSyncer) registerSlave() error {
 		b.c.Close()
 	}
 
-	log.Infof(color.RedString("register slave for master server %s:%d"), b.cfg.Host, b.cfg.Port)
+	log.Infof(color.BlueString("register slave for master server %s:%d"), b.cfg.Host, b.cfg.Port)
 	var err error
 	// 如何注册呢?
 	// 是否需要使用某个server_id, 还是只要有 binlog pos即可?

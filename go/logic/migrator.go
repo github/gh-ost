@@ -829,7 +829,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	))
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
-	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max-lag-millis: %+vms; max-load: %s; critical-load: %s; nice-ratio: %f",
+	fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# chunk-size: %+v; max-lag-millis: %+vms; max-load: %s; critical-load: %s; nice-ratio: %f"),
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
 		maxLoad.String(),
@@ -841,7 +841,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
 			setIndicator = "[set]"
 		}
-		fmt.Fprintln(w, fmt.Sprintf("# throttle-flag-file: %+v %+v",
+		fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# throttle-flag-file:")+" %+v %+v",
 			this.migrationContext.ThrottleFlagFile, setIndicator,
 		))
 	}
@@ -850,7 +850,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
 			setIndicator = "[set]"
 		}
-		fmt.Fprintln(w, fmt.Sprintf("# throttle-additional-flag-file: %+v %+v",
+		fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# throttle-additional-flag-file:")+" %+v %+v",
 			this.migrationContext.ThrottleAdditionalFlagFile, setIndicator,
 		))
 	}
@@ -879,11 +879,11 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 			this.migrationContext.PanicFlagFile,
 		))
 	}
-	fmt.Fprintln(w, fmt.Sprintf("# Serving on unix socket: %+v",
+	fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# Serving on unix socket:")+" %+v",
 		this.migrationContext.ServeSocketFile,
 	))
 	if this.migrationContext.ServeTCPPort != 0 {
-		fmt.Fprintln(w, fmt.Sprintf("# Serving on TCP port: %+v", this.migrationContext.ServeTCPPort))
+		fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# Serving on TCP port:")+" %+v", this.migrationContext.ServeTCPPort))
 	}
 }
 
