@@ -17,6 +17,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
+	"github.com/fatih/color"
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
 )
@@ -67,15 +68,23 @@ func (this *Inspector) InitDBConnections() (err error) {
 }
 
 func (this *Inspector) ValidateOriginalTable() (err error) {
+	// 需要确定:
+	// 1. table存在
+	// 2. Engine/Rows
 	if err := this.validateTable(); err != nil {
 		return err
 	}
+
+	// 外键约束 比较头疼，一般情况下都直接去掉这个约束
 	if err := this.validateTableForeignKeys(this.migrationContext.DiscardForeignKeys); err != nil {
 		return err
 	}
+	// 也不要使用Triggers/pt-online-schema-change会要求使用triggers, 但是不允许table原来使用trigger
 	if err := this.validateTableTriggers(); err != nil {
 		return err
 	}
+
+	// 通过Explain来获取函数统计，这个似乎更加准确
 	if err := this.estimateTableRowsViaExplain(); err != nil {
 		return err
 	}
@@ -83,6 +92,7 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 }
 
 func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (columns *sql.ColumnList, uniqueKeys [](*sql.UniqueKey), err error) {
+	// 获取唯一keys
 	uniqueKeys, err = this.getCandidateUniqueKeys(tableName)
 	if err != nil {
 		return columns, uniqueKeys, err
@@ -90,6 +100,8 @@ func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (colum
 	if len(uniqueKeys) == 0 {
 		return columns, uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
 	}
+
+	// 获取Columns
 	columns, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, tableName)
 	if err != nil {
 		return columns, uniqueKeys, err
@@ -98,6 +110,7 @@ func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (colum
 	return columns, uniqueKeys, nil
 }
 
+// 获取唯一keys & 获取Columns
 func (this *Inspector) InspectOriginalTable() (err error) {
 	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
 	if err != nil {
@@ -414,6 +427,9 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 func (this *Inspector) validateTable() error {
 	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), this.migrationContext.OriginalTableName)
 
+	// 需要确定:
+	// 1. table存在
+	// 2. Engine/Rows
 	tableFound := false
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 		this.migrationContext.TableEngine = rowMap.GetString("Engine")
@@ -517,6 +533,7 @@ func (this *Inspector) validateTableTriggers() error {
 
 // estimateTableRowsViaExplain estimates number of rows on original table
 func (this *Inspector) estimateTableRowsViaExplain() error {
+	// 通过Explain来估算数据库记录数
 	query := fmt.Sprintf(`explain select /* gh-ost */ * from %s.%s where 1=1`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 
 	outputFound := false
@@ -533,7 +550,7 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 	if !outputFound {
 		return log.Errorf("Cannot run EXPLAIN on %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
-	log.Infof("Estimated number of rows via EXPLAIN: %d", this.migrationContext.RowsEstimate)
+	log.Infof(color.GreenString("Estimated number of rows via EXPLAIN: %d"), this.migrationContext.RowsEstimate)
 	return nil
 }
 
@@ -541,16 +558,21 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 // 目前的这种模式比较适合在从库上执行: select count(*), 主库上设置有max-execution-time, 容易失败
 //
 func (this *Inspector) CountTableRows() error {
+	// 标记状态
 	atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 0)
 
 	log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 
+	// 这个如何避免在某些DB上execution timeout
+	// TODO: 可以听过索引覆盖模式，将 select count(*)分解成为很多小的查询
 	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	var rowsEstimate int64
 	if err := this.db.QueryRow(query).Scan(&rowsEstimate); err != nil {
 		return err
 	}
+
+	// 精确计算
 	atomic.StoreInt64(&this.migrationContext.RowsEstimate, rowsEstimate)
 	this.migrationContext.UsedRowsEstimateMethod = base.CountRowsEstimate
 

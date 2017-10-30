@@ -21,6 +21,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
+	"github.com/fatih/color"
 	"github.com/outbrain/golib/log"
 )
 
@@ -30,6 +31,15 @@ const (
 	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
 )
+
+func GetRowFormat(total int64) string {
+
+	digitNum := int(math.Log(float64(total))/math.Log(10) + 1)
+	currentFormat := color.GreenString(fmt.Sprintf("%%%dd", digitNum))
+	progress := color.GreenString(" %5.1f%%")
+	return "Copy: " + currentFormat + "/" + color.RedString("%d") + progress + "; Applied: %d; Backlog: %d/%d; Time: " +
+		color.CyanString("%+v") + "(total), %+v(copy); streamer: " + color.BlueString("%+v") + "; State: %s; ETA: " + color.CyanString("%s")
+}
 
 func ReadChangelogState(s string) ChangelogState {
 	return ChangelogState(strings.Split(s, ":")[0])
@@ -262,7 +272,12 @@ func (this *Migrator) validateStatement() (err error) {
 	return nil
 }
 
+//
+// 如何计算行数呢?
+// 如果不精确技术，可能估算不准确; 其他没有多大的影响
+//
 func (this *Migrator) countTableRows() (err error) {
+	// 1. CountTableRows 是否计算精确函数
 	if !this.migrationContext.CountTableRows {
 		// Not counting; we stay with an estimate
 		return nil
@@ -283,13 +298,15 @@ func (this *Migrator) countTableRows() (err error) {
 		return nil
 	}
 
+	// 2. 计算方式: 并行计算或者直接计算
 	if this.migrationContext.ConcurrentCountTableRows {
 		log.Infof("As instructed, counting rows in the background; meanwhile I will use an estimated count, and will update it later on")
 		go countRowsFunc()
 		// and we ignore errors, because this turns to be a background job
 		return nil
+	} else {
+		return countRowsFunc()
 	}
-	return countRowsFunc()
 }
 
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
@@ -959,7 +976,9 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s",
+	// "Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s"
+	format := GetRowFormat(rowsEstimate)
+	status := fmt.Sprintf(format,
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
@@ -1286,7 +1305,7 @@ func (this *Migrator) finalCleanup() error {
 		}
 	} else {
 		if !this.migrationContext.Noop {
-			log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add `--ok-to-drop-table` next time. But I prefer you do not. To drop the old table, issue:")
+			log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add " + color.MagentaString("`--ok-to-drop-table`") + " next time. But I prefer you do not. To drop the old table, issue:")
 			log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
 		}
 	}

@@ -191,7 +191,14 @@ type MigrationContext struct {
 	CanStopStreaming func() bool
 }
 
+//[client]
+//user=gh-ost
+//password=123456
+//[osc]
+//chunk_size=xxx
+//参考: https://github.com/github/gh-ost/blob/master/doc/cheatsheet.md
 type ContextConfig struct {
+	// 用户名，密码
 	Client struct {
 		User     string
 		Password string
