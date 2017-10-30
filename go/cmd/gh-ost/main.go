@@ -205,6 +205,7 @@ func main() {
 
 	maxLoadValue := *maxLoad
 	criticalLoadValue := *criticalLoad
+	chunkSizeValue := *chunkSize
 
 	if len(*dbConfigFile) > 0 && base.FileExists(*dbConfigFile) {
 		// 读取配置文件
@@ -226,6 +227,7 @@ func main() {
 
 		maxLoadValue = config.MaxLoad
 		criticalLoadValue = config.CriticalLoad
+		chunkSizeValue = config.ChunkSize
 
 	}
 
@@ -303,7 +305,7 @@ func main() {
 	}
 	migrationContext.SetHeartbeatIntervalMilliseconds(*heartbeatIntervalMillis)
 	migrationContext.SetNiceRatio(*niceRatio)
-	migrationContext.SetChunkSize(*chunkSize)
+	migrationContext.SetChunkSize(chunkSizeValue)
 	migrationContext.SetDMLBatchSize(*dmlBatchSize)
 	migrationContext.SetMaxLagMillisecondsThrottleThreshold(*maxLagMillis)
 
