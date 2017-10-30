@@ -203,19 +203,33 @@ func main() {
 		log.SetLevel(log.ERROR)
 	}
 
-	if migrationContext.DatabaseName == "" {
-		if len(*dbConfigFile) > 0 && base.FileExists(*dbConfigFile) {
-			// 读取配置文件
-			config, err := base.NewConfigWithFile(*dbConfigFile)
-			if err != nil {
-				log.Fatalf("db config file invalid: %s", *dbConfigFile)
-			}
-			// 实现alias到db的映射
-			db, host, port := config.GetDB(*dbAlias)
-			migrationContext.InspectorConnectionConfig.Key.Hostname = host
-			migrationContext.InspectorConnectionConfig.Key.Port = port
-			migrationContext.DatabaseName = db
+	maxLoadValue := *maxLoad
+	criticalLoadValue := *criticalLoad
+
+	if len(*dbConfigFile) > 0 && base.FileExists(*dbConfigFile) {
+		// 读取配置文件
+		config, err := base.NewConfigWithFile(*dbConfigFile)
+		if err != nil {
+			log.Fatalf("db config file invalid: %s", *dbConfigFile)
 		}
+		// 实现alias到db的映射
+		db, host, port := config.GetDB(*dbAlias)
+		migrationContext.InspectorConnectionConfig.Key.Hostname = host
+		migrationContext.InspectorConnectionConfig.Key.Port = port
+		migrationContext.DatabaseName = db
+
+		migrationContext.InitiallyDropGhostTable = config.InitiallyDropGhosTable
+		migrationContext.InitiallyDropOldTable = config.InitiallyDropOldTable
+		migrationContext.DropServeSocket = config.InitiallyDropSocketFile
+		migrationContext.CliUser = config.User
+		migrationContext.CliPassword = config.Password
+
+		maxLoadValue = config.MaxLoad
+		criticalLoadValue = config.CriticalLoad
+
+	}
+
+	if migrationContext.DatabaseName == "" {
 		log.Fatalf("--database must be provided and database name must not be empty")
 	}
 
@@ -268,10 +282,10 @@ func main() {
 	if err := migrationContext.ReadThrottleControlReplicaKeys(*throttleControlReplicas); err != nil {
 		log.Fatale(err)
 	}
-	if err := migrationContext.ReadMaxLoad(*maxLoad); err != nil {
+	if err := migrationContext.ReadMaxLoad(maxLoadValue); err != nil {
 		log.Fatale(err)
 	}
-	if err := migrationContext.ReadCriticalLoad(*criticalLoad); err != nil {
+	if err := migrationContext.ReadCriticalLoad(criticalLoadValue); err != nil {
 		log.Fatale(err)
 	}
 	if migrationContext.ServeSocketFile == "" {

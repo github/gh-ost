@@ -1,3 +1,12 @@
+max_load = "Threads_running=25"
+critical_load = "Threads_running=1000"
+chunk_size = 1000
+initially_drop_old_table = true
+initially_drop_ghost_table = true
+initially_drop_socket_file = true
+user = ""
+password = ""
+
 dbs = [
     "shard0:shard_sm_0@shard00-r1.db.test.com",
     "shard1:shard_sm_1@shard00-r1.db.test.com",

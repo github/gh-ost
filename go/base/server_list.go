@@ -12,7 +12,17 @@ import (
 )
 
 type DatabaseConfig struct {
-	Databases []string `toml:"dbs"`
+	Databases    []string `toml:"dbs"`
+	MaxLoad      string   `toml:"max_load"`
+	CriticalLoad string   `toml:"critical_load"`
+	ChunkSize    string   `toml:"chunk_size"`
+
+	InitiallyDropOldTable   bool `toml:"initially_drop_old_table"`
+	InitiallyDropGhosTable  bool `toml:"initially_drop_ghost_table"`
+	InitiallyDropSocketFile bool `toml:"initially_drop_socket_file"`
+
+	User     string `toml:"user"`
+	Password string `toml:"password"`
 }
 
 func NewConfigWithFile(name string) (*DatabaseConfig, error) {
