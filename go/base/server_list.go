@@ -15,14 +15,19 @@ type DatabaseConfig struct {
 	Databases    []string `toml:"dbs"`
 	MaxLoad      string   `toml:"max_load"`
 	CriticalLoad string   `toml:"critical_load"`
-	ChunkSize    int64   `toml:"chunk_size"`
+	ChunkSize    int64    `toml:"chunk_size"`
 
 	InitiallyDropOldTable   bool `toml:"initially_drop_old_table"`
 	InitiallyDropGhosTable  bool `toml:"initially_drop_ghost_table"`
 	InitiallyDropSocketFile bool `toml:"initially_drop_socket_file"`
 
-	User     string `toml:"user"`
-	Password string `toml:"password"`
+	User               string     `toml:"user"`
+	Password           string     `toml:"password"`
+	IsRdsMySQL         bool       `toml:"is_rds_mysql"`
+	AssumeRbr          bool       `toml:"assume_rbr"`
+	SlaveMasterMapping [][]string `toml:"slave_master_mapping"`
+
+	SlaveMasterMap map[string]string
 }
 
 func NewConfigWithFile(name string) (*DatabaseConfig, error) {
@@ -39,6 +44,11 @@ func NewConfig(data string) (*DatabaseConfig, error) {
 	_, err := toml.Decode(data, &c)
 	if err != nil {
 		return nil, errors.Trace(err)
+	}
+
+	c.SlaveMasterMap = make(map[string]string)
+	for _, mapping := range c.SlaveMasterMapping {
+		c.SlaveMasterMap[mapping[0]] = mapping[1]
 	}
 
 	return &c, nil

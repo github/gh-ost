@@ -17,8 +17,8 @@ import (
 	"github.com/github/gh-ost/go/sql"
 
 	"github.com/fatih/color"
-	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
+	log "github.com/wfxiang08/cyutils/utils/rolling_log"
 )
 
 const (
@@ -146,7 +146,7 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 		}
 	}
 	if len(this.migrationContext.GetOldTableName()) > mysql.MaxTableNameLength {
-		log.Fatalf("--timestamp-old-table defined, but resulting table name (%s) is too long (only %d characters allowed)", this.migrationContext.GetOldTableName(), mysql.MaxTableNameLength)
+		log.Panicf("--timestamp-old-table defined, but resulting table name (%s) is too long (only %d characters allowed)", this.migrationContext.GetOldTableName(), mysql.MaxTableNameLength)
 	}
 
 	if this.tableExists(this.migrationContext.GetOldTableName()) {
@@ -307,7 +307,8 @@ func (this *Applier) InitiateHeartbeat() {
 		if _, err := this.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339Nano)); err != nil {
 			numSuccessiveFailures++
 			if numSuccessiveFailures > this.migrationContext.MaxRetries() {
-				return log.Errore(err)
+				log.ErrorErrorf(err, "injectHeartbeat failed")
+				return err
 			}
 		} else {
 			numSuccessiveFailures = 0
@@ -344,7 +345,8 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 	// 执行Query
 	var result int64
 	if err := this.db.QueryRow(throttleQuery).Scan(&result); err != nil {
-		return 0, log.Errore(err)
+		log.ErrorErrorf(err, "injectHeartbeat failed")
+		return 0, err
 	}
 	return result, nil
 }
@@ -635,7 +637,8 @@ func (this *Applier) RenameTablesRollback() (renameError error) {
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		renameError = err
 	}
-	return log.Errore(renameError)
+	log.ErrorErrorf(renameError, "RenameTablesRollback failed")
+	return renameError
 }
 
 // StopSlaveIOThread is applicable with --test-on-replica; it stops the IO thread, duh.
@@ -884,7 +887,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		sql.EscapeName(this.migrationContext.GetOldTableName()),
 	)
 	if _, err := tx.Exec(query); err != nil {
-		log.Errore(err)
+		log.ErrorErrorf(err, "AtomicCutOverMagicLock failed")
 		// We DO NOT return here because we must `UNLOCK TABLES`!
 	}
 
@@ -898,7 +901,8 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 	query = `unlock tables`
 	if _, err := tx.Exec(query); err != nil {
 		tableUnlocked <- err
-		return log.Errore(err)
+		log.ErrorErrorf(err, "AtomicCutOverMagicLock failed")
+		return err
 	}
 	log.Infof("Tables unlocked")
 	tableUnlocked <- nil
@@ -941,7 +945,8 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 	log.Infof("Issuing and expecting this to block: %s", query)
 	if _, err := tx.Exec(query); err != nil {
 		tablesRenamed <- err
-		return log.Errore(err)
+		log.ErrorErrorf(err, "AtomicCutoverRename failed")
+		return err
 	}
 
 	// TODO: 什么时候Commit呢?
@@ -1035,7 +1040,8 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 
 	if err != nil {
 		err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), query, args)
-		return log.Errore(err)
+		log.ErrorErrorf(err, "RenameTablesRollback failed")
+		return err
 	}
 	// no error
 	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
@@ -1093,7 +1099,8 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 	}()
 
 	if err != nil {
-		return log.Errore(err)
+		log.ErrorErrorf(err, "ApplyDMLEventQueries failed")
+		return err
 	}
 	// no error
 	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, int64(len(dmlEvents)))

@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/github/gh-ost/go/base"
-	"github.com/outbrain/golib/log"
+	log "github.com/wfxiang08/cyutils/utils/rolling_log"
 )
 
 const (
@@ -84,7 +84,8 @@ func (this *HooksExecutor) executeHook(hook string, extraVariables ...string) er
 
 	combinedOutput, err := cmd.CombinedOutput()
 	fmt.Fprintln(os.Stderr, string(combinedOutput))
-	return log.Errore(err)
+	log.ErrorErrorf(err, "executeHook failed")
+	return err
 }
 
 func (this *HooksExecutor) detectHooks(baseName string) (hooks []string, err error) {

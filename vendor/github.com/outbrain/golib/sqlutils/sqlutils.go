@@ -23,7 +23,7 @@ import (
 	"fmt"
 	// 引入驱动
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/outbrain/golib/log"
+	log "github.com/wfxiang08/cyutils/utils/rolling_log"
 	"strconv"
 	"strings"
 	"sync"
@@ -207,7 +207,8 @@ func QueryRowsMap(db *sql.DB, query string, on_row func(RowMap) error, args ...i
 	rows, err := db.Query(query, args...)
 	defer rows.Close()
 	if err != nil && err != sql.ErrNoRows {
-		return log.Errore(err)
+		log.ErrorError(err)
+		return err
 	}
 	err = ScanRowsToMaps(rows, on_row)
 	return err
@@ -226,7 +227,8 @@ func queryResultData(db *sql.DB, query string, retrieveColumns bool, args ...int
 	rows, err := db.Query(query, args...)
 	defer rows.Close()
 	if err != nil && err != sql.ErrNoRows {
-		return EmptyResultData, columns, log.Errore(err)
+		log.ErrorError(err)
+		return EmptyResultData, columns, err
 	}
 	if retrieveColumns {
 		// Don't pay if you don't want to
@@ -282,7 +284,7 @@ func ExecNoPrepare(db *sql.DB, query string, args ...interface{}) (sql.Result, e
 	// auto-commit模式吧?
 	res, err = db.Exec(query, args...)
 	if err != nil {
-		log.Errore(err)
+		log.ErrorError(err)
 	}
 	return res, err
 }
@@ -305,7 +307,7 @@ func execInternal(silent bool, db *sql.DB, query string, args ...interface{}) (s
 	var res sql.Result
 	res, err = stmt.Exec(args...)
 	if err != nil && !silent {
-		log.Errore(err)
+		log.ErrorError(err)
 	}
 	return res, err
 }

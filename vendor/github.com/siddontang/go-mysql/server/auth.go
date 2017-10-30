@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 
 	. "github.com/siddontang/go-mysql/mysql"
+	"log"
 )
 
 func (c *Conn) writeInitialHandshake() error {
@@ -96,6 +97,7 @@ func (c *Conn) readHandshakeResponse(password string) error {
 
 	checkAuth := CalcPassword(c.salt, []byte(password))
 
+	log.Printf("User: %s, Password: %s", user, password)
 	if !bytes.Equal(auth, checkAuth) {
 		return NewDefaultError(ER_ACCESS_DENIED_ERROR, c.RemoteAddr().String(), c.user, "Yes")
 	}

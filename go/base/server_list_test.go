@@ -4,13 +4,13 @@ import (
 	"testing"
 
 	"fmt"
-	"github.com/outbrain/golib/log"
 	test "github.com/outbrain/golib/tests"
+	log "github.com/wfxiang08/cyutils/utils/rolling_log"
 	"strings"
 )
 
 func init() {
-	log.SetLevel(log.ERROR)
+	log.SetLevel(log.LEVEL_ERROR)
 }
 
 // go test github.com/github/gh-ost/go/base -v -run "TestServerListParse"
@@ -25,4 +25,8 @@ func TestServerListParse(t *testing.T) {
 	test.S(t).ExpectEquals(db, "shard_sm_29")
 	test.S(t).ExpectEquals(host, "shard03-r1.db.test.com")
 	test.S(t).ExpectEquals(port, 3306)
+
+	for key, value := range config.SlaveMasterMap {
+		fmt.Printf("%s --> %s\n", key, value)
+	}
 }

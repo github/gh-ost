@@ -17,7 +17,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/github/gh-ost/go/base"
-	"github.com/outbrain/golib/log"
+	log "github.com/wfxiang08/cyutils/utils/rolling_log"
 )
 
 type printStatusFunc func(PrintStatusRule, io.Writer)
@@ -88,7 +88,7 @@ func (this *Server) Serve() (err error) {
 		for {
 			conn, err := this.unixListener.Accept()
 			if err != nil {
-				log.Errore(err)
+				log.ErrorErrorf(err, "unixListener accept error")
 			}
 			go this.handleConnection(conn)
 		}
@@ -100,7 +100,7 @@ func (this *Server) Serve() (err error) {
 		for {
 			conn, err := this.tcpListener.Accept()
 			if err != nil {
-				log.Errore(err)
+				log.ErrorErrorf(err, "tcpListener accept error")
 			}
 			go this.handleConnection(conn)
 		}
@@ -132,7 +132,8 @@ func (this *Server) onServerCommand(command string, writer *bufio.Writer) (err e
 	} else {
 		fmt.Fprintf(writer, "%s\n", err.Error())
 	}
-	return log.Errore(err)
+	log.ErrorErrorf(err, "onServerCommand error")
+	return err
 }
 
 // applyServerCommand parses and executes commands by user

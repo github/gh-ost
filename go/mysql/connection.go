@@ -16,6 +16,7 @@ type ConnectionConfig struct {
 	User       string
 	Password   string
 	ImpliedKey *InstanceKey // 这是是做什么的呢？
+	IsRds      bool         // 是否为Rds
 }
 
 func NewConnectionConfig() *ConnectionConfig {
@@ -32,6 +33,7 @@ func (this *ConnectionConfig) DuplicateCredentials(key InstanceKey) *ConnectionC
 		Key:      key,
 		User:     this.User,
 		Password: this.Password,
+		IsRds:    this.IsRds,
 	}
 	config.ImpliedKey = &config.Key
 	return config

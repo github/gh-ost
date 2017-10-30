@@ -17,7 +17,7 @@
 package os
 
 import (
-	"github.com/outbrain/golib/log"
+	log "github.com/wfxiang08/cyutils/utils/rolling_log"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -28,7 +28,8 @@ func execCmd(commandText string, arguments ...string) (*exec.Cmd, string, error)
 	commandBytes := []byte(commandText)
 	tmpFile, err := ioutil.TempFile("", "gh-ost-process-cmd-")
 	if err != nil {
-		return nil, "", log.Errore(err)
+		log.ErrorErrorf(err, "execCmd failed")
+		return nil, "", err
 	}
 	ioutil.WriteFile(tmpFile.Name(), commandBytes, 0644)
 	log.Debugf("execCmd: %s", commandText)
@@ -43,10 +44,12 @@ func CommandRun(commandText string, arguments ...string) error {
 	cmd, tmpFileName, err := execCmd(commandText, arguments...)
 	defer os.Remove(tmpFileName)
 	if err != nil {
-		return log.Errore(err)
+		log.ErrorErrorf(err, "CommandRun failed")
+		return err
 	}
 	err = cmd.Run()
-	return log.Errore(err)
+	log.ErrorErrorf(err, "CommandRun failed")
+	return err
 }
 
 // RunCommandWithOutput executes a command and return output bytes
@@ -54,12 +57,14 @@ func RunCommandWithOutput(commandText string) ([]byte, error) {
 	cmd, tmpFileName, err := execCmd(commandText)
 	defer os.Remove(tmpFileName)
 	if err != nil {
-		return nil, log.Errore(err)
+		log.ErrorErrorf(err, "RunCommandWithOutput failed")
+		return nil, err
 	}
 
 	outputBytes, err := cmd.Output()
 	if err != nil {
-		return nil, log.Errore(err)
+		log.ErrorErrorf(err, "RunCommandWithOutput failed")
+		return nil, err
 	}
 
 	return outputBytes, nil

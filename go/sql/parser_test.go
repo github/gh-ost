@@ -9,12 +9,12 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/outbrain/golib/log"
 	test "github.com/outbrain/golib/tests"
+	log "github.com/wfxiang08/cyutils/utils/rolling_log"
 )
 
 func init() {
-	log.SetLevel(log.ERROR)
+	log.SetLevel(log.LEVEL_ERROR)
 }
 
 func TestParseAlterStatement(t *testing.T) {

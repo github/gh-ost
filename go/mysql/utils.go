@@ -12,8 +12,8 @@ import (
 
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
+	log "github.com/wfxiang08/cyutils/utils/rolling_log"
 )
 
 const MaxTableNameLength = 64
@@ -60,7 +60,10 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 	currentUri := connectionConfig.GetDBUri("information_schema")
 	db, _, err := sqlutils.GetDB(currentUri)
 	if err != nil {
+		log.ErrorErrorf(err, "Get db failed")
 		return nil, err
+	} else {
+		log.Printf("current uri: %s", currentUri)
 	}
 	// 执行show slave status?
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
@@ -188,7 +191,7 @@ func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnL
 		return nil, err
 	}
 	if len(columnNames) == 0 {
-		return nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
+		return nil, fmt.Errorf("Found 0 columns on %s.%s. Bailing out",
 			sql.EscapeName(databaseName),
 			sql.EscapeName(tableName),
 		)

@@ -13,9 +13,9 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/outbrain/golib/log"
 	gomysql "github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/replication"
+	log "github.com/wfxiang08/cyutils/utils/rolling_log"
 	"golang.org/x/net/context"
 )
 
@@ -57,7 +57,9 @@ func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *G
 // ConnectBinlogStreamer
 func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordinates) (err error) {
 	if coordinates.IsEmpty() {
-		return log.Errorf("Emptry coordinates at ConnectBinlogStreamer()")
+		err := fmt.Errorf("Emptry coordinates at ConnectBinlogStreamer()")
+		log.ErrorError(err)
+		return err
 	}
 
 	this.currentCoordinates = coordinates

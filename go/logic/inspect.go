@@ -18,8 +18,9 @@ import (
 	"github.com/github/gh-ost/go/sql"
 
 	"github.com/fatih/color"
-	"github.com/outbrain/golib/log"
+	"github.com/juju/errors"
 	"github.com/outbrain/golib/sqlutils"
+	log "github.com/wfxiang08/cyutils/utils/rolling_log"
 )
 
 const startSlavePostWaitMilliseconds = 500 * time.Millisecond
@@ -41,13 +42,17 @@ func NewInspector() *Inspector {
 
 func (this *Inspector) InitDBConnections() (err error) {
 	inspectorUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
+	log.Infof("DB: %s --> Uri: %s", this.migrationContext.DatabaseName, inspectorUri)
 	if this.db, _, err = sqlutils.GetDB(inspectorUri); err != nil {
+		log.ErrorErrorf(err, "get db failed")
 		return err
 	}
 	if err := this.validateConnection(); err != nil {
+		log.ErrorErrorf(err, "validateConnection failed")
 		return err
 	}
 	if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
+		log.ErrorErrorf(err, "GetInstanceKey failed")
 		return err
 	} else {
 		this.connectionConfig.ImpliedKey = impliedKey
@@ -55,12 +60,15 @@ func (this *Inspector) InitDBConnections() (err error) {
 
 	// 验证当前的授权是否OK
 	if err := this.validateGrants(); err != nil {
+		log.ErrorErrorf(err, "validateGrants failed")
 		return err
 	}
 	if err := this.validateBinlogs(); err != nil {
+		log.ErrorErrorf(err, "validateBinlogs failed")
 		return err
 	}
 	if err := this.applyBinlogFormat(); err != nil {
+		log.ErrorErrorf(err, "applyBinlogFormat failed")
 		return err
 	}
 	log.Infof("Inspector initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.InspectorMySQLVersion)
@@ -148,7 +156,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	// 是否允许Nullable？
 	if this.migrationContext.UniqueKey.HasNullable {
 		if this.migrationContext.NullableUniqueKeyAllowed {
-			log.Warningf("Chosen key (%s) has nullable columns. You have supplied with --allow-nullable-unique-key and so this migration proceeds. As long as there aren't NULL values in this key's column, migration should be fine. NULL values will corrupt migration's data", this.migrationContext.UniqueKey)
+			log.Printf("Chosen key (%s) has nullable columns. You have supplied with --allow-nullable-unique-key and so this migration proceeds. As long as there aren't NULL values in this key's column, migration should be fine. NULL values will corrupt migration's data", this.migrationContext.UniqueKey)
 		} else {
 			return fmt.Errorf("Chosen key (%s) has nullable columns. Bailing out. To force this operation to continue, supply --allow-nullable-unique-key flag. Only do so if you are certain there are no actual NULL values in this key. As long as there aren't, migration should be fine. NULL values in columns of this key will corrupt migration's data", this.migrationContext.UniqueKey)
 		}
@@ -277,7 +285,7 @@ func (this *Inspector) validateGrants() error {
 	log.Debugf("Privileges: Super: %t, REPLICATION CLIENT: %t, REPLICATION SLAVE: %t, ALL on *.*: %t, ALL on %s.*: %t", foundSuper, foundReplicationClient, foundReplicationSlave, foundAll, sql.EscapeName(this.migrationContext.DatabaseName), foundDBAll)
 	msg := fmt.Sprintf("User has insufficient privileges for migration. Needed: SUPER|REPLICATION CLIENT, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
 	log.Errorf(color.RedString("权限不够: ") + msg)
-	return log.Errorf(msg)
+	return errors.New(msg)
 }
 
 // restartReplication is required so that we are _certain_ the binlog format and
@@ -298,8 +306,15 @@ func (this *Inspector) restartReplication() error {
 	// stop slave sql_thread
 	//
 	var stopError, startError error
-	_, stopError = sqlutils.ExecNoPrepare(this.db, `stop slave`)
-	_, startError = sqlutils.ExecNoPrepare(this.db, `start slave`)
+
+	if this.connectionConfig.IsRds {
+		log.Panicf("Rds should not reach here: AssumeRBR should make sure by calling user")
+		// _, stopError = sqlutils.ExecNoPrepare(this.db, `CALL mysql.rds_stop_replication`)
+		// _, startError = sqlutils.ExecNoPrepare(this.db, `CALL mysql.rds_start_replication`)
+	} else {
+		_, stopError = sqlutils.ExecNoPrepare(this.db, `stop slave`)
+		_, startError = sqlutils.ExecNoPrepare(this.db, `start slave`)
+	}
 	if stopError != nil {
 		return stopError
 	}
@@ -337,6 +352,7 @@ func (this *Inspector) applyBinlogFormat() error {
 	}
 
 	// We already have RBR, no explicit switch
+	// 需要确保MySQL已经切换成为ROW模式了
 	if !this.migrationContext.AssumeRBR {
 		if err := this.restartReplication(); err != nil {
 			return err
@@ -409,7 +425,7 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	}
 
 	if this.migrationContext.IsTungsten {
-		log.Warningf("log_slave_updates not found on %s:%d, but --tungsten provided, so I'm proceeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		log.Printf("log_slave_updates not found on %s:%d, but --tungsten provided, so I'm proceeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 		return nil
 	}
 
@@ -418,7 +434,7 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	}
 
 	if this.migrationContext.InspectorIsAlsoApplier() {
-		log.Warningf("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		log.Printf("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 		return nil
 	}
 
@@ -448,7 +464,7 @@ func (this *Inspector) validateTable() error {
 		return err
 	}
 	if !tableFound {
-		return log.Errorf("Cannot find table %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return fmt.Errorf("Cannot find table %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Infof("Table found. Engine=%s", this.migrationContext.TableEngine)
 	log.Debugf("Estimated number of rows via STATUS: %d", this.migrationContext.RowsEstimate)
@@ -458,7 +474,7 @@ func (this *Inspector) validateTable() error {
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
 func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error {
 	if this.migrationContext.SkipForeignKeyChecks {
-		log.Warning("--skip-foreign-key-checks provided: will not check for foreign keys")
+		log.Printf("--skip-foreign-key-checks provided: will not check for foreign keys")
 		return nil
 	}
 	query := `
@@ -492,14 +508,14 @@ func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) erro
 		return err
 	}
 	if numParentForeignKeys > 0 {
-		return log.Errorf("Found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return fmt.Errorf("Found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	if numChildForeignKeys > 0 {
 		if allowChildForeignKeys {
 			log.Debugf("Foreign keys found and will be dropped, as per given --discard-foreign-keys flag")
 			return nil
 		}
-		return log.Errorf("Found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return fmt.Errorf("Found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Debugf("Validated no foreign keys exist on table")
 	return nil
@@ -527,7 +543,7 @@ func (this *Inspector) validateTableTriggers() error {
 		return err
 	}
 	if numTriggers > 0 {
-		return log.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return fmt.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Debugf("Validated no triggers exist on table")
 	return nil
@@ -550,7 +566,7 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 		return err
 	}
 	if !outputFound {
-		return log.Errorf("Cannot run EXPLAIN on %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return fmt.Errorf("Cannot run EXPLAIN on %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Infof(color.GreenString("Estimated number of rows via EXPLAIN: %d"), this.migrationContext.RowsEstimate)
 	return nil
