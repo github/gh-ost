@@ -660,12 +660,14 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if this.ConfigFile == "" {
 		return nil
 	}
+
 	gcfg.RelaxedParserMode = true
 	gcfgscanner.RelaxedScannerMode = true
 	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
 		return err
 	}
 
+	// 更新配置文件
 	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull
 	// the given variable from os env
 	if submatch := envVariableRegexp.FindStringSubmatch(this.config.Client.User); len(submatch) > 1 {

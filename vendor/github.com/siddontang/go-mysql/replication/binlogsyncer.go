@@ -10,6 +10,8 @@ import (
 
 	"golang.org/x/net/context"
 
+	"encoding/json"
+	"github.com/fatih/color"
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/siddontang/go-mysql/client"
@@ -72,7 +74,9 @@ type BinlogSyncer struct {
 
 // NewBinlogSyncer creates the BinlogSyncer with cfg.
 func NewBinlogSyncer(cfg *BinlogSyncerConfig) *BinlogSyncer {
-	log.Infof("create BinlogSyncer with config %v", cfg)
+
+	data, _ := json.Marshal(cfg)
+	log.Infof("create BinlogSyncer with config %s", color.RedString(string(data)))
 
 	b := new(BinlogSyncer)
 
@@ -131,8 +135,10 @@ func (b *BinlogSyncer) registerSlave() error {
 		b.c.Close()
 	}
 
-	log.Infof("register slave for master server %s:%d", b.cfg.Host, b.cfg.Port)
+	log.Infof(color.RedString("register slave for master server %s:%d"), b.cfg.Host, b.cfg.Port)
 	var err error
+	// 如何注册呢?
+	// 是否需要使用某个server_id, 还是只要有 binlog pos即可?
 	b.c, err = client.Connect(fmt.Sprintf("%s:%d", b.cfg.Host, b.cfg.Port), b.cfg.User, b.cfg.Password, "", func(c *client.Conn) {
 		c.TLSConfig = b.cfg.TLSConfig
 	})

@@ -143,7 +143,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		return fmt.Errorf("No shared unique key can be found after ALTER! Bailing out")
 	}
 	this.migrationContext.UniqueKey = sharedUniqueKeys[0]
-	log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
+	log.Infof(color.MagentaString("Chosen shared unique key is %s"), this.migrationContext.UniqueKey.Name)
 
 	// 是否允许Nullable？
 	if this.migrationContext.UniqueKey.HasNullable {
@@ -165,7 +165,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns,
 		this.migrationContext.GhostTableColumns,
 		this.migrationContext.ColumnRenameMap)
-	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
+	log.Infof("Shared columns are %s", color.CyanString(this.migrationContext.SharedColumns.String()))
 	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
 
 	// This additional step looks at which columns are unsigned. We could have merged this within

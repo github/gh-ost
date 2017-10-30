@@ -16,6 +16,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
+	"github.com/fatih/color"
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
 )
@@ -235,7 +236,7 @@ func (this *Applier) dropTable(tableName string) error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
-	log.Infof("Droppping table %s.%s",
+	log.Infof(color.RedString("Droppping table %s.%s"),
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
@@ -340,6 +341,7 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 	if throttleQuery == "" {
 		return 0, nil
 	}
+	// 执行Query
 	var result int64
 	if err := this.db.QueryRow(throttleQuery).Scan(&result); err != nil {
 		return 0, log.Errore(err)
@@ -369,7 +371,7 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 			return err
 		}
 	}
-	log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
+	log.Infof(color.GreenString("Migration min values: [%s]"), this.migrationContext.MigrationRangeMinValues.String())
 	return err
 }
 
@@ -390,7 +392,7 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 			return err
 		}
 	}
-	log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+	log.Infof(color.GreenString("Migration max values: [%s]"), this.migrationContext.MigrationRangeMaxValues.String())
 	return err
 }
 

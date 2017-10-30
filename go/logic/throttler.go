@@ -315,6 +315,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 		}
 	}
 	if this.migrationContext.GetThrottleQuery() != "" {
+		// 如果返回结果 > 0, 则要执行throttle, 暂停迁移
 		if res, _ := this.applier.ExecuteThrottleQuery(); res > 0 {
 			return setThrottle(true, "throttle-query", base.NoThrottleReasonHint)
 		}

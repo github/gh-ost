@@ -30,6 +30,9 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 		for sig := range c {
 			switch sig {
 			case syscall.SIGHUP:
+				// kill -HUP xxx
+				// 重新加载配置文件
+				// 这个时候重新加载有什么意义呢?
 				log.Infof("Received SIGHUP. Reloading configuration")
 				if err := migrationContext.ReadConfigFile(); err != nil {
 					log.Errore(err)
@@ -87,6 +90,8 @@ func main() {
 	flag.BoolVar(&migrationContext.InitiallyDropOldTable, "initially-drop-old-table", false, "Drop a possibly existing OLD table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists")
 	flag.BoolVar(&migrationContext.InitiallyDropGhostTable, "initially-drop-ghost-table", false, "Drop a possibly existing Ghost table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists")
 	flag.BoolVar(&migrationContext.TimestampOldTable, "timestamp-old-table", false, "Use a timestamp in old table name. This makes old table names unique and non conflicting cross migrations")
+
+	// 数据拷贝完毕，如何进行近cut-over呢?
 	cutOver := flag.String("cut-over", "atomic", "choose cut-over type (default|atomic, two-step)")
 	flag.BoolVar(&migrationContext.ForceNamedCutOverCommand, "force-named-cut-over", false, "When true, the 'unpostpone|cut-over' interactive command must name the migrated table")
 
@@ -116,11 +121,15 @@ func main() {
 	flag.StringVar(&migrationContext.HooksPath, "hooks-path", "", "directory where hook files are found (default: empty, ie. hooks disabled). Hook files found on this path, and conforming to hook naming conventions will be executed")
 	flag.StringVar(&migrationContext.HooksHintMessage, "hooks-hint", "", "arbitrary message to be injected to hooks via GH_OST_HOOKS_HINT, for your convenience")
 
+	// 默认的ServerId
+	// 注意这个很重要，不要和前天的server_id冲突
 	flag.UintVar(&migrationContext.ReplicaServerId, "replica-server-id", 99999, "server id used by gh-ost process. Default: 99999")
 
+	// 负载控制&检测
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")
 	flag.Int64Var(&migrationContext.CriticalLoadIntervalMilliseconds, "critical-load-interval-millis", 0, "When 0, migration immediately bails out upon meeting critical-load. When non-zero, a second check is done after given interval, and migration only bails out if 2nd check still meets critical load")
+
 	quiet := flag.Bool("quiet", false, "quiet")
 	verbose := flag.Bool("verbose", false, "verbose")
 	debug := flag.Bool("debug", false, "debug mode (very verbose)")
@@ -239,8 +248,10 @@ func main() {
 	migrationContext.SetChunkSize(*chunkSize)
 	migrationContext.SetDMLBatchSize(*dmlBatchSize)
 	migrationContext.SetMaxLagMillisecondsThrottleThreshold(*maxLagMillis)
+
 	migrationContext.SetThrottleQuery(*throttleQuery)
 	migrationContext.SetThrottleHTTP(*throttleHTTP)
+
 	migrationContext.SetDefaultNumRetries(*defaultRetries)
 	migrationContext.ApplyCredentials()
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/fatih/color"
 	"github.com/github/gh-ost/go/base"
 	"github.com/outbrain/golib/log"
 )
@@ -51,12 +52,14 @@ func (this *Server) BindSocketFile() (err error) {
 	if err != nil {
 		return err
 	}
-	log.Infof("Listening on unix socket file: %s", this.migrationContext.ServeSocketFile)
+	log.Infof("Listening on unix socket file: %s, socket usage: "+color.CyanString("https://github.com/github/gh-ost/blob/master/doc/interactive-commands.md"),
+		color.RedString(this.migrationContext.ServeSocketFile))
 	return nil
 }
 
 func (this *Server) RemoveSocketFile() (err error) {
-	log.Infof("Removing socket file: %s", this.migrationContext.ServeSocketFile)
+	log.Infof("Removing socket file: %s, socket usage: "+color.CyanString("https://github.com/github/gh-ost/blob/master/doc/interactive-commands.md"),
+		color.RedString(this.migrationContext.ServeSocketFile))
 	return os.Remove(this.migrationContext.ServeSocketFile)
 }
 
@@ -68,7 +71,8 @@ func (this *Server) BindTCPPort() (err error) {
 	if err != nil {
 		return err
 	}
-	log.Infof("Listening on tcp port: %d", this.migrationContext.ServeTCPPort)
+	log.Infof("Listening on tcp port: %s, socket usage: "+color.CyanString("https://github.com/github/gh-ost/blob/master/doc/interactive-commands.md"),
+		color.RedString(fmt.Sprintf("%d", this.migrationContext.ServeTCPPort)))
 	return nil
 }
 
