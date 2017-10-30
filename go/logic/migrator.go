@@ -406,7 +406,7 @@ func (this *Migrator) Migrate() (err error) {
 	log.Debugf("Operating until row copy is complete")
 	// 等待迁移完毕
 	this.consumeRowCopyComplete()
-	log.Infof("Row copy complete")
+	log.Infof(color.MagentaString("=== Row copy complete, Next: CutOver ==="))
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
 		return err
 	}
@@ -427,7 +427,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onSuccess(); err != nil {
 		return err
 	}
-	log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	log.Infof(color.MagentaString("=== Done migrating %s.%s ===^-^ ^-^"), sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
