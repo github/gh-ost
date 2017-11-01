@@ -121,6 +121,7 @@ func main() {
 	version := flag.Bool("version", false, "Print version & exit")
 	checkFlag := flag.Bool("check-flag", false, "Check if another flag exists/supported. This allows for cross-version scripting. Exits with 0 when all additional provided flags exist, nonzero otherwise. You must provide (dummy) values for flags that require a value. Example: gh-ost --check-flag --cut-over-lock-timeout-seconds --nice-ratio 0")
 	flag.StringVar(&migrationContext.ForceTmpTableName, "force-table-names", "", "table name prefix to be used on the temporary tables")
+	flag.CommandLine.SetOutput(os.Stdout)
 
 	flag.Parse()
 
@@ -128,7 +129,7 @@ func main() {
 		return
 	}
 	if *help {
-		fmt.Fprintf(os.Stderr, "Usage of gh-ost:\n")
+		fmt.Fprintf(os.Stdout, "Usage of gh-ost:\n")
 		flag.PrintDefaults()
 		return
 	}
