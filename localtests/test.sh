@@ -164,6 +164,7 @@ test_single() {
     diff $orig_content_output_file $ghost_content_output_file
 
     echo "diff $orig_content_output_file $ghost_content_output_file"
+
     return 1
   fi
 }
