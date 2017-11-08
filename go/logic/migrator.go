@@ -179,7 +179,7 @@ func (this *Migrator) canStopStreaming() bool {
 
 // onChangelogStateEvent is called when a binlog event operation on the changelog table is intercepted.
 func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
-	// Hey, I created the changlog table, I know the type of columns it has!
+	// Hey, I created the changelog table, I know the type of columns it has!
 	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
 		return nil
 	}
