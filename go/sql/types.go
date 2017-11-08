@@ -26,7 +26,7 @@ const (
 
 const maxMediumintUnsigned int32 = 16777215
 
-type TimezoneConvertion struct {
+type TimezoneConversion struct {
 	ToTimezone string
 }
 
@@ -35,7 +35,7 @@ type Column struct {
 	IsUnsigned         bool
 	Charset            string
 	Type               ColumnType
-	timezoneConversion *TimezoneConvertion
+	timezoneConversion *TimezoneConversion
 }
 
 func (this *Column) convertArg(arg interface{}) interface{} {
@@ -172,7 +172,7 @@ func (this *ColumnList) GetColumnType(columnName string) ColumnType {
 }
 
 func (this *ColumnList) SetConvertDatetimeToTimestamp(columnName string, toTimezone string) {
-	this.GetColumn(columnName).timezoneConversion = &TimezoneConvertion{ToTimezone: toTimezone}
+	this.GetColumn(columnName).timezoneConversion = &TimezoneConversion{ToTimezone: toTimezone}
 }
 
 func (this *ColumnList) HasTimezoneConversion(columnName string) bool {
