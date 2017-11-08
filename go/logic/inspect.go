@@ -202,7 +202,7 @@ func (this *Inspector) validateConnection() error {
 }
 
 // validateGrants verifies the user by which we're executing has necessary grants
-// to do its thang.
+// to do its thing.
 func (this *Inspector) validateGrants() error {
 	query := `show /* gh-ost */ grants for current_user()`
 	foundAll := false
