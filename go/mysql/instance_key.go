@@ -15,7 +15,7 @@ const (
 	DefaultInstancePort = 3306
 )
 
-// InstanceKey is an instance indicator, identifued by hostname and port
+// InstanceKey is an instance indicator, identified by hostname and port
 type InstanceKey struct {
 	Hostname string
 	Port     int
@@ -83,7 +83,7 @@ func (this *InstanceKey) IsValid() bool {
 	return len(this.Hostname) > 0 && this.Port > 0
 }
 
-// DetachedKey returns an instance key whose hostname is detahced: invalid, but recoverable
+// DetachedKey returns an instance key whose hostname is detached: invalid, but recoverable
 func (this *InstanceKey) DetachedKey() *InstanceKey {
 	if this.IsDetached() {
 		return this
@@ -91,7 +91,7 @@ func (this *InstanceKey) DetachedKey() *InstanceKey {
 	return &InstanceKey{Hostname: fmt.Sprintf("%s%s", detachHint, this.Hostname), Port: this.Port}
 }
 
-// ReattachedKey returns an instance key whose hostname is detahced: invalid, but recoverable
+// ReattachedKey returns an instance key whose hostname is detached: invalid, but recoverable
 func (this *InstanceKey) ReattachedKey() *InstanceKey {
 	if !this.IsDetached() {
 		return this

@@ -179,7 +179,7 @@ func (this *Migrator) canStopStreaming() bool {
 
 // onChangelogStateEvent is called when a binlog event operation on the changelog table is intercepted.
 func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
-	// Hey, I created the changlog table, I know the type of columns it has!
+	// Hey, I created the changelog table, I know the type of columns it has!
 	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
 		return nil
 	}
@@ -387,7 +387,7 @@ func (this *Migrator) ExecOnFailureHook() (err error) {
 
 func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
 	if this.migrationContext.TestOnReplica {
-		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
+		// We're merely testing, we don't want to keep this state. Rollback the renames as possible
 		this.applier.RenameTablesRollback()
 	}
 	if cutOverError == nil {
@@ -742,7 +742,7 @@ func (this *Migrator) initiateStatus() error {
 // printMigrationStatusHint prints a detailed configuration dump, that is useful
 // to keep in mind; such as the name of migrated table, throttle params etc.
 // This gets printed at beginning and end of migration, every 10 minutes throughout
-// migration, and as reponse to the "status" interactive command.
+// migration, and as response to the "status" interactive command.
 func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s",
@@ -820,7 +820,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	}
 }
 
-// printStatus prints the prgoress status, and optionally additionally detailed
+// printStatus prints the progress status, and optionally additionally detailed
 // dump of configuration.
 // `rule` indicates the type of output expected.
 // By default the status is written to standard output, but other writers can

@@ -16,7 +16,7 @@ Use of triggers simplifies a lot of the flow in doing a live table migration, bu
 
 Triggers are stored routines which are invoked on a per-row operation upon `INSERT`, `DELETE`, `UPDATE` on a table.
 They were introduced in MySQL `5.0`.
-A trigger may contain a set of queries, and these queries run in the same transaction space as the query that manipulates the table. This makes for an atomicy of both the original operation on the table and the trigger-invoked operations.
+A trigger may contain a set of queries, and these queries run in the same transaction space as the query that manipulates the table. This makes for an atomicity of both the original operation on the table and the trigger-invoked operations.
 
 ### Triggers, overhead
 

@@ -39,7 +39,7 @@ var (
 
 const frenoMagicHint = "freno"
 
-// Throttler collects metrics related to throttling and makes informed decisison
+// Throttler collects metrics related to throttling and makes informed decision
 // whether throttling should take place.
 type Throttler struct {
 	migrationContext *base.MigrationContext
@@ -139,7 +139,7 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 		if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
 			// when running on replica, the heartbeat injection is also done on the replica.
 			// This means we will always get a good heartbeat value.
-			// When runnign on replica, we should instead check the `SHOW SLAVE STATUS` output.
+			// When running on replica, we should instead check the `SHOW SLAVE STATUS` output.
 			if lag, err := mysql.GetReplicationLag(this.inspector.connectionConfig); err != nil {
 				return log.Errore(err)
 			} else {

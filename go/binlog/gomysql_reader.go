@@ -57,12 +57,12 @@ func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *G
 // ConnectBinlogStreamer
 func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordinates) (err error) {
 	if coordinates.IsEmpty() {
-		return log.Errorf("Emptry coordinates at ConnectBinlogStreamer()")
+		return log.Errorf("Empty coordinates at ConnectBinlogStreamer()")
 	}
 
 	this.currentCoordinates = coordinates
 	log.Infof("Connecting binlog streamer at %+v", this.currentCoordinates)
-	// Start sync with sepcified binlog file and position
+	// Start sync with specified binlog file and position
 	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{this.currentCoordinates.LogFile, uint32(this.currentCoordinates.LogPos)})
 
 	return err
@@ -114,7 +114,7 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 			}
 		}
 		// The channel will do the throttling. Whoever is reding from the channel
-		// decides whether action is taken sycnhronously (meaning we wait before
+		// decides whether action is taken synchronously (meaning we wait before
 		// next iteration) or asynchronously (we keep pushing more events)
 		// In reality, reads will be synchronous
 		entriesChannel <- binlogEntry

@@ -202,7 +202,7 @@ func (this *Inspector) validateConnection() error {
 }
 
 // validateGrants verifies the user by which we're executing has necessary grants
-// to do its thang.
+// to do its thing.
 func (this *Inspector) validateGrants() error {
 	query := `show /* gh-ost */ grants for current_user()`
 	foundAll := false
@@ -261,7 +261,7 @@ func (this *Inspector) validateGrants() error {
 
 // restartReplication is required so that we are _certain_ the binlog format and
 // row image settings have actually been applied to the replication thread.
-// It is entriely possible, for example, that the replication is using 'STATEMENT'
+// It is entirely possible, for example, that the replication is using 'STATEMENT'
 // binlog format even as the variable says 'ROW'
 func (this *Inspector) restartReplication() error {
 	log.Infof("Restarting replication on %s:%d to make sure binlog settings apply to replication thread", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
@@ -377,7 +377,7 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	}
 
 	if this.migrationContext.InspectorIsAlsoApplier() {
-		log.Warningf("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		log.Warningf("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 		return nil
 	}
 
