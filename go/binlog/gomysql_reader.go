@@ -57,7 +57,7 @@ func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig) (binlogReader *G
 // ConnectBinlogStreamer
 func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordinates) (err error) {
 	if coordinates.IsEmpty() {
-		return log.Errorf("Emptry coordinates at ConnectBinlogStreamer()")
+		return log.Errorf("Empty coordinates at ConnectBinlogStreamer()")
 	}
 
 	this.currentCoordinates = coordinates
