@@ -306,7 +306,7 @@ help                                 # This message
 			}
 			if arg != "" && arg != this.migrationContext.OriginalTableName {
 				// User explicitly provided table name. This is a courtesy protection mechanism
-				err := fmt.Errorf("User commanded 'unpostpone' on %s, but migrated table is %s; ingoring request.", arg, this.migrationContext.OriginalTableName)
+				err := fmt.Errorf("User commanded 'unpostpone' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
 				return NoPrintStatusRule, err
 			}
 			if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
