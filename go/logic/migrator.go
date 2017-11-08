@@ -742,7 +742,7 @@ func (this *Migrator) initiateStatus() error {
 // printMigrationStatusHint prints a detailed configuration dump, that is useful
 // to keep in mind; such as the name of migrated table, throttle params etc.
 // This gets printed at beginning and end of migration, every 10 minutes throughout
-// migration, and as reponse to the "status" interactive command.
+// migration, and as response to the "status" interactive command.
 func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s",
