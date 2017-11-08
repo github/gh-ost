@@ -57,7 +57,7 @@ func (this BinlogCoordinates) String() string {
 	return this.DisplayString()
 }
 
-// Equals tests equality of this corrdinate and another one.
+// Equals tests equality of this coordinate and another one.
 func (this *BinlogCoordinates) Equals(other *BinlogCoordinates) bool {
 	if other == nil {
 		return false
@@ -95,7 +95,7 @@ func (this *BinlogCoordinates) FileSmallerThan(other *BinlogCoordinates) bool {
 	return this.LogFile < other.LogFile
 }
 
-// FileNumberDistance returns the numeric distance between this corrdinate's file number and the other's.
+// FileNumberDistance returns the numeric distance between this coordinate's file number and the other's.
 // Effectively it means "how many roatets/FLUSHes would make these coordinates's file reach the other's"
 func (this *BinlogCoordinates) FileNumberDistance(other *BinlogCoordinates) int {
 	thisNumber, _ := this.FileNumber()
