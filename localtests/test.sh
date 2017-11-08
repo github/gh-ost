@@ -170,7 +170,12 @@ test_single() {
 
 build_binary() {
   echo "Building"
+  rm -f $ghost_binary
   go build -o $ghost_binary go/cmd/gh-ost/main.go
+  if [ $? -ne 0 ] ; then
+    echo "Build failure"
+    exit 1
+  fi
 }
 
 test_all() {

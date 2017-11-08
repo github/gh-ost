@@ -899,6 +899,25 @@ func (this *Applier) ShowStatusVariable(variableName string) (result int64, err 
 	return result, nil
 }
 
+func (this *Applier) validateUpdateDoesNotModifyMigrationUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEvent) error {
+	// log.Debugf("............ UPDATE")
+	// log.Debugf("............ UPDATE: %+v", this.migrationContext.UniqueKey.Columns.String())
+	// log.Debugf("............ UPDATE: %+v", dmlEvent.WhereColumnValues.String())
+	// log.Debugf("............ UPDATE: %+v", dmlEvent.NewColumnValues.String())
+	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
+		tableOrdinal := this.migrationContext.OriginalTableColumns.Ordinals[column.Name]
+		whereColumnValue := dmlEvent.WhereColumnValues.AbstractValues()[tableOrdinal]
+		newColumnValue := dmlEvent.NewColumnValues.AbstractValues()[tableOrdinal]
+		// log.Debugf("............ UPDATE: old value= %+v", whereColumnValue)
+		// log.Debugf("............ UPDATE: new value= %+v", newColumnValue)
+		// log.Debugf("............ UPDATE: equals? %+v", newColumnValue == whereColumnValue)
+		if newColumnValue != whereColumnValue {
+			return log.Errorf("gh-ost detected an UPDATE to a unique key column this migration is iterating on. Such update is not supported. Column is %s", column.Name)
+		}
+	}
+	return nil
+}
+
 // buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
 // event entry on the original table.
 func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query string, args []interface{}, rowsDelta int64, err error) {
@@ -915,6 +934,9 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query 
 		}
 	case binlog.UpdateDML:
 		{
+			if err := this.validateUpdateDoesNotModifyMigrationUniqueKeyColumns(dmlEvent); err != nil {
+				return query, args, rowsDelta, err
+			}
 			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
