@@ -5,31 +5,30 @@ create table gh_ost_test (
   primary key(id)
 ) auto_increment=1;
 
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-insert into gh_ost_test values (null, 13);
-
+insert into gh_ost_test values (null, 101);
+insert into gh_ost_test values (null, 102);
+insert into gh_ost_test values (null, 103);
+insert into gh_ost_test values (null, 104);
+insert into gh_ost_test values (null, 105);
+insert into gh_ost_test values (null, 106);
+insert into gh_ost_test values (null, 107);
+insert into gh_ost_test values (null, 108);
+insert into gh_ost_test values (null, 109);
+insert into gh_ost_test values (null, 110);
+insert into gh_ost_test values (null, 111);
+insert into gh_ost_test values (null, 112);
+insert into gh_ost_test values (null, 113);
+insert into gh_ost_test values (null, 114);
+insert into gh_ost_test values (null, 115);
+insert into gh_ost_test values (null, 116);
+insert into gh_ost_test values (null, 117);
+insert into gh_ost_test values (null, 118);
+insert into gh_ost_test values (null, 119);
+insert into gh_ost_test values (null, 120);
+insert into gh_ost_test values (null, 121);
+insert into gh_ost_test values (null, 122);
+insert into gh_ost_test values (null, 123);
+insert into gh_ost_test values (null, 124);
 
 drop event if exists gh_ost_test;
 delimiter ;;
