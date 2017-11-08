@@ -96,7 +96,7 @@ func (this *BinlogCoordinates) FileSmallerThan(other *BinlogCoordinates) bool {
 }
 
 // FileNumberDistance returns the numeric distance between this coordinate's file number and the other's.
-// Effectively it means "how many roatets/FLUSHes would make these coordinates's file reach the other's"
+// Effectively it means "how many rotates/FLUSHes would make these coordinates's file reach the other's"
 func (this *BinlogCoordinates) FileNumberDistance(other *BinlogCoordinates) int {
 	thisNumber, _ := this.FileNumber()
 	otherNumber, _ := other.FileNumber()
