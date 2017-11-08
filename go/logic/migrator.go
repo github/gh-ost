@@ -387,7 +387,7 @@ func (this *Migrator) ExecOnFailureHook() (err error) {
 
 func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
 	if this.migrationContext.TestOnReplica {
-		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
+		// We're merely testing, we don't want to keep this state. Rollback the renames as possible
 		this.applier.RenameTablesRollback()
 	}
 	if cutOverError == nil {
