@@ -24,15 +24,15 @@ Initial output lines may look like this:
 2016-05-19 17:57:11 INFO connection validated on 127.0.0.1:3306
 2016-05-19 17:57:11 INFO rotate to next log name: mysql-bin.002587
 2016-05-19 17:57:11 INFO connection validated on 127.0.0.1:3306
-2016-05-19 17:57:11 INFO Droppping table `mydb`.`_mytable_gst`
+2016-05-19 17:57:11 INFO Dropping table `mydb`.`_mytable_gst`
 2016-05-19 17:57:11 INFO Table dropped
-2016-05-19 17:57:11 INFO Droppping table `mydb`.`_mytable_old`
+2016-05-19 17:57:11 INFO Dropping table `mydb`.`_mytable_old`
 2016-05-19 17:57:11 INFO Table dropped
 2016-05-19 17:57:11 INFO Creating ghost table `mydb`.`_mytable_gst`
 2016-05-19 17:57:11 INFO Ghost table created
 2016-05-19 17:57:11 INFO Altering ghost table `mydb`.`_mytable_gst`
 2016-05-19 17:57:11 INFO Ghost table altered
-2016-05-19 17:57:11 INFO Droppping table `mydb`.`_mytable_osc`
+2016-05-19 17:57:11 INFO Dropping table `mydb`.`_mytable_osc`
 2016-05-19 17:57:11 INFO Table dropped
 2016-05-19 17:57:11 INFO Creating changelog table `mydb`.`_mytable_osc`
 2016-05-19 17:57:11 INFO Changelog table created
