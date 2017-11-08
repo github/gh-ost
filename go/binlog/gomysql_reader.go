@@ -114,7 +114,7 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 			}
 		}
 		// The channel will do the throttling. Whoever is reding from the channel
-		// decides whether action is taken sycnhronously (meaning we wait before
+		// decides whether action is taken synchronously (meaning we wait before
 		// next iteration) or asynchronously (we keep pushing more events)
 		// In reality, reads will be synchronous
 		entriesChannel <- binlogEntry
