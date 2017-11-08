@@ -305,7 +305,7 @@ help                                 # This message
 				return NoPrintStatusRule, err
 			}
 			if arg != "" && arg != this.migrationContext.OriginalTableName {
-				// User exlpicitly provided table name. This is a courtesy protection mechanism
+				// User explicitly provided table name. This is a courtesy protection mechanism
 				err := fmt.Errorf("User commanded 'unpostpone' on %s, but migrated table is %s; ingoring request.", arg, this.migrationContext.OriginalTableName)
 				return NoPrintStatusRule, err
 			}
