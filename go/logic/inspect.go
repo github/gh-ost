@@ -261,7 +261,7 @@ func (this *Inspector) validateGrants() error {
 
 // restartReplication is required so that we are _certain_ the binlog format and
 // row image settings have actually been applied to the replication thread.
-// It is entriely possible, for example, that the replication is using 'STATEMENT'
+// It is entirely possible, for example, that the replication is using 'STATEMENT'
 // binlog format even as the variable says 'ROW'
 func (this *Inspector) restartReplication() error {
 	log.Infof("Restarting replication on %s:%d to make sure binlog settings apply to replication thread", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
