@@ -377,7 +377,7 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	}
 
 	if this.migrationContext.InspectorIsAlsoApplier() {
-		log.Warningf("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		log.Warningf("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 		return nil
 	}
 
