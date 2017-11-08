@@ -820,7 +820,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	}
 }
 
-// printStatus prints the prgoress status, and optionally additionally detailed
+// printStatus prints the progress status, and optionally additionally detailed
 // dump of configuration.
 // `rule` indicates the type of output expected.
 // By default the status is written to standard output, but other writers can
