@@ -380,7 +380,7 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // CalculateNextIterationRangeEndValues reads the next-iteration-range-end unique key values,
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
-// itrating the range (and this done with copying row chunks)
+// iterating the range (and this done with copying row chunks)
 func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
