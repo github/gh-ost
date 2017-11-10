@@ -62,7 +62,7 @@ func GetReplicationLag(informationSchemaDb *gosql.DB, connectionConfig *Connecti
 func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
 	currentUri := connectionConfig.GetDBUri("information_schema")
 	// This function is only called once, okay to not have a cached connection pool
-	db, err := sqlutils.GetDB(currentUri)
+	db, err := GetDB(currentUri)
 	defer db.Close()
 
 	if err != nil {

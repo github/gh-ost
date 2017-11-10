@@ -41,12 +41,12 @@ func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 
 func (this *Inspector) InitDBConnections() (err error) {
 	inspectorUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = this.migrationContext.GetDB(inspectorUri); err != nil {
+	if this.db, err = mysql.GetDB(inspectorUri); err != nil {
 		return err
 	}
 
 	informationSchemaUri := this.connectionConfig.GetDBUri("information_schema")
-	if this.informationSchemaDb, _, err = this.migrationContext.GetDB(informationSchemaUri); err != nil {
+	if this.informationSchemaDb, err = mysql.GetDB(informationSchemaUri); err != nil {
 		return err
 	}
 

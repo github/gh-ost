@@ -47,11 +47,11 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 
 func (this *Applier) InitDBConnections() (err error) {
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = this.migrationContext.GetDB(applierUri); err != nil {
+	if this.db, err = mysql.GetDB(applierUri); err != nil {
 		return err
 	}
 	singletonApplierUri := fmt.Sprintf("%s?timeout=0", applierUri)
-	if this.singletonDB, _, err = this.migrationContext.GetDB(singletonApplierUri); err != nil {
+	if this.singletonDB, err = mysql.GetDB(singletonApplierUri); err != nil {
 		return err
 	}
 	this.singletonDB.SetMaxOpenConns(1)

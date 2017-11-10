@@ -181,7 +181,7 @@ func (this *Throttler) collectControlReplicasLag() {
 		dbUri := connectionConfig.GetDBUri("information_schema")
 
 		var heartbeatValue string
-		if db, _, err := this.migrationContext.GetDB(dbUri); err != nil {
+		if db, err := mysql.GetDB(dbUri); err != nil {
 			return lag, err
 		} else if err = db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
 			return lag, err

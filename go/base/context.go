@@ -14,11 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	gosql "database/sql"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-
-	"github.com/outbrain/golib/sqlutils"
 
 	"gopkg.in/gcfg.v1"
 	gcfgscanner "gopkg.in/gcfg.v1/scanner"
