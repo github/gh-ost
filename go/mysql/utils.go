@@ -33,6 +33,15 @@ func (this *ReplicationLagResult) HasLag() bool {
 	return this.Lag > 0
 }
 
+func GetDB(mysql_uri string) (*gosql.DB, error) {
+	db, err := gosql.Open("mysql", mysql_uri)
+	if err == nil {
+		return db, nil
+	} else {
+		return nil, err
+	}
+}
+
 // GetReplicationLag returns replication lag for a given connection config; either by explicit query
 // or via SHOW SLAVE STATUS
 func GetReplicationLag(informationSchemaDb *gosql.DB, connectionConfig *ConnectionConfig) (replicationLag time.Duration, err error) {
