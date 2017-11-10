@@ -25,6 +25,7 @@ import (
 	"github.com/outbrain/golib/log"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // RowMap represents one row in a result set. Its objective is to allow
@@ -120,13 +121,27 @@ func (this *RowMap) GetBool(key string) bool {
 	return this.GetInt(key) != 0
 }
 
+// knownDBs is a DB cache by uri
+var knownDBs map[string]*sql.DB = make(map[string]*sql.DB)
+var knownDBsMutex = &sync.Mutex{}
+
 // GetDB returns a DB instance based on uri.
-func GetDB(mysql_uri string) (*sql.DB, error) {
-	if db, err := sql.Open("mysql", mysql_uri); err == nil {
-		return db, nil
-	} else {
-		return db, err
+// bool result indicates whether the DB was returned from cache; err
+func GetDB(mysql_uri string) (*sql.DB, bool, error) {
+	knownDBsMutex.Lock()
+	defer func() {
+		knownDBsMutex.Unlock()
+	}()
+
+	var exists bool
+	if _, exists = knownDBs[mysql_uri]; !exists {
+		if db, err := sql.Open("mysql", mysql_uri); err == nil {
+			knownDBs[mysql_uri] = db
+		} else {
+			return db, exists, err
+		}
 	}
+	return knownDBs[mysql_uri], exists, nil
 }
 
 // RowToArray is a convenience function, typically not called directly, which maps a
