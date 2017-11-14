@@ -11,7 +11,8 @@ tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
 ghost_binary=/tmp/gh-ost-test
 exec_command_file=/tmp/gh-ost-test.bash
-
+orig_content_output_file=/gh-ost-test.orig.content.csv
+ghost_content_output_file=/gh-ost-test.ghost.content.csv
 test_pattern="${1:-.}"
 
 master_host=
@@ -29,6 +30,10 @@ verify_master_and_replica() {
     echo "Cannot verify gh-ost-test-mysql-replica"
     exit 1
   fi
+  if [ "$(gh-ost-test-mysql-replica -e "select @@global.binlog_format" -ss)" != "ROW" ] ; then
+    echo "Expecting test replica to have binlog_format=ROW"
+    exit 1
+  fi
   read replica_host replica_port <<< $(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
 }
 
@@ -42,6 +47,21 @@ echo_dot() {
   echo -n "."
 }
 
+start_replication() {
+  gh-ost-test-mysql-replica -e "stop slave; start slave;"
+  num_attempts=0
+  while gh-ost-test-mysql-replica -e "show slave status\G" | grep Seconds_Behind_Master | grep -q NULL ; do
+    ((num_attempts=num_attempts+1))
+    if [ $num_attempts -gt 10 ] ; then
+      echo
+      echo "ERROR replication failure"
+      exit 1
+    fi
+    echo_dot
+    sleep 1
+  done
+}
+
 test_single() {
   local test_name
   test_name="$1"
@@ -49,7 +69,7 @@ test_single() {
   echo -n "Testing: $test_name"
 
   echo_dot
-  gh-ost-test-mysql-replica -e "stop slave; start slave; do sleep(1)"
+  start_replication
   echo_dot
   gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
 
@@ -82,13 +102,12 @@ test_single() {
     --table=gh_ost_test \
     --alter='engine=innodb' \
     --exact-rowcount \
-    --switch-to-rbr \
+    --assume-rbr \
     --initially-drop-old-table \
     --initially-drop-ghost-table \
     --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
-    --postpone-cut-over-flag-file=/tmp/gh-ost.test.postpone.flag \
     --test-on-replica \
     --default-retries=1 \
     --chunk-size=10 \
@@ -134,15 +153,17 @@ test_single() {
   fi
 
   echo_dot
-  orig_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss | md5sum)
-  ghost_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss | md5sum)
+  gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss > $orig_content_output_file
+  gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss > $ghost_content_output_file
+  orig_checksum=$(cat $orig_content_output_file | md5sum)
+  ghost_checksum=$(cat $ghost_content_output_file | md5sum)
 
   if [ "$orig_checksum" != "$ghost_checksum" ] ; then
     echo "ERROR $test_name: checksum mismatch"
     echo "---"
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test" -ss
-    echo "---"
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho" -ss
+    diff $orig_content_output_file $ghost_content_output_file
+
+    echo "diff $orig_content_output_file $ghost_content_output_file"
     return 1
   fi
 }

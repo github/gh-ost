@@ -38,7 +38,7 @@ var (
 
 const frenoMagicHint = "freno"
 
-// Throttler collects metrics related to throttling and makes informed decisison
+// Throttler collects metrics related to throttling and makes informed decision
 // whether throttling should take place.
 type Throttler struct {
 	migrationContext *base.MigrationContext

@@ -55,12 +55,14 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	this.singletonDB.SetMaxOpenConns(1)
-	if err := this.validateConnection(this.db); err != nil {
+	version, err := base.ValidateConnection(this.db, this.connectionConfig)
+	if err != nil {
 		return err
 	}
-	if err := this.validateConnection(this.singletonDB); err != nil {
+	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig); err != nil {
 		return err
 	}
+	this.migrationContext.ApplierMySQLVersion = version
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
 	}
@@ -73,20 +75,6 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	log.Infof("Applier initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.ApplierMySQLVersion)
-	return nil
-}
-
-// validateConnection issues a simple can-connect to MySQL
-func (this *Applier) validateConnection(db *gosql.DB) error {
-	query := `select @@global.port, @@global.version`
-	var port int
-	if err := db.QueryRow(query).Scan(&port, &this.migrationContext.ApplierMySQLVersion); err != nil {
-		return err
-	}
-	if port != this.connectionConfig.Key.Port {
-		return fmt.Errorf("Unexpected database port reported: %+v", port)
-	}
-	log.Infof("connection validated on %+v", this.connectionConfig.Key)
 	return nil
 }
 
@@ -227,7 +215,7 @@ func (this *Applier) dropTable(tableName string) error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
-	log.Infof("Droppping table %s.%s",
+	log.Infof("Dropping table %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
@@ -397,7 +385,7 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // CalculateNextIterationRangeEndValues reads the next-iteration-range-end unique key values,
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
-// itrating the range (and this done with copying row chunks)
+// iterating the range (and this done with copying row chunks)
 func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {

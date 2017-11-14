@@ -43,7 +43,7 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 
 ### Querying for data
 
-For commands that accept an argumetn as value, pass `?` (question mark) to _get_ current value rather than _set_ a new one.
+For commands that accept an argument as value, pass `?` (question mark) to _get_ current value rather than _set_ a new one.
 
 ### Examples
 
