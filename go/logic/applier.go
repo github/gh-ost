@@ -46,10 +46,6 @@ func newDmlBuildResultError(err error) *dmlBuildResult {
 	}
 }
 
-func buildResults(args ...(*dmlBuildResult)) [](*dmlBuildResult) {
-	return args
-}
-
 // Applier connects and writes the the applier-server, which is the server where migration
 // happens. This is typically the master, but could be a replica when `--test-on-replica` or
 // `--execute-on-replica` are given.
@@ -951,12 +947,12 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 	case binlog.DeleteDML:
 		{
 			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
-			return buildResults(newDmlBuildResult(query, uniqueKeyArgs, -1, err))
+			return append(results, newDmlBuildResult(query, uniqueKeyArgs, -1, err))
 		}
 	case binlog.InsertDML:
 		{
 			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
-			return buildResults(newDmlBuildResult(query, sharedArgs, 1, err))
+			return append(results, newDmlBuildResult(query, sharedArgs, 1, err))
 		}
 	case binlog.UpdateDML:
 		{
@@ -974,10 +970,10 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 			args := sqlutils.Args()
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
-			return buildResults(newDmlBuildResult(query, args, 0, err))
+			return append(results, newDmlBuildResult(query, args, 0, err))
 		}
 	}
-	return buildResults(newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)))
+	return append(results, newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)))
 }
 
 // ApplyDMLEventQuery writes an entry to the ghost table, in response to an intercepted
