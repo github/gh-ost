@@ -921,18 +921,14 @@ func (this *Applier) ShowStatusVariable(variableName string) (result int64, err 
 	return result, nil
 }
 
+// updateModifiesUniqueKeyColumns checks whether a UPDATE DML event actually
+// modifies values of the migration's unique key (the iterated key). This will call
+// for special handling.
 func (this *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEvent) (modifiedColumn string, isModified bool) {
-	// log.Debugf("............ UPDATE")
-	// log.Debugf("............ UPDATE: %+v", this.migrationContext.UniqueKey.Columns.String())
-	// log.Debugf("............ UPDATE: %+v", dmlEvent.WhereColumnValues.String())
-	// log.Debugf("............ UPDATE: %+v", dmlEvent.NewColumnValues.String())
 	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
 		tableOrdinal := this.migrationContext.OriginalTableColumns.Ordinals[column.Name]
 		whereColumnValue := dmlEvent.WhereColumnValues.AbstractValues()[tableOrdinal]
 		newColumnValue := dmlEvent.NewColumnValues.AbstractValues()[tableOrdinal]
-		// log.Debugf("............ UPDATE: old value= %+v", whereColumnValue)
-		// log.Debugf("............ UPDATE: new value= %+v", newColumnValue)
-		// log.Debugf("............ UPDATE: equals? %+v", newColumnValue == whereColumnValue)
 		if newColumnValue != whereColumnValue {
 			return column.Name, true
 		}
@@ -956,15 +952,12 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 		}
 	case binlog.UpdateDML:
 		{
-			if modifiedColumn, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
-				log.Debugf("---------------- Detected modifiedColumn: %+v. Will turn into DELETE+INSERT", modifiedColumn)
+			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
 				dmlEvent.DML = binlog.DeleteDML
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
 				dmlEvent.DML = binlog.InsertDML
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
 				return results
-				// return buildResults(newDmlBuildResultError(log.Errorf("gh-ost detected an UPDATE to a unique key column this migration is iterating on. Such update is not supported. Column is `%s`", modifiedColumn)))
-				//				return query, args, rowsDelta, log.Errorf("gh-ost detected an UPDATE to a unique key column this migration is iterating on. Such update is not supported. Column is `%s`", modifiedColumn)
 			}
 			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args := sqlutils.Args()
