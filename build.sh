@@ -10,6 +10,11 @@ function build {
     GOOS=$3
     GOARCH=$4
 
+    if [[ $(go version | egrep "go1[.][012345678]") ]]; then
+      echo "go version is too low. Must use 1.9 or above"
+      exit 1
+    fi
+
     echo "Building ${osname} binary"
     export GOOS
     export GOARCH
@@ -27,7 +32,6 @@ buildpath=/tmp/gh-ost
 target=gh-ost
 timestamp=$(date "+%Y%m%d%H%M%S")
 ldflags="-X main.AppVersion=${RELEASE_VERSION}"
-export GO15VENDOREXPERIMENT=1
 
 mkdir -p ${buildpath}
 build macOS osx darwin amd64
