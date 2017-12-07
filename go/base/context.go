@@ -212,13 +212,7 @@ type ContextConfig struct {
 	}
 }
 
-var context *MigrationContext
-
-func init() {
-	context = newMigrationContext()
-}
-
-func newMigrationContext() *MigrationContext {
+func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
 		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
@@ -237,11 +231,6 @@ func newMigrationContext() *MigrationContext {
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
 	}
-}
-
-// GetMigrationContext
-func GetMigrationContext() *MigrationContext {
-	return context
 }
 
 func getSafeTableName(baseName string, suffix string) string {

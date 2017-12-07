@@ -16,7 +16,6 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/outbrain/golib/log"
-	"github.com/outbrain/golib/sqlutils"
 )
 
 var (
@@ -47,9 +46,9 @@ type Throttler struct {
 	inspector        *Inspector
 }
 
-func NewThrottler(applier *Applier, inspector *Inspector) *Throttler {
+func NewThrottler(migrationContext *base.MigrationContext, applier *Applier, inspector *Inspector) *Throttler {
 	return &Throttler{
-		migrationContext: base.GetMigrationContext(),
+		migrationContext: migrationContext,
 		applier:          applier,
 		inspector:        inspector,
 	}
@@ -139,8 +138,8 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 		if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
 			// when running on replica, the heartbeat injection is also done on the replica.
 			// This means we will always get a good heartbeat value.
-			// When running on replica, we should instead check the `SHOW SLAVE STATUS` output.
-			if lag, err := mysql.GetReplicationLag(this.inspector.connectionConfig); err != nil {
+			// When runnign on replica, we should instead check the `SHOW SLAVE STATUS` output.
+			if lag, err := mysql.GetReplicationLag(this.inspector.informationSchemaDb, this.inspector.connectionConfig); err != nil {
 				return log.Errore(err)
 			} else {
 				atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
@@ -182,11 +181,12 @@ func (this *Throttler) collectControlReplicasLag() {
 		dbUri := connectionConfig.GetDBUri("information_schema")
 
 		var heartbeatValue string
-		if db, _, err := sqlutils.GetDB(dbUri); err != nil {
+		if db, err := mysql.GetDB(dbUri); err != nil {
 			return lag, err
 		} else if err = db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
 			return lag, err
 		}
+
 		lag, err = parseChangelogHeartbeat(heartbeatValue)
 		return lag, err
 	}
