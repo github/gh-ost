@@ -195,8 +195,6 @@ type MigrationContext struct {
 	ForceTmpTableName                string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
-
-	CanStopStreaming func() bool
 }
 
 type ContextConfig struct {
