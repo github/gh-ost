@@ -104,7 +104,7 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 
 func (this *EventsStreamer) InitDBConnections() (err error) {
 	EventsStreamerUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, err = mysql.GetDB(EventsStreamerUri); err != nil {
+	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, EventsStreamerUri); err != nil {
 		return err
 	}
 	if _, err := base.ValidateConnection(this.db, this.connectionConfig); err != nil {

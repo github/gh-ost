@@ -8,6 +8,7 @@ package mysql
 import (
 	gosql "database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/github/gh-ost/go/sql"
@@ -33,13 +34,27 @@ func (this *ReplicationLagResult) HasLag() bool {
 	return this.Lag > 0
 }
 
-func GetDB(mysql_uri string) (*gosql.DB, error) {
-	db, err := gosql.Open("mysql", mysql_uri)
-	if err == nil {
-		return db, nil
-	} else {
-		return nil, err
+// knownDBs is a DB cache by uri
+var knownDBs map[string]*gosql.DB = make(map[string]*gosql.DB)
+var knownDBsMutex = &sync.Mutex{}
+
+func GetDB(migrationUuid string, mysql_uri string) (*gosql.DB, bool, error) {
+	cacheKey := migrationUuid + ":" + mysql_uri
+
+	knownDBsMutex.Lock()
+	defer func() {
+		knownDBsMutex.Unlock()
+	}()
+
+	var exists bool
+	if _, exists = knownDBs[cacheKey]; !exists {
+		if db, err := gosql.Open("mysql", mysql_uri); err == nil {
+			knownDBs[cacheKey] = db
+		} else {
+			return db, exists, err
+		}
 	}
+	return knownDBs[cacheKey], exists, nil
 }
 
 // GetReplicationLag returns replication lag for a given connection config; either by explicit query
@@ -62,7 +77,10 @@ func GetReplicationLag(informationSchemaDb *gosql.DB, connectionConfig *Connecti
 func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
 	currentUri := connectionConfig.GetDBUri("information_schema")
 	// This function is only called once, okay to not have a cached connection pool
-	db, err := GetDB(currentUri)
+	db, err := gosql.Open("mysql", currentUri)
+	if err != nil {
+		return nil, err
+	}
 	defer db.Close()
 
 	if err != nil {

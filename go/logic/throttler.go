@@ -186,7 +186,7 @@ func (this *Throttler) collectControlReplicasLag() {
 		dbUri := connectionConfig.GetDBUri("information_schema")
 
 		var heartbeatValue string
-		if db, err := mysql.GetDB(dbUri); err != nil {
+		if db, _, err := mysql.GetDB(this.migrationContext.Uuid, dbUri); err != nil {
 			return lag, err
 		} else if err = db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
 			return lag, err
@@ -461,6 +461,6 @@ func (this *Throttler) throttle(onThrottled func()) {
 }
 
 func (this *Throttler) Teardown() {
-	this.migrationContext.Log.Debugf("Tearing down...")
+	log.Debugf("Tearing down...")
 	atomic.StoreInt64(&this.finishedMigrating, 1)
 }
