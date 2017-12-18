@@ -158,10 +158,6 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 }
 
 func (this *GoMySQLReader) Close() error {
-	// Historically there was a:
-	//   this.binlogSyncer.Close()
-	// here. A new go-mysql version closes the binlog syncer connection independently.
-	// I will go against the sacred rules of comments and just leave this here.
-	// This is the year 2017. Let's see what year these comments get deleted.
+	this.binlogSyncer.Close()
 	return nil
 }
