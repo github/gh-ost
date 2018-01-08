@@ -40,7 +40,7 @@ func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 }
 
 func (this *Inspector) InitDBConnections() (err error) {
-	inspectorUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
+	inspectorUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName, this.migrationContext.IncludeMultibyteCharset)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, inspectorUri); err != nil {
 		return err
 	}

@@ -91,6 +91,7 @@ type MigrationContext struct {
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
+	IncludeMultibyteCharset  bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
