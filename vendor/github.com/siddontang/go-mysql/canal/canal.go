@@ -265,7 +265,7 @@ func (c *Canal) prepareSyncer() error {
 		Password: c.cfg.Password,
 	}
 
-	c.syncer = replication.NewBinlogSyncer(&cfg)
+	c.syncer = replication.NewBinlogSyncer(cfg)
 
 	return nil
 }

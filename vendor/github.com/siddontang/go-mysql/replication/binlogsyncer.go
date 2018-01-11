@@ -54,7 +54,7 @@ type BinlogSyncerConfig struct {
 type BinlogSyncer struct {
 	m sync.RWMutex
 
-	cfg *BinlogSyncerConfig
+	cfg BinlogSyncerConfig
 
 	c *client.Conn
 
@@ -71,8 +71,13 @@ type BinlogSyncer struct {
 }
 
 // NewBinlogSyncer creates the BinlogSyncer with cfg.
-func NewBinlogSyncer(cfg *BinlogSyncerConfig) *BinlogSyncer {
+func NewBinlogSyncer(cfg BinlogSyncerConfig) *BinlogSyncer {
+
+	// Clear the Password to avoid outputing it in log.
+	pass := cfg.Password
+	cfg.Password = ""
 	log.Infof("create BinlogSyncer with config %v", cfg)
+	cfg.Password = pass
 
 	b := new(BinlogSyncer)
 
