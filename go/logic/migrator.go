@@ -1262,4 +1262,9 @@ func (this *Migrator) teardown() {
 		log.Infof("Tearing down streamer")
 		this.eventsStreamer.Teardown()
 	}
+
+	if this.throttler != nil {
+		log.Infof("Tearing down throttler")
+		this.throttler.Teardown()
+	}
 }
