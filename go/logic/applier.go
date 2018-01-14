@@ -52,26 +52,29 @@ func newDmlBuildResultError(err error) *dmlBuildResult {
 // Applier is the one to actually write row data and apply binlog events onto the ghost table.
 // It is where the ghost & changelog tables get created. It is where the cut-over phase happens.
 type Applier struct {
-	connectionConfig *mysql.ConnectionConfig
-	db               *gosql.DB
-	singletonDB      *gosql.DB
-	migrationContext *base.MigrationContext
+	connectionConfig  *mysql.ConnectionConfig
+	db                *gosql.DB
+	singletonDB       *gosql.DB
+	migrationContext  *base.MigrationContext
+	finishedMigrating int64
 }
 
-func NewApplier() *Applier {
+func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	return &Applier{
-		connectionConfig: base.GetMigrationContext().ApplierConnectionConfig,
-		migrationContext: base.GetMigrationContext(),
+		connectionConfig:  migrationContext.ApplierConnectionConfig,
+		migrationContext:  migrationContext,
+		finishedMigrating: 0,
 	}
 }
 
 func (this *Applier) InitDBConnections() (err error) {
+
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = sqlutils.GetDB(applierUri); err != nil {
+	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
 	singletonApplierUri := fmt.Sprintf("%s?timeout=0", applierUri)
-	if this.singletonDB, _, err = sqlutils.GetDB(singletonApplierUri); err != nil {
+	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
 	}
 	this.singletonDB.SetMaxOpenConns(1)
@@ -320,6 +323,9 @@ func (this *Applier) InitiateHeartbeat() {
 
 	heartbeatTick := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	for range heartbeatTick {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return
+		}
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
 		// have this block the loop rather than spam the master in the event something
 		// goes wrong
@@ -1073,4 +1079,11 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 	}
 	log.Debugf("ApplyDMLEventQueries() applied %d events in one transaction", len(dmlEvents))
 	return nil
+}
+
+func (this *Applier) Teardown() {
+	log.Debugf("Tearing down...")
+	this.db.Close()
+	this.singletonDB.Close()
+	atomic.StoreInt64(&this.finishedMigrating, 1)
 }
