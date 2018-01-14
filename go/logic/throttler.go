@@ -16,7 +16,6 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/outbrain/golib/log"
-	"github.com/outbrain/golib/sqlutils"
 )
 
 var (
@@ -42,16 +41,18 @@ const frenoMagicHint = "freno"
 // Throttler collects metrics related to throttling and makes informed decision
 // whether throttling should take place.
 type Throttler struct {
-	migrationContext *base.MigrationContext
-	applier          *Applier
-	inspector        *Inspector
+	migrationContext  *base.MigrationContext
+	applier           *Applier
+	inspector         *Inspector
+	finishedMigrating int64
 }
 
-func NewThrottler(applier *Applier, inspector *Inspector) *Throttler {
+func NewThrottler(migrationContext *base.MigrationContext, applier *Applier, inspector *Inspector) *Throttler {
 	return &Throttler{
-		migrationContext: base.GetMigrationContext(),
-		applier:          applier,
-		inspector:        inspector,
+		migrationContext:  migrationContext,
+		applier:           applier,
+		inspector:         inspector,
+		finishedMigrating: 0,
 	}
 }
 
@@ -139,8 +140,8 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 		if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
 			// when running on replica, the heartbeat injection is also done on the replica.
 			// This means we will always get a good heartbeat value.
-			// When running on replica, we should instead check the `SHOW SLAVE STATUS` output.
-			if lag, err := mysql.GetReplicationLag(this.inspector.connectionConfig); err != nil {
+			// When runnign on replica, we should instead check the `SHOW SLAVE STATUS` output.
+			if lag, err := mysql.GetReplicationLag(this.inspector.informationSchemaDb, this.inspector.connectionConfig); err != nil {
 				return log.Errore(err)
 			} else {
 				atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
@@ -160,6 +161,9 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 
 	ticker := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	for range ticker {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return
+		}
 		go collectFunc()
 	}
 }
@@ -182,11 +186,12 @@ func (this *Throttler) collectControlReplicasLag() {
 		dbUri := connectionConfig.GetDBUri("information_schema")
 
 		var heartbeatValue string
-		if db, _, err := sqlutils.GetDB(dbUri); err != nil {
+		if db, _, err := mysql.GetDB(this.migrationContext.Uuid, dbUri); err != nil {
 			return lag, err
 		} else if err = db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
 			return lag, err
 		}
+
 		lag, err = parseChangelogHeartbeat(heartbeatValue)
 		return lag, err
 	}
@@ -233,6 +238,9 @@ func (this *Throttler) collectControlReplicasLag() {
 	shouldReadLagAggressively := false
 
 	for range aggressiveTicker {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return
+		}
 		if counter%relaxedFactor == 0 {
 			// we only check if we wish to be aggressive once per second. The parameters for being aggressive
 			// do not typically change at all throughout the migration, but nonetheless we check them.
@@ -285,6 +293,10 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 
 	ticker := time.Tick(100 * time.Millisecond)
 	for range ticker {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return
+		}
+
 		if sleep, _ := collectFunc(); sleep {
 			time.Sleep(1 * time.Second)
 		}
@@ -393,6 +405,10 @@ func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 
 		throttlerMetricsTick := time.Tick(1 * time.Second)
 		for range throttlerMetricsTick {
+			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+				return
+			}
+
 			this.collectGeneralThrottleMetrics()
 		}
 	}()
@@ -419,6 +435,9 @@ func (this *Throttler) initiateThrottlerChecks() error {
 	}
 	throttlerFunction()
 	for range throttlerTick {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return nil
+		}
 		throttlerFunction()
 	}
 
@@ -439,4 +458,9 @@ func (this *Throttler) throttle(onThrottled func()) {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+}
+
+func (this *Throttler) Teardown() {
+	log.Debugf("Tearing down...")
+	atomic.StoreInt64(&this.finishedMigrating, 1)
 }

@@ -30,9 +30,9 @@ type Server struct {
 	printStatus      printStatusFunc
 }
 
-func NewServer(hooksExecutor *HooksExecutor, printStatus printStatusFunc) *Server {
+func NewServer(migrationContext *base.MigrationContext, hooksExecutor *HooksExecutor, printStatus printStatusFunc) *Server {
 	return &Server{
-		migrationContext: base.GetMigrationContext(),
+		migrationContext: migrationContext,
 		hooksExecutor:    hooksExecutor,
 		printStatus:      printStatus,
 	}
