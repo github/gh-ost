@@ -158,8 +158,8 @@ func (t *testSyncerSuite) testSync(c *C, s *BinlogStreamer) {
 	t.testExecute(c, "DROP TABLE IF EXISTS test_json_v2")
 
 	str = `CREATE TABLE test_json_v2 (
-			id INT, 
-			c JSON, 
+			id INT,
+			c JSON,
 			PRIMARY KEY (id)
 			) ENGINE=InnoDB`
 
@@ -271,7 +271,7 @@ func (t *testSyncerSuite) setupTest(c *C, flavor string) {
 		Password: "",
 	}
 
-	t.b = NewBinlogSyncer(&cfg)
+	t.b = NewBinlogSyncer(cfg)
 }
 
 func (t *testSyncerSuite) testPositionSync(c *C) {

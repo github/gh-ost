@@ -45,7 +45,7 @@ func main() {
 		SemiSyncEnabled: *semiSync,
 	}
 
-	b := replication.NewBinlogSyncer(&cfg)
+	b := replication.NewBinlogSyncer(cfg)
 
 	pos := mysql.Position{*file, uint32(*pos)}
 	if len(*backupPath) > 0 {
