@@ -45,7 +45,7 @@ func (this *Inspector) InitDBConnections() (err error) {
 		return err
 	}
 
-	informationSchemaUri := this.connectionConfig.GetDBUri("information_schema")
+	informationSchemaUri := this.connectionConfig.GetDBUri("information_schema", false)
 	if this.informationSchemaDb, _, err = mysql.GetDB(this.migrationContext.Uuid, informationSchemaUri); err != nil {
 		return err
 	}
