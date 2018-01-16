@@ -49,16 +49,17 @@ func (this *ConnectionConfig) Equals(other *ConnectionConfig) bool {
 	return this.Key.Equals(&other.Key) || this.ImpliedKey.Equals(other.ImpliedKey)
 }
 
-func (this *ConnectionConfig) GetDBUri(databaseName string, includeMultibyte bool) string {
+func (this *ConnectionConfig) GetDBUri(databaseName string, includeRiskCharset bool) string {
 	hostname := this.Key.Hostname
 	var ip = net.ParseIP(hostname)
 	if (ip != nil) && (ip.To4() == nil) {
 		// Wrap IPv6 literals in square brackets
 		hostname = fmt.Sprintf("[%s]", hostname)
 	}
-	var multibyteCharset string
-	if includeMultibyte {
-		multibyteCharset = ",gbk,gb2312,big5,cp932,sjis"
+	var riskCharset string
+	interpolateParams := !includeRiskCharset
+	if includeRiskCharset {
+		riskCharset = ",gbk,gb2312,big5,cp932,sjis"
 	}
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=%t&autocommit=true&charset=utf8mb4,utf8,latin1%s", this.User, this.Password, hostname, this.Key.Port, databaseName, !includeMultibyte, multibyteCharset)
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=%t&autocommit=true&charset=utf8mb4,utf8,latin1%s", this.User, this.Password, hostname, this.Key.Port, databaseName, interpolateParams, riskCharset)
 }
