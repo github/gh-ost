@@ -91,6 +91,7 @@ type MigrationContext struct {
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
+	AliyunRDS                bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -213,6 +214,8 @@ type ContextConfig struct {
 		Max_Load              string
 	}
 }
+
+var Context *MigrationContext
 
 func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{

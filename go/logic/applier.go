@@ -89,10 +89,12 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
 	}
-	if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
+	if impliedKey, err := mysql.GetInstanceKey(this.db, this.migrationContext.AliyunRDS); err != nil {
 		return err
 	} else {
-		this.connectionConfig.ImpliedKey = impliedKey
+		if this.migrationContext.AliyunRDS != true {
+			this.connectionConfig.ImpliedKey = impliedKey
+		}
 	}
 	if err := this.readTableColumns(); err != nil {
 		return err

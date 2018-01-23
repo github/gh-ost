@@ -53,10 +53,12 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
-	if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
+	if impliedKey, err := mysql.GetInstanceKey(this.db, this.migrationContext.AliyunRDS); err != nil {
 		return err
 	} else {
-		this.connectionConfig.ImpliedKey = impliedKey
+		if this.migrationContext.AliyunRDS != true {
+			this.connectionConfig.ImpliedKey = impliedKey
+		}
 	}
 	if err := this.validateGrants(); err != nil {
 		return err

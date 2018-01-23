@@ -171,9 +171,11 @@ func GetSelfBinlogCoordinates(db *gosql.DB) (selfBinlogCoordinates *BinlogCoordi
 }
 
 // GetInstanceKey reads hostname and port on given DB
-func GetInstanceKey(db *gosql.DB) (instanceKey *InstanceKey, err error) {
+func GetInstanceKey(db *gosql.DB, isAliyunRDS bool) (instanceKey *InstanceKey, err error) {
 	instanceKey = &InstanceKey{}
-	err = db.QueryRow(`select @@global.hostname, @@global.port`).Scan(&instanceKey.Hostname, &instanceKey.Port)
+	if isAliyunRDS != true {
+		err = db.QueryRow(`select @@global.hostname, @@global.port`).Scan(&instanceKey.Hostname, &instanceKey.Port)
+	}
 	return instanceKey, err
 }
 
