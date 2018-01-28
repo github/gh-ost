@@ -1,13 +1,13 @@
 drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int auto_increment,
-  create_time timestamp NULL,
+  create_time timestamp NULL DEFAULT '0000-00-00 00:00:00',
   update_time timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   counter int(10) unsigned DEFAULT NULL,
   primary key(id)
 ) auto_increment=1;
 
-insert into gh_ost_test values (1,'0000-00-00 00:00:00',now(),0);
+insert into gh_ost_test values (1, '0000-00-00 00:00:00', now(), 0);
 
 drop event if exists gh_ost_test;
 delimiter ;;
