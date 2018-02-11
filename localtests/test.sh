@@ -26,6 +26,7 @@ verify_master_and_replica() {
     exit 1
   fi
   read master_host master_port <<< $(gh-ost-test-mysql-master -e "select @@hostname, @@port" -ss)
+  echo "# master verified at $master_host:$master_port"
   if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
     echo "Cannot verify gh-ost-test-mysql-replica"
     exit 1
@@ -35,6 +36,7 @@ verify_master_and_replica() {
     exit 1
   fi
   read replica_host replica_port <<< $(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
+  echo "# replica verified at $replica_host:$replica_port"
 }
 
 exec_cmd() {
