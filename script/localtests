@@ -20,9 +20,10 @@ echo 'sandboxes/rsandbox_5_7_21/m "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-m
 sed '/sandboxes/d' -i gh-ost-ci-env/bin/gh-ost-test-mysql-replica
 echo 'sandboxes/rsandbox_5_7_21/s1 "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-replica
 
-sandboxes/rsandbox_5_7_21/restart_all
-
 export PATH="${PWD}/gh-ost-ci-env/bin/:${PATH}"
+
+gh-ost-test-mysql-master -uroot -e "grant all on *.* to 'gh-ost'@'%' identified by 'gh-ost'"
+
 echo "# Running localtests"
 ./localtests/test.sh
 
