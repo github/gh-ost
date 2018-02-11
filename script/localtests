@@ -14,7 +14,7 @@ gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/5.7.21.ta
 
 mkdir -p sandboxes
 rm -rf sandboxes/*
-gh-ost-ci-env/bin/linux/dbdeployer replication 5.7.21 --nodes 2 --sandbox-binary ${PWD}/sandbox/binary --sandbox-home ${PWD}/sandboxes
+gh-ost-ci-env/bin/linux/dbdeployer replication 5.7.21 --nodes 2 --sandbox-binary ${PWD}/sandbox/binary --sandbox-home ${PWD}/sandboxes --my-cnf-options log_slave_updates --my-cnf-options log_bin --my-cnf-options binlog_format=ROW
 
 sed '/sandboxes/d' -i gh-ost-ci-env/bin/gh-ost-test-mysql-master
 echo 'sandboxes/rsandbox_5_7_21/m "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-master
