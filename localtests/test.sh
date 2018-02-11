@@ -26,6 +26,7 @@ verify_master_and_replica() {
     exit 1
   fi
   read master_host master_port <<< $(gh-ost-test-mysql-master -e "select @@hostname, @@port" -ss)
+  [ "$master_host" == "$(hostname)" ] && master_host="127.0.0.1"
   echo "# master verified at $master_host:$master_port"
   if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
     echo "Cannot verify gh-ost-test-mysql-replica"
@@ -36,6 +37,7 @@ verify_master_and_replica() {
     exit 1
   fi
   read replica_host replica_port <<< $(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
+  [ "$replica_host" == "$(hostname)" ] && replica_host="127.0.0.1"
   echo "# replica verified at $replica_host:$replica_port"
 }
 
@@ -100,6 +102,7 @@ test_single() {
     --password=gh-ost \
     --host=$replica_host \
     --port=$replica_port \
+    --assume-master-host=${master_host}:${master_port}
     --database=test \
     --table=gh_ost_test \
     --alter='engine=innodb' \
