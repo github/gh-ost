@@ -6,7 +6,7 @@ whoami
 
 [ -d "gh-ost-ci-env" ] || git clone https://github.com/github/gh-ost-ci-env.git
 
-find sandboxes -name "stop_all" || :
+find sandboxes -name "stop_all" | bash
 
 mkdir -p sandbox/binary
 rm -rf sandbox/binary/*
