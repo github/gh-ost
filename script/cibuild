@@ -15,3 +15,5 @@ cd .gopath/src/github.com/github/gh-ost
 
 echo "Running unit tests"
 go test ./go/...
+
+. script/localtests
