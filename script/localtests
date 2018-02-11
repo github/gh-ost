@@ -5,9 +5,11 @@ set -e
 [ -d "gh-ost-ci-env" ] || git clone https://github.com/github/gh-ost-ci-env.git
 
 mkdir -p sandbox/binary
+rm -rf /sandbox/binary/*
 gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/5.7.21.tar.gz --unpack-version=5.7.21 --sandbox-binary ${PWD}/sandbox/binary
 
 mkdir -p sandboxes
+rm -rf sandboxes/*
 gh-ost-ci-env/bin/linux/dbdeployer replication 5.7.21 --nodes 2 --sandbox-binary ${PWD}/sandbox/binary --sandbox-home ${PWD}/sandboxes
 
 sed '/sandboxes/d' -i gh-ost-ci-env/bin/gh-ost-test-mysql-master
