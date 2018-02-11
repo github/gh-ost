@@ -2,6 +2,8 @@
 
 set -e
 
+whoami
+
 [ -d "gh-ost-ci-env" ] || git clone https://github.com/github/gh-ost-ci-env.git
 
 find sandboxes -name "stop_all" || :
