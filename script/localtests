@@ -2,17 +2,20 @@
 
 set -e
 
-[ -d "gh-ost-ci-env" ] || git clone https://github.com/github/gh-ost-ci-env.git
-mkdir -p ~/opt/mysql
-mkdir -p ~/sandboxes
-gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/5.7.21.tar.gz --unpack-version=5.7.21 || :
+git clone https://github.com/github/gh-ost-ci-env.git
+
+mkdir -p sandbox/binary
+gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/5.7.21.tar.gz --unpack-version=5.7.21 --sandbox-binary ${PWD}/sandbox/binary
+
+mkdir -p sandboxes
+gh-ost-ci-env/bin/linux/dbdeployer replication 5.7.21 --nodes 2 --sandbox-binary ${PWD}/sandbox/binary --sandbox-home ${PWD}/sandboxes
 
 sed '/sandboxes/d' -i gh-ost-ci-env/bin/gh-ost-test-mysql-master
-echo '~/sandboxes/rsandbox_5_7_21/m "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-master
+echo 'sandboxes/rsandbox_5_7_21/m "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-master
 
 sed '/sandboxes/d' -i gh-ost-ci-env/bin/gh-ost-test-mysql-replica
-echo '~/sandboxes/rsandbox_5_7_21/s1 "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-replica
+echo 'sandboxes/rsandbox_5_7_21/s1 "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-replica
 
-export PATH="${HOME}/gh-ost-ci-env/bin/:${PATH}"
+export PATH="${PWD}/gh-ost-ci-env/bin/:${PATH}"
 echo "# Running localtests"
 ./localtests/test.sh
