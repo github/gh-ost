@@ -267,7 +267,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
 				(select id, name, position from mydb.tbl force index (name_position_uidx)
 				  where (((name > ?) or (((name = ?)) AND (position > ?)) or ((name = ?) and (position = ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?))))
-				lock in share mode )
+				)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
