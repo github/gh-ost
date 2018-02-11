@@ -11,8 +11,8 @@ tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
 ghost_binary=/tmp/gh-ost-test
 exec_command_file=/tmp/gh-ost-test.bash
-orig_content_output_file=/gh-ost-test.orig.content.csv
-ghost_content_output_file=/gh-ost-test.ghost.content.csv
+orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
+ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
 test_pattern="${1:-.}"
 
 master_host=
