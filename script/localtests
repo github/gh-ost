@@ -2,7 +2,7 @@
 
 set -e
 
-git clone https://github.com/github/gh-ost-ci-env.git
+[ -d "gh-ost-ci-env" ] || git clone https://github.com/github/gh-ost-ci-env.git
 
 mkdir -p sandbox/binary
 gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/5.7.21.tar.gz --unpack-version=5.7.21 --sandbox-binary ${PWD}/sandbox/binary
