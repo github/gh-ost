@@ -153,7 +153,8 @@ test_single() {
 
   if [ $execution_result -ne 0 ] ; then
     echo
-    echo "ERROR $test_name execution failure. cat $test_logfile"
+    echo "ERROR $test_name execution failure. cat $test_logfile:"
+    cat $test_logfile
     return 1
   fi
 
