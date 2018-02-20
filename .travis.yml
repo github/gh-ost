@@ -22,7 +22,9 @@ before_install:
 
 install: true
 
-script: script/cibuild
+script:
+  - script/cibuild
+  - script/localtests
 
 notifications:
   email: false
