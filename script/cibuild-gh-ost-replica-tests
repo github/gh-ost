@@ -10,7 +10,9 @@ test_mysql_version() {
   local mysql_version
   mysql_version="$1"
 
-  echo "# Testing $mysql_version"
+  echo "##### Testing $mysql_version"
+
+  echo "### Setting up sandbox for $mysql_version"
 
   find sandboxes -name "stop_all" | bash
 
@@ -32,6 +34,7 @@ test_mysql_version() {
 
   gh-ost-test-mysql-master -uroot -e "grant all on *.* to 'gh-ost'@'%' identified by 'gh-ost'"
 
+  echo "### Running gh-ost tests for $mysql_version"
   ./localtests/test.sh -b bin/gh-ost
 
   find sandboxes -name "stop_all" | bash
