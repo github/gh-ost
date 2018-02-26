@@ -16,17 +16,17 @@ test_mysql_version() {
 
   mkdir -p sandbox/binary
   rm -rf sandbox/binary/*
-  gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/"$mysql_version".tar.gz --unpack-version="$mysql_version" --sandbox-binary ${PWD}/sandbox/binary
+  gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/"$mysql_version".tar.gz --unpack-version="$mysql_version" --sandbox-binary ${PWD}/sandbox/binary --sandbox-directory rsandbox
 
   mkdir -p sandboxes
   rm -rf sandboxes/*
-  gh-ost-ci-env/bin/linux/dbdeployer replication "$mysql_version" --nodes 2 --sandbox-binary ${PWD}/sandbox/binary --sandbox-home ${PWD}/sandboxes --gtid --my-cnf-options log_slave_updates --my-cnf-options log_bin --my-cnf-options binlog_format=ROW
+  gh-ost-ci-env/bin/linux/dbdeployer replication "$mysql_version" --nodes 2 --sandbox-binary ${PWD}/sandbox/binary --sandbox-home ${PWD}/sandboxes --gtid --my-cnf-options log_slave_updates --my-cnf-options log_bin --my-cnf-options binlog_format=ROW --sandbox-directory rsandbox
 
   sed '/sandboxes/d' -i gh-ost-ci-env/bin/gh-ost-test-mysql-master
-  echo 'sandboxes/rsandbox_5_7_21/m "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-master
+  echo 'sandboxes/rsandbox/m "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-master
 
   sed '/sandboxes/d' -i gh-ost-ci-env/bin/gh-ost-test-mysql-replica
-  echo 'sandboxes/rsandbox_5_7_21/s1 "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-replica
+  echo 'sandboxes/rsandbox/s1 "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-replica
 
   export PATH="${PWD}/gh-ost-ci-env/bin/:${PATH}"
 
