@@ -24,7 +24,6 @@ install: true
 
 script:
   - script/cibuild
-  - script/localtests
 
 notifications:
   email: false
