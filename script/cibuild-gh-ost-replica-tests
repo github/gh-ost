@@ -38,6 +38,6 @@ test_mysql_version() {
 }
 
 # Test all versions:
-find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.gz" | xargs basename | sed -e 's/.tar.gz//g' | sort -r | while read mysql_version ; do
+find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.gz" | while read f ; do basename $f ".tar.gz" ; done | sort -r | while read mysql_version ; do
   test_mysql_version "$mysql_version"
 done
