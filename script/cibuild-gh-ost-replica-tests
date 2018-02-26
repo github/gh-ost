@@ -10,6 +10,8 @@ test_mysql_version() {
   local mysql_version
   mysql_version="$1"
 
+  echo "# Testing $mysql_version"
+
   find sandboxes -name "stop_all" | bash
 
   mkdir -p sandbox/binary
@@ -30,13 +32,13 @@ test_mysql_version() {
 
   gh-ost-test-mysql-master -uroot -e "grant all on *.* to 'gh-ost'@'%' identified by 'gh-ost'"
 
-  echo "# Testing $mysql_version"
-  . script/build
   ./localtests/test.sh -b bin/gh-ost
 
   find sandboxes -name "stop_all" | bash
 }
 
+echo "Building..."
+. script/build
 # Test all versions:
 find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.gz" | while read f ; do basename $f ".tar.gz" ; done | sort -r | while read mysql_version ; do
   test_mysql_version "$mysql_version"
