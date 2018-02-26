@@ -83,6 +83,15 @@ test_single() {
   local test_name
   test_name="$1"
 
+  if [ -f $tests_path/$test_name/ignore_versions ] ; then
+    ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
+    mysql_version=$(gh-ost-test-mysql-master -s -s -e "select @@version")
+    if echo "$mysql_version" | egrep "$ignore_versions" ; then
+      echo "ignoring"
+      return 0
+    fi
+  fi
+
   echo -n "Testing: $test_name"
 
   echo_dot
