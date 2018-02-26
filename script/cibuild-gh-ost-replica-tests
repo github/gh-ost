@@ -22,7 +22,13 @@ test_mysql_version() {
 
   mkdir -p sandboxes
   rm -rf sandboxes/*
-  gh-ost-ci-env/bin/linux/dbdeployer replication "$mysql_version" --nodes 2 --sandbox-binary ${PWD}/sandbox/binary --sandbox-home ${PWD}/sandboxes --gtid --my-cnf-options log_slave_updates --my-cnf-options log_bin --my-cnf-options binlog_format=ROW --sandbox-directory rsandbox
+
+  if echo "$mysql_version" | egrep "5[.]5[.]" ; then
+    gtid=""
+  else
+    gtid="--gtid"
+  fi
+  gh-ost-ci-env/bin/linux/dbdeployer replication "$mysql_version" --nodes 2 --sandbox-binary ${PWD}/sandbox/binary --sandbox-home ${PWD}/sandboxes ${gtid} --my-cnf-options log_slave_updates --my-cnf-options log_bin --my-cnf-options binlog_format=ROW --sandbox-directory rsandbox
 
   sed '/sandboxes/d' -i gh-ost-ci-env/bin/gh-ost-test-mysql-master
   echo 'sandboxes/rsandbox/m "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-master
