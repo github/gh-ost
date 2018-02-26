@@ -27,6 +27,7 @@ export PATH="${PWD}/gh-ost-ci-env/bin/:${PATH}"
 gh-ost-test-mysql-master -uroot -e "grant all on *.* to 'gh-ost'@'%' identified by 'gh-ost'"
 
 echo "# Running localtests"
-./localtests/test.sh
+. script/build
+./localtests/test.sh -b bin/gh-ost
 
 sandboxes/rsandbox_5_7_21/stop_all

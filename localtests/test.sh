@@ -9,16 +9,29 @@
 
 tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
-ghost_binary=/tmp/gh-ost-test
+default_ghost_binary=/tmp/gh-ost-test
+ghost_binary=""
 exec_command_file=/tmp/gh-ost-test.bash
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
-test_pattern="${1:-.}"
 
 master_host=
 master_port=
 replica_host=
 replica_port=
+
+OPTIND=1
+while getopts "b:" OPTION
+do
+  case $OPTION in
+    b)
+      ghost_binary="$OPTARG"
+    ;;
+  esac
+done
+shift $((OPTIND-1))
+
+test_pattern="${1:-.}"
 
 verify_master_and_replica() {
   if [ "$(gh-ost-test-mysql-master -e "select 1" -ss)" != "1" ] ; then
@@ -176,7 +189,12 @@ test_single() {
 
 build_binary() {
   echo "Building"
-  rm -f $ghost_binary
+  rm -f $default_ghost_binary
+  [ "$ghost_binary" == "" ] && ghost_binary="$default_ghost_binary"
+  if [ -f "$ghost_binary" ] ; then
+    echo "Using binary: $ghost_binary"
+    return 0
+  fi
   go build -o $ghost_binary go/cmd/gh-ost/main.go
   if [ $? -ne 0 ] ; then
     echo "Build failure"
