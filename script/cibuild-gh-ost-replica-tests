@@ -4,8 +4,14 @@ set -e
 
 whoami
 
-rm -rf ./gh-ost-ci-env
-[ -d "gh-ost-ci-env" ] || git clone https://github.com/github/gh-ost-ci-env.git
+# Clone gh-ost-ci-env
+# Only clone if not already running locally at latest commit
+remote_commit=$(git ls-remote https://github.com/github/gh-ost-ci-env.git HEAD | cut -f1)
+local_commit=$(cd gh-ost-ci-env && git log --format="%H" -n 1)
+if [ "$remote_commit" != "$local_commit" ] ; then
+  rm -rf ./gh-ost-ci-env
+  git clone https://github.com/github/gh-ost-ci-env.git
+fi
 
 test_mysql_version() {
   local mysql_version
