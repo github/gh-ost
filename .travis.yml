@@ -8,13 +8,22 @@ os:
 
 env:
 - MYSQL_USER=root
+- CURRENT_CI_ENV=travis
+
+addons:
+  apt:
+    packages:
+    - git
+    - numactl
+    - libaio1
 
 before_install:
   - mysql -e 'CREATE DATABASE IF NOT EXISTS test;'
 
 install: true
 
-script: script/cibuild
+script:
+  - script/cibuild
 
 notifications:
   email: false
