@@ -44,18 +44,28 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 // main is the application's entry point. It will either spawn a CLI or HTTP interfaces.
 func main() {
 	migrationContext := base.NewMigrationContext()
-	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
-	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unable to determine the master")
-	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
-	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
-	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
-	flag.StringVar(&migrationContext.CliMasterUser, "master-user", "", "MySQL user on master, if different from that on replica. Requires --assume-master-host")
-	flag.StringVar(&migrationContext.CliMasterPassword, "master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
+	flag.StringVar(&migrationContext.DstConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
+	flag.StringVar(&migrationContext.SrcConnectionConfig.Key.Hostname, "src-host", "", "MySQL hostname  of the source")
+	flag.StringVar(&migrationContext.AssumeDstMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unable to determine the master")
+	flag.StringVar(&migrationContext.AssumeSrcMasterHostname, "assume-src-master-host", "", "(optional) explicitly tell gh-ost the identity of the master for the source. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unable to determine the master")
+	flag.IntVar(&migrationContext.DstConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
+	flag.IntVar(&migrationContext.SrcConnectionConfig.Key.Port, "src-port", 0, "MySQL port of the source, default to same with destination port")
+
+	flag.StringVar(&migrationContext.CliDstUser, "user", "", "MySQL user on the replica")
+	flag.StringVar(&migrationContext.CliDstPassword, "password", "", "MySQL password on the replica")
+	flag.StringVar(&migrationContext.CliDstMasterUser, "master-user", "", "MySQL user on master, if different from that on replica. Requires --assume-master-host")
+	flag.StringVar(&migrationContext.CliDstMasterPassword, "master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
+	flag.StringVar(&migrationContext.CliSrcUser, "src-user", "", "MySQL user on the source")
+	flag.StringVar(&migrationContext.CliSrcPassword, "src-password", "", "MySQL password on the source")
+	flag.StringVar(&migrationContext.CliSrcMasterUser, "src-master-user", "", "MySQL user on the source master. Requires --assume-src-master-host")
+	flag.StringVar(&migrationContext.CliSrcMasterPassword, "src-master-password", "", "MySQL password on the source master. Requires --assume-src-master-host")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
 
-	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
-	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
+	flag.StringVar(&migrationContext.DstDatabaseName, "database", "", "destination database name (mandatory)")
+	flag.StringVar(&migrationContext.SrcDatabaseName, "src-database", "", "source database name (mandatory)")
+	flag.StringVar(&migrationContext.DstTableName, "table", "", "destination table name (mandatory)")
+	flag.StringVar(&migrationContext.SrcTableName, "src-table", "", "source table name (mandatory)")
 	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
 	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
 	flag.BoolVar(&migrationContext.ConcurrentCountTableRows, "concurrent-rowcount", true, "(with --exact-rowcount), when true (default): count rows after row-copy begins, concurrently, and adjust row estimate later on; when false: first count rows, then start row copy")
@@ -64,7 +74,7 @@ func main() {
 	flag.BoolVar(&migrationContext.NullableUniqueKeyAllowed, "allow-nullable-unique-key", false, "allow gh-ost to migrate based on a unique key with nullable columns. As long as no NULL values exist, this should be OK. If NULL values exist in chosen key, data may be corrupted. Use at your own risk!")
 	flag.BoolVar(&migrationContext.ApproveRenamedColumns, "approve-renamed-columns", false, "in case your `ALTER` statement renames columns, gh-ost will note that and offer its interpretation of the rename. By default gh-ost does not proceed to execute. This flag approves that gh-ost's interpretation is correct")
 	flag.BoolVar(&migrationContext.SkipRenamedColumns, "skip-renamed-columns", false, "in case your `ALTER` statement renames columns, gh-ost will note that and offer its interpretation of the rename. By default gh-ost does not proceed to execute. This flag tells gh-ost to skip the renamed columns, i.e. to treat what gh-ost thinks are renamed columns as unrelated columns. NOTE: you may lose column data")
-	flag.BoolVar(&migrationContext.IsTungsten, "tungsten", false, "explicitly let gh-ost know that you are running on a tungsten-replication based topology (you are likely to also provide --assume-master-host)")
+	flag.BoolVar(&migrationContext.IsTungsten, "tungsten", false, "explicitly let gh-ost know that you are running on a tungsten-replication based topology (you are likely to also provide --assume-master-host and --assume-src-master-host)")
 	flag.BoolVar(&migrationContext.DiscardForeignKeys, "discard-foreign-keys", false, "DANGER! This flag will migrate a table that has foreign keys and will NOT create foreign keys on the ghost table, thus your altered table will have NO foreign keys. This is useful for intentional dropping of foreign keys")
 	flag.BoolVar(&migrationContext.SkipForeignKeyChecks, "skip-foreign-key-checks", false, "set to 'true' when you know for certain there are no foreign keys on your table, and wish to skip the time it takes for gh-ost to verify that")
 	flag.BoolVar(&migrationContext.AliyunRDS, "aliyun-rds", false, "set to 'true' when you execute on Aliyun RDS.")
@@ -160,12 +170,25 @@ func main() {
 		log.SetLevel(log.ERROR)
 	}
 
-	if migrationContext.DatabaseName == "" {
+	if migrationContext.DstDatabaseName == "" {
 		log.Fatalf("--database must be provided and database name must not be empty")
 	}
-	if migrationContext.OriginalTableName == "" {
+	if migrationContext.DstTableName == "" {
 		log.Fatalf("--table must be provided and table name must not be empty")
 	}
+	if migrationContext.SrcConnectionConfig.Key.Hostname == "" {
+		migrationContext.SrcConnectionConfig.Key.Hostname = migrationContext.DstConnectionConfig.Key.Hostname
+	}
+	if migrationContext.SrcConnectionConfig.Key.Port == 0 {
+		migrationContext.SrcConnectionConfig.Key.Port = migrationContext.DstConnectionConfig.Key.Port
+	}
+	if migrationContext.SrcDatabaseName == "" {
+		migrationContext.SrcDatabaseName = migrationContext.DstDatabaseName
+	}
+	if migrationContext.SrcTableName == "" {
+		migrationContext.SrcTableName = migrationContext.DstTableName
+	}
+
 	if migrationContext.AlterStatement == "" {
 		log.Fatalf("--alter must be provided and statement must not be empty")
 	}
@@ -188,12 +211,20 @@ func main() {
 		}
 		log.Warning("--test-on-replica-skip-replica-stop enabled. We will not stop replication before cut-over. Ensure you have a plugin that does this.")
 	}
-	if migrationContext.CliMasterUser != "" && migrationContext.AssumeMasterHostname == "" {
+
+	if migrationContext.CliDstMasterUser != "" && migrationContext.AssumeDstMasterHostname == "" {
 		log.Fatalf("--master-user requires --assume-master-host")
 	}
-	if migrationContext.CliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
+	if migrationContext.CliDstMasterPassword != "" && migrationContext.AssumeDstMasterHostname == "" {
 		log.Fatalf("--master-password requires --assume-master-host")
 	}
+	if migrationContext.CliSrcMasterUser != "" && migrationContext.AssumeSrcMasterHostname == "" {
+		log.Fatalf("--src-master-user requires --assume-src-master-host")
+	}
+	if migrationContext.CliSrcMasterPassword != "" && migrationContext.AssumeSrcMasterHostname == "" {
+		log.Fatalf("--src-master-password requires --assume-src-master-host")
+	}
+
 	if *replicationLagQuery != "" {
 		log.Warningf("--replication-lag-query is deprecated")
 	}
@@ -206,6 +237,7 @@ func main() {
 	default:
 		log.Fatalf("Unknown cut-over: %s", *cutOver)
 	}
+
 	if err := migrationContext.ReadConfigFile(); err != nil {
 		log.Fatale(err)
 	}
@@ -219,16 +251,24 @@ func main() {
 		log.Fatale(err)
 	}
 	if migrationContext.ServeSocketFile == "" {
-		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
+		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.SrcDatabaseName, migrationContext.SrcTableName)
 	}
+
 	if *askPass {
 		fmt.Println("Password:")
 		bytePassword, err := terminal.ReadPassword(int(syscall.Stdin))
 		if err != nil {
 			log.Fatale(err)
 		}
-		migrationContext.CliPassword = string(bytePassword)
+		migrationContext.CliDstPassword = string(bytePassword)
 	}
+	if migrationContext.CliSrcUser == "" {
+		migrationContext.CliSrcUser = migrationContext.CliDstUser
+	}
+	if migrationContext.CliSrcPassword == "" {
+		migrationContext.CliSrcPassword = migrationContext.CliDstPassword
+	}
+
 	migrationContext.SetHeartbeatIntervalMilliseconds(*heartbeatIntervalMillis)
 	migrationContext.SetNiceRatio(*niceRatio)
 	migrationContext.SetChunkSize(*chunkSize)

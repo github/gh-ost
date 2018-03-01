@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
@@ -28,19 +27,17 @@ type GoMySQLReader struct {
 	LastAppliedRowsEventHint mysql.BinlogCoordinates
 }
 
-func NewGoMySQLReader(migrationContext *base.MigrationContext) (binlogReader *GoMySQLReader, err error) {
+func NewGoMySQLReader(connectionConfig *mysql.ConnectionConfig, serverID uint32) (binlogReader *GoMySQLReader, err error) {
 	binlogReader = &GoMySQLReader{
-		connectionConfig:        migrationContext.InspectorConnectionConfig,
+		connectionConfig:        connectionConfig,
 		currentCoordinates:      mysql.BinlogCoordinates{},
 		currentCoordinatesMutex: &sync.Mutex{},
 		binlogSyncer:            nil,
 		binlogStreamer:          nil,
 	}
 
-	serverId := uint32(migrationContext.ReplicaServerId)
-
 	binlogSyncerConfig := replication.BinlogSyncerConfig{
-		ServerID: serverId,
+		ServerID: serverID,
 		Flavor:   "mysql",
 		Host:     binlogReader.connectionConfig.Key.Hostname,
 		Port:     uint16(binlogReader.connectionConfig.Key.Port),
@@ -52,7 +49,7 @@ func NewGoMySQLReader(migrationContext *base.MigrationContext) (binlogReader *Go
 	return binlogReader, err
 }
 
-// ConnectBinlogStreamer
+// ConnectBinlogStreamer ...
 func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordinates) (err error) {
 	if coordinates.IsEmpty() {
 		return log.Errorf("Empty coordinates at ConnectBinlogStreamer()")
@@ -121,7 +118,7 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 	return nil
 }
 
-// StreamEvents
+// StreamEvents ...
 func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChannel chan<- *BinlogEntry) error {
 	if canStopStreaming() {
 		return nil

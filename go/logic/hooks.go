@@ -49,8 +49,14 @@ func (this *HooksExecutor) initHooks() error {
 
 func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []string {
 	env := os.Environ()
-	env = append(env, fmt.Sprintf("GH_OST_DATABASE_NAME=%s", this.migrationContext.DatabaseName))
-	env = append(env, fmt.Sprintf("GH_OST_TABLE_NAME=%s", this.migrationContext.OriginalTableName))
+	// keep for previous
+	env = append(env, fmt.Sprintf("GH_OST_DATABASE_NAME=%s", this.migrationContext.SrcDatabaseName))
+	env = append(env, fmt.Sprintf("GH_OST_TABLE_NAME=%s", this.migrationContext.SrcTableName))
+
+	env = append(env, fmt.Sprintf("GH_OST_SRC_DATABASE_NAME=%s", this.migrationContext.SrcDatabaseName))
+	env = append(env, fmt.Sprintf("GH_OST_SRC_TABLE_NAME=%s", this.migrationContext.SrcTableName))
+	env = append(env, fmt.Sprintf("GH_OST_DST_DATABASE_NAME=%s", this.migrationContext.DstDatabaseName))
+	env = append(env, fmt.Sprintf("GH_OST_DST_TABLE_NAME=%s", this.migrationContext.DstTableName))
 	env = append(env, fmt.Sprintf("GH_OST_GHOST_TABLE_NAME=%s", this.migrationContext.GetGhostTableName()))
 	env = append(env, fmt.Sprintf("GH_OST_OLD_TABLE_NAME=%s", this.migrationContext.GetOldTableName()))
 	env = append(env, fmt.Sprintf("GH_OST_DDL=%s", this.migrationContext.AlterStatement))
@@ -60,8 +66,14 @@ func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) [
 	env = append(env, fmt.Sprintf("GH_OST_ESTIMATED_ROWS=%d", estimatedRows))
 	totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
 	env = append(env, fmt.Sprintf("GH_OST_COPIED_ROWS=%d", totalRowsCopied))
-	env = append(env, fmt.Sprintf("GH_OST_MIGRATED_HOST=%s", this.migrationContext.GetApplierHostname()))
-	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_HOST=%s", this.migrationContext.GetInspectorHostname()))
+
+	// keep for previous
+	env = append(env, fmt.Sprintf("GH_OST_MIGRATED_HOST=%s", this.migrationContext.GetDstHostname()))
+	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_HOST=%s", this.migrationContext.GetSrcHostname()))
+
+	env = append(env, fmt.Sprintf("GH_OST_SRC_HOST=%s", this.migrationContext.GetSrcHostname()))
+	env = append(env, fmt.Sprintf("GH_OST_DST_HOST=%s", this.migrationContext.GetDstHostname()))
+
 	env = append(env, fmt.Sprintf("GH_OST_EXECUTING_HOST=%s", this.migrationContext.Hostname))
 	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT=%s", this.migrationContext.HooksHintMessage))
 

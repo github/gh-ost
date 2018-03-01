@@ -147,7 +147,7 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 			fmt.Fprintln(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
-coordinates													 # Print the currently inspected coordinates
+coordinates							 # Print the currently inspected coordinates
 chunk-size=<newsize>                 # Set a new chunk-size
 dml-batch-size=<newsize>             # Set a new dml-batch-size
 nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
@@ -173,7 +173,7 @@ help                                 # This message
 	case "coordinates":
 		{
 			if argIsQuestion || arg == "" {
-				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetRecentBinlogCoordinates())
+				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetSrcRecentBinlogCoordinates())
 				return NoPrintStatusRule, nil
 			}
 			return NoPrintStatusRule, fmt.Errorf("coordinates are read-only")
@@ -307,9 +307,9 @@ help                                 # This message
 				err := fmt.Errorf("User commanded 'unpostpone' without specifying table name, but --force-named-cut-over is set")
 				return NoPrintStatusRule, err
 			}
-			if arg != "" && arg != this.migrationContext.OriginalTableName {
+			if arg != "" && arg != this.migrationContext.SrcTableName {
 				// User explicitly provided table name. This is a courtesy protection mechanism
-				err := fmt.Errorf("User commanded 'unpostpone' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
+				err := fmt.Errorf("User commanded 'unpostpone' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.SrcTableName)
 				return NoPrintStatusRule, err
 			}
 			if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {

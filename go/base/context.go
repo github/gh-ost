@@ -73,11 +73,14 @@ func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleRea
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
-	Uuid string
+	SrcUUID string
+	DstUUID string
 
-	DatabaseName      string
-	OriginalTableName string
-	AlterStatement    string
+	SrcDatabaseName string
+	DstDatabaseName string
+	SrcTableName    string
+	DstTableName    string
+	AlterStatement  string
 
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
@@ -93,13 +96,17 @@ type MigrationContext struct {
 	DiscardForeignKeys       bool
 	AliyunRDS                bool
 
-	config            ContextConfig
-	configMutex       *sync.Mutex
-	ConfigFile        string
-	CliUser           string
-	CliPassword       string
-	CliMasterUser     string
-	CliMasterPassword string
+	config               ContextConfig
+	configMutex          *sync.Mutex
+	ConfigFile           string
+	CliSrcUser           string
+	CliSrcPassword       string
+	CliDstUser           string
+	CliDstPassword       string
+	CliSrcMasterUser     string
+	CliSrcMasterPassword string
+	CliDstMasterUser     string
+	CliDstMasterPassword string
 
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
@@ -142,20 +149,26 @@ type MigrationContext struct {
 	ReplicaServerId              uint
 	ManagedRowCopy               bool
 
-	Hostname                               string
-	AssumeMasterHostname                   string
-	ApplierTimeZone                        string
-	TableEngine                            string
-	RowsEstimate                           int64
-	RowsDeltaEstimate                      int64
-	UsedRowsEstimateMethod                 RowsEstimateMethod
-	HasSuperPrivilege                      bool
-	OriginalBinlogFormat                   string
-	OriginalBinlogRowImage                 string
-	InspectorConnectionConfig              *mysql.ConnectionConfig
-	InspectorMySQLVersion                  string
-	ApplierConnectionConfig                *mysql.ConnectionConfig
-	ApplierMySQLVersion                    string
+	Hostname                  string
+	AssumeSrcMasterHostname   string
+	AssumeDstMasterHostname   string
+	ApplierTimeZone           string
+	TableEngine               string
+	RowsEstimate              int64
+	RowsDeltaEstimate         int64
+	UsedRowsEstimateMethod    RowsEstimateMethod
+	HasSuperPrivilege         bool
+	OriginalBinlogFormat      string
+	OriginalBinlogRowImage    string
+	SrcConnectionConfig       *mysql.ConnectionConfig
+	SrcMySQLVersion           string
+	SrcMasterConnectionConfig *mysql.ConnectionConfig
+	SrcMasterMySQLVersion     string
+	DstConnectionConfig       *mysql.ConnectionConfig
+	DstMySQLVersion           string
+	DstMasterConnectionConfig *mysql.ConnectionConfig
+	DstMasterMySQLVersion     string
+
 	StartTime                              time.Time
 	RowCopyStartTime                       time.Time
 	RowCopyEndTime                         time.Time
@@ -194,6 +207,7 @@ type MigrationContext struct {
 	SharedColumns                    *sql.ColumnList
 	ColumnRenameMap                  map[string]string
 	DroppedColumnsMap                map[string]bool
+	SourceSchema                     string
 	MappedSharedColumns              *sql.ColumnList
 	MigrationRangeMinValues          *sql.ColumnValues
 	MigrationRangeMaxValues          *sql.ColumnValues
@@ -202,7 +216,8 @@ type MigrationContext struct {
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 	ForceTmpTableName                string
 
-	recentBinlogCoordinates mysql.BinlogCoordinates
+	srcRecentBinlogCoordinates mysql.BinlogCoordinates
+	dstRecentBinlogCoordinates mysql.BinlogCoordinates
 }
 
 type ContextConfig struct {
@@ -220,11 +235,14 @@ type ContextConfig struct {
 
 func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
-		Uuid:                                uuid.NewV4().String(),
+		SrcUUID:                             uuid.NewV4().String(),
+		DstUUID:                             uuid.NewV4().String(),
 		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
-		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
-		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
+		SrcConnectionConfig:                 mysql.NewConnectionConfig(),
+		SrcMasterConnectionConfig:           mysql.NewConnectionConfig(),
+		DstConnectionConfig:                 mysql.NewConnectionConfig(),
+		DstMasterConnectionConfig:           mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
 		DMLBatchSize:                        10,
@@ -254,9 +272,8 @@ func getSafeTableName(baseName string, suffix string) string {
 func (this *MigrationContext) GetGhostTableName() string {
 	if this.ForceTmpTableName != "" {
 		return getSafeTableName(this.ForceTmpTableName, "gho")
-	} else {
-		return getSafeTableName(this.OriginalTableName, "gho")
 	}
+	return getSafeTableName(this.DstTableName, "gho")
 }
 
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
@@ -265,7 +282,7 @@ func (this *MigrationContext) GetOldTableName() string {
 	if this.ForceTmpTableName != "" {
 		tableName = this.ForceTmpTableName
 	} else {
-		tableName = this.OriginalTableName
+		tableName = this.SrcTableName
 	}
 
 	if this.TimestampOldTable {
@@ -283,15 +300,14 @@ func (this *MigrationContext) GetOldTableName() string {
 func (this *MigrationContext) GetChangelogTableName() string {
 	if this.ForceTmpTableName != "" {
 		return getSafeTableName(this.ForceTmpTableName, "ghc")
-	} else {
-		return getSafeTableName(this.OriginalTableName, "ghc")
 	}
+	return getSafeTableName(this.DstTableName, "ghc")
 }
 
 // GetVoluntaryLockName returns a name of a voluntary lock to be used throughout
 // the swap-tables process.
 func (this *MigrationContext) GetVoluntaryLockName() string {
-	return fmt.Sprintf("%s.%s.lock", this.DatabaseName, this.OriginalTableName)
+	return fmt.Sprintf("%s.%s.lock", this.SrcDatabaseName, this.SrcTableName)
 }
 
 // RequiresBinlogFormatChange is `true` when the original binlog format isn't `ROW`
@@ -299,33 +315,44 @@ func (this *MigrationContext) RequiresBinlogFormatChange() bool {
 	return this.OriginalBinlogFormat != "ROW"
 }
 
-// GetApplierHostname is a safe access method to the applier hostname
-func (this *MigrationContext) GetApplierHostname() string {
-	if this.ApplierConnectionConfig == nil {
+// GetDstHostname is a safe access method to the applier master hostname
+// NOTE: use master for dst to keep it same with previous
+func (this *MigrationContext) GetDstHostname() string {
+	if this.DstMasterConnectionConfig == nil {
 		return ""
 	}
-	if this.ApplierConnectionConfig.ImpliedKey == nil {
+	if this.DstMasterConnectionConfig.ImpliedKey == nil {
 		return ""
 	}
-	return this.ApplierConnectionConfig.ImpliedKey.Hostname
+	return this.DstMasterConnectionConfig.ImpliedKey.Hostname
 }
 
-// GetInspectorHostname is a safe access method to the inspector hostname
-func (this *MigrationContext) GetInspectorHostname() string {
-	if this.InspectorConnectionConfig == nil {
+// GetSrcHostname is a safe access method to the inspector replica hostname
+func (this *MigrationContext) GetSrcHostname() string {
+	if this.SrcConnectionConfig == nil {
 		return ""
 	}
-	if this.InspectorConnectionConfig.ImpliedKey == nil {
+	if this.SrcConnectionConfig.ImpliedKey == nil {
 		return ""
 	}
-	return this.InspectorConnectionConfig.ImpliedKey.Hostname
+	return this.SrcConnectionConfig.ImpliedKey.Hostname
 }
 
-// InspectorIsAlsoApplier is `true` when the both inspector and applier are the
+// SrcIsAlsoDst is `true` when the both source and destination are the
 // same database instance. This would be true when running directly on master or when
 // testing on replica.
-func (this *MigrationContext) InspectorIsAlsoApplier() bool {
-	return this.InspectorConnectionConfig.Equals(this.ApplierConnectionConfig)
+func (this *MigrationContext) SrcIsAlsoDst() bool {
+	return this.DstMasterConnectionConfig.Equals(this.SrcMasterConnectionConfig)
+}
+
+// SrcMasterIsAlsoReplica is `true` when the master and replica is the same on source
+func (this *MigrationContext) SrcMasterIsAlsoReplica() bool {
+	return this.SrcMasterConnectionConfig.Equals(this.SrcConnectionConfig)
+}
+
+// DstMasterIsAlsoReplica is `true` when the master and replica is the same on destination
+func (this *MigrationContext) DstMasterIsAlsoReplica() bool {
+	return this.DstMasterConnectionConfig.Equals(this.DstConnectionConfig)
 }
 
 // HasMigrationRange tells us whether there's a range to iterate for copying rows.
@@ -387,7 +414,6 @@ func (this *MigrationContext) ElapsedTime() time.Duration {
 	return time.Since(this.StartTime)
 }
 
-// MarkRowCopyStartTime
 func (this *MigrationContext) MarkRowCopyStartTime() {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
@@ -410,7 +436,6 @@ func (this *MigrationContext) ElapsedRowCopyTime() time.Duration {
 	return this.RowCopyEndTime.Sub(this.RowCopyStartTime)
 }
 
-// ElapsedRowCopyTime returns time since starting to copy chunks of rows
 func (this *MigrationContext) MarkRowCopyEndTime() {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
@@ -581,17 +606,30 @@ func (this *MigrationContext) SetNiceRatio(newRatio float64) {
 	this.niceRatio = newRatio
 }
 
-func (this *MigrationContext) GetRecentBinlogCoordinates() mysql.BinlogCoordinates {
+func (this *MigrationContext) GetSrcRecentBinlogCoordinates() mysql.BinlogCoordinates {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
-	return this.recentBinlogCoordinates
+	return this.srcRecentBinlogCoordinates
 }
 
-func (this *MigrationContext) SetRecentBinlogCoordinates(coordinates mysql.BinlogCoordinates) {
+func (this *MigrationContext) SetSrcRecentBinlogCoordinates(coordinates mysql.BinlogCoordinates) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
-	this.recentBinlogCoordinates = coordinates
+	this.srcRecentBinlogCoordinates = coordinates
+}
+
+func (this *MigrationContext) GetDstRecentBinlogCoordinates() mysql.BinlogCoordinates {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	return this.dstRecentBinlogCoordinates
+}
+
+func (this *MigrationContext) SetDstRecentBinlogCoordinates(coordinates mysql.BinlogCoordinates) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.dstRecentBinlogCoordinates = coordinates
 }
 
 // ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
@@ -609,7 +647,7 @@ func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
 	return nil
 }
 
-// ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
+// ReadCriticalLoad parses the `--critical-load` flag, which is in multiple key-value format,
 // such as: 'Threads_running=100,Threads_connected=500'
 // It only applies changes in case there's no parsing error.
 func (this *MigrationContext) ReadCriticalLoad(criticalLoadList string) error {
@@ -677,19 +715,52 @@ func (this *MigrationContext) ApplyCredentials() {
 	this.configMutex.Lock()
 	defer this.configMutex.Unlock()
 
+	// init with config
 	if this.config.Client.User != "" {
-		this.InspectorConnectionConfig.User = this.config.Client.User
+		this.SrcConnectionConfig.User = this.config.Client.User
+		this.DstConnectionConfig.User = this.config.Client.User
+		this.SrcMasterConnectionConfig.User = this.config.Client.User
+		this.DstMasterConnectionConfig.User = this.config.Client.User
 	}
-	if this.CliUser != "" {
+	if this.CliSrcUser != "" {
 		// Override
-		this.InspectorConnectionConfig.User = this.CliUser
+		this.SrcConnectionConfig.User = this.CliSrcUser
 	}
+	if this.CliDstUser != "" {
+		// Override
+		this.DstConnectionConfig.User = this.CliDstUser
+	}
+	if this.CliSrcMasterUser != "" {
+		// Override
+		this.SrcMasterConnectionConfig.User = this.CliSrcMasterUser
+	}
+	if this.CliDstMasterUser != "" {
+		// Override
+		this.DstMasterConnectionConfig.User = this.CliDstMasterUser
+	}
+
+	// init with config
 	if this.config.Client.Password != "" {
-		this.InspectorConnectionConfig.Password = this.config.Client.Password
+		this.SrcConnectionConfig.Password = this.config.Client.Password
+		this.DstConnectionConfig.Password = this.config.Client.Password
+		this.SrcMasterConnectionConfig.Password = this.config.Client.Password
+		this.DstMasterConnectionConfig.Password = this.config.Client.Password
 	}
-	if this.CliPassword != "" {
+	if this.CliSrcPassword != "" {
 		// Override
-		this.InspectorConnectionConfig.Password = this.CliPassword
+		this.SrcConnectionConfig.Password = this.CliSrcPassword
+	}
+	if this.CliDstPassword != "" {
+		// Override
+		this.DstConnectionConfig.Password = this.CliDstPassword
+	}
+	if this.CliSrcMasterPassword != "" {
+		// Override
+		this.SrcMasterConnectionConfig.Password = this.CliSrcMasterPassword
+	}
+	if this.CliDstMasterPassword != "" {
+		// Override
+		this.DstMasterConnectionConfig.Password = this.CliDstMasterPassword
 	}
 }
 

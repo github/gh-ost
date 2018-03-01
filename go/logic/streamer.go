@@ -35,7 +35,9 @@ const (
 // EventsStreamer reads data from binary logs and streams it on. It acts as a publisher,
 // and interested parties may subscribe for per-table events.
 type EventsStreamer struct {
+	uuid                     string
 	connectionConfig         *mysql.ConnectionConfig
+	databaseName             string
 	db                       *gosql.DB
 	migrationContext         *base.MigrationContext
 	initialBinlogCoordinates *mysql.BinlogCoordinates
@@ -45,10 +47,12 @@ type EventsStreamer struct {
 	binlogReader             *binlog.GoMySQLReader
 }
 
-func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer {
+func NewEventsStreamer(connectionConfig *mysql.ConnectionConfig, uuid, databaseName string, context *base.MigrationContext) *EventsStreamer {
 	return &EventsStreamer{
-		connectionConfig: migrationContext.InspectorConnectionConfig,
-		migrationContext: migrationContext,
+		connectionConfig: connectionConfig,
+		uuid:             uuid,
+		databaseName:     databaseName,
+		migrationContext: context,
 		listeners:        [](*BinlogEventListener){},
 		listenersMutex:   &sync.Mutex{},
 		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
@@ -103,13 +107,14 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 }
 
 func (this *EventsStreamer) InitDBConnections() (err error) {
-	EventsStreamerUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, EventsStreamerUri); err != nil {
+	eventsStreamerURI := this.connectionConfig.GetDBUri(this.databaseName)
+	if this.db, _, err = mysql.GetDB(this.uuid, eventsStreamerURI); err != nil {
 		return err
 	}
 	if _, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext); err != nil {
 		return err
 	}
+
 	if err := this.readCurrentBinlogCoordinates(); err != nil {
 		return err
 	}
@@ -122,7 +127,7 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 
 // initBinlogReader creates and connects the reader: we hook up to a MySQL server as a replica
 func (this *EventsStreamer) initBinlogReader(binlogCoordinates *mysql.BinlogCoordinates) error {
-	goMySQLReader, err := binlog.NewGoMySQLReader(this.migrationContext)
+	goMySQLReader, err := binlog.NewGoMySQLReader(this.connectionConfig, uint32(this.migrationContext.ReplicaServerId))
 	if err != nil {
 		return err
 	}
@@ -213,7 +218,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 
 func (this *EventsStreamer) Close() (err error) {
 	err = this.binlogReader.Close()
-	log.Infof("Closed streamer connection. err=%+v", err)
+	log.Infof("Closed streamer connection on %+v. err=%+v", this.connectionConfig.Key, err)
 	return err
 }
 

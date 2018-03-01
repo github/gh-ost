@@ -62,14 +62,15 @@ const (
 
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
-	parser           *sql.Parser
-	inspector        *Inspector
-	applier          *Applier
-	eventsStreamer   *EventsStreamer
-	server           *Server
-	throttler        *Throttler
-	hooksExecutor    *HooksExecutor
-	migrationContext *base.MigrationContext
+	parser            *sql.Parser
+	inspector         *Inspector
+	applier           *Applier
+	srcEventsStreamer *EventsStreamer
+	dstEventsStreamer *EventsStreamer
+	server            *Server
+	throttler         *Throttler
+	hooksExecutor     *HooksExecutor
+	migrationContext  *base.MigrationContext
 
 	firstThrottlingCollected   chan bool
 	ghostTableMigrated         chan bool
@@ -314,7 +315,14 @@ func (this *Migrator) createFlagFiles() (err error) {
 
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
-	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	log.Infof("Migrating %s.%s{%s} to %s.%s{%s}",
+		sql.EscapeName(this.migrationContext.SrcDatabaseName),
+		sql.EscapeName(this.migrationContext.SrcTableName),
+		this.migrationContext.SrcConnectionConfig.Key,
+		sql.EscapeName(this.migrationContext.DstDatabaseName),
+		sql.EscapeName(this.migrationContext.DstTableName),
+		this.migrationContext.DstConnectionConfig.Key,
+	)
 	this.migrationContext.StartTime = time.Now()
 	if this.migrationContext.Hostname, err = os.Hostname(); err != nil {
 		return err
@@ -421,7 +429,12 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onSuccess(); err != nil {
 		return err
 	}
-	log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	log.Infof("Done migrating %s.%s to %s.%s",
+		sql.EscapeName(this.migrationContext.SrcDatabaseName),
+		sql.EscapeName(this.migrationContext.SrcTableName),
+		sql.EscapeName(this.migrationContext.DstDatabaseName),
+		sql.EscapeName(this.migrationContext.DstTableName),
+	)
 	return nil
 }
 
@@ -598,7 +611,7 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
 	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
-	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.SrcTableName))
 	return nil
 }
 
@@ -690,7 +703,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 
 	// ooh nice! We're actually truly and thankfully done
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
-	log.Infof("Lock & rename duration: %s. During this time, queries on %s were blocked", lockAndRenameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	log.Infof("Lock & rename duration: %s. During this time, queries on %s were blocked", lockAndRenameDuration, sql.EscapeName(this.migrationContext.SrcTableName))
 	return nil
 }
 
@@ -731,44 +744,75 @@ func (this *Migrator) initiateInspector() (err error) {
 	}
 	// So far so good, table is accessible and valid.
 	// Let's get master connection config
-	if this.migrationContext.AssumeMasterHostname == "" {
+	if this.migrationContext.AssumeDstMasterHostname == "" {
 		// No forced master host; detect master
-		if this.migrationContext.ApplierConnectionConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
+		if this.migrationContext.DstMasterConnectionConfig, err = this.inspector.getMasterConnectionConfig(this.migrationContext.DstConnectionConfig); err != nil {
 			return err
 		}
-		log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
+		log.Infof("Dstination master found to be %+v", *this.migrationContext.DstConnectionConfig.ImpliedKey)
 	} else {
 		// Forced master host.
-		key, err := mysql.ParseRawInstanceKeyLoose(this.migrationContext.AssumeMasterHostname)
+		key, err := mysql.ParseRawInstanceKeyLoose(this.migrationContext.AssumeDstMasterHostname)
 		if err != nil {
 			return err
 		}
-		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.DuplicateCredentials(*key)
-		if this.migrationContext.CliMasterUser != "" {
-			this.migrationContext.ApplierConnectionConfig.User = this.migrationContext.CliMasterUser
+		this.migrationContext.DstMasterConnectionConfig = this.migrationContext.DstConnectionConfig.DuplicateCredentials(*key)
+		if this.migrationContext.CliDstMasterUser != "" {
+			this.migrationContext.DstMasterConnectionConfig.User = this.migrationContext.CliDstUser
 		}
-		if this.migrationContext.CliMasterPassword != "" {
-			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
+		if this.migrationContext.CliDstMasterPassword != "" {
+			this.migrationContext.DstMasterConnectionConfig.Password = this.migrationContext.CliDstPassword
 		}
-		log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
+		log.Infof("Dstination master forced to be %+v", *this.migrationContext.DstConnectionConfig.ImpliedKey)
 	}
+	if this.migrationContext.AssumeSrcMasterHostname == "" {
+		// No forced master host; detect master
+		if this.migrationContext.SrcMasterConnectionConfig, err = this.inspector.getMasterConnectionConfig(this.migrationContext.SrcConnectionConfig); err != nil {
+			return err
+		}
+		log.Infof("Source master found to be %+v", *this.migrationContext.SrcConnectionConfig.ImpliedKey)
+	} else {
+		// Forced master host.
+		key, err := mysql.ParseRawInstanceKeyLoose(this.migrationContext.AssumeSrcMasterHostname)
+		if err != nil {
+			return err
+		}
+		this.migrationContext.SrcMasterConnectionConfig = this.migrationContext.SrcConnectionConfig.DuplicateCredentials(*key)
+		if this.migrationContext.CliSrcMasterUser != "" {
+			this.migrationContext.SrcMasterConnectionConfig.User = this.migrationContext.CliSrcMasterUser
+		}
+		if this.migrationContext.CliSrcMasterPassword != "" {
+			this.migrationContext.SrcMasterConnectionConfig.Password = this.migrationContext.CliSrcMasterPassword
+		}
+		log.Infof("Source master to be %+v", *this.migrationContext.SrcMasterConnectionConfig.ImpliedKey)
+	}
+
 	// validate configs
 	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
-		if this.migrationContext.InspectorIsAlsoApplier() {
+		if this.migrationContext.SrcMasterIsAlsoReplica() || this.migrationContext.DstMasterIsAlsoReplica() {
 			return fmt.Errorf("Instructed to --test-on-replica or --migrate-on-replica, but the server we connect to doesn't seem to be a replica")
 		}
 		log.Infof("--test-on-replica or --migrate-on-replica given. Will not execute on master %+v but rather on replica %+v itself",
-			*this.migrationContext.ApplierConnectionConfig.ImpliedKey, *this.migrationContext.InspectorConnectionConfig.ImpliedKey,
+			*this.migrationContext.DstMasterConnectionConfig.ImpliedKey, *this.migrationContext.DstConnectionConfig.ImpliedKey,
 		)
-		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.Duplicate()
+		this.migrationContext.DstMasterConnectionConfig = this.migrationContext.DstConnectionConfig.Duplicate()
 		if this.migrationContext.GetThrottleControlReplicaKeys().Len() == 0 {
-			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.InspectorConnectionConfig.Key)
+			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.DstConnectionConfig.Key)
 		}
-	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
-		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", this.migrationContext.InspectorConnectionConfig, this.migrationContext.ApplierConnectionConfig)
+	} else if (this.migrationContext.SrcMasterIsAlsoReplica() || this.migrationContext.DstMasterIsAlsoReplica()) && !this.migrationContext.AllowedRunningOnMaster {
+		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Src config=%+v, Dst config=%+v", this.migrationContext.SrcConnectionConfig, this.migrationContext.DstConnectionConfig)
 	}
 	if err := this.inspector.validateLogSlaveUpdates(); err != nil {
 		return err
+	}
+	if !this.migrationContext.SrcIsAlsoDst() {
+		// only two-step cutover supported when src and dst differs
+		this.migrationContext.CutOverType = base.CutOverTwoStep
+		log.Noticef("force two-step cutover since src and dst differs")
+
+		// force managed rowcopy when src and dst differs
+		this.migrationContext.ManagedRowCopy = true
+		log.Noticef("force managed rowcopy since src and dst differs")
 	}
 
 	return nil
@@ -795,14 +839,15 @@ func (this *Migrator) initiateStatus() error {
 func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s",
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.SrcDatabaseName),
+		sql.EscapeName(this.migrationContext.SrcTableName),
+		sql.EscapeName(this.migrationContext.DstDatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	))
-	fmt.Fprintln(w, fmt.Sprintf("# Migrating %+v; inspecting %+v; executing on %+v",
-		*this.applier.connectionConfig.ImpliedKey,
-		*this.inspector.connectionConfig.ImpliedKey,
+	fmt.Fprintln(w, fmt.Sprintf("# Migrating {%+v} -> {%+v}; inspecting %+v; executing on %+v",
+		*this.applier.srcConnectionConfig.ImpliedKey,
+		*this.applier.dstConnectionConfig.ImpliedKey,
+		*this.inspector.srcConnectionConfig.ImpliedKey,
 		this.migrationContext.Hostname,
 	))
 	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v",
@@ -956,7 +1001,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		return
 	}
 
-	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
+	currentBinlogCoordinates := *this.srcEventsStreamer.GetCurrentBinlogCoordinates()
 
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
@@ -981,26 +1026,61 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 // initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
-	this.eventsStreamer = NewEventsStreamer(this.migrationContext)
-	if err := this.eventsStreamer.InitDBConnections(); err != nil {
+	this.srcEventsStreamer = NewEventsStreamer(this.migrationContext.SrcConnectionConfig, this.migrationContext.SrcUUID, this.migrationContext.SrcDatabaseName, this.migrationContext)
+	if err := this.srcEventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
-	this.eventsStreamer.AddListener(
-		false,
-		this.migrationContext.DatabaseName,
-		this.migrationContext.GetChangelogTableName(),
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			return this.onChangelogStateEvent(dmlEvent)
-		},
-	)
+
+	// only needed when src and dst differs
+	if !this.migrationContext.SrcIsAlsoDst() {
+		this.dstEventsStreamer = NewEventsStreamer(this.migrationContext.DstConnectionConfig, this.migrationContext.DstUUID, this.migrationContext.DstDatabaseName, this.migrationContext)
+		if err := this.dstEventsStreamer.InitDBConnections(); err != nil {
+			return err
+		}
+		this.dstEventsStreamer.AddListener(
+			false,
+			this.migrationContext.DstDatabaseName,
+			this.migrationContext.GetChangelogTableName(),
+			func(dmlEvent *binlog.BinlogDMLEvent) error {
+				return this.onChangelogStateEvent(dmlEvent)
+			},
+		)
+		go func() {
+			log.Debugf("Beginning dst streaming")
+			err := this.dstEventsStreamer.StreamEvents(this.canStopStreaming)
+			if err != nil {
+				this.migrationContext.PanicAbort <- err
+			}
+			log.Debugf("Done dst streaming")
+		}()
+
+		go func() {
+			ticker := time.Tick(1 * time.Second)
+			for range ticker {
+				if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+					return
+				}
+				this.migrationContext.SetDstRecentBinlogCoordinates(*this.dstEventsStreamer.GetCurrentBinlogCoordinates())
+			}
+		}()
+	} else {
+		this.srcEventsStreamer.AddListener(
+			false,
+			this.migrationContext.DstDatabaseName,
+			this.migrationContext.GetChangelogTableName(),
+			func(dmlEvent *binlog.BinlogDMLEvent) error {
+				return this.onChangelogStateEvent(dmlEvent)
+			},
+		)
+	}
 
 	go func() {
-		log.Debugf("Beginning streaming")
-		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
+		log.Debugf("Beginning src streaming")
+		err := this.srcEventsStreamer.StreamEvents(this.canStopStreaming)
 		if err != nil {
 			this.migrationContext.PanicAbort <- err
 		}
-		log.Debugf("Done streaming")
+		log.Debugf("Done src streaming")
 	}()
 
 	go func() {
@@ -1009,19 +1089,20 @@ func (this *Migrator) initiateStreaming() error {
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}
-			this.migrationContext.SetRecentBinlogCoordinates(*this.eventsStreamer.GetCurrentBinlogCoordinates())
+			this.migrationContext.SetSrcRecentBinlogCoordinates(*this.srcEventsStreamer.GetCurrentBinlogCoordinates())
 		}
 	}()
+
 	return nil
 }
 
 // addDMLEventsListener begins listening for binlog events on the original table,
 // and creates & enqueues a write task per such event.
 func (this *Migrator) addDMLEventsListener() error {
-	err := this.eventsStreamer.AddListener(
+	err := this.srcEventsStreamer.AddListener(
 		false,
-		this.migrationContext.DatabaseName,
-		this.migrationContext.OriginalTableName,
+		this.migrationContext.SrcDatabaseName,
+		this.migrationContext.SrcTableName,
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
 			this.applyEventsQueue <- newApplyEventStructByDML(dmlEvent)
 			return nil
@@ -1250,15 +1331,23 @@ func (this *Migrator) finalCleanup() error {
 	atomic.StoreInt64(&this.migrationContext.CleanupImminentFlag, 1)
 
 	if this.migrationContext.Noop {
-		if createTableStatement, err := this.inspector.showCreateTable(this.migrationContext.GetGhostTableName()); err == nil {
+		if createTableStatement, err := this.inspector.showCreateTable(this.inspector.dstDB, this.migrationContext.DstDatabaseName, this.migrationContext.GetGhostTableName()); err == nil {
 			log.Infof("New table structure follows")
 			fmt.Println(createTableStatement)
 		} else {
 			log.Errore(err)
 		}
 	}
-	if err := this.eventsStreamer.Close(); err != nil {
-		log.Errore(err)
+	if this.srcEventsStreamer != nil {
+		if err := this.srcEventsStreamer.Close(); err != nil {
+			log.Errore(err)
+		}
+	}
+
+	if this.dstEventsStreamer != nil {
+		if err := this.dstEventsStreamer.Close(); err != nil {
+			log.Errore(err)
+		}
 	}
 
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
@@ -1271,7 +1360,7 @@ func (this *Migrator) finalCleanup() error {
 	} else {
 		if !this.migrationContext.Noop {
 			log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add `--ok-to-drop-table` next time. But I prefer you do not. To drop the old table, issue:")
-			log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
+			log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.SrcDatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
 		}
 	}
 	if this.migrationContext.Noop {
@@ -1296,9 +1385,14 @@ func (this *Migrator) teardown() {
 		this.applier.Teardown()
 	}
 
-	if this.eventsStreamer != nil {
-		log.Infof("Tearing down streamer")
-		this.eventsStreamer.Teardown()
+	if this.srcEventsStreamer != nil {
+		log.Infof("Tearing down src streamer")
+		this.srcEventsStreamer.Teardown()
+	}
+
+	if this.dstEventsStreamer != nil {
+		log.Infof("Tearing down dst streamer")
+		this.dstEventsStreamer.Teardown()
 	}
 
 	if this.throttler != nil {
