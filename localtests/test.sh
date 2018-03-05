@@ -41,6 +41,11 @@ verify_master_and_replica() {
   read master_host master_port <<< $(gh-ost-test-mysql-master -e "select @@hostname, @@port" -ss)
   [ "$master_host" == "$(hostname)" ] && master_host="127.0.0.1"
   echo "# master verified at $master_host:$master_port"
+  if ! gh-ost-test-mysql-master -e "set global event_scheduler := 1" ; then
+    echo "Cannot enable event_scheduler on master"
+    exit 1
+  fi
+
   if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
     echo "Cannot verify gh-ost-test-mysql-replica"
     exit 1
