@@ -107,3 +107,5 @@ Generally speaking, `master` branch is stable, but only [releases](https://githu
 - [@ggunson](https://github.com/ggunson)
 - [@tomkrouper](https://github.com/tomkrouper)
 - [@shlomi-noach](https://github.com/shlomi-noach)
+- [@jessbreckenridge](https://github.com/jessbreckenridge)
+- [@gtowey](https://github.com/gtowey)
