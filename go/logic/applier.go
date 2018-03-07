@@ -69,7 +69,7 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 
 func (this *Applier) InitDBConnections() (err error) {
 
-	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName, this.migrationContext.IncludeRiskCharset)
+	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName, this.migrationContext.IncludeRiskyCharsets)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
