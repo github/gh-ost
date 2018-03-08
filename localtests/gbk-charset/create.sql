@@ -21,4 +21,5 @@ create event gh_ost_test
 begin
   insert into gh_ost_test (name) values ('gbk-test-default');
   insert into gh_ost_test values (null, 'gbk-test', '添加普通列测试-添加普通列测试');
+  update gh_ost_test set v='添加普通列测试' where v='添加普通列测试-添加普通列测试' order by id desc limit 1;
 end ;;
