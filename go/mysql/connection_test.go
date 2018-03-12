@@ -55,6 +55,7 @@ func TestDuplicate(t *testing.T) {
 	test.S(t).ExpectEquals(dup.User, "gromit")
 	test.S(t).ExpectEquals(dup.Password, "penguin")
 }
+
 func TestGetDBUri(t *testing.T) {
 	c := NewConnectionConfig()
 	c.Key = InstanceKey{Hostname: "myhost", Port: 3306}
@@ -62,7 +63,5 @@ func TestGetDBUri(t *testing.T) {
 	c.Password = "penguin"
 
 	uri := c.GetDBUri("test")
-	test.S(t).ExpectEquals(uri, "gromit:penguin@tcp(myhost:3306)/test?interpolateParams=false&autocommit=true&charset=utf8mb4,utf8,latin1,gbk,gb2312,big5,cp932,sjis")
-	uri = c.GetDBUri("test")
 	test.S(t).ExpectEquals(uri, "gromit:penguin@tcp(myhost:3306)/test?interpolateParams=true&autocommit=true&charset=utf8mb4,utf8,latin1")
 }
