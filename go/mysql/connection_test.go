@@ -61,8 +61,8 @@ func TestGetDBUri(t *testing.T) {
 	c.User = "gromit"
 	c.Password = "penguin"
 
-	uri := c.GetDBUri("test", true)
+	uri := c.GetDBUri("test")
 	test.S(t).ExpectEquals(uri, "gromit:penguin@tcp(myhost:3306)/test?interpolateParams=false&autocommit=true&charset=utf8mb4,utf8,latin1,gbk,gb2312,big5,cp932,sjis")
-	uri = c.GetDBUri("test", false)
+	uri = c.GetDBUri("test")
 	test.S(t).ExpectEquals(uri, "gromit:penguin@tcp(myhost:3306)/test?interpolateParams=true&autocommit=true&charset=utf8mb4,utf8,latin1")
 }
