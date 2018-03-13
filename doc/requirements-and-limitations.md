@@ -52,3 +52,5 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 - If you have en `enum` field as part of your migration key (typically the `PRIMARY KEY`), migration performance will be degraded and potentially bad. [Read more](https://github.com/github/gh-ost/pull/277#issuecomment-254811520)
 
 - Migrating a `FEDERATED` table is unsupported and is irrelevant to the problem `gh-ost` tackles.
+
+- [Encrypted binary logs](https://www.percona.com/blog/2018/03/08/binlog-encryption-percona-server-mysql/) are not supported.
