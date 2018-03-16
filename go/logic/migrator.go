@@ -130,7 +130,7 @@ func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 
 // retryOperation attempts up to `count` attempts at running given function,
 // exiting as soon as it returns with non-error.
-func (this *Migrator) retryOperation(operation func() error, notFatalHint ...bool) (err error) {
+func (this *Migrator) retryOperation(operation func() error) (err error) {
 	maxRetries := int(this.migrationContext.MaxRetries())
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
@@ -143,8 +143,23 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		}
 		// there's an error. Let's try again.
 	}
-	if len(notFatalHint) == 0 {
-		this.migrationContext.PanicAbort <- err
+	return err
+}
+
+func (this *Migrator) retryOperationWithExponentialBackoff(operation func() error) (err error) {
+	var numAttempts float64
+	for {
+		err = operation()
+		if err == nil {
+			return nil
+		}
+
+		interval := math.Exp2(numAttempts)
+		if interval > this.migrationContext.CutOverExponentialBackoffMaxInterval {
+			break
+		} else {
+			time.Sleep(interval * time.Second)
+		}
 	}
 	return err
 }
@@ -372,7 +387,13 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
 	}
-	if err := this.retryOperation(this.cutOver); err != nil {
+	var retrier func(func() error) error
+	if this.migrationContext.CutOverExponentialBackoff {
+		retrier = this.retryOperationWithExponentialBackoff
+	} else {
+		retrier = this.retryOperation
+	}
+	if err := retrier(this.cutOver); err != nil {
 		return err
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
