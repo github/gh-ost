@@ -130,7 +130,7 @@ func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 
 // retryOperation attempts up to `count` attempts at running given function,
 // exiting as soon as it returns with non-error.
-func (this *Migrator) retryOperation(operation func() error) (err error) {
+func (this *Migrator) retryOperation(operation func() error, notFatalHint ...bool) (err error) {
 	maxRetries := int(this.migrationContext.MaxRetries())
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
@@ -143,23 +143,29 @@ func (this *Migrator) retryOperation(operation func() error) (err error) {
 		}
 		// there's an error. Let's try again.
 	}
+	if len(notFatalHint) == 0 {
+		this.migrationContext.PanicAbort <- err
+	}
 	return err
 }
 
-func (this *Migrator) retryOperationWithExponentialBackoff(operation func() error) (err error) {
-	var numAttempts float64
+func (this *Migrator) retryOperationWithExponentialBackoff(operation func() error, notFatalHint ...bool) (err error) {
+	var numAttempts int
 	for {
 		err = operation()
 		if err == nil {
 			return nil
 		}
 
-		interval := math.Exp2(numAttempts)
+		interval := int(math.Exp2(float64(numAttempts)))
 		if interval > this.migrationContext.CutOverExponentialBackoffMaxInterval {
 			break
 		} else {
-			time.Sleep(interval * time.Second)
+			time.Sleep(time.Duration(interval) * time.Second)
 		}
+	}
+	if len(notFatalHint) == 0 {
+		this.migrationContext.PanicAbort <- err
 	}
 	return err
 }
@@ -387,7 +393,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
 	}
-	var retrier func(func() error) error
+	var retrier func(func() error, ...bool) error
 	if this.migrationContext.CutOverExponentialBackoff {
 		retrier = this.retryOperationWithExponentialBackoff
 	} else {

@@ -119,7 +119,7 @@ type MigrationContext struct {
 	PostponeCutOverFlagFile              string
 	CutOverLockTimeoutSeconds            int64
 	CutOverExponentialBackoff            bool
-	CutOverExponentialBackoffMaxInterval int64
+	CutOverExponentialBackoffMaxInterval int
 	ForceNamedCutOverCommand             bool
 	PanicFlagFile                        string
 	HooksPath                            string
@@ -343,7 +343,7 @@ func (this *MigrationContext) SetCutOverLockTimeoutSeconds(timeoutSeconds int64)
 	return nil
 }
 
-func (this *MigrationContext) SetCutOverExponentialBackoffMaxInterval(intervalSeconds int64) error {
+func (this *MigrationContext) SetCutOverExponentialBackoffMaxInterval(intervalSeconds int) error {
 	if intervalSeconds < 2 {
 		return fmt.Errorf("Minimal maximum interval is 2sec. Timeout remains at %d", this.CutOverExponentialBackoffMaxInterval)
 	}
