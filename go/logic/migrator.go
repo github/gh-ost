@@ -149,20 +149,22 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	return err
 }
 
+// retryOperation attempts running given function, waiting 2^(n-1) seconds
+// between each attempt, where n is the running number of attempts. exits
+// as soon as the function returns with non-error, or as soon as the next
+// wait interval exceeds `CutOverExponentialBackoffMaxInterval`.
 func (this *Migrator) retryOperationWithExponentialBackoff(operation func() error, notFatalHint ...bool) (err error) {
-	var numAttempts int
-	for {
+	numAttempts := 0
+	var interval int64
+	maxInterval := this.migrationContext.CutOverExponentialBackoffMaxInterval
+	for interval < maxInterval {
+		time.Sleep(time.Duration(interval) * time.Second)
 		err = operation()
 		if err == nil {
 			return nil
 		}
-
-		interval := int(math.Exp2(float64(numAttempts)))
-		if interval > this.migrationContext.CutOverExponentialBackoffMaxInterval {
-			break
-		} else {
-			time.Sleep(time.Duration(interval) * time.Second)
-		}
+		interval = int64(math.Exp2(float64(numAttempts)))
+		numAttempts++
 	}
 	if len(notFatalHint) == 0 {
 		this.migrationContext.PanicAbort <- err
