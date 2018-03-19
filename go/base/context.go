@@ -100,30 +100,30 @@ type MigrationContext struct {
 	CliMasterUser     string
 	CliMasterPassword string
 
-	HeartbeatIntervalMilliseconds        int64
-	defaultNumRetries                    int64
-	ChunkSize                            int64
-	niceRatio                            float64
-	MaxLagMillisecondsThrottleThreshold  int64
-	throttleControlReplicaKeys           *mysql.InstanceKeyMap
-	ThrottleFlagFile                     string
-	ThrottleAdditionalFlagFile           string
-	throttleQuery                        string
-	throttleHTTP                         string
-	ThrottleCommandedByUser              int64
-	HibernateUntil                       int64
-	maxLoad                              LoadMap
-	criticalLoad                         LoadMap
-	CriticalLoadIntervalMilliseconds     int64
-	CriticalLoadHibernateSeconds         int64
-	PostponeCutOverFlagFile              string
-	CutOverLockTimeoutSeconds            int64
-	CutOverExponentialBackoff            bool
-	CutOverExponentialBackoffMaxInterval int64
-	ForceNamedCutOverCommand             bool
-	PanicFlagFile                        string
-	HooksPath                            string
-	HooksHintMessage                     string
+	HeartbeatIntervalMilliseconds       int64
+	defaultNumRetries                   int64
+	ChunkSize                           int64
+	niceRatio                           float64
+	MaxLagMillisecondsThrottleThreshold int64
+	throttleControlReplicaKeys          *mysql.InstanceKeyMap
+	ThrottleFlagFile                    string
+	ThrottleAdditionalFlagFile          string
+	throttleQuery                       string
+	throttleHTTP                        string
+	ThrottleCommandedByUser             int64
+	HibernateUntil                      int64
+	maxLoad                             LoadMap
+	criticalLoad                        LoadMap
+	CriticalLoadIntervalMilliseconds    int64
+	CriticalLoadHibernateSeconds        int64
+	PostponeCutOverFlagFile             string
+	CutOverLockTimeoutSeconds           int64
+	CutOverExponentialBackoff           bool
+	ExponentialBackoffMaxInterval       int64
+	ForceNamedCutOverCommand            bool
+	PanicFlagFile                       string
+	HooksPath                           string
+	HooksHintMessage                    string
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -343,11 +343,11 @@ func (this *MigrationContext) SetCutOverLockTimeoutSeconds(timeoutSeconds int64)
 	return nil
 }
 
-func (this *MigrationContext) SetCutOverExponentialBackoffMaxInterval(intervalSeconds int64) error {
+func (this *MigrationContext) SetExponentialBackoffMaxInterval(intervalSeconds int64) error {
 	if intervalSeconds < 2 {
-		return fmt.Errorf("Minimal maximum interval is 2sec. Timeout remains at %d", this.CutOverExponentialBackoffMaxInterval)
+		return fmt.Errorf("Minimal maximum interval is 2sec. Timeout remains at %d", this.ExponentialBackoffMaxInterval)
 	}
-	this.CutOverExponentialBackoffMaxInterval = intervalSeconds
+	this.ExponentialBackoffMaxInterval = intervalSeconds
 	return nil
 }
 
