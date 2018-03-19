@@ -149,10 +149,11 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	return err
 }
 
-// retryOperation attempts running given function, waiting 2^(n-1) seconds
-// between each attempt, where n is the running number of attempts. exits
-// as soon as the function returns with non-error, or as soon as the next
-// wait interval exceeds `CutOverExponentialBackoffMaxInterval`.
+// `retryOperationWithExponentialBackoff` attempts running given function, waiting 2^(n-1)
+// seconds between each attempt, where `n` is the running number of attempts. Exits
+// as soon as the function returns with non-error, or as soon as `MaxRetries`
+// attempts are reached. Wait intervals between attempts obey a maximum of
+// `ExponentialBackoffMaxInterval`.
 func (this *Migrator) retryOperationWithExponentialBackoff(operation func() error, notFatalHint ...bool) (err error) {
 	var interval int64
 	maxRetries := int(this.migrationContext.MaxRetries())
