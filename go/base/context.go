@@ -140,6 +140,7 @@ type MigrationContext struct {
 	TimestampOldTable            bool // Should old table name include a timestamp
 	CutOverType                  CutOver
 	ReplicaServerId              uint
+	ManagedRowCopy               bool
 
 	Hostname                               string
 	AssumeMasterHostname                   string

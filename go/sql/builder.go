@@ -235,6 +235,75 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
 }
 
+// BuildRangeSelectQuery ...
+func BuildRangeSelectQuery(databaseName, originalTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+	if len(sharedColumns) == 0 {
+		return "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeSelectQuery")
+	}
+	databaseName = EscapeName(databaseName)
+	originalTableName = EscapeName(originalTableName)
+
+	sharedColumns = duplicateNames(sharedColumns)
+	for i := range sharedColumns {
+		sharedColumns[i] = EscapeName(sharedColumns[i])
+	}
+	sharedColumnsListing := strings.Join(sharedColumns, ", ")
+
+	uniqueKey = EscapeName(uniqueKey)
+	var minRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
+	if includeRangeStartValues {
+		minRangeComparisonSign = GreaterThanOrEqualsComparisonSign
+	}
+	rangeStartComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns.Names(), rangeStartValues, rangeStartArgs, minRangeComparisonSign)
+	if err != nil {
+		return "", explodedArgs, err
+	}
+	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+	rangeEndComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns.Names(), rangeEndValues, rangeEndArgs, LessThanOrEqualsComparisonSign)
+	if err != nil {
+		return "", explodedArgs, err
+	}
+	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+	transactionalClause := ""
+	if transactionalTable {
+		transactionalClause = "lock in share mode"
+	}
+	result = fmt.Sprintf(`
+		select /* gh-ost %s.%s */ %s from %s.%s force index (%s) where (%s and %s) %s
+	`, databaseName, originalTableName, sharedColumnsListing,
+		databaseName, originalTableName, uniqueKey,
+		rangeStartComparison, rangeEndComparison, transactionalClause,
+	)
+	return result, explodedArgs, nil
+}
+
+// BuildRangeSelectPreparedQuery ...
+func BuildRangeSelectPreparedQuery(databaseName, originalTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
+	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
+	return BuildRangeSelectQuery(databaseName, originalTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
+}
+
+// BuildRangeApplyPreparedQuery ...
+func BuildRangeApplyPreparedQuery(databaseName, ghostTableName string, mappedSharedColumns []string) (result string, err error) {
+	if len(mappedSharedColumns) == 0 {
+		return "", fmt.Errorf("Got 0 mapped shared columns in BuildRangeApplyQuery")
+	}
+	databaseName = EscapeName(databaseName)
+	ghostTableName = EscapeName(ghostTableName)
+
+	mappedSharedColumns = duplicateNames(mappedSharedColumns)
+	for i := range mappedSharedColumns {
+		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
+	}
+	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
+
+	result = fmt.Sprintf(`
+      insert /* gh-ost %s.%s */ ignore into %s.%s (%s) values
+    `, databaseName, ghostTableName, databaseName, ghostTableName, mappedSharedColumnsListing)
+	return result, nil
+}
+
 func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
