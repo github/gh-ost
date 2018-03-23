@@ -204,6 +204,58 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 	}
 }
 
+func TestBuildRangeSelectQuery(t *testing.T) {
+	databaseName := "mydb"
+	originalTableName := "tbl"
+	sharedColumns := []string{"id", "name", "position"}
+	{
+		uniqueKey := "PRIMARY"
+		uniqueKeyColumns := NewColumnList([]string{"id"})
+		rangeStartValues := []string{"@v1s"}
+		rangeEndValues := []string{"@v1e"}
+		rangeStartArgs := []interface{}{3}
+		rangeEndArgs := []interface{}{103}
+
+		query, explodedArgs, err := BuildRangeSelectQuery(databaseName, originalTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		test.S(t).ExpectNil(err)
+		expected := `
+				select /* gh-ost mydb.tbl */ id, name, position from mydb.tbl force index (PRIMARY)
+				where (((id > @v1s) or ((id = @v1s))) and ((id < @v1e) or ((id = @v1e))))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
+	}
+	{
+		uniqueKey := "name_position_uidx"
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+		rangeStartValues := []string{"@v1s", "@v2s"}
+		rangeEndValues := []string{"@v1e", "@v2e"}
+		rangeStartArgs := []interface{}{3, 17}
+		rangeEndArgs := []interface{}{103, 117}
+
+		query, explodedArgs, err := BuildRangeSelectQuery(databaseName, originalTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		test.S(t).ExpectNil(err)
+		expected := `
+			select /* gh-ost mydb.tbl */ id, name, position from mydb.tbl force index (name_position_uidx)
+			where (((name > @v1s) or (((name = @v1s)) AND (position > @v2s)) or ((name = @v1s) and (position = @v2s))) and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e)) or ((name = @v1e) and (position = @v2e))))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
+	}
+}
+
+func TestBuildApplyQuery(t *testing.T) {
+	databaseName := "mydb"
+	ghostTableName := "ghost"
+	mappedSharedColumns := []string{"id", "name", "position"}
+	{
+		query, err := BuildRangeApplyPreparedQuery(databaseName, ghostTableName, mappedSharedColumns)
+		test.S(t).ExpectNil(err)
+		expected := `insert /* gh-ost mydb.ghost */ ignore into mydb.ghost (id, name, position) values`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+	}
+}
+
 func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
