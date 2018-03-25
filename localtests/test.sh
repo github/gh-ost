@@ -143,6 +143,7 @@ test_single() {
     --test-on-replica \
     --default-retries=1 \
     --chunk-size=10 \
+    --managed-rowcopy \
     --verbose \
     --debug \
     --stack \
