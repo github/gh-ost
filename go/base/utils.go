@@ -64,7 +64,7 @@ func StringContainsAll(s string, substrings ...string) bool {
 	return nonEmptyStringsFound
 }
 
-func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig) (string, error) {
+func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext) (string, error) {
 	versionQuery := `select @@global.version`
 	var port, extraPort int
 	var version string
@@ -76,7 +76,7 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig) 
 		// swallow this error. not all servers support extra_port
 	}
 	// AliyunRDS set users port to "NULL", replace it by gh-ost param
-	if Context.AliyunRDS {
+	if migrationContext.AliyunRDS {
 		port = connectionConfig.Key.Port
 	} else {
 		portQuery := `select @@global.port`

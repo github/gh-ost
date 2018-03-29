@@ -53,10 +53,10 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
-	if impliedKey, err := mysql.GetInstanceKey(this.db, this.migrationContext.AliyunRDS); err != nil {
-		return err
-	} else {
-		if this.migrationContext.AliyunRDS != true {
+	if !this.migrationContext.AliyunRDS {
+		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
+			return err
+		} else {
 			this.connectionConfig.ImpliedKey = impliedKey
 		}
 	}
@@ -205,7 +205,7 @@ func (this *Inspector) validateConnection() error {
 		return fmt.Errorf("MySQL replication length limited to 32 characters. See https://dev.mysql.com/doc/refman/5.7/en/assigning-passwords.html")
 	}
 
-	version, err := base.ValidateConnection(this.db, this.connectionConfig)
+	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext)
 	this.migrationContext.InspectorMySQLVersion = version
 	return err
 }

@@ -215,8 +215,6 @@ type ContextConfig struct {
 	}
 }
 
-var Context *MigrationContext
-
 func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
 		Uuid:                                uuid.NewV4().String(),
