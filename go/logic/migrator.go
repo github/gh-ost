@@ -795,6 +795,7 @@ func (this *Migrator) initiateInspector() (err error) {
 		log.Infof("--test-on-replica or --migrate-on-replica given. Will not execute on master %+v but rather on replica %+v itself",
 			*this.migrationContext.DstMasterConnectionConfig.ImpliedKey, *this.migrationContext.DstConnectionConfig.ImpliedKey,
 		)
+		this.migrationContext.SrcMasterConnectionConfig = this.migrationContext.SrcConnectionConfig.Duplicate()
 		this.migrationContext.DstMasterConnectionConfig = this.migrationContext.DstConnectionConfig.Duplicate()
 		if this.migrationContext.GetThrottleControlReplicaKeys().Len() == 0 {
 			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.DstConnectionConfig.Key)

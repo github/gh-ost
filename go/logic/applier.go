@@ -823,7 +823,7 @@ func (this *Applier) StopReplication() error {
 	if err != nil {
 		return err
 	}
-	log.Infof("Replication IO thread at %+v. SQL thread is at %+v", *readBinlogCoordinates, *executeBinlogCoordinates)
+	log.Infof("Replication IO thread at %+v. SQL thread is at %+v", readBinlogCoordinates, executeBinlogCoordinates)
 	return nil
 }
 
