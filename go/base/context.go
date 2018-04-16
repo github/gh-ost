@@ -91,6 +91,7 @@ type MigrationContext struct {
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
+	AliyunRDS                bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
