@@ -111,7 +111,7 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 				binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
 			}
 		}
-		// The channel will do the throttling. Whoever is reding from the channel
+		// The channel will do the throttling. Whoever is reading from the channel
 		// decides whether action is taken synchronously (meaning we wait before
 		// next iteration) or asynchronously (we keep pushing more events)
 		// In reality, reads will be synchronous
