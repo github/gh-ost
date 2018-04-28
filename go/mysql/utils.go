@@ -57,9 +57,8 @@ func GetDB(migrationUuid string, mysql_uri string) (*gosql.DB, bool, error) {
 	return knownDBs[cacheKey], exists, nil
 }
 
-// GetReplicationLag returns replication lag for a given connection config; either by explicit query
-// or via SHOW SLAVE STATUS
-func GetReplicationLag(informationSchemaDb *gosql.DB, connectionConfig *ConnectionConfig) (replicationLag time.Duration, err error) {
+// GetReplicationLagFromSlaveStatus returns replication lag for a given db; via SHOW SLAVE STATUS
+func GetReplicationLagFromSlaveStatus(informationSchemaDb *gosql.DB) (replicationLag time.Duration, err error) {
 	err = sqlutils.QueryRowsMap(informationSchemaDb, `show slave status`, func(m sqlutils.RowMap) error {
 		slaveIORunning := m.GetString("Slave_IO_Running")
 		slaveSQLRunning := m.GetString("Slave_SQL_Running")

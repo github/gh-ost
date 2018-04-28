@@ -758,9 +758,8 @@ func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.Connect
 }
 
 func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err error) {
-	replicationLag, err = mysql.GetReplicationLag(
+	replicationLag, err = mysql.GetReplicationLagFromSlaveStatus(
 		this.informationSchemaDb,
-		this.migrationContext.InspectorConnectionConfig,
 	)
 	return replicationLag, err
 }
