@@ -32,7 +32,7 @@ func EscapeName(name string) string {
 	return fmt.Sprintf("`%s`", name)
 }
 
-func buildColumnsPreparedValues(columns *ColumnList) []string {
+func BuildColumnsPreparedValues(columns *ColumnList) []string {
 	values := make([]string, columns.Len(), columns.Len())
 	for i, column := range columns.Columns() {
 		var token string
@@ -175,7 +175,7 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 }
 
 func BuildRangePreparedComparison(columns *ColumnList, args []interface{}, comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
-	values := buildColumnsPreparedValues(columns)
+	values := BuildColumnsPreparedValues(columns)
 	return BuildRangeComparison(columns.Names(), values, args, comparisonSign)
 }
 
@@ -230,8 +230,8 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 }
 
 func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
-	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
-	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
+	rangeStartValues := BuildColumnsPreparedValues(uniqueKeyColumns)
+	rangeEndValues := BuildColumnsPreparedValues(uniqueKeyColumns)
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
 }
 
@@ -279,8 +279,8 @@ func BuildRangeSelectQuery(databaseName, originalTableName string, sharedColumns
 
 // BuildRangeSelectPreparedQuery ...
 func BuildRangeSelectPreparedQuery(databaseName, originalTableName string, sharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
-	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
-	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
+	rangeStartValues := BuildColumnsPreparedValues(uniqueKeyColumns)
+	rangeEndValues := BuildColumnsPreparedValues(uniqueKeyColumns)
 	return BuildRangeSelectQuery(databaseName, originalTableName, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
 }
 
@@ -511,7 +511,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	for i := range mappedSharedColumnNames {
 		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
 	}
-	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
+	preparedValues := BuildColumnsPreparedValues(mappedSharedColumns)
 
 	result = fmt.Sprintf(`
 			replace /* gh-ost %s.%s */ into

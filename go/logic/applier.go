@@ -487,10 +487,8 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		)
 
 		applyExplodedArgs := []interface{}{}
-		placeholder := make([]string, this.migrationContext.SharedColumns.Len())
-		for i := range placeholder {
-			placeholder[i] = "?"
-		}
+
+		placeholder := sql.BuildColumnsPreparedValues(this.migrationContext.MappedSharedColumns)
 		applyPreparedQuery := fmt.Sprintf(` (%s),`, strings.Join(placeholder, ","))
 
 		err = func() error {
