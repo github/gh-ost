@@ -551,15 +551,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 			if _, err := tx.Exec(sessionQuery); err != nil {
 				return nil, err
 			}
-			stmt, err := tx.Prepare(applyQuery)
-			if err != nil {
-				return nil, err
-			}
-			result, err := stmt.Exec(applyExplodedArgs...)
-			if err != nil {
-				return nil, err
-			}
-			err = stmt.Close()
+			result, err := tx.Exec(applyQuery, applyExplodedArgs...)
 			if err != nil {
 				return nil, err
 			}
