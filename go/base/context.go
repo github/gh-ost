@@ -28,23 +28,23 @@ type RowsEstimateMethod string
 
 const (
 	TableStatusRowsEstimate RowsEstimateMethod = "TableStatusRowsEstimate"
-	ExplainRowsEstimate                        = "ExplainRowsEstimate"
-	CountRowsEstimate                          = "CountRowsEstimate"
+	ExplainRowsEstimate     RowsEstimateMethod = "ExplainRowsEstimate"
+	CountRowsEstimate       RowsEstimateMethod = "CountRowsEstimate"
 )
 
 type CutOver int
 
 const (
-	CutOverAtomic  CutOver = iota
-	CutOverTwoStep         = iota
+	CutOverAtomic CutOver = iota
+	CutOverTwoStep
 )
 
 type ThrottleReasonHint string
 
 const (
 	NoThrottleReasonHint                 ThrottleReasonHint = "NoThrottleReasonHint"
-	UserCommandThrottleReasonHint                           = "UserCommandThrottleReasonHint"
-	LeavingHibernationThrottleReasonHint                    = "LeavingHibernationThrottleReasonHint"
+	UserCommandThrottleReasonHint        ThrottleReasonHint = "UserCommandThrottleReasonHint"
+	LeavingHibernationThrottleReasonHint ThrottleReasonHint = "LeavingHibernationThrottleReasonHint"
 )
 
 const (
