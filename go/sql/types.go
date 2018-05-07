@@ -15,13 +15,13 @@ import (
 type ColumnType int
 
 const (
-	UnknownColumnType   ColumnType = iota
-	TimestampColumnType            = iota
-	DateTimeColumnType             = iota
-	EnumColumnType                 = iota
-	MediumIntColumnType            = iota
-	JSONColumnType                 = iota
-	FloatColumnType                = iota
+	UnknownColumnType ColumnType = iota
+	TimestampColumnType
+	DateTimeColumnType
+	EnumColumnType
+	MediumIntColumnType
+	JSONColumnType
+	FloatColumnType
 )
 
 const maxMediumintUnsigned int32 = 16777215
