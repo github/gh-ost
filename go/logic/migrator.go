@@ -255,7 +255,11 @@ func (this *Migrator) listenOnPanicAbort() {
 // validateStatement validates the `alter` statement meets criteria.
 // At this time this means:
 // - column renames are approved
+// - no table rename allowed
 func (this *Migrator) validateStatement() (err error) {
+	if this.parser.IsRenameTable() {
+		return fmt.Errorf("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
+	}
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
 		if !this.migrationContext.ApproveRenamedColumns {
