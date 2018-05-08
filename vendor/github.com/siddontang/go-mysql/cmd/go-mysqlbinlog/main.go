@@ -41,7 +41,7 @@ func main() {
 		Port:            uint16(*port),
 		User:            *user,
 		Password:        *password,
-		RawModeEanbled:  *rawMode,
+		RawModeEnabled:  *rawMode,
 		SemiSyncEnabled: *semiSync,
 	}
 

@@ -130,6 +130,9 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 	arg := ""
 	if len(tokens) > 1 {
 		arg = strings.TrimSpace(tokens[1])
+		if unquoted, err := strconv.Unquote(arg); err == nil {
+			arg = unquoted
+		}
 	}
 	argIsQuestion := (arg == "?")
 	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"

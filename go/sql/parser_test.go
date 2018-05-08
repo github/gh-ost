@@ -159,3 +159,42 @@ func TestParseAlterStatementDroppedColumns(t *testing.T) {
 		test.S(t).ExpectTrue(parser.droppedColumns["b"])
 	}
 }
+
+func TestParseAlterStatementRenameTable(t *testing.T) {
+
+	{
+		parser := NewParser()
+		statement := "drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectFalse(parser.isRenameTable)
+	}
+	{
+		parser := NewParser()
+		statement := "rename as something_else"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectTrue(parser.isRenameTable)
+	}
+	{
+		parser := NewParser()
+		statement := "drop column b, rename as something_else"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectTrue(parser.isRenameTable)
+	}
+	{
+		parser := NewParser()
+		statement := "engine=innodb rename as something_else"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectTrue(parser.isRenameTable)
+	}
+	{
+		parser := NewParser()
+		statement := "rename as something_else, engine=innodb"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectTrue(parser.isRenameTable)
+	}
+}

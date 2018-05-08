@@ -1,4 +1,4 @@
-`gh-ost` has been updated to work with Amazon RDS however due to GitHub not relying using AWS for databases, this documentation is community driven so if you find a bug please [open an issue][new_issue]!
+`gh-ost` has been updated to work with Amazon RDS however due to GitHub not using AWS for databases, this documentation is community driven so if you find a bug please [open an issue][new_issue]!
 
 # Amazon RDS
 

@@ -9,16 +9,29 @@
 
 tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
-ghost_binary=/tmp/gh-ost-test
+default_ghost_binary=/tmp/gh-ost-test
+ghost_binary=""
 exec_command_file=/tmp/gh-ost-test.bash
-orig_content_output_file=/gh-ost-test.orig.content.csv
-ghost_content_output_file=/gh-ost-test.ghost.content.csv
-test_pattern="${1:-.}"
+orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
+ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
 
 master_host=
 master_port=
 replica_host=
 replica_port=
+
+OPTIND=1
+while getopts "b:" OPTION
+do
+  case $OPTION in
+    b)
+      ghost_binary="$OPTARG"
+    ;;
+  esac
+done
+shift $((OPTIND-1))
+
+test_pattern="${1:-.}"
 
 verify_master_and_replica() {
   if [ "$(gh-ost-test-mysql-master -e "select 1" -ss)" != "1" ] ; then
@@ -26,6 +39,13 @@ verify_master_and_replica() {
     exit 1
   fi
   read master_host master_port <<< $(gh-ost-test-mysql-master -e "select @@hostname, @@port" -ss)
+  [ "$master_host" == "$(hostname)" ] && master_host="127.0.0.1"
+  echo "# master verified at $master_host:$master_port"
+  if ! gh-ost-test-mysql-master -e "set global event_scheduler := 1" ; then
+    echo "Cannot enable event_scheduler on master"
+    exit 1
+  fi
+
   if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
     echo "Cannot verify gh-ost-test-mysql-replica"
     exit 1
@@ -35,6 +55,8 @@ verify_master_and_replica() {
     exit 1
   fi
   read replica_host replica_port <<< $(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
+  [ "$replica_host" == "$(hostname)" ] && replica_host="127.0.0.1"
+  echo "# replica verified at $replica_host:$replica_port"
 }
 
 exec_cmd() {
@@ -65,6 +87,15 @@ start_replication() {
 test_single() {
   local test_name
   test_name="$1"
+
+  if [ -f $tests_path/$test_name/ignore_versions ] ; then
+    ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
+    mysql_version=$(gh-ost-test-mysql-master -s -s -e "select @@version")
+    if echo "$mysql_version" | egrep -q "^${ignore_versions}" ; then
+      echo -n "Skipping: $test_name"
+      return 0
+    fi
+  fi
 
   echo -n "Testing: $test_name"
 
@@ -98,6 +129,7 @@ test_single() {
     --password=gh-ost \
     --host=$replica_host \
     --port=$replica_port \
+    --assume-master-host=${master_host}:${master_port}
     --database=test \
     --table=gh_ost_test \
     --alter='engine=innodb' \
@@ -148,7 +180,8 @@ test_single() {
 
   if [ $execution_result -ne 0 ] ; then
     echo
-    echo "ERROR $test_name execution failure. cat $test_logfile"
+    echo "ERROR $test_name execution failure. cat $test_logfile:"
+    cat $test_logfile
     return 1
   fi
 
@@ -170,7 +203,12 @@ test_single() {
 
 build_binary() {
   echo "Building"
-  rm -f $ghost_binary
+  rm -f $default_ghost_binary
+  [ "$ghost_binary" == "" ] && ghost_binary="$default_ghost_binary"
+  if [ -f "$ghost_binary" ] ; then
+    echo "Using binary: $ghost_binary"
+    return 0
+  fi
   go build -o $ghost_binary go/cmd/gh-ost/main.go
   if [ $? -ne 0 ] ; then
     echo "Build failure"

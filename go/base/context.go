@@ -28,23 +28,23 @@ type RowsEstimateMethod string
 
 const (
 	TableStatusRowsEstimate RowsEstimateMethod = "TableStatusRowsEstimate"
-	ExplainRowsEstimate                        = "ExplainRowsEstimate"
-	CountRowsEstimate                          = "CountRowsEstimate"
+	ExplainRowsEstimate     RowsEstimateMethod = "ExplainRowsEstimate"
+	CountRowsEstimate       RowsEstimateMethod = "CountRowsEstimate"
 )
 
 type CutOver int
 
 const (
-	CutOverAtomic  CutOver = iota
-	CutOverTwoStep         = iota
+	CutOverAtomic CutOver = iota
+	CutOverTwoStep
 )
 
 type ThrottleReasonHint string
 
 const (
 	NoThrottleReasonHint                 ThrottleReasonHint = "NoThrottleReasonHint"
-	UserCommandThrottleReasonHint                           = "UserCommandThrottleReasonHint"
-	LeavingHibernationThrottleReasonHint                    = "LeavingHibernationThrottleReasonHint"
+	UserCommandThrottleReasonHint        ThrottleReasonHint = "UserCommandThrottleReasonHint"
+	LeavingHibernationThrottleReasonHint ThrottleReasonHint = "LeavingHibernationThrottleReasonHint"
 )
 
 const (
@@ -91,6 +91,7 @@ type MigrationContext struct {
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
+	AliyunRDS                bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -118,6 +119,8 @@ type MigrationContext struct {
 	CriticalLoadHibernateSeconds        int64
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
+	CutOverExponentialBackoff           bool
+	ExponentialBackoffMaxInterval       int64
 	ForceNamedCutOverCommand            bool
 	PanicFlagFile                       string
 	HooksPath                           string
@@ -338,6 +341,14 @@ func (this *MigrationContext) SetCutOverLockTimeoutSeconds(timeoutSeconds int64)
 		return fmt.Errorf("Maximal timeout is 10sec. Timeout remains at %d", this.CutOverLockTimeoutSeconds)
 	}
 	this.CutOverLockTimeoutSeconds = timeoutSeconds
+	return nil
+}
+
+func (this *MigrationContext) SetExponentialBackoffMaxInterval(intervalSeconds int64) error {
+	if intervalSeconds < 2 {
+		return fmt.Errorf("Minimal maximum interval is 2sec. Timeout remains at %d", this.ExponentialBackoffMaxInterval)
+	}
+	this.ExponentialBackoffMaxInterval = intervalSeconds
 	return nil
 }
 

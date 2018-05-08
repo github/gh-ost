@@ -149,6 +149,34 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	return err
 }
 
+// `retryOperationWithExponentialBackoff` attempts running given function, waiting 2^(n-1)
+// seconds between each attempt, where `n` is the running number of attempts. Exits
+// as soon as the function returns with non-error, or as soon as `MaxRetries`
+// attempts are reached. Wait intervals between attempts obey a maximum of
+// `ExponentialBackoffMaxInterval`.
+func (this *Migrator) retryOperationWithExponentialBackoff(operation func() error, notFatalHint ...bool) (err error) {
+	var interval int64
+	maxRetries := int(this.migrationContext.MaxRetries())
+	maxInterval := this.migrationContext.ExponentialBackoffMaxInterval
+	for i := 0; i < maxRetries; i++ {
+		newInterval := int64(math.Exp2(float64(i - 1)))
+		if newInterval <= maxInterval {
+			interval = newInterval
+		}
+		if i != 0 {
+			time.Sleep(time.Duration(interval) * time.Second)
+		}
+		err = operation()
+		if err == nil {
+			return nil
+		}
+	}
+	if len(notFatalHint) == 0 {
+		this.migrationContext.PanicAbort <- err
+	}
+	return err
+}
+
 // executeAndThrottleOnError executes a given function. If it errors, it
 // throttles.
 func (this *Migrator) executeAndThrottleOnError(operation func() error) (err error) {
@@ -227,7 +255,11 @@ func (this *Migrator) listenOnPanicAbort() {
 // validateStatement validates the `alter` statement meets criteria.
 // At this time this means:
 // - column renames are approved
+// - no table rename allowed
 func (this *Migrator) validateStatement() (err error) {
+	if this.parser.IsRenameTable() {
+		return fmt.Errorf("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
+	}
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
 		if !this.migrationContext.ApproveRenamedColumns {
@@ -372,7 +404,13 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
 	}
-	if err := this.retryOperation(this.cutOver); err != nil {
+	var retrier func(func() error, ...bool) error
+	if this.migrationContext.CutOverExponentialBackoff {
+		retrier = this.retryOperationWithExponentialBackoff
+	} else {
+		retrier = this.retryOperation
+	}
+	if err := retrier(this.cutOver); err != nil {
 		return err
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
