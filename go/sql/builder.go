@@ -15,11 +15,11 @@ type ValueComparisonSign string
 
 const (
 	LessThanComparisonSign            ValueComparisonSign = "<"
-	LessThanOrEqualsComparisonSign                        = "<="
-	EqualsComparisonSign                                  = "="
-	GreaterThanOrEqualsComparisonSign                     = ">="
-	GreaterThanComparisonSign                             = ">"
-	NotEqualsComparisonSign                               = "!="
+	LessThanOrEqualsComparisonSign    ValueComparisonSign = "<="
+	EqualsComparisonSign              ValueComparisonSign = "="
+	GreaterThanOrEqualsComparisonSign ValueComparisonSign = ">="
+	GreaterThanComparisonSign         ValueComparisonSign = ">"
+	NotEqualsComparisonSign           ValueComparisonSign = "!="
 )
 
 // EscapeName will escape a db/table/column/... name by wrapping with backticks.
