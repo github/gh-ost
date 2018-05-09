@@ -40,10 +40,9 @@ func FileExists(fileName string) bool {
 func TouchFile(fileName string) error {
 	f, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE, 0755)
 	if err != nil {
-		return (err)
+		return err
 	}
-	defer f.Close()
-	return nil
+	return f.Close()
 }
 
 // StringContainsAll returns true if `s` contains all non empty given `substrings`
