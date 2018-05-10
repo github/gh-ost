@@ -1064,16 +1064,16 @@ func (this *Migrator) initiateStreaming() error {
 				this.migrationContext.SetDstRecentBinlogCoordinates(*this.dstEventsStreamer.GetCurrentBinlogCoordinates())
 			}
 		}()
-	} else {
-		this.srcEventsStreamer.AddListener(
-			false,
-			this.migrationContext.DstDatabaseName,
-			this.migrationContext.GetChangelogTableName(),
-			func(dmlEvent *binlog.BinlogDMLEvent) error {
-				return this.onChangelogStateEvent(dmlEvent)
-			},
-		)
 	}
+
+	this.srcEventsStreamer.AddListener(
+		false,
+		this.migrationContext.DstDatabaseName,
+		this.migrationContext.GetChangelogTableName(),
+		func(dmlEvent *binlog.BinlogDMLEvent) error {
+			return this.onChangelogStateEvent(dmlEvent)
+		},
+	)
 
 	go func() {
 		log.Debugf("Beginning src streaming")

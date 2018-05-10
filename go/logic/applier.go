@@ -233,26 +233,44 @@ func (this *Applier) CreateChangelogTable() error {
 	if err := this.DropChangelogTable(); err != nil {
 		return err
 	}
-	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s (
-			id bigint auto_increment,
-			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			hint varchar(64) charset ascii not null,
-			value varchar(4096) charset ascii not null,
-			primary key(id),
-			unique key hint_uidx(hint)
-		) auto_increment=256
-		`,
+	query := `create /* gh-ost */ table %s.%s (
+		id bigint auto_increment,
+		last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		hint varchar(64) charset ascii not null,
+		value varchar(4096) charset ascii not null,
+		primary key(id),
+		unique key hint_uidx(hint)
+	) auto_increment=256
+	`
+	dstQuery := fmt.Sprintf(query,
 		sql.EscapeName(this.migrationContext.DstDatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
-	log.Infof("Creating changelog table %s.%s",
+	log.Infof("Creating changelog table %s.%s on dst",
 		sql.EscapeName(this.migrationContext.DstDatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
-	if _, err := sqlutils.ExecNoPrepare(this.dstDB, query); err != nil {
+	if _, err := sqlutils.ExecNoPrepare(this.dstDB, dstQuery); err != nil {
 		return err
 	}
-	log.Infof("Changelog table created")
+	log.Infof("Changelog table created on dst")
+
+	if this.migrationContext.SrcIsAlsoDst() {
+		return nil
+	}
+
+	log.Infof("Creating changelog table %s.%s on src",
+		sql.EscapeName(this.migrationContext.DstDatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+	srcQuery := fmt.Sprintf(query,
+		sql.EscapeName(this.migrationContext.SrcDatabaseName),
+		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+	)
+	if _, err := sqlutils.ExecNoPrepare(this.srcDB, srcQuery); err != nil {
+		return err
+	}
+	log.Infof("Changelog table created on src")
 	return nil
 }
 
@@ -262,14 +280,14 @@ func (this *Applier) dropSrcTable(tableName string) error {
 		sql.EscapeName(this.migrationContext.SrcDatabaseName),
 		sql.EscapeName(tableName),
 	)
-	log.Infof("Dropping table %s.%s",
+	log.Infof("Dropping table %s.%s on src",
 		sql.EscapeName(this.migrationContext.SrcDatabaseName),
 		sql.EscapeName(tableName),
 	)
 	if _, err := sqlutils.ExecNoPrepare(this.srcDB, query); err != nil {
 		return err
 	}
-	log.Infof("Table dropped")
+	log.Infof("Table dropped on src")
 	return nil
 }
 
@@ -279,20 +297,26 @@ func (this *Applier) dropDstTable(tableName string) error {
 		sql.EscapeName(this.migrationContext.DstDatabaseName),
 		sql.EscapeName(tableName),
 	)
-	log.Infof("Dropping table %s.%s",
+	log.Infof("Dropping table %s.%s on dst",
 		sql.EscapeName(this.migrationContext.DstDatabaseName),
 		sql.EscapeName(tableName),
 	)
 	if _, err := sqlutils.ExecNoPrepare(this.dstDB, query); err != nil {
 		return err
 	}
-	log.Infof("Table dropped")
+	log.Infof("Table dropped on dst")
 	return nil
 }
 
 // DropChangelogTable drops the changelog table on the dst host
 func (this *Applier) DropChangelogTable() error {
-	return this.dropDstTable(this.migrationContext.GetChangelogTableName())
+	if err := this.dropDstTable(this.migrationContext.GetChangelogTableName()); err != nil {
+		return err
+	}
+	if this.migrationContext.SrcIsAlsoDst() {
+		return nil
+	}
+	return this.dropSrcTable(this.migrationContext.GetChangelogTableName())
 }
 
 // DropOldTable drops the _Old table on the src host
@@ -309,6 +333,16 @@ func (this *Applier) DropGhostTable() error {
 // It returns the hint as given, for convenience
 func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 	explicitId := 0
+	query := `
+	insert /* gh-ost */ into %s.%s
+		(id, hint, value)
+	values
+		(NULLIF(?, 0), ?, ?)
+	on duplicate key update
+		last_update=NOW(),
+		value=VALUES(value)
+		`
+
 	switch hint {
 	case "heartbeat":
 		explicitId = 1
@@ -316,20 +350,23 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 		explicitId = 2
 	case "throttle":
 		explicitId = 3
+	default:
+		fullQuery := fmt.Sprintf(
+			query,
+			sql.EscapeName(this.migrationContext.DstDatabaseName),
+			sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+		)
+		_, err := sqlutils.Exec(this.dstDB, fullQuery, explicitId, hint, value)
+		return hint, err
 	}
-	query := fmt.Sprintf(`
-			insert /* gh-ost */ into %s.%s
-				(id, hint, value)
-			values
-				(NULLIF(?, 0), ?, ?)
-			on duplicate key update
-				last_update=NOW(),
-				value=VALUES(value)
-		`,
-		sql.EscapeName(this.migrationContext.DstDatabaseName),
+
+	// NOTE: write 1,2,3 on src, and others on dst
+	fullQuery := fmt.Sprintf(
+		query,
+		sql.EscapeName(this.migrationContext.SrcDatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
-	_, err := sqlutils.Exec(this.dstDB, query, explicitId, hint, value)
+	_, err := sqlutils.Exec(this.srcDB, fullQuery, explicitId, hint, value)
 	return hint, err
 }
 
