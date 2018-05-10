@@ -73,18 +73,18 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 
 func (this *Applier) InitDBConnections() (err error) {
 
-	srcApplierURI := this.srcConnectionConfig.GetDBUri(this.migrationContext.SrcDatabaseName)
-	if this.srcDB, _, err = mysql.GetDB(this.migrationContext.SrcUUID, srcApplierURI); err != nil {
+	srcURI := this.srcConnectionConfig.GetDBUri(this.migrationContext.SrcDatabaseName)
+	if this.srcDB, _, err = mysql.GetDB(this.migrationContext.SrcUUID, srcURI); err != nil {
 		return err
 	}
 
-	dstApplierURI := this.dstConnectionConfig.GetDBUri(this.migrationContext.DstDatabaseName)
-	if this.dstDB, _, err = mysql.GetDB(this.migrationContext.DstUUID, dstApplierURI); err != nil {
+	dstURI := this.dstConnectionConfig.GetDBUri(this.migrationContext.DstDatabaseName)
+	if this.dstDB, _, err = mysql.GetDB(this.migrationContext.DstUUID, dstURI); err != nil {
 		return err
 	}
 
-	srcSingletonApplierURI := fmt.Sprintf("%s?timeout=0", srcApplierURI)
-	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.SrcUUID, srcSingletonApplierURI); err != nil {
+	srcSingletonURI := fmt.Sprintf("%s?timeout=0", srcURI)
+	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.SrcUUID, srcSingletonURI); err != nil {
 		return err
 	}
 	this.singletonDB.SetMaxOpenConns(1)
@@ -260,7 +260,7 @@ func (this *Applier) CreateChangelogTable() error {
 	}
 
 	log.Infof("Creating changelog table %s.%s on src",
-		sql.EscapeName(this.migrationContext.DstDatabaseName),
+		sql.EscapeName(this.migrationContext.SrcDatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
 	srcQuery := fmt.Sprintf(query,
