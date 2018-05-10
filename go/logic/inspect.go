@@ -792,11 +792,11 @@ func (this *Inspector) readChangelogState(hint string) (string, error) {
 	query := fmt.Sprintf(`
 		select hint, value from %s.%s where hint = ? and id <= 255
 		`,
-		sql.EscapeName(this.migrationContext.DstDatabaseName),
+		sql.EscapeName(this.migrationContext.SrcDatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
 	result := ""
-	err := sqlutils.QueryRowsMap(this.dstDB, query, func(m sqlutils.RowMap) error {
+	err := sqlutils.QueryRowsMap(this.srcDB, query, func(m sqlutils.RowMap) error {
 		result = m.GetString("value")
 		return nil
 	}, hint)
