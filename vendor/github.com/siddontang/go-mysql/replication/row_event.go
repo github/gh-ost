@@ -400,6 +400,10 @@ func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{
 	case MYSQL_TYPE_DATETIME:
 		n = 8
 		i64 := binary.LittleEndian.Uint64(data)
+
+		if i64 == 0 {
+			return "0000-00-00 00:00:00", n, nil
+		}
 		d := i64 / 1000000
 		t := i64 % 1000000
 		v = time.Date(int(d/10000),
