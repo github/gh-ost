@@ -87,6 +87,7 @@ start_replication() {
 test_single() {
   local test_name
   test_name="$1"
+  original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
 
   if [ -f $tests_path/$test_name/ignore_versions ] ; then
     ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
@@ -102,6 +103,12 @@ test_single() {
   echo_dot
   start_replication
   echo_dot
+
+  if [ -f $tests_path/$test_name/sql_mode ] ; then
+    gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+  fi
+  
   gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
 
   extra_args=""
@@ -153,6 +160,11 @@ test_single() {
   bash $exec_command_file 1> $test_logfile 2>&1
 
   execution_result=$?
+
+  if [ -f $tests_path/$test_name/sql_mode ] ; then
+    gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
+  fi
 
   if [ -f $tests_path/$test_name/destroy.sql ] ; then
     gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/destroy.sql
