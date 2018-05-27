@@ -2,7 +2,7 @@
 #
 #
 
-RELEASE_VERSION=$(cat RELEASE_VERSION)
+RELEASE_VERSION=
 
 function build {
     osname=$1
@@ -28,14 +28,26 @@ function build {
     (cd $buildpath && tar cfz ./gh-ost-binary-${osshort}-${timestamp}.tar.gz $target)
 }
 
-buildpath=/tmp/gh-ost
-target=gh-ost
-timestamp=$(date "+%Y%m%d%H%M%S")
-ldflags="-X main.AppVersion=${RELEASE_VERSION}"
+main() {
+  if [ -z "${RELEASE_VERSION}" ] ; then
+    RELEASE_VERSION=$(git describe --abbrev=0 --tags | tr -d 'v')
+  fi
+  if [ -z "${RELEASE_VERSION}" ] ; then
+    RELEASE_VERSION=$(cat RELEASE_VERSION)
+  fi
 
-mkdir -p ${buildpath}
-build macOS osx darwin amd64
-build GNU/Linux linux linux amd64
 
-echo "Binaries found in:"
-ls -1 $buildpath/gh-ost-binary*${timestamp}.tar.gz
+  buildpath=/tmp/gh-ost
+  target=gh-ost
+  timestamp=$(date "+%Y%m%d%H%M%S")
+  ldflags="-X main.AppVersion=${RELEASE_VERSION}"
+
+  mkdir -p ${buildpath}
+  build macOS osx darwin amd64
+  build GNU/Linux linux linux amd64
+
+  echo "Binaries found in:"
+  ls -1 $buildpath/gh-ost-binary*${timestamp}.tar.gz
+}
+
+main "$@"
