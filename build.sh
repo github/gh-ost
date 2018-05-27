@@ -59,7 +59,7 @@ main() {
   fi
 
 
-  buildpath=/tmp/gh-ost
+  buildpath=/tmp/gh-ost-release
   target=gh-ost
   timestamp=$(date "+%Y%m%d%H%M%S")
   ldflags="-X main.AppVersion=${RELEASE_VERSION}"
