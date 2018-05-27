@@ -7,8 +7,6 @@ buildpath=
 builddir=
 
 function setuptree() {
-  mkdir -p $buildpath
-  rm -rf ${buildpath:?}/*
   b=$( mktemp -d $buildpath/gh-ostXXXXXX ) || return 1
   mkdir -p $b/gh-ost
   mkdir -p $b/gh-ost/usr/bin
@@ -65,6 +63,7 @@ main() {
   ldflags="-X main.AppVersion=${RELEASE_VERSION}"
 
   mkdir -p ${buildpath}
+  rm -rf ${buildpath:?}/*
   build macOS osx darwin amd64
   build GNU/Linux linux linux amd64
 
