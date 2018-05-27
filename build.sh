@@ -4,7 +4,6 @@
 
 RELEASE_VERSION=
 buildpath=
-builddir=
 
 function setuptree() {
   b=$( mktemp -d $buildpath/gh-ostXXXXXX ) || return 1
@@ -19,7 +18,6 @@ function build {
   GOOS=$3
   GOARCH=$4
 
-  builddir=$(setuptree)
 
 
   if ! go version | egrep -q 'go(1[.]9|1[.]1[0-9])' ; then
@@ -41,6 +39,7 @@ function build {
 
   if [ "$GOOS" == "linux" ] ; then
     echo "Creating Distro full packages"
+    builddir=$(setuptree)
     cp $buildpath/$target $builddir/gh-ost/usr/bin
     cd $buildpath
     fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m shlomi-noach --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t rpm .
