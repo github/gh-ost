@@ -3,29 +3,50 @@
 #
 
 RELEASE_VERSION=
+buildpath=
+builddir=
+
+function setuptree() {
+  mkdir -p $buildpath
+  rm -rf ${buildpath:?}/*
+  b=$( mktemp -d $buildpath/gh-ostXXXXXX ) || return 1
+  mkdir -p $b/gh-ost
+  mkdir -p $b/gh-ost/usr/bin
+  echo $b
+}
 
 function build {
-    osname=$1
-    osshort=$2
-    GOOS=$3
-    GOARCH=$4
+  osname=$1
+  osshort=$2
+  GOOS=$3
+  GOARCH=$4
 
-    if ! go version | egrep -q 'go(1[.]9|1[.]1[0-9])' ; then
-      echo "go version is too low. Must use 1.9 or above"
+  builddir=$(setuptree)
+
+
+  if ! go version | egrep -q 'go(1[.]9|1[.]1[0-9])' ; then
+    echo "go version is too low. Must use 1.9 or above"
+    exit 1
+  fi
+
+  echo "Building ${osname} binary"
+  export GOOS
+  export GOARCH
+  go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
+
+  if [ $? -ne 0 ]; then
+      echo "Build failed for ${osname}"
       exit 1
-    fi
+  fi
 
-    echo "Building ${osname} binary"
-    export GOOS
-    export GOARCH
-    go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
+  (cd $buildpath && tar cfz ./gh-ost-binary-${osshort}-${timestamp}.tar.gz $target)
 
-    if [ $? -ne 0 ]; then
-        echo "Build failed for ${osname}"
-        exit 1
-    fi
-
-    (cd $buildpath && tar cfz ./gh-ost-binary-${osshort}-${timestamp}.tar.gz $target)
+  if [ "$GOOS" == "linux" ] ; then
+    echo "Creating Distro full packages"
+    cp $buildpath/$target $builddir/gh-ost/usr/bin
+    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m shlomi-noach --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t rpm .
+    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m shlomi-noach --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t deb --deb-no-default-config-files .
+  fi
 }
 
 main() {
