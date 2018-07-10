@@ -10,6 +10,8 @@ import (
 
 	"golang.org/x/net/context"
 
+	"encoding/json"
+	"github.com/fatih/color"
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/siddontang/go-mysql/client"
@@ -33,8 +35,8 @@ type BinlogSyncerConfig struct {
 	Port uint16
 	// User is for MySQL user.
 	User string
-	// Password is for MySQL password.
-	Password string
+	// Password is for MySQL password. 序列化时不打印出来
+	Password string `json:"-"`
 
 	// Localhost is local hostname if register salve.
 	// If not set, use os.Hostname() instead.
@@ -70,14 +72,11 @@ type BinlogSyncer struct {
 	cancel context.CancelFunc
 }
 
-// NewBinlogSyncer creates the BinlogSyncer with cfg.
 func NewBinlogSyncer(cfg BinlogSyncerConfig) *BinlogSyncer {
 
-	// Clear the Password to avoid outputing it in log.
-	pass := cfg.Password
-	cfg.Password = ""
-	log.Infof("create BinlogSyncer with config %v", cfg)
-	cfg.Password = pass
+	data, _ := json.Marshal(cfg)
+	log.Infof("create BinlogSyncer with config %s", color.BlueString(string(data)))
+
 
 	b := new(BinlogSyncer)
 
@@ -136,8 +135,10 @@ func (b *BinlogSyncer) registerSlave() error {
 		b.c.Close()
 	}
 
-	log.Infof("register slave for master server %s:%d", b.cfg.Host, b.cfg.Port)
+	log.Infof(color.BlueString("register slave for master server %s:%d"), b.cfg.Host, b.cfg.Port)
 	var err error
+	// 如何注册呢?
+	// 是否需要使用某个server_id, 还是只要有 binlog pos即可?
 	b.c, err = client.Connect(fmt.Sprintf("%s:%d", b.cfg.Host, b.cfg.Port), b.cfg.User, b.cfg.Password, "", func(c *client.Conn) {
 		c.TLSConfig = b.cfg.TLSConfig
 	})

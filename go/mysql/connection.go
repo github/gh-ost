@@ -15,7 +15,8 @@ type ConnectionConfig struct {
 	Key        InstanceKey
 	User       string
 	Password   string
-	ImpliedKey *InstanceKey
+	ImpliedKey *InstanceKey // 这是是做什么的呢？
+	IsRds      bool         // 是否为Rds
 }
 
 func NewConnectionConfig() *ConnectionConfig {
@@ -32,6 +33,7 @@ func (this *ConnectionConfig) DuplicateCredentials(key InstanceKey) *ConnectionC
 		Key:      key,
 		User:     this.User,
 		Password: this.Password,
+		IsRds:    this.IsRds,
 	}
 	config.ImpliedKey = &config.Key
 	return config
@@ -56,6 +58,7 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 		// Wrap IPv6 literals in square brackets
 		hostname = fmt.Sprintf("[%s]", hostname)
 	}
+
 	interpolateParams := true
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=%t&autocommit=true&charset=utf8mb4,utf8,latin1", this.User, this.Password, hostname, this.Key.Port, databaseName, interpolateParams)
 }

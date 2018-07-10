@@ -16,7 +16,13 @@ import (
 	"github.com/github/gh-ost/go/logic"
 	"github.com/outbrain/golib/log"
 
+	"github.com/fatih/color"
 	"golang.org/x/crypto/ssh/terminal"
+	"path"
+)
+
+const (
+	DEFAULT_HOSTS_CONF = ".gh-ost/dbs.toml"
 )
 
 var AppVersion string
@@ -30,6 +36,9 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 		for sig := range c {
 			switch sig {
 			case syscall.SIGHUP:
+				// kill -HUP xxx
+				// 重新加载配置文件
+				// 这个时候重新加载有什么意义呢?
 				log.Infof("Received SIGHUP. Reloading configuration")
 				if err := migrationContext.ReadConfigFile(); err != nil {
 					log.Errore(err)
@@ -43,28 +52,57 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 
 // main is the application's entry point. It will either spawn a CLI or HTTP interfaces.
 func main() {
-	migrationContext := base.NewMigrationContext()
+
+	fmt.Fprintf(os.Stdout, color.GreenString("# === Begin ===\n"))
+
+	migrationContext := base.GetMigrationContext()
+
+	// hostname, db, username, password等基本上不会经常变化，可以放在某个地方
+	// 通过 dbConfigFile, 可以使用db的alias来简化命令行参数
+	dbAlias := flag.String("db-alias", "", "db alias in db conf file")
+	dbConfigFile := flag.String("hosts-conf", "", "hosts config file")
+
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
-	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unable to determine the master")
+
+	// 主动告知master(可以不告知的)
+	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unabel to determine the master")
+
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
+
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
 	flag.StringVar(&migrationContext.CliMasterUser, "master-user", "", "MySQL user on master, if different from that on replica. Requires --assume-master-host")
 	flag.StringVar(&migrationContext.CliMasterPassword, "master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
+
+	// XXX: 配置文件的作用?
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
+
+	// 可以不指定密码，每次由运维来主动输入
 	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
+	flag.StringVar(&migrationContext.OriginalFilter, "origin-filter", "", "filter on origin talbe")
+
 	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
+
+	// 不使用精确的Rows估计算法(execution timeout可能使得精确估计不大可能)
+	// 是否使用精确的行数
 	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
+
 	flag.BoolVar(&migrationContext.ConcurrentCountTableRows, "concurrent-rowcount", true, "(with --exact-rowcount), when true (default): count rows after row-copy begins, concurrently, and adjust row estimate later on; when false: first count rows, then start row copy")
+
+	// 是否允许运行在master上呢？
+	// 虽然写操作是在master上的，但是查询操作默认是在slave上的
 	flag.BoolVar(&migrationContext.AllowedRunningOnMaster, "allow-on-master", false, "allow this migration to run directly on master. Preferably it would run on a replica")
+	// 是否允许 master <---> master(双主）
 	flag.BoolVar(&migrationContext.AllowedMasterMaster, "allow-master-master", false, "explicitly allow running in a master-master setup")
 	flag.BoolVar(&migrationContext.NullableUniqueKeyAllowed, "allow-nullable-unique-key", false, "allow gh-ost to migrate based on a unique key with nullable columns. As long as no NULL values exist, this should be OK. If NULL values exist in chosen key, data may be corrupted. Use at your own risk!")
 	flag.BoolVar(&migrationContext.ApproveRenamedColumns, "approve-renamed-columns", false, "in case your `ALTER` statement renames columns, gh-ost will note that and offer its interpretation of the rename. By default gh-ost does not proceed to execute. This flag approves that gh-ost's interpretation is correct")
 	flag.BoolVar(&migrationContext.SkipRenamedColumns, "skip-renamed-columns", false, "in case your `ALTER` statement renames columns, gh-ost will note that and offer its interpretation of the rename. By default gh-ost does not proceed to execute. This flag tells gh-ost to skip the renamed columns, i.e. to treat what gh-ost thinks are renamed columns as unrelated columns. NOTE: you may lose column data")
 	flag.BoolVar(&migrationContext.IsTungsten, "tungsten", false, "explicitly let gh-ost know that you are running on a tungsten-replication based topology (you are likely to also provide --assume-master-host)")
+
+	// 可以默认打开，至少目前我们没有这个需求
 	flag.BoolVar(&migrationContext.DiscardForeignKeys, "discard-foreign-keys", false, "DANGER! This flag will migrate a table that has foreign keys and will NOT create foreign keys on the ghost table, thus your altered table will have NO foreign keys. This is useful for intentional dropping of foreign keys")
 	flag.BoolVar(&migrationContext.SkipForeignKeyChecks, "skip-foreign-key-checks", false, "set to 'true' when you know for certain there are no foreign keys on your table, and wish to skip the time it takes for gh-ost to verify that")
 	flag.BoolVar(&migrationContext.AliyunRDS, "aliyun-rds", false, "set to 'true' when you execute on Aliyun RDS.")
@@ -74,10 +112,15 @@ func main() {
 	flag.BoolVar(&migrationContext.TestOnReplicaSkipReplicaStop, "test-on-replica-skip-replica-stop", false, "When --test-on-replica is enabled, do not issue commands stop replication (requires --test-on-replica)")
 	flag.BoolVar(&migrationContext.MigrateOnReplica, "migrate-on-replica", false, "Have the migration run on a replica, not on the master. This will do the full migration on the replica including cut-over (as opposed to --test-on-replica)")
 
+	// 是否删除old table
 	flag.BoolVar(&migrationContext.OkToDropTable, "ok-to-drop-table", false, "Shall the tool drop the old table at end of operation. DROPping tables can be a long locking operation, which is why I'm not doing it by default. I'm an online tool, yes?")
 	flag.BoolVar(&migrationContext.InitiallyDropOldTable, "initially-drop-old-table", false, "Drop a possibly existing OLD table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists")
 	flag.BoolVar(&migrationContext.InitiallyDropGhostTable, "initially-drop-ghost-table", false, "Drop a possibly existing Ghost table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists")
+
+	// 表名是否带上时间戳
 	flag.BoolVar(&migrationContext.TimestampOldTable, "timestamp-old-table", false, "Use a timestamp in old table name. This makes old table names unique and non conflicting cross migrations")
+
+	// 数据拷贝完毕，如何进行近cut-over呢?
 	cutOver := flag.String("cut-over", "atomic", "choose cut-over type (default|atomic, two-step)")
 	flag.BoolVar(&migrationContext.ForceNamedCutOverCommand, "force-named-cut-over", false, "When true, the 'unpostpone|cut-over' interactive command must name the migrated table")
 
@@ -92,10 +135,13 @@ func main() {
 	niceRatio := flag.Float64("nice-ratio", 0, "force being 'nice', imply sleep time per chunk time; range: [0.0..100.0]. Example values: 0 is aggressive. 1: for every 1ms spent copying rows, sleep additional 1ms (effectively doubling runtime); 0.7: for every 10ms spend in a rowcopy chunk, spend 7ms sleeping immediately after")
 
 	maxLagMillis := flag.Int64("max-lag-millis", 1500, "replication lag at which to throttle operation")
-	replicationLagQuery := flag.String("replication-lag-query", "", "Deprecated. gh-ost uses an internal, subsecond resolution query")
+
+	// 通过谁来控制throttle
 	throttleControlReplicas := flag.String("throttle-control-replicas", "", "List of replicas on which to check for lag; comma delimited. Example: myhost1.com:3306,myhost2.com,myhost3.com:3307")
+
 	throttleQuery := flag.String("throttle-query", "", "when given, issued (every second) to check if operation should throttle. Expecting to return zero for no-throttle, >0 for throttle. Query is issued on the migrated server. Make sure this query is lightweight")
 	throttleHTTP := flag.String("throttle-http", "", "when given, gh-ost checks given URL via HEAD request; any response code other than 200 (OK) causes throttling; make sure it has low latency response")
+
 	heartbeatIntervalMillis := flag.Int64("heartbeat-interval-millis", 100, "how frequently would gh-ost inject a heartbeat value")
 	flag.StringVar(&migrationContext.ThrottleFlagFile, "throttle-flag-file", "", "operation pauses when this file exists; hint: use a file that is specific to the table being altered")
 	flag.StringVar(&migrationContext.ThrottleAdditionalFlagFile, "throttle-additional-flag-file", "/tmp/gh-ost.throttle", "operation pauses when this file exists; hint: keep default, use for throttling multiple gh-ost operations")
@@ -109,11 +155,30 @@ func main() {
 	flag.StringVar(&migrationContext.HooksPath, "hooks-path", "", "directory where hook files are found (default: empty, ie. hooks disabled). Hook files found on this path, and conforming to hook naming conventions will be executed")
 	flag.StringVar(&migrationContext.HooksHintMessage, "hooks-hint", "", "arbitrary message to be injected to hooks via GH_OST_HOOKS_HINT, for your convenience")
 
+	// 默认的ServerId
+	// XXX: 注意这个很重要，不要和前天的server_id冲突
 	flag.UintVar(&migrationContext.ReplicaServerId, "replica-server-id", 99999, "server id used by gh-ost process. Default: 99999")
 
+	// 负载控制&检测
+	//mysql> show status like "Threads%";
+	//+-------------------+-------+
+	//| Variable_name     | Value |
+	//	+-------------------+-------+
+	//| Threads_cached    | 10    |
+	//| Threads_connected | 19    |
+	//| Threads_created   | 1182  |
+	//| Threads_running   | 1     |
+	//	+-------------------+-------+
+	// 4 rows in set (0.01 sec)
+	// 多大的负载才算是大的负载呢?
+	//
+	// 暂停
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
+	// 中断
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")
+	// 等待一段时间后再中断
 	flag.Int64Var(&migrationContext.CriticalLoadIntervalMilliseconds, "critical-load-interval-millis", 0, "When 0, migration immediately bails out upon meeting critical-load. When non-zero, a second check is done after given interval, and migration only bails out if 2nd check still meets critical load")
+
 	flag.Int64Var(&migrationContext.CriticalLoadHibernateSeconds, "critical-load-hibernate-seconds", 0, "When nonzero, critical-load does not panic and bail out; instead, gh-ost goes into hibernate for the specified duration. It will not read/write anything to from/to any server")
 	quiet := flag.Bool("quiet", false, "quiet")
 	verbose := flag.Bool("verbose", false, "verbose")
@@ -159,6 +224,73 @@ func main() {
 		log.SetLevel(log.ERROR)
 	}
 
+	maxLoadValue := *maxLoad
+	criticalLoadValue := *criticalLoad
+	chunkSizeValue := *chunkSize
+	migrationContext.RowCopyComplete.Store(false)
+
+	dbConfigFileValue := *dbConfigFile
+	throttleControlReplicasValue := *throttleControlReplicas
+	maxLagMillisValue := *maxLagMillis
+
+	if len(*dbAlias) > 0 {
+		// 默认地址: ~/.gh-ost/dbs.toml
+		if len(dbConfigFileValue) == 0 {
+			dir, err := base.Dir()
+			if err == nil {
+				dbConfigFileValue = path.Join(dir, DEFAULT_HOSTS_CONF)
+			}
+		}
+
+		if len(dbConfigFileValue) > 0 && base.FileExists(dbConfigFileValue) {
+			log.Infof("dbConfigFileValue is %s", dbConfigFileValue)
+			// 读取配置文件
+			config, err := base.NewConfigWithFile(dbConfigFileValue)
+			if err != nil {
+				log.Errore(err)
+				log.Fatalf("db config file invalid: %s", dbConfigFileValue)
+			}
+			// 实现alias到db的映射
+			db, host, port := config.GetDB(*dbAlias)
+			migrationContext.InspectorConnectionConfig.Key.Hostname = host
+			migrationContext.InspectorConnectionConfig.Key.Port = port
+			migrationContext.DatabaseName = db
+
+			if master, ok := config.Slave2Master[migrationContext.InspectorConnectionConfig.Key.Hostname]; ok {
+				migrationContext.AssumeMasterHostname = master
+			}
+
+			migrationContext.InitiallyDropGhostTable = config.InitiallyDropGhosTable
+			migrationContext.InitiallyDropOldTable = config.InitiallyDropOldTable
+			migrationContext.DropServeSocket = config.InitiallyDropSocketFile
+			migrationContext.CliUser = config.User
+			migrationContext.CliPassword = config.Password
+
+			maxLoadValue = config.MaxLoad
+			criticalLoadValue = config.CriticalLoad
+			chunkSizeValue = config.ChunkSize
+
+			if config.IsRdsMySQL {
+				migrationContext.InspectorConnectionConfig.IsRds = true
+				migrationContext.ApplierConnectionConfig.IsRds = true
+				migrationContext.AssumeRBR = true // RDS必须这样
+			}
+
+			// 如果使用配置文件，则以配置文件为准
+			if config.MaxLagMillis > 0 {
+				maxLagMillisValue = config.MaxLagMillis
+				// throttleControlReplicasValue
+
+				if _, ok := config.Slave2Master[migrationContext.InspectorConnectionConfig.Key.Hostname]; ok {
+					// 如果当前的host不是master
+					throttleControlReplicasValue = fmt.Sprintf("%s:%d", migrationContext.InspectorConnectionConfig.Key.Hostname, migrationContext.InspectorConnectionConfig.Key.Port)
+				}
+			}
+
+		}
+
+	}
+
 	if migrationContext.DatabaseName == "" {
 		log.Fatalf("--database must be provided and database name must not be empty")
 	}
@@ -193,9 +325,6 @@ func main() {
 	if migrationContext.CliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
 		log.Fatalf("--master-password requires --assume-master-host")
 	}
-	if *replicationLagQuery != "" {
-		log.Warningf("--replication-lag-query is deprecated")
-	}
 
 	switch *cutOver {
 	case "atomic", "default", "":
@@ -208,18 +337,20 @@ func main() {
 	if err := migrationContext.ReadConfigFile(); err != nil {
 		log.Fatale(err)
 	}
-	if err := migrationContext.ReadThrottleControlReplicaKeys(*throttleControlReplicas); err != nil {
+	if err := migrationContext.ReadThrottleControlReplicaKeys(throttleControlReplicasValue); err != nil {
 		log.Fatale(err)
 	}
-	if err := migrationContext.ReadMaxLoad(*maxLoad); err != nil {
+	if err := migrationContext.ReadMaxLoad(maxLoadValue); err != nil {
 		log.Fatale(err)
 	}
-	if err := migrationContext.ReadCriticalLoad(*criticalLoad); err != nil {
+	if err := migrationContext.ReadCriticalLoad(criticalLoadValue); err != nil {
 		log.Fatale(err)
 	}
 	if migrationContext.ServeSocketFile == "" {
 		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
 	}
+
+	// 如何主动要求输入密码?
 	if *askPass {
 		fmt.Println("Password:")
 		bytePassword, err := terminal.ReadPassword(int(syscall.Stdin))
@@ -230,11 +361,13 @@ func main() {
 	}
 	migrationContext.SetHeartbeatIntervalMilliseconds(*heartbeatIntervalMillis)
 	migrationContext.SetNiceRatio(*niceRatio)
-	migrationContext.SetChunkSize(*chunkSize)
+	migrationContext.SetChunkSize(chunkSizeValue)
 	migrationContext.SetDMLBatchSize(*dmlBatchSize)
-	migrationContext.SetMaxLagMillisecondsThrottleThreshold(*maxLagMillis)
+	migrationContext.SetMaxLagMillisecondsThrottleThreshold(maxLagMillisValue)
+
 	migrationContext.SetThrottleQuery(*throttleQuery)
 	migrationContext.SetThrottleHTTP(*throttleHTTP)
+
 	migrationContext.SetDefaultNumRetries(*defaultRetries)
 	migrationContext.ApplyCredentials()
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {
@@ -248,10 +381,12 @@ func main() {
 	acceptSignals(migrationContext)
 
 	migrator := logic.NewMigrator(migrationContext)
+	// 如何执行Migrate呢?
 	err := migrator.Migrate()
+
 	if err != nil {
 		migrator.ExecOnFailureHook()
 		log.Fatale(err)
 	}
-	fmt.Fprintf(os.Stdout, "# Done\n")
+	fmt.Fprintf(os.Stdout, color.GreenString("# === Done ===^-^ ^-^\n"))
 }
