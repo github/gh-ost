@@ -324,6 +324,12 @@ func (this *Applier) InitiateHeartbeat() {
 		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
 			return nil
 		}
+
+		//
+		if atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
+			return nil
+		}
+
 		if _, err := this.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339Nano)); err != nil {
 			numSuccessiveFailures++
 			if numSuccessiveFailures > this.migrationContext.MaxRetries() {
