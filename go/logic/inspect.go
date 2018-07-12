@@ -17,6 +17,8 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
+	"github.com/fatih/color"
+	"github.com/juju/errors"
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
 )
@@ -60,29 +62,39 @@ func (this *Inspector) InitDBConnections() (err error) {
 			this.connectionConfig.ImpliedKey = impliedKey
 		}
 	}
+
+	// 验证当前的授权是否OK
 	if err := this.validateGrants(); err != nil {
-		return err
+		return log.Errore(err)
 	}
 	if err := this.validateBinlogs(); err != nil {
-		return err
+		return log.Errore(err)
 	}
 	if err := this.applyBinlogFormat(); err != nil {
-		return err
+		return log.Errore(err)
 	}
 	log.Infof("Inspector initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.InspectorMySQLVersion)
 	return nil
 }
 
 func (this *Inspector) ValidateOriginalTable() (err error) {
+	// 需要确定:
+	// 1. table存在
+	// 2. Engine/Rows
 	if err := this.validateTable(); err != nil {
 		return err
 	}
+
+	// 外键约束 比较头疼，一般情况下都直接去掉这个约束
 	if err := this.validateTableForeignKeys(this.migrationContext.DiscardForeignKeys); err != nil {
 		return err
 	}
+	// 也不要使用Triggers/pt-online-schema-change会要求使用triggers, 但是不允许table原来使用trigger
 	if err := this.validateTableTriggers(); err != nil {
 		return err
 	}
+
+	// 通过Explain来获取函数统计，这个似乎更加准确
 	if err := this.estimateTableRowsViaExplain(); err != nil {
 		return err
 	}
@@ -97,7 +109,10 @@ func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (colum
 	if len(uniqueKeys) == 0 {
 		return columns, virtualColumns, uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
 	}
+
 	columns, virtualColumns, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, tableName)
+
+	// 获取Columns
 	if err != nil {
 		return columns, virtualColumns, uniqueKeys, err
 	}
@@ -105,6 +120,7 @@ func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (colum
 	return columns, virtualColumns, uniqueKeys, nil
 }
 
+// 获取唯一keys & 获取Columns
 func (this *Inspector) InspectOriginalTable() (err error) {
 	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableVirtualColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
 	if err != nil {
@@ -126,6 +142,9 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	if err != nil {
 		return err
 	}
+
+	// 如何选择一组可靠的Uniq Keys呢?
+	// 可能由于删除字段，导致两者无法共有一组相同的UniqKey, 导致迁移无法j进行
 	sharedUniqueKeys, err := this.getSharedUniqueKeys(this.migrationContext.OriginalTableUniqueKeys, this.migrationContext.GhostTableUniqueKeys)
 	if err != nil {
 		return err
@@ -157,7 +176,12 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	if this.migrationContext.UniqueKey == nil {
 		return fmt.Errorf("No shared unique key can be found after ALTER! Bailing out")
 	}
+
 	log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
+	log.Infof(color.MagentaString("Chosen shared unique key is %s"), this.migrationContext.UniqueKey.Name)
+
+	// 是否允许Nullable？
+
 	if this.migrationContext.UniqueKey.HasNullable {
 		if this.migrationContext.NullableUniqueKeyAllowed {
 			log.Warningf("Chosen key (%s) has nullable columns. You have supplied with --allow-nullable-unique-key and so this migration proceeds. As long as there aren't NULL values in this key's column, migration should be fine. NULL values will corrupt migration's data", this.migrationContext.UniqueKey)
@@ -167,7 +191,8 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	}
 
 	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.OriginalTableVirtualColumns, this.migrationContext.GhostTableVirtualColumns, this.migrationContext.ColumnRenameMap)
-	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
+	log.Infof("Shared columns are %s", color.CyanString(this.migrationContext.SharedColumns.String()))
+
 	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
 
 	// This additional step looks at which columns are unsigned. We could have merged this within
@@ -215,12 +240,21 @@ func (this *Inspector) validateGrants() error {
 	foundReplicationSlave := false
 	foundDBAll := false
 
+	// 如何验证权限呢?
+	// GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES,
+	// LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'root'@'%' WITH GRANT OPTION
+	//
+	// ON *.* 表示 对当前用户开发的权限
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 		for _, grantData := range rowMap {
 			grant := grantData.String
+
+			// 1. 全部授权
+			//   *.* 这个问题如何解决?
 			if strings.Contains(grant, `GRANT ALL PRIVILEGES ON *.*`) {
 				foundAll = true
 			}
+			// 2. SUPER 全部
 			if strings.Contains(grant, `SUPER`) && strings.Contains(grant, ` ON *.*`) {
 				foundSuper = true
 			}
@@ -248,19 +282,21 @@ func (this *Inspector) validateGrants() error {
 	this.migrationContext.HasSuperPrivilege = foundSuper
 
 	if foundAll {
-		log.Infof("User has ALL privileges")
+		log.Infof(color.GreenString("User has ALL privileges"))
 		return nil
 	}
 	if foundSuper && foundReplicationSlave && foundDBAll {
-		log.Infof("User has SUPER, REPLICATION SLAVE privileges, and has ALL privileges on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+		log.Infof(color.GreenString("User has SUPER, REPLICATION SLAVE privileges, and has ALL privileges on %s.*"), sql.EscapeName(this.migrationContext.DatabaseName))
 		return nil
 	}
 	if foundReplicationClient && foundReplicationSlave && foundDBAll {
-		log.Infof("User has REPLICATION CLIENT, REPLICATION SLAVE privileges, and has ALL privileges on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+		log.Infof(color.GreenString("User has REPLICATION CLIENT, REPLICATION SLAVE privileges, and has ALL privileges on %s.*"), sql.EscapeName(this.migrationContext.DatabaseName))
 		return nil
 	}
 	log.Debugf("Privileges: Super: %t, REPLICATION CLIENT: %t, REPLICATION SLAVE: %t, ALL on *.*: %t, ALL on %s.*: %t", foundSuper, foundReplicationClient, foundReplicationSlave, foundAll, sql.EscapeName(this.migrationContext.DatabaseName), foundDBAll)
-	return log.Errorf("User has insufficient privileges for migration. Needed: SUPER|REPLICATION CLIENT, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+	msg := fmt.Sprintf("User has insufficient privileges for migration. Needed: SUPER|REPLICATION CLIENT, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+	log.Errorf(color.RedString("权限不够: ") + msg)
+	return errors.New(msg)
 }
 
 // restartReplication is required so that we are _certain_ the binlog format and
@@ -276,9 +312,20 @@ func (this *Inspector) restartReplication() error {
 		return nil
 	}
 
+	// stop slave
+	// stop slave io_thread
+	// stop slave sql_thread
+	//
 	var stopError, startError error
-	_, stopError = sqlutils.ExecNoPrepare(this.db, `stop slave`)
-	_, startError = sqlutils.ExecNoPrepare(this.db, `start slave`)
+
+	if this.connectionConfig.IsRds {
+		log.Fatal("Rds should not reach here: AssumeRBR should make sure by calling user")
+		// _, stopError = sqlutils.ExecNoPrepare(this.db, `CALL mysql.rds_stop_replication`)
+		// _, startError = sqlutils.ExecNoPrepare(this.db, `CALL mysql.rds_start_replication`)
+	} else {
+		_, stopError = sqlutils.ExecNoPrepare(this.db, `stop slave`)
+		_, startError = sqlutils.ExecNoPrepare(this.db, `start slave`)
+	}
 	if stopError != nil {
 		return stopError
 	}
@@ -298,6 +345,10 @@ func (this *Inspector) applyBinlogFormat() error {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
 			return fmt.Errorf("Existing binlog_format is %s. Am not switching it to ROW unless you specify --switch-to-rbr", this.migrationContext.OriginalBinlogFormat)
 		}
+
+		// 修改global
+		// 修改session
+		// global才会导致所有其他session的binlog ok
 		if _, err := sqlutils.ExecNoPrepare(this.db, `set global binlog_format='ROW'`); err != nil {
 			return err
 		}
@@ -310,7 +361,9 @@ func (this *Inspector) applyBinlogFormat() error {
 		log.Debugf("'ROW' binlog format applied")
 		return nil
 	}
+
 	// We already have RBR, no explicit switch
+	// 需要确保MySQL已经切换成为ROW模式了
 	if !this.migrationContext.AssumeRBR {
 		if err := this.restartReplication(); err != nil {
 			return err
@@ -319,7 +372,12 @@ func (this *Inspector) applyBinlogFormat() error {
 	return nil
 }
 
+//
 // validateBinlogs checks that binary log configuration is good to go
+// binlog_row_image = "full"
+// has_binlog
+// binlog_format: row
+//
 func (this *Inspector) validateBinlogs() error {
 	query := `select @@global.log_bin, @@global.binlog_format`
 	var hasBinaryLogs bool
@@ -329,10 +387,14 @@ func (this *Inspector) validateBinlogs() error {
 	if !hasBinaryLogs {
 		return fmt.Errorf("%s:%d must have binary logs enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	}
+
+	// Binlog格式不正确; 是否自动切换呢?
 	if this.migrationContext.RequiresBinlogFormatChange() {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
 			return fmt.Errorf("You must be using ROW binlog format. I can switch it for you, provided --switch-to-rbr and that %s:%d doesn't have replicas", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 		}
+
+		// Replicas的个数
 		query := fmt.Sprintf(`show /* gh-ost */ slave hosts`)
 		countReplicas := 0
 		err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
@@ -342,6 +404,8 @@ func (this *Inspector) validateBinlogs() error {
 		if err != nil {
 			return err
 		}
+
+		// 如果有不少slave, 则不要轻易调整Row format, 其实调整了问题也不大
 		if countReplicas > 0 {
 			return fmt.Errorf("%s:%d has %s binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
 		}
@@ -395,6 +459,9 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 func (this *Inspector) validateTable() error {
 	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), this.migrationContext.OriginalTableName)
 
+	// 需要确定:
+	// 1. table存在
+	// 2. Engine/Rows
 	tableFound := false
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 		this.migrationContext.TableEngine = rowMap.GetString("Engine")
@@ -411,7 +478,7 @@ func (this *Inspector) validateTable() error {
 		return err
 	}
 	if !tableFound {
-		return log.Errorf("Cannot find table %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return fmt.Errorf("Cannot find table %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Infof("Table found. Engine=%s", this.migrationContext.TableEngine)
 	log.Debugf("Estimated number of rows via STATUS: %d", this.migrationContext.RowsEstimate)
@@ -421,7 +488,7 @@ func (this *Inspector) validateTable() error {
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
 func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error {
 	if this.migrationContext.SkipForeignKeyChecks {
-		log.Warning("--skip-foreign-key-checks provided: will not check for foreign keys")
+		log.Warningf("--skip-foreign-key-checks provided: will not check for foreign keys")
 		return nil
 	}
 	query := `
@@ -455,14 +522,14 @@ func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) erro
 		return err
 	}
 	if numParentForeignKeys > 0 {
-		return log.Errorf("Found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return fmt.Errorf("Found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	if numChildForeignKeys > 0 {
 		if allowChildForeignKeys {
 			log.Debugf("Foreign keys found and will be dropped, as per given --discard-foreign-keys flag")
 			return nil
 		}
-		return log.Errorf("Found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return fmt.Errorf("Found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Debugf("Validated no foreign keys exist on table")
 	return nil
@@ -490,7 +557,7 @@ func (this *Inspector) validateTableTriggers() error {
 		return err
 	}
 	if numTriggers > 0 {
-		return log.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return fmt.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	log.Debugf("Validated no triggers exist on table")
 	return nil
@@ -498,6 +565,7 @@ func (this *Inspector) validateTableTriggers() error {
 
 // estimateTableRowsViaExplain estimates number of rows on original table
 func (this *Inspector) estimateTableRowsViaExplain() error {
+	// 通过Explain来估算数据库记录数
 	query := fmt.Sprintf(`explain select /* gh-ost */ * from %s.%s where 1=1`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 
 	outputFound := false
@@ -512,24 +580,31 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 		return err
 	}
 	if !outputFound {
-		return log.Errorf("Cannot run EXPLAIN on %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		return fmt.Errorf("Cannot run EXPLAIN on %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
-	log.Infof("Estimated number of rows via EXPLAIN: %d", this.migrationContext.RowsEstimate)
+	log.Infof(color.GreenString("Estimated number of rows via EXPLAIN: %d"), this.migrationContext.RowsEstimate)
 	return nil
 }
 
 // CountTableRows counts exact number of rows on the original table
+// 目前的这种模式比较适合在从库上执行: select count(*), 主库上设置有max-execution-time, 容易失败
+//
 func (this *Inspector) CountTableRows() error {
+	// 标记状态
 	atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 0)
 
 	log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 
+	// 这个如何避免在某些DB上execution timeout
+	// TODO: 可以听过索引覆盖模式，将 select count(*)分解成为很多小的查询
 	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	var rowsEstimate int64
 	if err := this.db.QueryRow(query).Scan(&rowsEstimate); err != nil {
 		return err
 	}
+
+	// 精确计算
 	atomic.StoreInt64(&this.migrationContext.RowsEstimate, rowsEstimate)
 	this.migrationContext.UsedRowsEstimateMethod = base.CountRowsEstimate
 
@@ -549,10 +624,14 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 				table_schema=?
 				and table_name=?
 		`
+	// 目前为止: *sql.ColumnList 只有Column的Name信息，没有太的meta信息, 因此需要完善补充
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		columnName := m.GetString("COLUMN_NAME")
 		columnType := m.GetString("COLUMN_TYPE")
+
+		// 其他类型如何处理呢？例如：int, varchar.....
 		if strings.Contains(columnType, "unsigned") {
+			// 将对应的column：ColumnName 设置为unsigned
 			for _, columnsList := range columnsLists {
 				columnsList.SetUnsigned(columnName)
 			}
@@ -692,6 +771,9 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 }
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
+// 获取两个table的共享的columns
+// *sql.ColumnList <==>  *sql.ColumnList
+//
 func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, originalVirtualColumns, ghostVirtualColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
 	sharedColumnNames := []string{}
 	for _, originalColumn := range originalColumns.Names() {
@@ -723,6 +805,8 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 			sharedColumnNames = append(sharedColumnNames, originalColumn)
 		}
 	}
+
+	// 2. ghost table中的对应的names
 	mappedSharedColumnNames := []string{}
 	for _, columnName := range sharedColumnNames {
 		if mapped, ok := columnRenameMap[columnName]; ok {
@@ -758,6 +842,7 @@ func (this *Inspector) readChangelogState(hint string) (string, error) {
 	return result, err
 }
 
+// 如何搜索Master呢?
 func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
 	log.Infof("Recursively searching for replication master")
 	visitedKeys := mysql.NewInstanceKeyMap()

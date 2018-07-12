@@ -19,6 +19,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
+	"github.com/fatih/color"
 	"github.com/outbrain/golib/log"
 )
 
@@ -28,6 +29,18 @@ const (
 	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
 )
+
+func GetRowFormat(total int64, origin bool) string {
+	if origin {
+		return "Copy: %d/%d %5.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s"
+	} else {
+		digitNum := int(math.Log(float64(total))/math.Log(10) + 1)
+		currentFormat := color.GreenString(fmt.Sprintf("%%%dd", digitNum))
+		progress := color.GreenString(" %5.1f%%")
+		return "Copy: " + currentFormat + "/" + color.RedString("%d") + progress + "; Applied: %d; Backlog: %d/%d; Time: " +
+			color.CyanString("%+v") + "(total), %+v(copy); streamer: " + color.BlueString("%+v") + "; State: %s; ETA: " + color.CyanString("%s")
+	}
+}
 
 func ReadChangelogState(s string) ChangelogState {
 	return ChangelogState(strings.Split(s, ":")[0])
@@ -135,6 +148,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
 			// sleep after previous iteration
+			// 如果遇到异常，最好等待一段时间，否则retry也是失败
 			time.Sleep(1 * time.Second)
 		}
 		err = operation()
@@ -143,6 +157,8 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		}
 		// there's an error. Let's try again.
 	}
+
+	// 直接报错，中断执行
 	if len(notFatalHint) == 0 {
 		this.migrationContext.PanicAbort <- err
 	}
@@ -210,13 +226,18 @@ func (this *Migrator) canStopStreaming() bool {
 
 // onChangelogStateEvent is called when a binlog event operation on the changelog table is intercepted.
 func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
-	// Hey, I created the changelog table, I know the type of columns it has!
+
+	// 如何处理binlog的变化呢?
+	// Hey, I created the changlog table, I know the type of columns it has!
+
+	// 只关注state变化的Event
 	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
 		return nil
 	}
 	changelogStateString := dmlEvent.NewColumnValues.StringColumn(3)
 	changelogState := ReadChangelogState(changelogStateString)
 	log.Infof("Intercepted changelog state %s", changelogState)
+
 	switch changelogState {
 	case GhostTableMigrated:
 		{
@@ -262,6 +283,7 @@ func (this *Migrator) validateStatement() (err error) {
 	}
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
+		// 一般情况下，数据库不要做rename字段；因为已有的代码可能会继续修改被rename的字段，造成大量的错误
 		if !this.migrationContext.ApproveRenamedColumns {
 			return fmt.Errorf("gh-ost believes the ALTER statement renames columns, as follows: %v; as precaution, you are asked to confirm gh-ost is correct, and provide with `--approve-renamed-columns`, and we're all happy. Or you can skip renamed columns via `--skip-renamed-columns`, in which case column data may be lost", this.parser.GetNonTrivialRenames())
 		}
@@ -271,7 +293,12 @@ func (this *Migrator) validateStatement() (err error) {
 	return nil
 }
 
+//
+// 如何计算行数呢?
+// 如果不精确技术，可能估算不准确; 其他没有多大的影响
+//
 func (this *Migrator) countTableRows() (err error) {
+	// 1. CountTableRows 是否计算精确函数
 	if !this.migrationContext.CountTableRows {
 		// Not counting; we stay with an estimate
 		return nil
@@ -282,6 +309,7 @@ func (this *Migrator) countTableRows() (err error) {
 	}
 
 	countRowsFunc := func() error {
+		// 目前的这种模式比较适合在从库上执行: select count(*), 主库上设置有max-execution-time, 容易失败
 		if err := this.inspector.CountTableRows(); err != nil {
 			return err
 		}
@@ -291,13 +319,15 @@ func (this *Migrator) countTableRows() (err error) {
 		return nil
 	}
 
+	// 2. 计算方式: 并行计算或者直接计算
 	if this.migrationContext.ConcurrentCountTableRows {
 		log.Infof("As instructed, counting rows in the background; meanwhile I will use an estimated count, and will update it later on")
 		go countRowsFunc()
 		// and we ignore errors, because this turns to be a background job
 		return nil
+	} else {
+		return countRowsFunc()
 	}
-	return countRowsFunc()
 }
 
 func (this *Migrator) createFlagFiles() (err error) {
@@ -320,6 +350,7 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
+	// 执行过程中，如果出错，就直接报错，然后退出
 	go this.listenOnPanicAbort()
 
 	if err := this.initiateHooksExecutor(); err != nil {
@@ -328,9 +359,13 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onStartup(); err != nil {
 		return err
 	}
+
+	// 1. Parse要执行的语句
 	if err := this.parser.ParseAlterStatement(this.migrationContext.AlterStatement); err != nil {
 		return err
 	}
+	// 2. 验证? 怎么做呢?
+	// 一般情况下，数据库不要做rename字段；因为已有的代码可能会继续修改被rename的字段，造成大量的错误
 	if err := this.validateStatement(); err != nil {
 		return err
 	}
@@ -338,10 +373,12 @@ func (this *Migrator) Migrate() (err error) {
 	// After this point, we'll need to teardown anything that's been started
 	//   so we don't leave things hanging around
 	defer this.teardown()
-
+	// 3. 监控
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
+
+	// 4.
 	if err := this.initiateStreaming(); err != nil {
 		return err
 	}
@@ -368,17 +405,24 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
+	// 创建Server/删除socket file
 	if err := this.initiateServer(); err != nil {
 		return err
 	}
 	defer this.server.RemoveSocketFile()
 
+	//
+	// 准备migrate!!!!!
+	//
 	if err := this.countTableRows(); err != nil {
 		return err
 	}
+
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
+
+	// 获取key的range
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
@@ -388,19 +432,27 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
+
+	// 开始执行拷贝操作
+	// 1. binlog的同步
 	go this.executeWriteFuncs()
+	// 2. 批量操作
 	go this.iterateChunks()
+
 	this.migrationContext.MarkRowCopyStartTime()
 	go this.initiateStatus()
 
 	log.Debugf("Operating until row copy is complete")
+	// 等待迁移完毕
 	this.consumeRowCopyComplete()
-	log.Infof("Row copy complete")
+	this.migrationContext.RowCopyComplete.Store(true)
+	log.Infof(color.MagentaString("=== Row copy complete, Next: CutOver ==="))
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
 		return err
 	}
 	this.printStatus(ForcePrintStatusRule)
 
+	// 执行完毕了，然后如何cutOver呢?
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
 	}
@@ -415,13 +467,15 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 
+	// teardown和finalCleanup可能有一些不同步的问题
 	if err := this.finalCleanup(); err != nil {
 		return nil
 	}
+
 	if err := this.hooksExecutor.onSuccess(); err != nil {
 		return err
 	}
-	log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	log.Infof(color.MagentaString("=== Done migrating %s.%s ===^-^ ^-^"), sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
@@ -526,6 +580,7 @@ func (this *Migrator) cutOver() (err error) {
 		return err
 	}
 	if this.migrationContext.CutOverType == base.CutOverTwoStep {
+		// TODO: 表的交换可以一步到位的
 		err := this.cutOverTwoStep()
 		this.handleCutOverResult(err)
 		return err
@@ -541,6 +596,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	this.migrationContext.MarkPointOfInterest()
 	waitForEventsUpToLockStartTime := time.Now()
 
+	// 写入hint
 	allEventsUpToLockProcessedChallenge := fmt.Sprintf("%s:%d", string(AllEventsUpToLockProcessed), waitForEventsUpToLockStartTime.UnixNano())
 	log.Infof("Writing changelog state: %+v", allEventsUpToLockProcessedChallenge)
 	if _, err := this.applier.WriteChangelogState(allEventsUpToLockProcessedChallenge); err != nil {
@@ -556,6 +612,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 			}
 		case state := <-this.allEventsUpToLockProcessed:
 			{
+				// 通过binlog收到消息，表面lock之前所有的events都收到了
 				if state == allEventsUpToLockProcessedChallenge {
 					log.Infof("Waiting for events up to lock: got %s", state)
 					found = true
@@ -582,20 +639,27 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
+	// 1. Original Table锁定，不让写入数据
 	if err := this.retryOperation(this.applier.LockOriginalTable); err != nil {
 		return err
 	}
 
+	// 2. 确保lock之前所有的binlog已经收到，并且processed
 	if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
 		return err
 	}
+
+	// 3. 交换table
 	if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
 		return err
 	}
+
+	// 4. 当前Session释放locks
 	if err := this.retryOperation(this.applier.UnlockTables); err != nil {
 		return err
 	}
 
+	// 5. 打印执行情况
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
 	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
 	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -616,6 +680,8 @@ func (this *Migrator) atomicCutOver() (err error) {
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
 	lockOriginalSessionIdChan := make(chan int64, 2)
+
+	// 为什么要异步执行 AtomicCutOverMagicLock
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	go func() {
@@ -699,10 +765,15 @@ func (this *Migrator) initiateServer() (err error) {
 	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
 		this.printStatus(rule, writer)
 	}
+
 	this.server = NewServer(this.migrationContext, this.hooksExecutor, f)
+
+	// 绑定socket
 	if err := this.server.BindSocketFile(); err != nil {
 		return err
 	}
+
+	// 绑定tcp
 	if err := this.server.BindTCPPort(); err != nil {
 		return err
 	}
@@ -765,7 +836,7 @@ func (this *Migrator) initiateInspector() (err error) {
 			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.InspectorConnectionConfig.Key)
 		}
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
-		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", this.migrationContext.InspectorConnectionConfig, this.migrationContext.ApplierConnectionConfig)
+		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide "+color.GreenString("--allow-on-master")+". Inspector config=%+v, applier config=%+v", this.migrationContext.InspectorConnectionConfig, this.migrationContext.ApplierConnectionConfig)
 	}
 	if err := this.inspector.validateLogSlaveUpdates(); err != nil {
 		return err
@@ -782,6 +853,12 @@ func (this *Migrator) initiateStatus() error {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return nil
 		}
+
+		// 如果清理工作完成，则直接退出
+		if this.migrationContext != nil && atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
+			return nil
+		}
+
 		go this.printStatus(HeuristicPrintStatusRule)
 	}
 
@@ -810,7 +887,8 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	))
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
-	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f",
+
+	fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f"),
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
 		atomic.LoadInt64(&this.migrationContext.DMLBatchSize),
@@ -823,7 +901,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
 			setIndicator = "[set]"
 		}
-		fmt.Fprintln(w, fmt.Sprintf("# throttle-flag-file: %+v %+v",
+		fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# throttle-flag-file:")+" %+v %+v",
 			this.migrationContext.ThrottleFlagFile, setIndicator,
 		))
 	}
@@ -832,7 +910,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
 			setIndicator = "[set]"
 		}
-		fmt.Fprintln(w, fmt.Sprintf("# throttle-additional-flag-file: %+v %+v",
+		fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# throttle-additional-flag-file:")+" %+v %+v",
 			this.migrationContext.ThrottleAdditionalFlagFile, setIndicator,
 		))
 	}
@@ -861,11 +939,11 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 			this.migrationContext.PanicFlagFile,
 		))
 	}
-	fmt.Fprintln(w, fmt.Sprintf("# Serving on unix socket: %+v",
+	fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# Serving on unix socket:")+" %+v",
 		this.migrationContext.ServeSocketFile,
 	))
 	if this.migrationContext.ServeTCPPort != 0 {
-		fmt.Fprintln(w, fmt.Sprintf("# Serving on TCP port: %+v", this.migrationContext.ServeTCPPort))
+		fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# Serving on TCP port:")+" %+v", this.migrationContext.ServeTCPPort))
 	}
 }
 
@@ -958,45 +1036,70 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s",
-		totalRowsCopied, rowsEstimate, progressPct,
-		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
-		len(this.applyEventsQueue), cap(this.applyEventsQueue),
-		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
-		currentBinlogCoordinates,
-		state,
-		eta,
-	)
-	this.applier.WriteChangelog(
-		fmt.Sprintf("copy iteration %d at %d", this.migrationContext.GetIteration(), time.Now().Unix()),
-		status,
-	)
-	w := io.MultiWriter(writers...)
-	fmt.Fprintln(w, status)
+	// 结束之后就不再汇报情况
+	if !this.migrationContext.RowCopyComplete.Load().(bool) {
+		// "Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s"
+		// 保存到数据库
+		format := GetRowFormat(rowsEstimate, true)
+		status := fmt.Sprintf(format,
+			totalRowsCopied, rowsEstimate, progressPct,
+			atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
+			len(this.applyEventsQueue), cap(this.applyEventsQueue),
+			base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
+			currentBinlogCoordinates,
+			state,
+			eta,
+		)
+		this.applier.WriteChangelog(
+			fmt.Sprintf("copy iteration %d at %d", this.migrationContext.GetIteration(), time.Now().Unix()),
+			status,
+		)
 
-	if elapsedSeconds%60 == 0 {
-		this.hooksExecutor.onStatus(status)
+		// 打印Log
+		format = GetRowFormat(rowsEstimate, false)
+		status = fmt.Sprintf(format,
+			totalRowsCopied, rowsEstimate, progressPct,
+			atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
+			len(this.applyEventsQueue), cap(this.applyEventsQueue),
+			base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
+			currentBinlogCoordinates,
+			state,
+			eta,
+		)
+		if !this.migrationContext.Noop {
+			w := io.MultiWriter(writers...)
+			fmt.Fprintln(w, status)
+		}
+
+		if elapsedSeconds%60 == 0 {
+			this.hooksExecutor.onStatus(status)
+		}
 	}
 }
 
 // initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
+	// 关注一下: NewEventsStreamer
 	this.eventsStreamer = NewEventsStreamer(this.migrationContext)
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
 	this.eventsStreamer.AddListener(
-		false,
+		false, // 同步处理binlog的变化
 		this.migrationContext.DatabaseName,
+		// gt-ost 应用场景: 一次只改一个table, 因此不需要关注其他的tables的变化
 		this.migrationContext.GetChangelogTableName(),
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
+			// 监听state变化
 			return this.onChangelogStateEvent(dmlEvent)
 		},
 	)
 
+	// 如何开始streaming呢?
 	go func() {
 		log.Debugf("Beginning streaming")
 		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
+		// 出错，就直接PanicAbort
 		if err != nil {
 			this.migrationContext.PanicAbort <- err
 		}
@@ -1053,6 +1156,8 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.ValidateOrDropExistingTables(); err != nil {
 		return err
 	}
+
+	// Changelog 和 Ghost的关系?
 	if err := this.applier.CreateChangelogTable(); err != nil {
 		log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
 		return err
@@ -1067,7 +1172,10 @@ func (this *Migrator) initiateApplier() error {
 		return err
 	}
 
+	// Ghost表准备好了
 	this.applier.WriteChangelogState(string(GhostTableMigrated))
+
+	// 定时写入Heartbeat
 	go this.applier.InitiateHeartbeat()
 	return nil
 }
@@ -1100,6 +1208,8 @@ func (this *Migrator) iterateChunks() error {
 				// There's another such check down the line
 				return nil
 			}
+
+			// 计算当前iteration的range
 			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
 			if err != nil {
 				return terminateRowIteration(err)
@@ -1124,6 +1234,8 @@ func (this *Migrator) iterateChunks() error {
 				if err != nil {
 					return terminateRowIteration(err)
 				}
+
+				// 更改统计数据
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
 				return nil
@@ -1140,6 +1252,7 @@ func (this *Migrator) iterateChunks() error {
 }
 
 func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
+	// 如何执行一个DML Event呢?
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
 		if eventStruct.writeFunc != nil {
 			if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
@@ -1152,7 +1265,10 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		return handleNonDMLEventStruct(eventStruct)
 	}
 	if eventStruct.dmlEvent != nil {
+		// 拷贝一份数据出来?
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
+
+		// 先消费一个Event
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
 		var nonDmlStructToApply *applyEventStruct
 
@@ -1163,22 +1279,30 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 			// So, if DMLBatchSize==1 we wish to not process any further events
 			availableEvents = batchSize - 1
 		}
+
+		// 是否考虑批量执行(把剩下可以执行的命令尽可能多地执行)
 		for i := 0; i < availableEvents; i++ {
 			additionalStruct := <-this.applyEventsQueue
 			if additionalStruct.dmlEvent == nil {
 				// Not a DML. We don't group this, and we don't batch any further
+				// 非DML, 那可能是什么情况呢?
 				nonDmlStructToApply = additionalStruct
 				break
 			}
 			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
 		}
+
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
+		// 如何实现一个RetryWrapper呢?
+		// 函数闭包，消除被Retry函数的特异性
+		//
 		var applyEventFunc tableWriteFunc = func() error {
 			return this.applier.ApplyDMLEventQueries(dmlEvents)
 		}
 		if err := this.retryOperation(applyEventFunc); err != nil {
 			return log.Errore(err)
 		}
+
 		if nonDmlStructToApply != nil {
 			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
 			// We need to handle it!
@@ -1194,6 +1318,7 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 // This is where the ghost table gets the data. The function fills the data single-threaded.
 // Both event backlog and rowcopy events are polled; the backlog events have precedence.
 func (this *Migrator) executeWriteFuncs() error {
+	// 如果是dry-run，则直接返回
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really executing write funcs")
 		return nil
@@ -1207,9 +1332,11 @@ func (this *Migrator) executeWriteFuncs() error {
 
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
+		// 如何处理select/case的优先级问题
 		select {
 		case eventStruct := <-this.applyEventsQueue:
 			{
+				// 有新的Event, 则立马Apply
 				if err := this.onApplyEventStruct(eventStruct); err != nil {
 					return err
 				}
@@ -1219,6 +1346,7 @@ func (this *Migrator) executeWriteFuncs() error {
 				select {
 				case copyRowsFunc := <-this.copyRowsQueue:
 					{
+						// 否则执行Rows Copy的任务?
 						copyRowsStartTime := time.Now()
 						// Retries are handled within the copyRowsFunc
 						if err := copyRowsFunc(); err != nil {
@@ -1252,7 +1380,7 @@ func (this *Migrator) finalCleanup() error {
 	if this.migrationContext.Noop {
 		if createTableStatement, err := this.inspector.showCreateTable(this.migrationContext.GetGhostTableName()); err == nil {
 			log.Infof("New table structure follows")
-			fmt.Println(createTableStatement)
+			log.Infof(createTableStatement)
 		} else {
 			log.Errore(err)
 		}
@@ -1261,6 +1389,7 @@ func (this *Migrator) finalCleanup() error {
 		log.Errore(err)
 	}
 
+	// 这里做清理工作之后，可能会出现一些goroutine协调的问题：例如其他goroutine继续写changelog
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
 		return err
 	}
@@ -1270,7 +1399,7 @@ func (this *Migrator) finalCleanup() error {
 		}
 	} else {
 		if !this.migrationContext.Noop {
-			log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add `--ok-to-drop-table` next time. But I prefer you do not. To drop the old table, issue:")
+			log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add " + color.MagentaString("`--ok-to-drop-table`") + " next time. But I prefer you do not. To drop the old table, issue:")
 			log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
 		}
 	}

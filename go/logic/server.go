@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/fatih/color"
 	"github.com/github/gh-ost/go/base"
 	"github.com/outbrain/golib/log"
 )
@@ -42,19 +43,28 @@ func (this *Server) BindSocketFile() (err error) {
 	if this.migrationContext.ServeSocketFile == "" {
 		return nil
 	}
+
+	// 启动时删除: DropServeSocket
 	if this.migrationContext.DropServeSocket && base.FileExists(this.migrationContext.ServeSocketFile) {
 		os.Remove(this.migrationContext.ServeSocketFile)
 	}
+
+	// unix socket如何创建?
 	this.unixListener, err = net.Listen("unix", this.migrationContext.ServeSocketFile)
 	if err != nil {
+		log.Errorf("Perhaps socket exists: %s, you can delete it by "+color.GreenString("--initially-drop-socket-file")+" or "+color.GreenString("--initially-drop-socket-file=1")+
+			" or "+color.GreenString("rm %s"),
+			this.migrationContext.ServeSocketFile, this.migrationContext.ServeSocketFile)
 		return err
 	}
-	log.Infof("Listening on unix socket file: %s", this.migrationContext.ServeSocketFile)
+	log.Infof("Listening on unix socket file: %s, socket usage: "+color.CyanString("https://github.com/github/gh-ost/blob/master/doc/interactive-commands.md"),
+		color.RedString(this.migrationContext.ServeSocketFile))
 	return nil
 }
 
 func (this *Server) RemoveSocketFile() (err error) {
-	log.Infof("Removing socket file: %s", this.migrationContext.ServeSocketFile)
+	log.Infof("Removing socket file: %s, socket usage: "+color.CyanString("https://github.com/github/gh-ost/blob/master/doc/interactive-commands.md"),
+		color.RedString(this.migrationContext.ServeSocketFile))
 	return os.Remove(this.migrationContext.ServeSocketFile)
 }
 
@@ -66,12 +76,14 @@ func (this *Server) BindTCPPort() (err error) {
 	if err != nil {
 		return err
 	}
-	log.Infof("Listening on tcp port: %d", this.migrationContext.ServeTCPPort)
+	log.Infof("Listening on tcp port: %s, socket usage: "+color.CyanString("https://github.com/github/gh-ost/blob/master/doc/interactive-commands.md"),
+		color.RedString(fmt.Sprintf("%d", this.migrationContext.ServeTCPPort)))
 	return nil
 }
 
 // Serve begins listening & serving on whichever device was configured
 func (this *Server) Serve() (err error) {
+
 	go func() {
 		for {
 			conn, err := this.unixListener.Accept()
@@ -97,10 +109,12 @@ func (this *Server) Serve() (err error) {
 	return nil
 }
 
+// net.Conn 是不太区分unix socket还是tcp socket
 func (this *Server) handleConnection(conn net.Conn) (err error) {
 	if conn != nil {
 		defer conn.Close()
 	}
+	// ReadLine
 	command, _, err := bufio.NewReader(conn).ReadLine()
 	if err != nil {
 		return err
