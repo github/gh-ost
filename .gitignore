@@ -5,3 +5,5 @@
 .idea
 /gh-ost
 /dbs.toml
+/db.*
+/main

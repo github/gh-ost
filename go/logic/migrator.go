@@ -467,9 +467,11 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 
+	// teardown和finalCleanup可能有一些不同步的问题
 	if err := this.finalCleanup(); err != nil {
 		return nil
 	}
+
 	if err := this.hooksExecutor.onSuccess(); err != nil {
 		return err
 	}
@@ -851,6 +853,12 @@ func (this *Migrator) initiateStatus() error {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return nil
 		}
+
+		// 如果清理工作完成，则直接退出
+		if this.migrationContext != nil && atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
+			return nil
+		}
+
 		go this.printStatus(HeuristicPrintStatusRule)
 	}
 
@@ -880,7 +888,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
 
-	fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# chunk-size: %+v; max-lag-millis: %+vms; max-load: %s; critical-load: %s; nice-ratio: %f"),
+	fmt.Fprintln(w, fmt.Sprintf(color.MagentaString("# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f"),
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
 		atomic.LoadInt64(&this.migrationContext.DMLBatchSize),
@@ -1310,6 +1318,7 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 // This is where the ghost table gets the data. The function fills the data single-threaded.
 // Both event backlog and rowcopy events are polled; the backlog events have precedence.
 func (this *Migrator) executeWriteFuncs() error {
+	// 如果是dry-run，则直接返回
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really executing write funcs")
 		return nil
@@ -1380,6 +1389,7 @@ func (this *Migrator) finalCleanup() error {
 		log.Errore(err)
 	}
 
+	// 这里做清理工作之后，可能会出现一些goroutine协调的问题：例如其他goroutine继续写changelog
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
 		return err
 	}
