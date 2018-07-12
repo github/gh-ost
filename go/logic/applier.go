@@ -238,6 +238,8 @@ func (this *Applier) CreateChangelogTable() error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
+
+	// 直接执行SQL
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
