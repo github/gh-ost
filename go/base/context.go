@@ -77,9 +77,9 @@ type MigrationContext struct {
 
 	DatabaseName      string
 	OriginalTableName string
-	OriginalFilter    string
-
 	AlterStatement string
+	// 新增字段
+	OriginalFilter    string
 
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
