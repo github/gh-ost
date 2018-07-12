@@ -427,6 +427,7 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 
 // ReadMigrationRangeValues reads min/max values that will be used for rowcopy
 func (this *Applier) ReadMigrationRangeValues() error {
+	// 读取全局的Range
 	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
 		return err
 	}
@@ -453,6 +454,8 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		if i == 1 {
 			buildFunc = sql.BuildUniqueKeyRangeEndPreparedQueryViaTemptable
 		}
+
+		// 给定(MigrationIterationRangeMinValues, MigrationRangeMaxValues, ChunkSize) 得到 iterationRangeMaxValues
 		query, explodedArgs, err := buildFunc(
 			this.migrationContext.DatabaseName,
 			this.migrationContext.OriginalTableName,
@@ -471,6 +474,8 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			return hasFurtherRange, err
 		}
 		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
+
+		// rows只有一行，读一次就结束了
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
 				return hasFurtherRange, err
