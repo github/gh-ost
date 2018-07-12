@@ -454,6 +454,11 @@ func (this *Throttler) initiateThrottlerChecks() error {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return nil
 		}
+
+		// 清理工作结束之后，不再进行throttle检测
+		if this.migrationContext != nil && atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
+			return nil
+		}
 		throttlerFunction()
 	}
 
