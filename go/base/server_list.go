@@ -11,6 +11,15 @@ import (
 	"strings"
 )
 
+type UserPassword struct {
+	User     string
+	Password string
+}
+
+func (u UserPassword) String() string {
+	return fmt.Sprintf("%s %s", u.User, u.Password)
+}
+
 type DatabaseConfig struct {
 	Databases    []string `toml:"dbs"`
 	MaxLoad      string   `toml:"max_load"`
@@ -21,9 +30,12 @@ type DatabaseConfig struct {
 	InitiallyDropGhosTable  bool `toml:"initially_drop_ghost_table"`
 	InitiallyDropSocketFile bool `toml:"initially_drop_socket_file"`
 
-	User       string `toml:"user"`
-	Password   string `toml:"password"`
-	IsRdsMySQL bool   `toml:"is_rds_mysql"`
+	User     string `toml:"user"`
+	Password string `toml:"password"`
+
+	IsAliRds   bool `toml:"is_ali_rds"`
+	IsRdsMySQL bool `toml:"is_rds_mysql"`
+
 	// RDS中:
 	// 1. 不能调用start slave/stop slave, 也不能通过 CALL mysql.rds_start_replication 之类函数
 	AssumeRbr bool `toml:"assume_rbr"`
@@ -35,6 +47,9 @@ type DatabaseConfig struct {
 	//Master_Port: 3306
 	SlaveMasterMapping [][]string `toml:"slave_master_mapping"`
 	Slave2Master       map[string]string
+
+	PasswordMapping    [][]string `toml:"alias_2_password_mapping"`
+	Alias2UserPassword map[string]*UserPassword
 
 	// Throttle控制
 	MaxLagMillis int64 `toml:"max_lag_millis"`
@@ -59,6 +74,16 @@ func NewConfig(data string) (*DatabaseConfig, error) {
 	c.Slave2Master = make(map[string]string)
 	for _, mapping := range c.SlaveMasterMapping {
 		c.Slave2Master[mapping[0]] = mapping[1]
+	}
+
+	c.Alias2UserPassword = make(map[string]*UserPassword)
+	for _, mapping := range c.PasswordMapping {
+		passwords := strings.SplitN(mapping[1], ":", 2)
+		userPassword := &UserPassword{
+			User:     passwords[0],
+			Password: passwords[1],
+		}
+		c.Alias2UserPassword[mapping[0]] = userPassword
 	}
 
 	return &c, nil

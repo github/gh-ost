@@ -252,6 +252,7 @@ func main() {
 			}
 			// 实现alias到db的映射
 			db, host, port := config.GetDB(*dbAlias)
+			userPassword := config.Alias2UserPassword[*dbAlias]
 			migrationContext.InspectorConnectionConfig.Key.Hostname = host
 			migrationContext.InspectorConnectionConfig.Key.Port = port
 			migrationContext.DatabaseName = db
@@ -263,8 +264,16 @@ func main() {
 			migrationContext.InitiallyDropGhostTable = config.InitiallyDropGhosTable
 			migrationContext.InitiallyDropOldTable = config.InitiallyDropOldTable
 			migrationContext.DropServeSocket = config.InitiallyDropSocketFile
-			migrationContext.CliUser = config.User
-			migrationContext.CliPassword = config.Password
+
+			if userPassword != nil {
+				// 使用定制的用户名和密码
+				migrationContext.CliUser = userPassword.User
+				migrationContext.CliPassword = userPassword.Password
+			} else {
+				// 使用默认的用户名和密码
+				migrationContext.CliUser = config.User
+				migrationContext.CliPassword = config.Password
+			}
 
 			maxLoadValue = config.MaxLoad
 			criticalLoadValue = config.CriticalLoad
@@ -274,6 +283,11 @@ func main() {
 				migrationContext.InspectorConnectionConfig.IsRds = true
 				migrationContext.ApplierConnectionConfig.IsRds = true
 				migrationContext.AssumeRBR = true // RDS必须这样
+			}
+
+			// 设置阿里云rds
+			if config.IsAliRds {
+				migrationContext.AliyunRDS = config.IsAliRds
 			}
 
 			// 如果使用配置文件，则以配置文件为准

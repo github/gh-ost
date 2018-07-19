@@ -17,6 +17,11 @@ max_lag_millis=1500
 user = "xxx"
 password = "xxx"
 
+#
+alias_2_password_mapping = [
+    ["starmaker", "username:password"]
+]
+
 # 在aws rds内部通过show slave status得到的master的ip/port可能无法在应用所在的网络直接访问，因此这里手动指定slave到master的mapping
 slave_master_mapping = [
     ["db-backend-r1.db.test.com", "db-backend.db.test.com"],

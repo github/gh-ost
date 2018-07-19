@@ -29,4 +29,8 @@ func TestServerListParse(t *testing.T) {
 	for key, value := range config.Slave2Master {
 		fmt.Printf("%s --> %s\n", key, value)
 	}
+
+	for key, value := range config.Alias2UserPassword {
+		fmt.Printf("%s --> %s\n", key, value)
+	}
 }
