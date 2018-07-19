@@ -18,6 +18,12 @@ slave_master_mapping = [
     ["shard02-r2.db.test.com", "shard02.db.test.com"],
     ["shard03-r2.db.test.com", "shard03.db.test.com"],
 ]
+
+#
+alias_2_password_mapping = [
+    ["starmaker", "username:password"]
+]
+
 dbs = [
     "shard0:shard_sm_0@shard00-r1.db.test.com",
     "shard1:shard_sm_1@shard00-r1.db.test.com",
