@@ -7,6 +7,7 @@ package sql
 
 import (
 	"fmt"
+	"github.com/github/gh-ost/go/base"
 	"strconv"
 	"strings"
 )
@@ -320,7 +321,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 					offset %d
     `, databaseName, tableName, hint,
 		strings.Join(uniqueKeyColumnNames, ", "),
-		databaseName, tableName,  // dbname.tablename
+		databaseName, tableName, // dbname.tablename
 		rangeStartComparison, rangeEndComparison,
 		strings.Join(uniqueKeyColumnAscending, ", "),
 		(chunkSize - 1),
@@ -448,7 +449,11 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 //
 // Original Table中删除数据，如何处理呢?
 //
-func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKeyColumns *ColumnList, args []interface{}) (result string, uniqueKeyArgs []interface{}, err error) {
+func BuildDMLDeleteQuery(databaseName, tableName string,
+	partition *base.Partition,
+	tableColumns, uniqueKeyColumns *ColumnList,
+	args []interface{}) (result string, uniqueKeyArgs []interface{}, err error) {
+
 	if len(args) != tableColumns.Len() {
 		return result, uniqueKeyArgs, fmt.Errorf("args count differs from table column count in BuildDMLDeleteQuery")
 	}
@@ -456,11 +461,26 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 		return result, uniqueKeyArgs, fmt.Errorf("No unique key columns found in BuildDMLDeleteQuery")
 	}
 
+	var partitionID int64 = -1
 	// uniqueKeyColumns 是前后都完全一致的列?
 	for _, column := range uniqueKeyColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name] // uniqueKey的位置
 		arg := column.convertArg(args[tableOrdinal])       // args: full row image
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+
+		if partition != nil && partitionID < 0 && partition.PartitionKey == column.Name {
+			// 	确定partition
+			value, err := column.convertInt64Arg(args[tableOrdinal])
+			if err != nil {
+				panic(fmt.Sprintf("%s", err.Error()))
+			}
+			partitionID = value % partition.PartitionNum
+			if partitionID != partition.PartitionIndex {
+				// 不是关注的Partition，直接跳过
+				return "", nil, nil
+			}
+		}
+
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
@@ -468,6 +488,7 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	if err != nil {
 		return result, uniqueKeyArgs, err
 	}
+
 	result = fmt.Sprintf(`
 			delete /* gh-ost %s.%s */
 				from
@@ -481,7 +502,9 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	return result, uniqueKeyArgs, nil
 }
 
-func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
+func BuildDMLInsertQuery(databaseName, tableName string, partition *base.Partition,
+	tableColumns, sharedColumns, mappedSharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
+
 	if len(args) != tableColumns.Len() {
 		return result, args, fmt.Errorf("args count differs from table column count in BuildDMLInsertQuery")
 	}
@@ -494,10 +517,24 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
+	var partitionID int64 = -1
 	for _, column := range sharedColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
 		arg := column.convertArg(args[tableOrdinal])
 		sharedArgs = append(sharedArgs, arg)
+
+		if partition != nil && partitionID < 0 && partition.PartitionKey == column.Name {
+			// 	确定partition
+			value, err := column.convertInt64Arg(args[tableOrdinal])
+			if err != nil {
+				panic(fmt.Sprintf("%s", err.Error()))
+			}
+			partitionID = value % partition.PartitionNum
+			if partitionID != partition.PartitionIndex {
+				// 不是关注的Partition，直接跳过
+				return "", nil, nil
+			}
+		}
 	}
 
 	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names())
@@ -520,7 +557,8 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	return result, sharedArgs, nil
 }
 
-func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns, uniqueKeyColumns *ColumnList, valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {
+func BuildDMLUpdateQuery(databaseName, tableName string, partition *base.Partition,
+	tableColumns, sharedColumns, mappedSharedColumns, uniqueKeyColumns *ColumnList, valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {
 	if len(valueArgs) != tableColumns.Len() {
 		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("value args count differs from table column count in BuildDMLUpdateQuery")
 	}
@@ -548,10 +586,24 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 		sharedArgs = append(sharedArgs, arg)
 	}
 
+	var partitionID int64 = -1
 	for _, column := range uniqueKeyColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
 		arg := column.convertArg(whereArgs[tableOrdinal])
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+
+		if partition != nil && partitionID < 0 && partition.PartitionKey == column.Name {
+			// 	确定partition
+			value, err := column.convertInt64Arg(whereArgs[tableOrdinal])
+			if err != nil {
+				panic(fmt.Sprintf("%s", err.Error()))
+			}
+			partitionID = value % partition.PartitionNum
+			if partitionID != partition.PartitionIndex {
+				// 不是关注的Partition，直接跳过
+				return "", nil, nil, nil
+			}
+		}
 	}
 
 	setClause, err := BuildSetPreparedClause(mappedSharedColumns)

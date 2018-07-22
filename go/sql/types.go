@@ -6,6 +6,7 @@
 package sql
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -36,6 +37,40 @@ type Column struct {
 	Charset            string
 	Type               ColumnType
 	timezoneConversion *TimezoneConversion
+}
+
+var ErrorNotIntType = errors.New("not int type")
+
+func (this *Column) convertInt64Arg(arg interface{}) (int64, error) {
+	if _, ok := arg.(string); ok {
+		return -1, ErrorNotIntType
+	}
+
+	if i, ok := arg.(int8); ok {
+		return int64(i), nil
+	}
+	if i, ok := arg.(int16); ok {
+		return int64(i), nil
+	}
+	if i, ok := arg.(int32); ok {
+		if this.Type == MediumIntColumnType {
+			// problem with mediumint is that it's a 3-byte type. There is no compatible golang type to match that.
+			// So to convert from negative to positive we'd need to convert the value manually
+			if i >= 0 {
+				return int64(i), nil
+			}
+			return int64(maxMediumintUnsigned + i + 1), nil
+		}
+		return int64(i), nil
+	}
+	if i, ok := arg.(int64); ok {
+		return i, nil
+	}
+	if i, ok := arg.(int); ok {
+		return int64(i), nil
+	}
+
+	return -1, ErrorNotIntType
 }
 
 func (this *Column) convertArg(arg interface{}) interface{} {

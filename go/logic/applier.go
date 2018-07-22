@@ -609,26 +609,33 @@ func (this *Applier) UnlockTables() error {
 // 为什么不一步到为呢?
 //
 func (this *Applier) SwapTablesQuickAndBumpy() error {
-	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-		sql.EscapeName(this.migrationContext.GetOldTableName()),
-	)
-	log.Infof("Renaming original table")
-	this.migrationContext.RenameTablesStartTime = time.Now()
-	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
-		return err
+	if this.migrationContext.Partition != nil {
+		// 如何分步骤执行呢？
+		// TODO:
+		// 1. partition exchange with gho table
+		// 2. gho table rename to del
+	} else {
+		query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.OriginalTableName),
+			sql.EscapeName(this.migrationContext.GetOldTableName()),
+		)
+		log.Infof("Renaming original table")
+		this.migrationContext.RenameTablesStartTime = time.Now()
+		if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
+			return err
+		}
+		query = fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+			sql.EscapeName(this.migrationContext.OriginalTableName),
+		)
+		log.Infof("Renaming ghost table")
+		if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+			return err
+		}
+		this.migrationContext.RenameTablesEndTime = time.Now()
 	}
-	query = fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-	log.Infof("Renaming ghost table")
-	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
-		return err
-	}
-	this.migrationContext.RenameTablesEndTime = time.Now()
 
 	log.Infof("Tables renamed")
 	return nil
@@ -967,16 +974,21 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 		return err
 	}
 
-	query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s, %s.%s to %s.%s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetOldTableName()),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
+	if this.migrationContext.Partition != nil {
+		// Partition Exchange
+		// TODO:
+	} else {
+		query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s, %s.%s to %s.%s`,
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.OriginalTableName),
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetOldTableName()),
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.OriginalTableName),
+		)
+	}
 	log.Infof("Issuing and expecting this to block: %s", query)
 	if _, err := tx.Exec(query); err != nil {
 		tablesRenamed <- err
@@ -1018,16 +1030,30 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
 		{
-			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
-			return append(results, newDmlBuildResult(query, uniqueKeyArgs, -1, err))
+			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(),
+				this.migrationContext.Partition,
+				this.migrationContext.OriginalTableColumns,
+				&this.migrationContext.UniqueKey.Columns,
+				dmlEvent.WhereColumnValues.AbstractValues())
+
+			if query != "" {
+				results = append(results, newDmlBuildResult(query, uniqueKeyArgs, -1, err))
+			}
+			return results
 		}
 	case binlog.InsertDML:
 		{
-			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
-			return append(results, newDmlBuildResult(query, sharedArgs, 1, err))
+			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.Partition,
+				this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
+
+			if query != "" {
+				results = append(results, newDmlBuildResult(query, sharedArgs, 1, err))
+			}
+			return results
 		}
 	case binlog.UpdateDML:
 		{
+			// UpdateDML 如何发现UniqKey本身改变了，则需要演变成为一个Delete + Insert
 			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
 				dmlEvent.DML = binlog.DeleteDML
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
@@ -1035,11 +1061,15 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
 				return results
 			}
-			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
-			args := sqlutils.Args()
-			args = append(args, sharedArgs...)
-			args = append(args, uniqueKeyArgs...)
-			return append(results, newDmlBuildResult(query, args, 0, err))
+			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.Partition,
+				this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			if query != "" {
+				args := sqlutils.Args()
+				args = append(args, sharedArgs...)
+				args = append(args, uniqueKeyArgs...)
+				results = append(results, newDmlBuildResult(query, args, 0, err))
+			}
+			return results
 		}
 	}
 	return append(results, newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)))
