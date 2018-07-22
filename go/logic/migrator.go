@@ -1357,12 +1357,12 @@ func (this *Migrator) executeWriteFuncs() error {
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
 		// 如何处理select/case的优先级问题
-		log.Infof(color.RedString("executeWriteFuncs normal loop, queue: %d, %p"), len(this.applyEventsQueue), this.applyEventsQueue)
+		// log.Infof(color.RedString("executeWriteFuncs normal loop, queue: %d, %p"), len(this.applyEventsQueue), this.applyEventsQueue)
 		select {
 		case eventStruct := <-this.applyEventsQueue:
 			{
 				// 有新的Event, 则立马Apply
-				log.Infof(color.RedString("consume applyEventsQueue ...."))
+				//log.Infof(color.RedString("consume applyEventsQueue ...."))
 				if err := this.onApplyEventStruct(eventStruct); err != nil {
 					log.Infof(color.RedString("onApplyEventStruct error: %v"), err)
 					return err
@@ -1375,13 +1375,13 @@ func (this *Migrator) executeWriteFuncs() error {
 					{
 						// 否则执行Rows Copy的任务?
 						copyRowsStartTime := time.Now()
-						log.Infof(color.GreenString("copyRowsFunc begin"))
+						//log.Infof(color.GreenString("copyRowsFunc begin"))
 						// Retries are handled within the copyRowsFunc
 						if err := copyRowsFunc(); err != nil {
 							return log.Errore(err)
 						}
 
-						log.Infof(color.GreenString("copyRowsFunc finished"))
+						//log.Infof(color.GreenString("copyRowsFunc finished"))
 						if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
 							copyRowsDuration := time.Since(copyRowsStartTime)
 							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
