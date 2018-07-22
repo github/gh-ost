@@ -77,9 +77,11 @@ type MigrationContext struct {
 
 	DatabaseName      string
 	OriginalTableName string
-	AlterStatement string
+	AlterStatement    string
+
 	// 新增字段
-	OriginalFilter    string
+	OriginalFilter string
+	Partition      *sql.Partition
 
 	CountTableRows           bool
 	ConcurrentCountTableRows bool

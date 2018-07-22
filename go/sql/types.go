@@ -6,6 +6,7 @@
 package sql
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -36,6 +37,34 @@ type Column struct {
 	Charset            string
 	Type               ColumnType
 	timezoneConversion *TimezoneConversion
+}
+
+var ErrorNotIntType = errors.New("not int type")
+
+func (this *Column) convertInt64Arg(arg interface{}) (int64, error) {
+	switch v := arg.(type) {
+	case int:
+		return int64(v), nil
+	case int8:
+		return int64(v), nil
+	case int16:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case int64:
+		return int64(v), nil
+	case uint:
+		return int64(v), nil
+	case uint8:
+		return int64(v), nil
+	case uint16:
+		return int64(v), nil
+	case uint32:
+		return int64(v), nil
+	case uint64:
+		return int64(v), nil
+	}
+	return -1, ErrorNotIntType
 }
 
 func (this *Column) convertArg(arg interface{}) interface{} {
