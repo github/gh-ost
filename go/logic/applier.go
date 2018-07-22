@@ -180,6 +180,7 @@ func (this *Applier) CreateGhostTable() error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 	)
+
 	log.Infof(color.BlueString("Creating ghost table")+" %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
@@ -189,6 +190,27 @@ func (this *Applier) CreateGhostTable() error {
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
+
+	if this.migrationContext.Partition != nil {
+		//// 是否支持Partition呢？
+		//// /*!50100 PARTITION BY HASH (user_id) PARTITIONS 100 */;
+		//
+		//reg := regexp.MustCompile("/\\*.*?PARTITION BY HASH\\s+\\((.*)\\)\\s+PARTITIONS\\s+(\\d+)\\s+\\*/")
+		//results := reg.FindStringSubmatch(query)
+		//if results != nil && len(results) != 3 {
+		//	panic("Unexpected table schema: %s")
+		//}
+
+		query = fmt.Sprintf(`ALTER TABLE /* gh-ost */ %s.%s REMOVE PARTITIONING`,
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		)
+		if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+			return err
+		}
+
+	}
+
 	log.Infof("Ghost table created")
 	return nil
 }
@@ -381,7 +403,9 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 // ReadMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName,
+		this.migrationContext.Partition,
+		&uniqueKey.Columns)
 	if err != nil {
 		return err
 	}
@@ -407,7 +431,9 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 // ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName,
+		this.migrationContext.Partition,
+		&uniqueKey.Columns)
 	if err != nil {
 		return err
 	}
@@ -459,6 +485,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		query, explodedArgs, err := buildFunc(
 			this.migrationContext.DatabaseName,
 			this.migrationContext.OriginalTableName,
+			this.migrationContext.Partition,
 			&this.migrationContext.UniqueKey.Columns,
 			this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 			this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
@@ -503,6 +530,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.GetGhostTableName(),
+		this.migrationContext.Partition,
 		this.migrationContext.OriginalFilter,
 
 		this.migrationContext.SharedColumns.Names(),
