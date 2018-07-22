@@ -9,6 +9,16 @@
 	* 有些情况下需要大量删除一些过期的数据，如果逐个删除太慢，而且在innodb中使用的是标记删除, 容易导致index在磁盘上不连续，造成读写效率低；还不如直接通过gh-ost一步实现数据的整理和清理。
 * 如果不使用db-alias, 则请参考 [cheatsheet](doc/cheatsheet.md), 来获取完整的命令。
 
+* 删除分区表的partition：
+  * `gh-ost --hosts-conf=information.online --db-alias=info --verbose --alter='REMOVE PARTITIONING' --table="uper" --allow-on-master --aliyun-rds --assume-rbr --execute`
+* 删除一周以前的数据
+  * `gh-ost --hosts-conf=db.online --db-alias=ne --verbose --origin-filter="create_time > \"`date --date="7 days ago" +"%Y-%m-%d %H:%M:%S"`\"" --alter="Engine InnoDB" --table="user_share_history" --allow-on-master --aliyun-rds --assume-rbr --execute`
+
+* 删除一周以前的数据(如果是分区表，制定分区操作）
+  * --partition-conf="user_id:1:100" 分区字段 user_id, 总分区数 100，要操作的分区index：1（取值0~99），目前只支持简单的hash分区整理(整理磁盘，删除数据，但是不支持修改schema）
+  * `gh-ost --hosts-conf=db.online --db-alias=ne --verbose --origin-filter="create_time > \"`date --date="7 days ago" +"%Y-%m-%d %H:%M:%S"`\"" --alter="Engine InnoDB" --table="user_share_history" --allow-on-master --aliyun-rds --assume-rbr --partition-conf="user_id:1:100" --execute`
+
+
 
 
 [![build status](https://travis-ci.org/github/gh-ost.svg)](https://travis-ci.org/github/gh-ost) [![downloads](https://img.shields.io/github/downloads/github/gh-ost/total.svg)](https://github.com/github/gh-ost/releases) [![release](https://img.shields.io/github/release/github/gh-ost.svg)](https://github.com/github/gh-ost/releases)
