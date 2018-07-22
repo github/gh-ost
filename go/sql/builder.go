@@ -519,6 +519,20 @@ func BuildDMLDeleteQuery(databaseName, tableName string,
 		tableOrdinal := tableColumns.Ordinals[column.Name] // uniqueKey的位置
 		arg := column.convertArg(args[tableOrdinal])       // args: full row image
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+
+		if partition != nil && partitionID < 0 && partition.DBField == column.Name {
+			// 	确定partition
+			value, err := column.convertInt64Arg(args[tableOrdinal])
+			if err != nil {
+				panic(fmt.Sprintf("%s", err.Error()))
+			}
+			partitionID = value % partition.PartitionNum
+			if partitionID != partition.PartitionIndex {
+				// 不是关注的Partition，直接跳过
+				return "", nil, nil
+			}
+		}
+
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
@@ -527,7 +541,6 @@ func BuildDMLDeleteQuery(databaseName, tableName string,
 		return result, uniqueKeyArgs, err
 	}
 
-	// 目标Table不存在partition的问题
 	result = fmt.Sprintf(`
 			delete /* gh-ost %s.%s */
 				from
