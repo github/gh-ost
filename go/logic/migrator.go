@@ -488,8 +488,10 @@ func (this *Migrator) ExecOnFailureHook() (err error) {
 func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
 	if this.migrationContext.TestOnReplica {
 		// We're merely testing, we don't want to keep this state. Rollback the renames as possible
+		// TODO: 基于partition的调整，暂时不支持Rollback
 		this.applier.RenameTablesRollback()
 	}
+
 	if cutOverError == nil {
 		return nil
 	}

@@ -614,7 +614,7 @@ func (this *Applier) SwapTablesQuickAndBumpy() error {
 		// TODO:
 		// 1. partition exchange with gho table
 		// 2. gho table rename to del
-
+		// _user_red_bag (partition 0) 和 _user_red_bag_gho 交换
 		query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s EXCHANGE PARTITION p%d with %s.%s`,
 			sql.EscapeName(this.migrationContext.DatabaseName),
 			sql.EscapeName(this.migrationContext.OriginalTableName),

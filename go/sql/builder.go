@@ -558,13 +558,14 @@ func BuildDMLInsertQuery(databaseName, tableName string, partition *Partition,
 		arg := column.convertArg(args[tableOrdinal])
 		sharedArgs = append(sharedArgs, arg)
 
+		// 如何需要支持partition，且没有选定 partitionID，则做字段名匹配
+		// 暂时只支持简单的Hash Partition
 		if partition != nil && partitionID < 0 && partition.DBField == column.Name {
-			// 	确定partition
 			value, err := column.convertInt64Arg(args[tableOrdinal])
 			if err != nil {
 				panic(fmt.Sprintf("%s", err.Error()))
 			}
-			partitionID = value % partition.PartitionNum
+			partitionID = value % partition.PartitionNum // 简单的Hash Partition
 			if partitionID != partition.PartitionIndex {
 				// 不是关注的Partition，直接跳过
 				return "", nil, nil
@@ -627,8 +628,9 @@ func BuildDMLUpdateQuery(databaseName, tableName string, partition *Partition,
 		arg := column.convertArg(whereArgs[tableOrdinal])
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 
+		// 如何需要支持partition，且没有选定 partitionID，则做字段名匹配
+		// 暂时只支持简单的Hash Partition
 		if partition != nil && partitionID < 0 && partition.DBField == column.Name {
-			// 	确定partition
 			value, err := column.convertInt64Arg(whereArgs[tableOrdinal])
 			if err != nil {
 				panic(fmt.Sprintf("%s", err.Error()))
