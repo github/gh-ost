@@ -21,6 +21,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/outbrain/golib/log"
+	"sync"
 )
 
 type ChangelogState string
@@ -89,7 +90,9 @@ type Migrator struct {
 	rowCopyComplete            chan error
 	allEventsUpToLockProcessed chan string
 
+	tableRWLock         sync.Mutex
 	rowCopyCompleteFlag int64
+
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
@@ -246,12 +249,12 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	case AllEventsUpToLockProcessed:
 		{
 			var applyEventFunc tableWriteFunc = func() error {
-				log.Infof(color.MagentaString("2. allEventsUpToLockProcessed...."))
+				// log.Infof(color.MagentaString("2. allEventsUpToLockProcessed: %s"), changelogStateString)
 				this.allEventsUpToLockProcessed <- changelogStateString
 				return nil
 			}
 
-			log.Infof(color.MagentaString("1. AllEventsUpToLockProcessed...."))
+			// log.Infof(color.MagentaString("1. AllEventsUpToLockProcessed...."))
 
 			// at this point we know all events up to lock have been read from the streamer,
 			// because the streamer works sequentially. So those events are either already handled,
@@ -259,9 +262,9 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 			// So as not to create a potential deadlock, we write this func to applyEventsQueue
 			// asynchronously, understanding it doesn't really matter.
 			go func() {
-				log.Infof(color.MagentaString("1.5. applyEventsQueue...."))
+				//log.Infof(color.MagentaString("1.5. applyEventsQueue...."))
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
-				log.Infof(color.MagentaString("1.5. applyEventsQueue: %d, %p"), len(this.applyEventsQueue), this.applyEventsQueue)
+				//log.Infof(color.MagentaString("1.5. applyEventsQueue: %d, %p"), len(this.applyEventsQueue), this.applyEventsQueue)
 			}()
 		}
 	default:
@@ -276,6 +279,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 // listenOnPanicAbort aborts on abort request
 func (this *Migrator) listenOnPanicAbort() {
 	err := <-this.migrationContext.PanicAbort
+	log.Infof("PanicAbort: %v", err)
 	log.Fatale(err)
 }
 
@@ -449,9 +453,11 @@ func (this *Migrator) Migrate() (err error) {
 	go this.initiateStatus()
 
 	log.Debugf("Operating until row copy is complete")
+
 	// 等待迁移完毕
 	this.consumeRowCopyComplete()
 	this.migrationContext.RowCopyComplete.Store(true)
+
 	log.Infof(color.MagentaString("=== Row copy complete, Next: CutOver ==="))
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
 		return err
@@ -468,6 +474,7 @@ func (this *Migrator) Migrate() (err error) {
 	} else {
 		retrier = this.retryOperation
 	}
+	// 迁移完毕之后进行cutOver
 	if err := retrier(this.cutOver); err != nil {
 		return err
 	}
@@ -602,7 +609,7 @@ func (this *Migrator) cutOver() (err error) {
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
 func (this *Migrator) waitForEventsUpToLock() (err error) {
-	log.Infof(color.CyanString("Enter waitForEventsUpToLock..."))
+	// log.Infof(color.CyanString("Enter waitForEventsUpToLock..."))
 	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
 
 	this.migrationContext.MarkPointOfInterest()
@@ -611,12 +618,12 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	// 写入hint
 	allEventsUpToLockProcessedChallenge := fmt.Sprintf("%s:%d", string(AllEventsUpToLockProcessed), waitForEventsUpToLockStartTime.UnixNano())
 
-	log.Infof("A: Writing changelog state: %+v", allEventsUpToLockProcessedChallenge)
+	//log.Infof("A: Writing changelog state: %+v", allEventsUpToLockProcessedChallenge)
 	if _, err := this.applier.WriteChangelogState(allEventsUpToLockProcessedChallenge); err != nil {
-		log.Errorf("WriteChangelogState error: %v", err)
+		//log.Errorf("WriteChangelogState error: %v", err)
 		return err
 	}
-	log.Infof("B: Waiting for events up to lock")
+	//log.Infof("B: Waiting for events up to lock")
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 1)
 
 	for found := false; !found; {
@@ -655,7 +662,12 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
+	// 开始执行Table的Lock操作
+	this.tableRWLock.Lock()
+	defer this.tableRWLock.Unlock()
+
 	// 1. Original Table锁定，不让写入数据
+	//    剩余的binlog，会迅速写入ghost文件中；由于优先处理binlog，且有throttle控制，因此当rows被拷贝完毕时，binlog剩余的也不多
 	if err := this.retryOperation(this.applier.LockOriginalTable); err != nil {
 		return err
 	}
@@ -686,6 +698,9 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 func (this *Migrator) atomicCutOver() (err error) {
 	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
+
+	this.tableRWLock.Lock()
+	defer this.tableRWLock.Unlock()
 
 	okToUnlockTable := make(chan bool, 4)
 	defer func() {
@@ -1142,6 +1157,7 @@ func (this *Migrator) addDMLEventsListener() error {
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
+			// log.Infof(color.RedString("addDMLEventsListener: %v"), dmlEvent)
 			this.applyEventsQueue <- newApplyEventStructByDML(dmlEvent)
 			return nil
 		},
@@ -1200,7 +1216,10 @@ func (this *Migrator) initiateApplier() error {
 // a chunk of rows onto the ghost table.
 func (this *Migrator) iterateChunks() error {
 	terminateRowIteration := func(err error) error {
-		this.rowCopyComplete <- err
+		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 0 {
+			atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
+			this.rowCopyComplete <- err
+		}
 		return log.Errore(err)
 	}
 	if this.migrationContext.Noop {
@@ -1219,6 +1238,12 @@ func (this *Migrator) iterateChunks() error {
 			return nil
 		}
 		copyRowsFunc := func() error {
+			this.tableRWLock.Lock()
+			defer this.tableRWLock.Unlock()
+
+			//defer func() {
+			//	log.Infof(color.CyanString("copyRowsFunc over"))
+			//}()
 			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
 				// Done.
 				// There's another such check down the line
@@ -1226,6 +1251,7 @@ func (this *Migrator) iterateChunks() error {
 			}
 
 			// 计算当前iteration的range
+			// 需要注意所的问题：
 			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
 			if err != nil {
 				return terminateRowIteration(err)
@@ -1244,8 +1270,10 @@ func (this *Migrator) iterateChunks() error {
 					// But some are still then collected at the binary log, and these are the ones we're trying to
 					// not apply here. If the race condition wins over us, then we just attempt to apply onto the
 					// _ghost_ table, which no longer exists. So, bothering error messages and all, but no damage.
+					//log.Infof("rowCopyCompleteFlag: 1")
 					return nil
 				}
+
 				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
 					return terminateRowIteration(err)
@@ -1268,7 +1296,7 @@ func (this *Migrator) iterateChunks() error {
 }
 
 func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
-	log.Infof(color.MagentaString("onApplyEventStruct"))
+	//log.Infof(color.MagentaString("onApplyEventStruct"))
 
 	// 如何执行一个DML Event呢?
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
@@ -1300,7 +1328,7 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 
 		// 是否考虑批量执行(把剩下可以执行的命令尽可能多地执行)
 		for i := 0; i < availableEvents; i++ {
-			// log.Infof("QueueLen: %d", this.applyEventsQueue)
+			//log.Infof("QueueLen: %d", len(this.applyEventsQueue))
 			additionalStruct := <-this.applyEventsQueue
 			if additionalStruct.dmlEvent == nil {
 				// Not a DML. We don't group this, and we don't batch any further
@@ -1378,6 +1406,9 @@ func (this *Migrator) executeWriteFuncs() error {
 						//log.Infof(color.GreenString("copyRowsFunc begin"))
 						// Retries are handled within the copyRowsFunc
 						if err := copyRowsFunc(); err != nil {
+
+							//log.Infof(color.GreenString("copyRowsFunc error: %v"), err)
+
 							return log.Errore(err)
 						}
 
@@ -1386,7 +1417,7 @@ func (this *Migrator) executeWriteFuncs() error {
 							copyRowsDuration := time.Since(copyRowsStartTime)
 							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
 							sleepTime := time.Duration(time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond)
-							log.Infof(color.RedString("sleepTime：%.3fs"), sleepTime)
+							//log.Infof(color.RedString("sleepTime：%.3fs"), sleepTime)
 							time.Sleep(sleepTime)
 						}
 					}
@@ -1394,7 +1425,7 @@ func (this *Migrator) executeWriteFuncs() error {
 					{
 						// Hmmmmm... nothing in the queue; no events, but also no row copy.
 						// This is possible upon load. Let's just sleep it over.
-						log.Debugf("Getting nothing in the write queue. Sleeping...")
+						log.Infof(color.RedString("Getting nothing in the write queue. Sleeping..."))
 						time.Sleep(time.Millisecond * 50)
 					}
 				}

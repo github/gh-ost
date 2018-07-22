@@ -514,7 +514,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			return hasFurtherRange, nil
 		}
 	}
-	log.Debugf("Iteration complete: no further range to iterate")
+	log.Infof("Iteration complete: no further range to iterate")
 	return hasFurtherRange, nil
 }
 

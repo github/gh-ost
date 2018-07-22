@@ -596,14 +596,19 @@ func BuildDMLInsertQuery(databaseName, tableName string, partition *Partition,
 	}
 	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
 
+	partitionInfo := ""
+	if partitionID != -1 {
+		partitionInfo = fmt.Sprintf("partition p%d", partitionID)
+	}
+
 	result = fmt.Sprintf(`
 			replace /* gh-ost %s.%s */ into
-				%s.%s
+				%s.%s %s
 					(%s)
 				values
 					(%s)
 		`, databaseName, tableName,
-		databaseName, tableName,
+		databaseName, tableName, partitionInfo,
 		strings.Join(mappedSharedColumnNames, ", "),
 		strings.Join(preparedValues, ", "),
 	)
