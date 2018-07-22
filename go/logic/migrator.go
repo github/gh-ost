@@ -1421,7 +1421,7 @@ func (this *Migrator) executeWriteFuncs() error {
 						// Hmmmmm... nothing in the queue; no events, but also no row copy.
 						// This is possible upon load. Let's just sleep it over.
 						log.Infof(color.RedString("Getting nothing in the write queue. Sleeping..."))
-						time.Sleep(time.Millisecond * 50)
+						time.Sleep(time.Second)
 					}
 				}
 			}
