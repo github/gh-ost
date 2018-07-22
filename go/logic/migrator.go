@@ -110,7 +110,7 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
-		allEventsUpToLockProcessed: make(chan string, 10),
+		allEventsUpToLockProcessed: make(chan string),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
@@ -249,12 +249,9 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	case AllEventsUpToLockProcessed:
 		{
 			var applyEventFunc tableWriteFunc = func() error {
-				// log.Infof(color.MagentaString("2. allEventsUpToLockProcessed: %s"), changelogStateString)
 				this.allEventsUpToLockProcessed <- changelogStateString
 				return nil
 			}
-
-			// log.Infof(color.MagentaString("1. AllEventsUpToLockProcessed...."))
 
 			// at this point we know all events up to lock have been read from the streamer,
 			// because the streamer works sequentially. So those events are either already handled,
@@ -262,9 +259,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 			// So as not to create a potential deadlock, we write this func to applyEventsQueue
 			// asynchronously, understanding it doesn't really matter.
 			go func() {
-				//log.Infof(color.MagentaString("1.5. applyEventsQueue...."))
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
-				//log.Infof(color.MagentaString("1.5. applyEventsQueue: %d, %p"), len(this.applyEventsQueue), this.applyEventsQueue)
 			}()
 		}
 	default:
