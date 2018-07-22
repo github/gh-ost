@@ -643,14 +643,14 @@ func (this *Applier) SwapTablesQuickAndBumpy() error {
 		// 1. partition exchange with gho table
 		// 2. gho table rename to del
 		// _user_red_bag (partition 0) 和 _user_red_bag_gho 交换
-		query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s EXCHANGE PARTITION p%d with %s.%s`,
+		query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s EXCHANGE PARTITION p%d with table %s.%s`,
 			sql.EscapeName(this.migrationContext.DatabaseName),
 			sql.EscapeName(this.migrationContext.OriginalTableName),
 			this.migrationContext.Partition.PartitionIndex,
 			sql.EscapeName(this.migrationContext.DatabaseName),
 			sql.EscapeName(this.migrationContext.GetGhostTableName()),
 		)
-		log.Infof("Exchange original partition")
+		log.Infof("Exchange original partition： %s", query)
 		this.migrationContext.RenameTablesStartTime = time.Now()
 		if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
 			return err

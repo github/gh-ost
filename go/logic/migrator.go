@@ -246,9 +246,13 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	case AllEventsUpToLockProcessed:
 		{
 			var applyEventFunc tableWriteFunc = func() error {
+				log.Infof(color.MagentaString("2. allEventsUpToLockProcessed...."))
 				this.allEventsUpToLockProcessed <- changelogStateString
 				return nil
 			}
+
+			log.Infof(color.MagentaString("1. AllEventsUpToLockProcessed...."))
+
 			// at this point we know all events up to lock have been read from the streamer,
 			// because the streamer works sequentially. So those events are either already handled,
 			// or have event functions in applyEventsQueue.
@@ -603,33 +607,33 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 
 	// 写入hint
 	allEventsUpToLockProcessedChallenge := fmt.Sprintf("%s:%d", string(AllEventsUpToLockProcessed), waitForEventsUpToLockStartTime.UnixNano())
-	log.Infof("Writing changelog state: %+v", allEventsUpToLockProcessedChallenge)
+	log.Infof("A: Writing changelog state: %+v", allEventsUpToLockProcessedChallenge)
 	if _, err := this.applier.WriteChangelogState(allEventsUpToLockProcessedChallenge); err != nil {
 		return err
 	}
-	log.Infof("Waiting for events up to lock")
+	log.Infof("B: Waiting for events up to lock")
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 1)
 	for found := false; !found; {
 		select {
 		case <-timeout.C:
 			{
-				return log.Errorf("Timeout while waiting for events up to lock")
+				return log.Errorf("C: Timeout while waiting for events up to lock")
 			}
 		case state := <-this.allEventsUpToLockProcessed:
 			{
-				// 通过binlog收到消息，表面lock之前所有的events都收到了
+				// 通过binlog收到消息，表明lock之前所有的events都收到了
 				if state == allEventsUpToLockProcessedChallenge {
-					log.Infof("Waiting for events up to lock: got %s", state)
+					log.Infof("C: Waiting for events up to lock: got %s", state)
 					found = true
 				} else {
-					log.Infof("Waiting for events up to lock: skipping %s", state)
+					log.Infof("C: Waiting for events up to lock: skipping %s", state)
 				}
 			}
 		}
 	}
 	waitForEventsUpToLockDuration := time.Since(waitForEventsUpToLockStartTime)
 
-	log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
+	log.Infof("D: Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
 	this.printStatus(ForcePrintStatusAndHintRule)
 
 	return nil
@@ -1257,6 +1261,8 @@ func (this *Migrator) iterateChunks() error {
 }
 
 func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
+	log.Infof(color.MagentaString("onApplyEventStruct"))
+
 	// 如何执行一个DML Event呢?
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
 		if eventStruct.writeFunc != nil {
