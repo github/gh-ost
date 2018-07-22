@@ -596,19 +596,15 @@ func BuildDMLInsertQuery(databaseName, tableName string, partition *Partition,
 	}
 	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
 
-	partitionInfo := ""
-	if partitionID != -1 {
-		partitionInfo = fmt.Sprintf("partition p%d", partitionID)
-	}
-
+	// 目标Table不存在partition的概念
 	result = fmt.Sprintf(`
 			replace /* gh-ost %s.%s */ into
-				%s.%s %s
+				%s.%s 
 					(%s)
 				values
 					(%s)
 		`, databaseName, tableName,
-		databaseName, tableName, partitionInfo,
+		databaseName, tableName,
 		strings.Join(mappedSharedColumnNames, ", "),
 		strings.Join(preparedValues, ", "),
 	)
@@ -644,6 +640,7 @@ func BuildDMLUpdateQuery(databaseName, tableName string, partition *Partition,
 		sharedArgs = append(sharedArgs, arg)
 	}
 
+	// 如果是分区表，则uniqueKey一定包含分区字段
 	var partitionID int64 = -1
 	for _, column := range uniqueKeyColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
