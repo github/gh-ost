@@ -107,7 +107,7 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
-		allEventsUpToLockProcessed: make(chan string),
+		allEventsUpToLockProcessed: make(chan string, 10),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
@@ -259,9 +259,9 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 			// So as not to create a potential deadlock, we write this func to applyEventsQueue
 			// asynchronously, understanding it doesn't really matter.
 			go func() {
-				log.Infof(color.MagentaString("1.5. allEventsUpToLockProcessed...."))
+				log.Infof(color.MagentaString("1.5. applyEventsQueue...."))
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
-				log.Infof(color.MagentaString("1.5. allEventsUpToLockProcessed: %d, %p"), len(this.applyEventsQueue), this.applyEventsQueue)
+				log.Infof(color.MagentaString("1.5. applyEventsQueue: %d, %p"), len(this.applyEventsQueue), this.applyEventsQueue)
 			}()
 		}
 	default:
@@ -602,6 +602,7 @@ func (this *Migrator) cutOver() (err error) {
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
 func (this *Migrator) waitForEventsUpToLock() (err error) {
+	log.Infof(color.CyanString("Enter waitForEventsUpToLock..."))
 	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
 
 	this.migrationContext.MarkPointOfInterest()
@@ -612,6 +613,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 
 	log.Infof("A: Writing changelog state: %+v", allEventsUpToLockProcessedChallenge)
 	if _, err := this.applier.WriteChangelogState(allEventsUpToLockProcessedChallenge); err != nil {
+		log.Errorf("WriteChangelogState error: %v", err)
 		return err
 	}
 	log.Infof("B: Waiting for events up to lock")
@@ -625,6 +627,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 			}
 		case state := <-this.allEventsUpToLockProcessed:
 			{
+				log.Infof("state: %s vs. %s", state, allEventsUpToLockProcessedChallenge)
 				// 通过binlog收到消息，表明lock之前所有的events都收到了
 				if state == allEventsUpToLockProcessedChallenge {
 					log.Infof("C: Waiting for events up to lock: got %s", state)
@@ -1334,6 +1337,9 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 // This is where the ghost table gets the data. The function fills the data single-threaded.
 // Both event backlog and rowcopy events are polled; the backlog events have precedence.
 func (this *Migrator) executeWriteFuncs() error {
+	defer func() {
+		log.Infof(color.GreenString("executeWriteFuncs over..."))
+	}()
 	// 如果是dry-run，则直接返回
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really executing write funcs")
@@ -1351,14 +1357,14 @@ func (this *Migrator) executeWriteFuncs() error {
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
 		// 如何处理select/case的优先级问题
-		// log.Infof(color.RedString("executeWriteFuncs normal loop, queue: %d, %p"), len(this.applyEventsQueue), this.applyEventsQueue)
+		log.Infof(color.RedString("executeWriteFuncs normal loop, queue: %d, %p"), len(this.applyEventsQueue), this.applyEventsQueue)
 		select {
 		case eventStruct := <-this.applyEventsQueue:
 			{
 				// 有新的Event, 则立马Apply
-				//log.Infof(color.RedString("consume applyEventsQueue ...."))
+				log.Infof(color.RedString("consume applyEventsQueue ...."))
 				if err := this.onApplyEventStruct(eventStruct); err != nil {
-					//log.Infof(color.RedString("onApplyEventStruct error: %v"), err)
+					log.Infof(color.RedString("onApplyEventStruct error: %v"), err)
 					return err
 				}
 			}
@@ -1369,18 +1375,18 @@ func (this *Migrator) executeWriteFuncs() error {
 					{
 						// 否则执行Rows Copy的任务?
 						copyRowsStartTime := time.Now()
-						// log.Infof(color.GreenString("copyRowsFunc begin"))
+						log.Infof(color.GreenString("copyRowsFunc begin"))
 						// Retries are handled within the copyRowsFunc
 						if err := copyRowsFunc(); err != nil {
 							return log.Errore(err)
 						}
 
-						// log.Infof(color.GreenString("copyRowsFunc finished"))
+						log.Infof(color.GreenString("copyRowsFunc finished"))
 						if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
 							copyRowsDuration := time.Since(copyRowsStartTime)
 							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
 							sleepTime := time.Duration(time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond)
-							// log.Infof(color.RedString("sleepTime：%.3fs"), sleepTime)
+							log.Infof(color.RedString("sleepTime：%.3fs"), sleepTime)
 							time.Sleep(sleepTime)
 						}
 					}
@@ -1388,7 +1394,7 @@ func (this *Migrator) executeWriteFuncs() error {
 					{
 						// Hmmmmm... nothing in the queue; no events, but also no row copy.
 						// This is possible upon load. Let's just sleep it over.
-						// log.Debugf("Getting nothing in the write queue. Sleeping...")
+						log.Debugf("Getting nothing in the write queue. Sleeping...")
 						time.Sleep(time.Millisecond * 50)
 					}
 				}
