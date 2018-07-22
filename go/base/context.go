@@ -70,12 +70,6 @@ func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleRea
 	}
 }
 
-type Partition struct {
-	PartitionKey   string // 默认为空字符串
-	PartitionIndex int64
-	PartitionNum   int64
-}
-
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
@@ -84,9 +78,10 @@ type MigrationContext struct {
 	DatabaseName      string
 	OriginalTableName string
 	AlterStatement    string
+
 	// 新增字段
 	OriginalFilter string
-	Partition      *Partition
+	Partition      *sql.Partition
 
 	CountTableRows           bool
 	ConcurrentCountTableRows bool

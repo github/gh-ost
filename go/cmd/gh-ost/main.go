@@ -17,6 +17,7 @@ import (
 	"github.com/outbrain/golib/log"
 
 	"github.com/fatih/color"
+	"github.com/github/gh-ost/go/sql"
 	"golang.org/x/crypto/ssh/terminal"
 	"path"
 )
@@ -61,6 +62,8 @@ func main() {
 	// 通过 dbConfigFile, 可以使用db的alias来简化命令行参数
 	dbAlias := flag.String("db-alias", "", "db alias in db conf file")
 	dbConfigFile := flag.String("hosts-conf", "", "hosts config file")
+
+	dbPartition := flag.String("partition-conf", "", "制定要优化整理的partition: field:partition_index:partition_num")
 
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
 
@@ -232,6 +235,12 @@ func main() {
 	dbConfigFileValue := *dbConfigFile
 	throttleControlReplicasValue := *throttleControlReplicas
 	maxLagMillisValue := *maxLagMillis
+
+	// 解析partition相关的配置
+	if len(*dbPartition) > 0 {
+		partition := sql.NewPartition(*dbPartition)
+		migrationContext.Partition = partition
+	}
 
 	if len(*dbAlias) > 0 {
 		// 默认地址: ~/.gh-ost/dbs.toml

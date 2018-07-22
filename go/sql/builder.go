@@ -7,7 +7,7 @@ package sql
 
 import (
 	"fmt"
-	"github.com/github/gh-ost/go/base"
+	"log"
 	"strconv"
 	"strings"
 )
@@ -22,6 +22,41 @@ const (
 	GreaterThanComparisonSign         ValueComparisonSign = ">"
 	NotEqualsComparisonSign           ValueComparisonSign = "!="
 )
+
+// 参考：https://dev.mysql.com/doc/refman/5.6/en/partitioning-management-exchange.html
+type Partition struct {
+	DBField        string // 根据哪个字段做partition
+	PartitionIndex int64  // 要整理的partition
+	PartitionNum   int64  // 总共拥有的partition的数量
+}
+
+// Partition:
+//   field:partition_index:partition_num
+func NewPartition(v string) *Partition {
+
+	fileds := strings.Split(v, ":")
+	if len(fileds) != 3 {
+		panic("Invalid partition specification: field:partition_index:partition_num")
+	}
+
+	index, err := strconv.ParseInt(fileds[1], 10, 64)
+	if err != nil {
+		msg := fmt.Sprintf("Partition index parse error: %v", err)
+		log.Printf("Msg: %s", msg)
+		panic(msg)
+	}
+	num, err := strconv.ParseInt(fileds[2], 10, 64)
+	if err != nil {
+		msg := fmt.Sprintf("Partition number parse error: %v", err)
+		log.Printf("Msg: %s", msg)
+		panic(msg)
+	}
+	return &Partition{
+		DBField:        fileds[0],
+		PartitionIndex: index,
+		PartitionNum:   num,
+	}
+}
 
 // EscapeName will escape a db/table/column/... name by wrapping with backticks.
 // It is not fool proof. I'm just trying to do the right thing here, not solving
@@ -450,7 +485,7 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 // Original Table中删除数据，如何处理呢?
 //
 func BuildDMLDeleteQuery(databaseName, tableName string,
-	partition *base.Partition,
+	partition *Partition,
 	tableColumns, uniqueKeyColumns *ColumnList,
 	args []interface{}) (result string, uniqueKeyArgs []interface{}, err error) {
 
@@ -468,7 +503,7 @@ func BuildDMLDeleteQuery(databaseName, tableName string,
 		arg := column.convertArg(args[tableOrdinal])       // args: full row image
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 
-		if partition != nil && partitionID < 0 && partition.PartitionKey == column.Name {
+		if partition != nil && partitionID < 0 && partition.DBField == column.Name {
 			// 	确定partition
 			value, err := column.convertInt64Arg(args[tableOrdinal])
 			if err != nil {
@@ -502,7 +537,7 @@ func BuildDMLDeleteQuery(databaseName, tableName string,
 	return result, uniqueKeyArgs, nil
 }
 
-func BuildDMLInsertQuery(databaseName, tableName string, partition *base.Partition,
+func BuildDMLInsertQuery(databaseName, tableName string, partition *Partition,
 	tableColumns, sharedColumns, mappedSharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
 
 	if len(args) != tableColumns.Len() {
@@ -523,7 +558,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, partition *base.Partiti
 		arg := column.convertArg(args[tableOrdinal])
 		sharedArgs = append(sharedArgs, arg)
 
-		if partition != nil && partitionID < 0 && partition.PartitionKey == column.Name {
+		if partition != nil && partitionID < 0 && partition.DBField == column.Name {
 			// 	确定partition
 			value, err := column.convertInt64Arg(args[tableOrdinal])
 			if err != nil {
@@ -557,7 +592,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, partition *base.Partiti
 	return result, sharedArgs, nil
 }
 
-func BuildDMLUpdateQuery(databaseName, tableName string, partition *base.Partition,
+func BuildDMLUpdateQuery(databaseName, tableName string, partition *Partition,
 	tableColumns, sharedColumns, mappedSharedColumns, uniqueKeyColumns *ColumnList, valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {
 	if len(valueArgs) != tableColumns.Len() {
 		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("value args count differs from table column count in BuildDMLUpdateQuery")
@@ -592,7 +627,7 @@ func BuildDMLUpdateQuery(databaseName, tableName string, partition *base.Partiti
 		arg := column.convertArg(whereArgs[tableOrdinal])
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 
-		if partition != nil && partitionID < 0 && partition.PartitionKey == column.Name {
+		if partition != nil && partitionID < 0 && partition.DBField == column.Name {
 			// 	确定partition
 			value, err := column.convertInt64Arg(whereArgs[tableOrdinal])
 			if err != nil {

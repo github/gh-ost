@@ -614,6 +614,32 @@ func (this *Applier) SwapTablesQuickAndBumpy() error {
 		// TODO:
 		// 1. partition exchange with gho table
 		// 2. gho table rename to del
+
+		query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s EXCHANGE PARTITION p%d with %s.%s`,
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.OriginalTableName),
+			this.migrationContext.Partition.PartitionIndex,
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		)
+		log.Infof("Exchange original partition")
+		this.migrationContext.RenameTablesStartTime = time.Now()
+		if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
+			return err
+		}
+
+		query = fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+			sql.EscapeName(this.migrationContext.GetOldTableName()),
+		)
+
+		log.Infof("Renaming ghost(origin) table")
+		if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+			return err
+		}
+		this.migrationContext.RenameTablesEndTime = time.Now()
+
 	} else {
 		query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
 			sql.EscapeName(this.migrationContext.DatabaseName),
@@ -976,7 +1002,8 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 
 	if this.migrationContext.Partition != nil {
 		// Partition Exchange
-		// TODO:
+		panic("Partition is not support in atomic mode")
+
 	} else {
 		query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s, %s.%s to %s.%s`,
 			sql.EscapeName(this.migrationContext.DatabaseName),
@@ -988,11 +1015,13 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 			sql.EscapeName(this.migrationContext.DatabaseName),
 			sql.EscapeName(this.migrationContext.OriginalTableName),
 		)
-	}
-	log.Infof("Issuing and expecting this to block: %s", query)
-	if _, err := tx.Exec(query); err != nil {
-		tablesRenamed <- err
-		return log.Errore(err)
+
+		log.Infof("Issuing and expecting this to block: %s", query)
+		if _, err := tx.Exec(query); err != nil {
+			tablesRenamed <- err
+			return log.Errore(err)
+		}
+
 	}
 
 	// TODO: 什么时候Commit呢?

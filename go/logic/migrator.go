@@ -572,15 +572,18 @@ func (this *Migrator) cutOver() (err error) {
 			}
 		}
 	}
-	if this.migrationContext.CutOverType == base.CutOverAtomic {
+
+	// 优先考虑：一步就CutOver
+	if this.migrationContext.Partition == nil && this.migrationContext.CutOverType == base.CutOverAtomic {
 		// Atomic solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
 		err := this.atomicCutOver()
 		this.handleCutOverResult(err)
 		return err
 	}
-	if this.migrationContext.CutOverType == base.CutOverTwoStep {
-		// TODO: 表的交换可以一步到位的
+
+	// 如果支持Partition，或者两步Cut
+	if this.migrationContext.Partition != nil || this.migrationContext.CutOverType == base.CutOverTwoStep {
 		err := this.cutOverTwoStep()
 		this.handleCutOverResult(err)
 		return err
