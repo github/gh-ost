@@ -19,6 +19,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
+	"sync"
 )
 
 const (
@@ -56,6 +57,8 @@ type Applier struct {
 	connectionConfig  *mysql.ConnectionConfig
 	db                *gosql.DB
 	singletonDB       *gosql.DB // 专门用于lock db等操作, 在这个线程上可以执行对table的写操作
+	WriteLock         sync.Mutex
+	WriteLocked       bool
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
 }
@@ -601,22 +604,22 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	return chunkSize, rowsAffected, duration, nil
 }
 
-// LockOriginalTable places a write lock on the original table
-func (this *Applier) LockOriginalTable() error {
-	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-
-	log.Infof("Locking %s", query)
-	this.migrationContext.LockTablesStartTime = time.Now()
-	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
-		return err
-	}
-
-	log.Infof("Table locked")
-	return nil
-}
+//// LockOriginalTable places a write lock on the original table
+//func (this *Applier) LockOriginalTable() error {
+//	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
+//		sql.EscapeName(this.migrationContext.DatabaseName),
+//		sql.EscapeName(this.migrationContext.OriginalTableName),
+//	)
+//
+//	log.Infof("Locking %s", query)
+//	this.migrationContext.LockTablesStartTime = time.Now()
+//	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
+//		return err
+//	}
+//
+//	log.Infof("Table locked")
+//	return nil
+//}
 
 // LockGhoTable places a write lock on the original table
 func (this *Applier) LockGhoOriginTable() error {
@@ -632,6 +635,11 @@ func (this *Applier) LockGhoOriginTable() error {
 	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
 		return err
 	}
+
+	// WriteLock获取到了
+	this.WriteLock.Lock()
+	this.WriteLocked = true
+	this.WriteLock.Unlock()
 
 	log.Infof(color.GreenString("ghost&origin Table locked"))
 	return nil
@@ -674,8 +682,6 @@ func (this *Applier) UnlockTables() error {
 func (this *Applier) SwapTablesQuickAndBumpy() error {
 	log.Infof("SwapTablesQuickAndBumpy......")
 	if this.migrationContext.Partition != nil {
-
-		this.LockGhoOriginTable()
 
 		// 如何分步骤执行呢？
 		// TODO:
@@ -1200,7 +1206,17 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 		//
 
 		err := func() error {
-			tx, err := this.db.Begin()
+			this.WriteLock.Lock()
+			defer this.WriteLock.Unlock()
+
+			var tx *gosql.Tx
+			var err error
+			if this.WriteLocked {
+				tx, err = this.singletonDB.Begin()
+			} else {
+				tx, err = this.db.Begin()
+			}
+
 			if err != nil {
 				return err
 			}
@@ -1239,7 +1255,17 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 	var totalDelta int64
 
 	err := func() error {
-		tx, err := this.db.Begin()
+		this.WriteLock.Lock()
+		defer this.WriteLock.Unlock()
+
+		var tx *gosql.Tx
+		var err error
+		if this.WriteLocked {
+			tx, err = this.singletonDB.Begin()
+		} else {
+			tx, err = this.db.Begin()
+		}
+
 		if err != nil {
 			return err
 		}

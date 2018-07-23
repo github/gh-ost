@@ -663,7 +663,7 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 
 	// 1. Original Table锁定，不让写入数据
 	//    剩余的binlog，会迅速写入ghost文件中；由于优先处理binlog，且有throttle控制，因此当rows被拷贝完毕时，binlog剩余的也不多
-	if err := this.retryOperation(this.applier.LockOriginalTable); err != nil {
+	if err := this.retryOperation(this.applier.LockGhoOriginTable); err != nil {
 		return err
 	}
 
@@ -1319,6 +1319,7 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 	if eventStruct.dmlEvent == nil {
 		return handleNonDMLEventStruct(eventStruct)
 	}
+
 	if eventStruct.dmlEvent != nil {
 		// 拷贝一份数据出来?
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
