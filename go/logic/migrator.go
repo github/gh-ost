@@ -1225,6 +1225,7 @@ func (this *Migrator) iterateChunks() error {
 		log.Debugf("No rows found in table. Rowcopy will be implicitly empty")
 		return terminateRowIteration(nil)
 	}
+	hasFurtherRange := true
 	// Iterate per chunk:
 	for {
 		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
@@ -1245,9 +1246,11 @@ func (this *Migrator) iterateChunks() error {
 				return nil
 			}
 
+			var err error
+
 			// 计算当前iteration的range
 			// 需要注意所的问题：
-			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
+			hasFurtherRange, err = this.applier.CalculateNextIterationRangeEndValues()
 			if err != nil {
 				return terminateRowIteration(err)
 			}
@@ -1286,6 +1289,9 @@ func (this *Migrator) iterateChunks() error {
 		}
 		// Enqueue copy operation; to be executed by executeWriteFuncs()
 		this.copyRowsQueue <- copyRowsFunc
+		if !hasFurtherRange {
+			break // 及时退出
+		}
 	}
 	return nil
 }
