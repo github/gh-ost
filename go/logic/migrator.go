@@ -1207,14 +1207,31 @@ func (this *Migrator) initiateApplier() error {
 	return nil
 }
 
+type TAtomBool struct{ flag int32 }
+
+func (b *TAtomBool) Set(value bool) {
+	var i int32 = 0
+	if value {
+		i = 1
+	}
+	atomic.StoreInt32(&(b.flag), int32(i))
+}
+func (b *TAtomBool) Get() bool {
+	if atomic.LoadInt32(&(b.flag)) != 0 {
+		return true
+	}
+	return false
+}
+
 // iterateChunks iterates the existing table rows, and generates a copy task of
 // a chunk of rows onto the ghost table.
 func (this *Migrator) iterateChunks() error {
+	// Iterate per chunk:
+	rowRangeComplete := &TAtomBool{}
+
 	terminateRowIteration := func(err error) error {
-		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 0 {
-			atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
-			this.rowCopyComplete <- err
-		}
+		rowRangeComplete.Set(true)
+		this.rowCopyComplete <- err
 		return log.Errore(err)
 	}
 	if this.migrationContext.Noop {
@@ -1225,8 +1242,7 @@ func (this *Migrator) iterateChunks() error {
 		log.Debugf("No rows found in table. Rowcopy will be implicitly empty")
 		return terminateRowIteration(nil)
 	}
-	hasFurtherRange := true
-	// Iterate per chunk:
+
 	for {
 		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
 			// Done
@@ -1234,23 +1250,18 @@ func (this *Migrator) iterateChunks() error {
 			return nil
 		}
 		copyRowsFunc := func() error {
-			this.tableRWLock.Lock()
-			defer this.tableRWLock.Unlock()
-
 			//defer func() {
 			//	log.Infof(color.CyanString("copyRowsFunc over"))
 			//}()
-			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || rowRangeComplete.Get() {
 				// Done.
 				// There's another such check down the line
 				return nil
 			}
 
-			var err error
-
 			// 计算当前iteration的range
 			// 需要注意所的问题：
-			hasFurtherRange, err = this.applier.CalculateNextIterationRangeEndValues()
+			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
 			if err != nil {
 				return terminateRowIteration(err)
 			}
@@ -1259,7 +1270,7 @@ func (this *Migrator) iterateChunks() error {
 			}
 			// Copy task:
 			applyCopyRowsFunc := func() error {
-				if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+				if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || rowRangeComplete.Get() {
 					// No need for more writes.
 					// This is the de-facto place where we avoid writing in the event of completed cut-over.
 					// There could _still_ be a race condition, but that's as close as we can get.
@@ -1289,9 +1300,6 @@ func (this *Migrator) iterateChunks() error {
 		}
 		// Enqueue copy operation; to be executed by executeWriteFuncs()
 		this.copyRowsQueue <- copyRowsFunc
-		if !hasFurtherRange {
-			break // 及时退出
-		}
 	}
 	return nil
 }
