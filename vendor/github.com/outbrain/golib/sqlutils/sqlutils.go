@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	// 引入驱动
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/outbrain/golib/log"
 	"strconv"
@@ -278,6 +279,7 @@ func ExecNoPrepare(db *sql.DB, query string, args ...interface{}) (sql.Result, e
 	}()
 
 	var res sql.Result
+	// auto-commit模式吧?
 	res, err = db.Exec(query, args...)
 	if err != nil {
 		log.Errore(err)

@@ -79,6 +79,10 @@ type MigrationContext struct {
 	OriginalTableName string
 	AlterStatement    string
 
+	// 新增字段
+	OriginalFilter string
+	Partition      *sql.Partition
+
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
 	AllowedRunningOnMaster   bool
@@ -167,6 +171,7 @@ type MigrationContext struct {
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
+	RowCopyComplete                        atomic.Value
 	TotalDMLEventsApplied                  int64
 	DMLBatchSize                           int64
 	isThrottled                            bool
@@ -196,17 +201,24 @@ type MigrationContext struct {
 	ColumnRenameMap                  map[string]string
 	DroppedColumnsMap                map[string]bool
 	MappedSharedColumns              *sql.ColumnList
-	MigrationRangeMinValues          *sql.ColumnValues
-	MigrationRangeMaxValues          *sql.ColumnValues
+	MigrationRangeMinValues          *sql.ColumnValues // 相对于UniqueKey的最小value和最大value
+	MigrationRangeMaxValues          *sql.ColumnValues // 相对于UniqueKey的最小value和最大value
 	Iteration                        int64
-	MigrationIterationRangeMinValues *sql.ColumnValues
+	MigrationIterationRangeMinValues *sql.ColumnValues // 单次iteration的最小value
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 	ForceTmpTableName                string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 }
 
+//[client]
+//user=gh-ost
+//password=123456
+//[osc]
+//chunk_size=xxx
+//参考: https://github.com/github/gh-ost/blob/master/doc/cheatsheet.md
 type ContextConfig struct {
+	// 用户名，密码
 	Client struct {
 		User     string
 		Password string
@@ -217,6 +229,17 @@ type ContextConfig struct {
 		Replication_Lag_Query string
 		Max_Load              string
 	}
+}
+
+var context *MigrationContext
+
+func init() {
+	context = NewMigrationContext()
+}
+
+// GetMigrationContext
+func GetMigrationContext() *MigrationContext {
+	return context
 }
 
 func NewMigrationContext() *MigrationContext {
@@ -397,6 +420,9 @@ func (this *MigrationContext) MarkRowCopyStartTime() {
 
 // ElapsedRowCopyTime returns time since starting to copy chunks of rows
 func (this *MigrationContext) ElapsedRowCopyTime() time.Duration {
+	// 获取当前的Job执行时间:
+	// 开始，结束, 中间状态
+	//
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 
@@ -702,12 +728,14 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if this.ConfigFile == "" {
 		return nil
 	}
+
 	gcfg.RelaxedParserMode = true
 	gcfgscanner.RelaxedScannerMode = true
 	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
 		return fmt.Errorf("Error reading config file %s. Details: %s", this.ConfigFile, err.Error())
 	}
 
+	// 更新配置文件
 	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull
 	// the given variable from os env
 	if submatch := envVariableRegexp.FindStringSubmatch(this.config.Client.User); len(submatch) > 1 {

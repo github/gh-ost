@@ -1,0 +1,61 @@
+max_load = "Threads_running=25"
+critical_load = "Threads_running=1000"
+chunk_size = 1000
+initially_drop_old_table = true
+initially_drop_ghost_table = true
+initially_drop_socket_file = true
+user = ""
+password = ""
+is_rds_mysql = false
+assume_rbr = true
+max_lag_millis=1500
+
+slave_master_mapping = [
+    ["test-backend-r2.db.test.com", "test-backend.db.test.com"],
+    ["test-final-r2.db.test.com", "test-final.db.test.com"],
+    ["shard00-r2.db.test.com", "shard00.db.test.com"],
+    ["shard01-r2.db.test.com", "shard01.db.test.com"],
+    ["shard02-r2.db.test.com", "shard02.db.test.com"],
+    ["shard03-r2.db.test.com", "shard03.db.test.com"],
+]
+
+#
+alias_2_password_mapping = [
+    ["starmaker", "username:password"]
+]
+
+dbs = [
+    "shard0:shard_sm_0@shard00-r1.db.test.com",
+    "shard1:shard_sm_1@shard00-r1.db.test.com",
+    "shard2:shard_sm_2@shard00-r1.db.test.com",
+    "shard3:shard_sm_3@shard00-r1.db.test.com",
+    "shard4:shard_sm_4@shard00-r1.db.test.com",
+    "shard5:shard_sm_5@shard00-r1.db.test.com",
+    "shard6:shard_sm_6@shard01-r1.db.test.com",
+    "shard7:shard_sm_7@shard01-r1.db.test.com",
+    "shard8:shard_sm_8@shard01-r1.db.test.com",
+    "shard9:shard_sm_9@shard01-r1.db.test.com",
+    "shard10:shard_sm_10@shard01-r1.db.test.com",
+    "shard11:shard_sm_11@shard01-r1.db.test.com",
+    "shard12:shard_sm_12@shard02-r1.db.test.com",
+    "shard13:shard_sm_13@shard02-r1.db.test.com",
+    "shard14:shard_sm_14@shard02-r1.db.test.com",
+    "shard15:shard_sm_15@shard02-r1.db.test.com",
+    "shard16:shard_sm_16@shard00-r1.db.test.com",
+    "shard17:shard_sm_17@shard00-r1.db.test.com",
+    "shard18:shard_sm_18@shard01-r1.db.test.com",
+    "shard19:shard_sm_19@shard01-r1.db.test.com",
+    "shard20:shard_sm_20@shard02-r1.db.test.com",
+    "shard21:shard_sm_21@shard02-r1.db.test.com",
+    "shard22:shard_sm_22@shard03-r1.db.test.com",
+    "shard23:shard_sm_23@shard03-r1.db.test.com",
+    "shard24:shard_sm_24@shard03-r1.db.test.com",
+    "shard25:shard_sm_25@shard03-r1.db.test.com",
+    "shard26:shard_sm_26@shard03-r1.db.test.com",
+    "shard27:shard_sm_27@shard03-r1.db.test.com",
+    "shard28:shard_sm_28@shard03-r1.db.test.com",
+    "shard29:shard_sm_29@shard03-r1.db.test.com",
+    "shard30:shard_sm_30@shard02-r1.db.test.com",
+    "shard31:shard_sm_31@shard02-r1.db.test.com"
+    ]
+
