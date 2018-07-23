@@ -701,8 +701,6 @@ func (this *Applier) SwapTablesQuickAndBumpy() error {
 			return err
 		}
 
-		this.UnlockTables()
-		this.LockGhoTable()
 		query = fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
 			sql.EscapeName(this.migrationContext.DatabaseName),
 			sql.EscapeName(this.migrationContext.GetGhostTableName()),
