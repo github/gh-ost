@@ -457,9 +457,9 @@ func (this *Applier) ReadMigrationRangeValues(partition *sql.PartitionInfo) erro
 	}
 
 	if partition != nil {
-		log.Infof(color.CyanString("MigrationRange %s ~ %s for partition: %s"), msgMin, msgMax, partition.PartitionName)
+		log.Infof("MigrationRange "+color.CyanString("%3s")+" ==> %s ~ %s", partition.PartitionName, msgMin, msgMax)
 	} else {
-		log.Infof(color.CyanString("MigrationRange %s ~ %s"), msgMin, msgMax)
+		log.Infof("MigrationRange %s ~ %s", msgMin, msgMax)
 	}
 	return nil
 }

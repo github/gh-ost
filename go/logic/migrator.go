@@ -276,6 +276,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 
 // listenOnPanicAbort aborts on abort request
 func (this *Migrator) listenOnPanicAbort() {
+	// 在处理过程中，如果遇到错误，则直接退出
 	err := <-this.migrationContext.PanicAbort
 	log.Infof("PanicAbort: %v", err)
 	log.Fatale(err)
@@ -1174,7 +1175,9 @@ func (this *Migrator) initiateApplier() error {
 			for _, p := range this.migrationContext.PartitionInfos {
 				totalCount += p.TableRows
 			}
-			this.migrationContext.RowsEstimate = totalCount
+			if totalCount > this.migrationContext.RowsEstimate {
+				this.migrationContext.RowsEstimate = totalCount
+			}
 		}
 	}
 
@@ -1307,7 +1310,7 @@ func (this *Migrator) iterateChunks() error {
 
 	for _, partitionInfo := range this.migrationContext.PartitionInfos {
 		if rowRangeError.Get() {
-			return errors.New("row range error")
+			return terminateRowIteration(errors.New("row range error"))
 		}
 
 		// 重置状态
@@ -1318,7 +1321,7 @@ func (this *Migrator) iterateChunks() error {
 		atomic.StoreInt64(&this.migrationContext.Iteration, 0) // 重新开始迭代
 
 		if err := this.applier.ReadMigrationRangeValues(partitionInfo); err != nil {
-			return err
+			return terminateRowIteration(err)
 		}
 
 		// 一次一个Partition来处理
