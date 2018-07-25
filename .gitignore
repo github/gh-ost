@@ -2,3 +2,8 @@
 /bin/
 /libexec/
 /.vendor/
+.idea
+/gh-ost
+/dbs.toml
+/db.*
+/main

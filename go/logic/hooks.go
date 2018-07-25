@@ -47,6 +47,8 @@ func (this *HooksExecutor) initHooks() error {
 	return nil
 }
 
+// 构建新的环境变量
+// GH_OST的很多信息也放环境变量中
 func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []string {
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("GH_OST_DATABASE_NAME=%s", this.migrationContext.DatabaseName))
@@ -74,6 +76,8 @@ func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) [
 // executeHook executes a command, and sets relevant environment variables
 // combined output & error are printed to gh-ost's standard error.
 func (this *HooksExecutor) executeHook(hook string, extraVariables ...string) error {
+	// gt-ost 如何给Hook传递信息？
+	// 通过环境变量来传递
 	cmd := exec.Command(hook)
 	cmd.Env = this.applyEnvironmentVariables(extraVariables...)
 
@@ -92,10 +96,13 @@ func (this *HooksExecutor) detectHooks(baseName string) (hooks []string, err err
 }
 
 func (this *HooksExecutor) executeHooks(baseName string, extraVariables ...string) error {
+	// 检查所有的hooks
 	hooks, err := this.detectHooks(baseName)
 	if err != nil {
 		return err
 	}
+
+	// 遍历执行每一个Hook
 	for _, hook := range hooks {
 		log.Infof("executing %+v hook: %+v", baseName, hook)
 		if err := this.executeHook(hook, extraVariables...); err != nil {

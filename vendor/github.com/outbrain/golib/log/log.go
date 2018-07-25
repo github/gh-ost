@@ -19,6 +19,7 @@ package log
 import (
 	"errors"
 	"fmt"
+	"github.com/fatih/color"
 	"log/syslog"
 	"os"
 	"runtime/debug"
@@ -172,7 +173,7 @@ func logErrorEntry(logLevel LogLevel, err error) error {
 		// No error
 		return nil
 	}
-	entryString := fmt.Sprintf("%+v", err)
+	entryString := fmt.Sprintf(color.RedString("%+v"), err)
 	logEntry(logLevel, entryString)
 	if printStackTrace {
 		debug.PrintStack()

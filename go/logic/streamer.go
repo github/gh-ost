@@ -84,14 +84,21 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 	this.listenersMutex.Lock()
 	defer this.listenersMutex.Unlock()
 
+	// 如何通知listeners呢? 按照加入的先后顺序来通知
+	dbNameLower := strings.ToLower(binlogEvent.DatabaseName)
+	tableNameLower := strings.ToLower(binlogEvent.TableName)
 	for _, listener := range this.listeners {
 		listener := listener
-		if strings.ToLower(listener.databaseName) != strings.ToLower(binlogEvent.DatabaseName) {
+		// DB和Table一致，可以做一个预处理, 把listener的names都统一为小写
+		if strings.ToLower(listener.databaseName) != dbNameLower {
 			continue
 		}
-		if strings.ToLower(listener.tableName) != strings.ToLower(binlogEvent.TableName) {
+		if strings.ToLower(listener.tableName) != tableNameLower {
 			continue
 		}
+
+		// 同步和异步的区别?
+		// Dml vs. DDL
 		if listener.async {
 			go func() {
 				listener.onDmlEvent(binlogEvent)
@@ -103,6 +110,7 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 }
 
 func (this *EventsStreamer) InitDBConnections() (err error) {
+	// 1. Connection + DB 构成完整的Uri
 	EventsStreamerUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, EventsStreamerUri); err != nil {
 		return err
@@ -110,9 +118,12 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if _, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext); err != nil {
 		return err
 	}
+	// 获取当前的binlog的位置
 	if err := this.readCurrentBinlogCoordinates(); err != nil {
 		return err
 	}
+
+	// 初始化binlog read的初始位置
 	if err := this.initBinlogReader(this.initialBinlogCoordinates); err != nil {
 		return err
 	}
@@ -126,9 +137,12 @@ func (this *EventsStreamer) initBinlogReader(binlogCoordinates *mysql.BinlogCoor
 	if err != nil {
 		return err
 	}
+	// 设置起始read的位置
 	if err := goMySQLReader.ConnectBinlogStreamer(*binlogCoordinates); err != nil {
 		return err
 	}
+
+	// 创建完毕
 	this.binlogReader = goMySQLReader
 	return nil
 }
@@ -145,7 +159,12 @@ func (this *EventsStreamer) GetReconnectBinlogCoordinates() *mysql.BinlogCoordin
 func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	query := `show /* gh-ost readCurrentBinlogCoordinates */ master status`
 	foundMasterStatus := false
+
+	// 如何处理一些特殊的请求?
+	// 除了使用gorm, 该如何使用其他的开始模式呢?
+	// 如何实现rows, row to map？
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		// 看来这个不支持gtid模式？
 		this.initialBinlogCoordinates = &mysql.BinlogCoordinates{
 			LogFile: m.GetString("File"),
 			LogPos:  m.GetInt64("Position"),
@@ -181,6 +200,8 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 		if canStopStreaming() {
 			return nil
 		}
+		// 第一步: Streaming
+		//        如果失败，则等待5s
 		if err := this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel); err != nil {
 			if canStopStreaming() {
 				return nil
@@ -191,6 +212,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
 
 			// See if there's retry overflow
+			// 失败提示? 如果连续N次在同一个地方失败，则退出
 			if this.binlogReader.LastAppliedRowsEventHint.Equals(&lastAppliedRowsEventHint) {
 				successiveFailures += 1
 			} else {
@@ -203,6 +225,9 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			// Reposition at same binlog file.
 			lastAppliedRowsEventHint = this.binlogReader.LastAppliedRowsEventHint
 			log.Infof("Reconnecting... Will resume at %+v", lastAppliedRowsEventHint)
+
+			// 获取之前的binlogReader的binlog-coordinate
+			// 重新初始化binlog reader？
 			if err := this.initBinlogReader(this.GetReconnectBinlogCoordinates()); err != nil {
 				return err
 			}

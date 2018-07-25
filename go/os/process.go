@@ -24,6 +24,7 @@ import (
 )
 
 func execCmd(commandText string, arguments ...string) (*exec.Cmd, string, error) {
+	// 将CommandText写入一个文本文件，然后再通过bash执行
 	commandBytes := []byte(commandText)
 	tmpFile, err := ioutil.TempFile("", "gh-ost-process-cmd-")
 	if err != nil {
