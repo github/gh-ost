@@ -1,4 +1,25 @@
 # gh-ost
+用法总结:
+
+* gh-ost --table="master_hls" --verbose --alter='ADD COLUMN `type` varchar(10) DEFAULT ""' --execute --db-alias=shard6
+ * 可以通过 --conf=conf/dbs.toml 或者使用 ~/.gh-ost/dbs.toml来使用db的配置文件，不用每次都指定密码，执行数据库全称；
+ * alter后面的语句最好通过单引号(')括起来
+ * 通过db-alias来激活对db conf的使用，可以使得gh-ost的命令行非常简洁；数据库调整的命令也可以和其他人分享（而不用担心账号，密码丢失)
+* gh-ost --table="master_hls" --verbose --alter='ADD COLUMN `type` varchar(10) DEFAULT ""' --execute --db-alias=shard6 --origin-filter='created_time > 15000000'
+	* 有些情况下需要大量删除一些过期的数据，如果逐个删除太慢，而且在innodb中使用的是标记删除, 容易导致index在磁盘上不连续，造成读写效率低；还不如直接通过gh-ost一步实现数据的整理和清理。
+* 如果不使用db-alias, 则请参考 [cheatsheet](doc/cheatsheet.md), 来获取完整的命令。
+
+* 删除分区表的partition：
+  * `gh-ost --hosts-conf=information.online --db-alias=info --verbose --alter='REMOVE PARTITIONING' --table="uper" --allow-on-master --aliyun-rds --assume-rbr --execute`
+* 删除一周以前的数据
+  * `gh-ost --hosts-conf=db.online --db-alias=ne --verbose --origin-filter="create_time > \"`date --date="7 days ago" +"%Y-%m-%d %H:%M:%S"`\"" --alter="Engine InnoDB" --table="user_share_history" --allow-on-master --aliyun-rds --assume-rbr --execute`
+
+* 删除一周以前的数据(如果是分区表，制定分区操作）
+  * --partition-opt=1
+  * `gh-ost --hosts-conf=db.online --db-alias=ne --verbose --origin-filter="create_time > \"`date --date="7 days ago" +"%Y-%m-%d %H:%M:%S"`\"" --alter="Engine InnoDB" --table="user_share_history" --allow-on-master --aliyun-rds --assume-rbr --partition-opt=1 --execute`
+
+
+
 
 [![build status](https://travis-ci.org/github/gh-ost.svg)](https://travis-ci.org/github/gh-ost) [![downloads](https://img.shields.io/github/downloads/github/gh-ost/total.svg)](https://github.com/github/gh-ost/releases) [![release](https://img.shields.io/github/release/github/gh-ost.svg)](https://github.com/github/gh-ost/releases)
 

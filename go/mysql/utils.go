@@ -75,7 +75,9 @@ func GetReplicationLag(informationSchemaDb *gosql.DB, connectionConfig *Connecti
 	return replicationLag, err
 }
 
+// 得到master key
 func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
+	// 这个DB有什么特别的意义?
 	currentUri := connectionConfig.GetDBUri("information_schema")
 	// This function is only called once, okay to not have a cached connection pool
 	db, err := gosql.Open("mysql", currentUri)
@@ -87,6 +89,7 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 	if err != nil {
 		return nil, err
 	}
+	// 执行show slave status?
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
 		// We wish to recognize the case where the topology's master actually has replication configuration.
 		// This can happen when a DBA issues a `RESET SLAVE` instead of `RESET SLAVE ALL`.
@@ -96,6 +99,7 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 			return nil
 		}
 
+		// 如果存在Master信息， 且Slave正常工作
 		slaveIORunning := rowMap.GetString("Slave_IO_Running")
 		slaveSQLRunning := rowMap.GetString("Slave_SQL_Running")
 
@@ -108,6 +112,7 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 			)
 		}
 
+		// 得到master key
 		masterKey = &InstanceKey{
 			Hostname: rowMap.GetString("Master_Host"),
 			Port:     rowMap.GetInt("Master_Port"),
@@ -118,6 +123,13 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 	return masterKey, err
 }
 
+//
+//
+//   Master
+//    |    \
+//   Slave Slave
+//  可能是一个Tree, 直接从Slave反向到Master
+//
 func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKeys *InstanceKeyMap, allowMasterMaster bool) (masterConfig *ConnectionConfig, err error) {
 	log.Debugf("Looking for master on %+v", connectionConfig.Key)
 
@@ -125,18 +137,24 @@ func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKe
 	if err != nil {
 		return nil, err
 	}
+
+	// 如果找不到master, 则当前的host就是maser
 	if masterKey == nil {
 		return connectionConfig, nil
 	}
+
+	// 找到的master无效?
 	if !masterKey.IsValid() {
 		return connectionConfig, nil
 	}
 	masterConfig = connectionConfig.Duplicate()
 	masterConfig.Key = *masterKey
 
+	// 找到一个Master, 然后呢?
 	log.Debugf("Master of %+v is %+v", connectionConfig.Key, masterConfig.Key)
 	if visitedKeys.HasKey(masterConfig.Key) {
 		if allowMasterMaster {
+			// 如果碰到: master <--> master 就直接返回, 不处理 master <--> master整体作为一个slave的情况
 			return connectionConfig, nil
 		}
 		return nil, fmt.Errorf("There seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
@@ -145,6 +163,7 @@ func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKe
 	return GetMasterConnectionConfigSafe(masterConfig, visitedKeys, allowMasterMaster)
 }
 
+// 获取当前的slave的复制情况?
 func GetReplicationBinlogCoordinates(db *gosql.DB) (readBinlogCoordinates *BinlogCoordinates, executeBinlogCoordinates *BinlogCoordinates, err error) {
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
 		readBinlogCoordinates = &BinlogCoordinates{
@@ -174,6 +193,7 @@ func GetSelfBinlogCoordinates(db *gosql.DB) (selfBinlogCoordinates *BinlogCoordi
 // GetInstanceKey reads hostname and port on given DB
 func GetInstanceKey(db *gosql.DB) (instanceKey *InstanceKey, err error) {
 	instanceKey = &InstanceKey{}
+	// 获取全局的信息
 	err = db.QueryRow(`select @@global.hostname, @@global.port`).Scan(&instanceKey.Hostname, &instanceKey.Port)
 	return instanceKey, err
 }
