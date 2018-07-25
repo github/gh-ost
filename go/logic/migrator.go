@@ -1122,7 +1122,7 @@ func (this *Migrator) iterateChunks() error {
 				}
 				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
-					return terminateRowIteration(err)
+					return err
 				}
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
