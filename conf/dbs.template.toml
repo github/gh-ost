@@ -1,0 +1,49 @@
+max_load = "Threads_running=25"
+critical_load = "Threads_running=1000"
+chunk_size = 1000
+
+initially_drop_old_table = true
+initially_drop_ghost_table = true
+initially_drop_socket_file = true
+
+
+is_rds_mysql = true
+# 如果使用rds, 则rbr必须满足；这个满足不是假设，而是必须实现满足。因为权限的问题，gh-ost不可能妥协
+assume_rbr = true
+
+# 如果为0，则不考虑主从延迟的，也就不用throttle, 如果大于0，则延迟一旦超过指定的数系统就会throttle
+max_lag_millis=1500
+
+user = "xxx"
+password = "xxx"
+
+#
+alias_2_password_mapping = [
+    ["starmaker", "username:password"]
+]
+
+# 在aws rds内部通过show slave status得到的master的ip/port可能无法在应用所在的网络直接访问，因此这里手动指定slave到master的mapping
+slave_master_mapping = [
+    ["db-backend-r1.db.test.com", "db-backend.db.test.com"],
+    ["db-final-r1.db.test.com", "db-final.db.test.com"],
+    ["shard00-r1.db.test.com", "shard00.db.test.com"],
+    ["shard01-r1.db.test.com", "shard01.db.test.com"],
+    ["shard02-r1.db.test.com", "shard02.db.test.com"],
+    ["shard03-r1.db.test.com", "shard03.db.test.com"],
+]
+
+dbs = [
+    "starmaker:starmaker@db-backend-r1.db.test.com",
+    "final:starmaker_final@db-final-r1.db.test.com",
+    "shard0:shard_0@shard00-r1.db.test.com",
+    "shard1:shard_1@shard00-r1.db.test.com",
+    "shard2:shard_2@shard00-r1.db.test.com",
+    "shard3:shard_3@shard00-r1.db.test.com",
+    "shard4:shard_4@shard00-r1.db.test.com",
+    "shard5:shard_5@shard00-r1.db.test.com",
+    "shard6:shard_6@shard01-r1.db.test.com",
+    "shard7:shard_7@shard01-r1.db.test.com",
+    "shard8:shard_8@shard01-r1.db.test.com",
+    "shard9:shard_9@shard01-r1.db.test.com",
+    ]
+

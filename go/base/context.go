@@ -79,6 +79,11 @@ type MigrationContext struct {
 	OriginalTableName string
 	AlterStatement    string
 
+	// 新增字段
+	OriginalFilter string               // 在数据整理的过程中，可以通过filter来选择"要保留的数据"，"不是要删除的数据"
+	PartitionInfos []*sql.PartitionInfo // table包含的partition信息
+	PartitionOpt   bool                 // 数据整理过程中，是否按照partition来逐步处理（效率更高，但是不支持修改schema）
+
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
 	AllowedRunningOnMaster   bool
@@ -167,6 +172,7 @@ type MigrationContext struct {
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
+	RowCopyComplete                        atomic.Value
 	TotalDMLEventsApplied                  int64
 	DMLBatchSize                           int64
 	isThrottled                            bool
@@ -206,6 +212,7 @@ type MigrationContext struct {
 	recentBinlogCoordinates mysql.BinlogCoordinates
 }
 
+//参考: https://github.com/github/gh-ost/blob/master/doc/cheatsheet.md
 type ContextConfig struct {
 	Client struct {
 		User     string
@@ -217,6 +224,17 @@ type ContextConfig struct {
 		Replication_Lag_Query string
 		Max_Load              string
 	}
+}
+
+var context *MigrationContext
+
+func init() {
+	context = NewMigrationContext()
+}
+
+// GetMigrationContext
+func GetMigrationContext() *MigrationContext {
+	return context
 }
 
 func NewMigrationContext() *MigrationContext {

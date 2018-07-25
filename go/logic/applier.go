@@ -16,6 +16,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
+	"github.com/fatih/color"
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
 )
@@ -54,7 +55,6 @@ func newDmlBuildResultError(err error) *dmlBuildResult {
 type Applier struct {
 	connectionConfig  *mysql.ConnectionConfig
 	db                *gosql.DB
-	singletonDB       *gosql.DB
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
 }
@@ -73,18 +73,14 @@ func (this *Applier) InitDBConnections() (err error) {
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
-	singletonApplierUri := fmt.Sprintf("%s?timeout=0", applierUri)
-	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
-		return err
-	}
-	this.singletonDB.SetMaxOpenConns(1)
+
+	this.db.SetMaxOpenConns(100)
+
 	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext)
 	if err != nil {
 		return err
 	}
-	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig, this.migrationContext); err != nil {
-		return err
-	}
+
 	this.migrationContext.ApplierMySQLVersion = version
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
@@ -157,6 +153,8 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 			return err
 		}
 	}
+
+	// 验证Drop的结果
 	if len(this.migrationContext.GetOldTableName()) > mysql.MaxTableNameLength {
 		log.Fatalf("--timestamp-old-table defined, but resulting table name (%s) is too long (only %d characters allowed)", this.migrationContext.GetOldTableName(), mysql.MaxTableNameLength)
 	}
@@ -170,21 +168,70 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 
 // CreateGhostTable creates the ghost table on the applier host
 func (this *Applier) CreateGhostTable() error {
+	// 1. create table like ...., 创建一个schema完全一样的table
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s like %s.%s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 	)
-	log.Infof("Creating ghost table %s.%s",
+
+	log.Infof(color.BlueString("Creating ghost table")+" %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
+
+	// 2. 直接执行query
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
+
+	// 如果针对partition做优化
+	if this.migrationContext.PartitionOpt {
+		var err error
+		this.migrationContext.PartitionInfos, err = this.GetPartitionInfos()
+		if err != nil {
+			log.Infof("GetPartitionInfos err: %v", err)
+		}
+	}
+
 	log.Infof("Ghost table created")
 	return nil
+}
+
+// GetPartitionInfos 获取OriginTable的分区信息
+func (this *Applier) GetPartitionInfos() ([]*sql.PartitionInfo, error) {
+	query := fmt.Sprintf(`SELECT PARTITION_NAME, TABLE_ROWS FROM INFORMATION_SCHEMA.PARTITIONS  WHERE TABLE_NAME = '%s' AND TABLE_SCHEMA='%s' ORDER BY PARTITION_ORDINAL_POSITION ASC`,
+		this.migrationContext.OriginalTableName,
+		this.migrationContext.DatabaseName,
+	)
+
+	log.Infof("partition info query: %s", color.GreenString(query))
+	rows, err := this.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []*sql.PartitionInfo
+
+	for rows.Next() {
+		p := &sql.PartitionInfo{}
+		err = rows.Scan(&p.PartitionName, &p.TableRows)
+		if err != nil {
+			log.Info("Scan partitions error: %v", err)
+			continue
+		} else {
+			if p.PartitionName != "" {
+				results = append(results, p)
+			}
+		}
+	}
+	err = rows.Err()
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 // AlterGhost applies `alter` statement on ghost table
@@ -194,7 +241,7 @@ func (this *Applier) AlterGhost() error {
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 		this.migrationContext.AlterStatement,
 	)
-	log.Infof("Altering ghost table %s.%s",
+	log.Infof(color.BlueString("Altering ghost table")+" %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
@@ -223,7 +270,7 @@ func (this *Applier) CreateChangelogTable() error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
-	log.Infof("Creating changelog table %s.%s",
+	log.Infof(color.BlueString("Creating changelog table")+" %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
@@ -240,7 +287,7 @@ func (this *Applier) dropTable(tableName string) error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
-	log.Infof("Dropping table %s.%s",
+	log.Infof(color.BlueString("Droppping table %s.%s"),
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
@@ -308,7 +355,8 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 func (this *Applier) InitiateHeartbeat() {
 	var numSuccessiveFailures int64
 	injectHeartbeat := func() error {
-		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
+		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 ||
+			atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
 			return nil
 		}
 		if _, err := this.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339Nano)); err != nil {
@@ -323,6 +371,10 @@ func (this *Applier) InitiateHeartbeat() {
 	}
 	injectHeartbeat()
 
+	//
+	// 定时发送心跳数据，用于测量MySQL的同步延迟
+	// 如果MySQL的修改多大，那么可能会出现问题
+	//
 	heartbeatTick := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	for range heartbeatTick {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
@@ -355,54 +407,68 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 }
 
 // ReadMigrationMinValues returns the minimum values to be iterated on rowcopy
-func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
+func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey, partition *sql.PartitionInfo) (string, error) {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, partition, &uniqueKey.Columns)
 	if err != nil {
-		return err
+		return "", err
 	}
 	rows, err := this.db.Query(query)
 	if err != nil {
-		return err
+		return "", err
 	}
+	defer rows.Close() // 必须关闭，否则存在db connection泄露
 	for rows.Next() {
 		this.migrationContext.MigrationRangeMinValues = sql.NewColumnValues(uniqueKey.Len())
 		if err = rows.Scan(this.migrationContext.MigrationRangeMinValues.ValuesPointers...); err != nil {
-			return err
+			return "", err
 		}
+		return this.migrationContext.MigrationRangeMinValues.String(), nil
 	}
-	log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
-	return err
+	return "", err
 }
 
 // ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
-func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
+func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey, partition *sql.PartitionInfo) (string, error) {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, partition, &uniqueKey.Columns)
 	if err != nil {
-		return err
+		return "", err
 	}
 	rows, err := this.db.Query(query)
 	if err != nil {
-		return err
+		return "", err
 	}
+	defer rows.Close() // 必须关闭
+
 	for rows.Next() {
 		this.migrationContext.MigrationRangeMaxValues = sql.NewColumnValues(uniqueKey.Len())
 		if err = rows.Scan(this.migrationContext.MigrationRangeMaxValues.ValuesPointers...); err != nil {
-			return err
+			return "", err
 		}
+		return this.migrationContext.MigrationRangeMaxValues.String(), nil
 	}
-	log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
-	return err
+	return "", err
 }
 
 // ReadMigrationRangeValues reads min/max values that will be used for rowcopy
-func (this *Applier) ReadMigrationRangeValues() error {
-	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
+func (this *Applier) ReadMigrationRangeValues(partition *sql.PartitionInfo) error {
+	var msgMin string
+	var msgMax string
+	var err error
+
+	// 读取全局的Range
+	if msgMin, err = this.ReadMigrationMinValues(this.migrationContext.UniqueKey, partition); err != nil {
 		return err
 	}
-	if err := this.ReadMigrationMaxValues(this.migrationContext.UniqueKey); err != nil {
+	if msgMax, err = this.ReadMigrationMaxValues(this.migrationContext.UniqueKey, partition); err != nil {
 		return err
+	}
+
+	if partition != nil {
+		log.Infof(color.CyanString("MigrationRange %s ~ %s for partition: %s"), msgMin, msgMax, partition.PartitionName)
+	} else {
+		log.Infof(color.CyanString("MigrationRange %s ~ %s"), msgMin, msgMax)
 	}
 	return nil
 }
@@ -411,8 +477,11 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and this done with copying row chunks)
-func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
+func (this *Applier) CalculateNextIterationRangeEndValues(partition *sql.PartitionInfo) (hasFurtherRange bool, err error) {
+
+	// 1. 当前iteration的min value是上次iteration的max value
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
+	//    边界情况
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
 		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
 	}
@@ -421,9 +490,12 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		if i == 1 {
 			buildFunc = sql.BuildUniqueKeyRangeEndPreparedQueryViaTemptable
 		}
+
+		// 给定(MigrationIterationRangeMinValues, MigrationRangeMaxValues, ChunkSize) 得到 iterationRangeMaxValues
 		query, explodedArgs, err := buildFunc(
 			this.migrationContext.DatabaseName,
 			this.migrationContext.OriginalTableName,
+			partition,
 			&this.migrationContext.UniqueKey.Columns,
 			this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 			this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
@@ -450,20 +522,27 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			return hasFurtherRange, nil
 		}
 	}
-	log.Debugf("Iteration complete: no further range to iterate")
+	if len(this.migrationContext.PartitionInfos) == 0 {
+		log.Infof("Iteration complete: no further range to iterate")
+	}
 	return hasFurtherRange, nil
 }
 
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
 // data actually gets copied from original table.
-func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+func (this *Applier) ApplyIterationInsertQuery(partition *sql.PartitionInfo) (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&this.migrationContext.ChunkSize)
 
+	// 如何执行区间的Insert呢?
+	// 注意控制一下时间: 5s可能是作为一个限制
 	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.GetGhostTableName(),
+		partition,
+		this.migrationContext.OriginalFilter,
+
 		this.migrationContext.SharedColumns.Names(),
 		this.migrationContext.MappedSharedColumns.Names(),
 		this.migrationContext.UniqueKey.Name,
@@ -473,6 +552,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.GetIteration() == 0,
 		this.migrationContext.IsTransactionalTable(),
 	)
+
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
 	}
@@ -482,6 +562,14 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err != nil {
 			return nil, err
 		}
+
+		// by fei.wang 如果出现错误，则拯救connection
+		// 1. 如果调用了tx.Commit, 再调用 tx.Rollback()是会有error返回的，但是"无视结果"
+		// 2. 如果tx.Exec 执行过程中，连接断开了，那么Rollback也没有意义了
+		// 3. 如果后面的SQL比较简单，基本上不大可能出错，因此可以可以省略Rollback
+		defer tx.Rollback()
+
+		// 统一"时区"
 		sessionQuery := fmt.Sprintf(`SET
 			SESSION time_zone = '%s',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
@@ -489,6 +577,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
 		}
+
 		result, err := tx.Exec(query, explodedArgs...)
 		if err != nil {
 			return nil, err
@@ -511,65 +600,6 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.GetIteration(),
 		chunkSize)
 	return chunkSize, rowsAffected, duration, nil
-}
-
-// LockOriginalTable places a write lock on the original table
-func (this *Applier) LockOriginalTable() error {
-	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-	log.Infof("Locking %s.%s",
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-	this.migrationContext.LockTablesStartTime = time.Now()
-	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
-		return err
-	}
-	log.Infof("Table locked")
-	return nil
-}
-
-// UnlockTables makes tea. No wait, it unlocks tables.
-func (this *Applier) UnlockTables() error {
-	query := `unlock /* gh-ost */ tables`
-	log.Infof("Unlocking tables")
-	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
-		return err
-	}
-	log.Infof("Tables unlocked")
-	return nil
-}
-
-// SwapTablesQuickAndBumpy issues a two-step swap table operation:
-// - rename original table to _old
-// - rename ghost table to original
-// There is a point in time in between where the table does not exist.
-func (this *Applier) SwapTablesQuickAndBumpy() error {
-	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-		sql.EscapeName(this.migrationContext.GetOldTableName()),
-	)
-	log.Infof("Renaming original table")
-	this.migrationContext.RenameTablesStartTime = time.Now()
-	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
-		return err
-	}
-	query = fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-	log.Infof("Renaming ghost table")
-	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
-		return err
-	}
-	this.migrationContext.RenameTablesEndTime = time.Now()
-
-	log.Infof("Tables renamed")
-	return nil
 }
 
 // RenameTablesRollback renames back both table: original back to ghost,
@@ -816,11 +846,13 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		return err
 	}
 
+	// 创建一个place holder table：sentry_table, old_table
 	if err := this.CreateAtomicCutOverSentryTable(); err != nil {
 		tableLocked <- err
 		return err
 	}
 
+	// lock tables时该session之前lock的table就被自动释放；注意这个风险
 	query = fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write, %s.%s write`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
@@ -911,6 +943,7 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 	)
+
 	log.Infof("Issuing and expecting this to block: %s", query)
 	if _, err := tx.Exec(query); err != nil {
 		tablesRenamed <- err
@@ -960,6 +993,7 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 		}
 	case binlog.UpdateDML:
 		{
+			// UpdateDML 如何发现UniqKey本身改变了，则需要演变成为一个Delete + Insert
 			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
 				dmlEvent.DML = binlog.DeleteDML
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
@@ -975,59 +1009,6 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 		}
 	}
 	return append(results, newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)))
-}
-
-// ApplyDMLEventQuery writes an entry to the ghost table, in response to an intercepted
-// original-table binlog event
-func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
-	for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
-		if buildResult.err != nil {
-			return buildResult.err
-		}
-		// TODO The below is in preparation for transactional writes on the ghost tables.
-		// Such writes would be, for example:
-		// - prepended with sql_mode setup
-		// - prepended with time zone setup
-		// - prepended with SET SQL_LOG_BIN=0
-		// - prepended with SET FK_CHECKS=0
-		// etc.
-		//
-		// a known problem: https://github.com/golang/go/issues/9373 -- bitint unsigned values, not supported in database/sql
-		// is solved by silently converting unsigned bigints to string values.
-		//
-
-		err := func() error {
-			tx, err := this.db.Begin()
-			if err != nil {
-				return err
-			}
-			sessionQuery := `SET
-			SESSION time_zone = '+00:00',
-			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
-			`
-			if _, err := tx.Exec(sessionQuery); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(buildResult.query, buildResult.args...); err != nil {
-				return err
-			}
-			if err := tx.Commit(); err != nil {
-				return err
-			}
-			return nil
-		}()
-
-		if err != nil {
-			err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), buildResult.query, buildResult.args)
-			return log.Errore(err)
-		}
-		// no error
-		atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
-		if this.migrationContext.CountTableRows {
-			atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, buildResult.rowsDelta)
-		}
-	}
-	return nil
 }
 
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
@@ -1046,6 +1027,10 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 			return err
 		}
 
+		// 时区, sql_mode
+		// 这个执行时间开销在: 1ms左右，因此后面的dmlEvents最好做批量执行
+		// 还好: sql是放在一个transaction内部执行的，这个1ms也省下来了
+		//
 		sessionQuery := `SET
 			SESSION time_zone = '+00:00',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
@@ -1053,6 +1038,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return rollback(err)
 		}
+		// 如何处理dmlEvents呢?
 		for _, dmlEvent := range dmlEvents {
 			for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
 				if buildResult.err != nil {
@@ -1086,6 +1072,5 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 func (this *Applier) Teardown() {
 	log.Debugf("Tearing down...")
 	this.db.Close()
-	this.singletonDB.Close()
 	atomic.StoreInt64(&this.finishedMigrating, 1)
 }

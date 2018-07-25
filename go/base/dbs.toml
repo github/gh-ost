@@ -1,0 +1,39 @@
+max_load = "Threads_running=25"
+critical_load = "Threads_running=1000"
+chunk_size = 1000
+initially_drop_old_table = true
+initially_drop_ghost_table = true
+initially_drop_socket_file = true
+user = ""
+password = ""
+is_rds_mysql = false
+assume_rbr = true
+max_lag_millis=1500
+
+slave_master_mapping = [
+    ["test-backend-r2.db.test.com", "test-backend.db.test.com"],
+    ["test-final-r2.db.test.com", "test-final.db.test.com"],
+    ["shard00-r2.db.test.com", "shard00.db.test.com"],
+    ["shard01-r2.db.test.com", "shard01.db.test.com"],
+    ["shard02-r2.db.test.com", "shard02.db.test.com"],
+    ["shard03-r2.db.test.com", "shard03.db.test.com"],
+]
+
+#
+alias_2_password_mapping = [
+    ["starmaker", "username:password"]
+]
+
+dbs = [
+    "shard0:shard_sm_0@shard00-r1.db.test.com",
+    "shard1:shard_sm_1@shard00-r1.db.test.com",
+    "shard2:shard_sm_2@shard00-r1.db.test.com",
+    "shard3:shard_sm_3@shard00-r1.db.test.com",
+    "shard4:shard_sm_4@shard00-r1.db.test.com",
+    "shard5:shard_sm_5@shard00-r1.db.test.com",
+    "shard6:shard_sm_6@shard01-r1.db.test.com",
+    "shard7:shard_sm_7@shard01-r1.db.test.com",
+    "shard8:shard_sm_8@shard01-r1.db.test.com",
+    "shard9:shard_sm_9@shard01-r1.db.test.com"
+    ]
+
