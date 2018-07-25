@@ -306,6 +306,7 @@ func (this *Migrator) validateStatement() (err error) {
 // 如果不精确技术，可能估算不准确; 其他没有多大的影响
 //
 func (this *Migrator) countTableRows() (err error) {
+
 	// 1. CountTableRows 是否计算精确函数
 	if !this.migrationContext.CountTableRows {
 		// Not counting; we stay with an estimate
@@ -780,6 +781,7 @@ func (this *Migrator) initiateInspector() (err error) {
 	if err := this.inspector.ValidateOriginalTable(); err != nil {
 		return err
 	}
+
 	if err := this.inspector.InspectOriginalTable(); err != nil {
 		return err
 	}
@@ -946,6 +948,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	elapsedSeconds := int64(elapsedTime.Seconds())
 	totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
 	rowsEstimate := atomic.LoadInt64(&this.migrationContext.RowsEstimate) + atomic.LoadInt64(&this.migrationContext.RowsDeltaEstimate)
+
 	if this.rowCopyCompleteFlag.Get() {
 		// Done copying rows. The totalRowsCopied value is the de-facto number of rows,
 		// and there is no further need to keep updating the value.
@@ -1023,8 +1026,6 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	// 结束之后就不再汇报情况
 	if !this.migrationContext.RowCopyComplete.Load().(bool) {
-		// "Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s"
-
 		format := GetRowFormat(rowsEstimate, true)
 		status := fmt.Sprintf(format,
 			totalRowsCopied, rowsEstimate, progressPct,
@@ -1158,6 +1159,25 @@ func (this *Migrator) initiateApplier() error {
 		return err
 	}
 
+	// 如果针对partition做优化
+	// 之前的估算算法在： this.initiateInspector() 被调用，这里直覆盖调用的结果
+	if this.migrationContext.PartitionOpt {
+		var err error
+		this.migrationContext.PartitionInfos, err = this.applier.GetPartitionInfos()
+		if err != nil {
+			log.Infof("GetPartitionInfos err: %v", err)
+		}
+
+		// 通过分区表的信息来获取统计数据
+		if len(this.migrationContext.PartitionInfos) != 0 {
+			var totalCount int64
+			for _, p := range this.migrationContext.PartitionInfos {
+				totalCount += p.TableRows
+			}
+			this.migrationContext.RowsEstimate = totalCount
+		}
+	}
+
 	// Ghost表准备好了
 	this.applier.WriteChangelogState(string(GhostTableMigrated))
 
@@ -1262,7 +1282,7 @@ func (this *Migrator) iterateChunks() error {
 		}
 
 		copyRowsWg.Wait() // 等待当前的Task执行完毕
-		log.Infof(color.GreenString("PartitionIter complete for partition: %s"), partition.PartitionName)
+		// log.Infof(color.GreenString("PartitionIter complete for partition: %s"), partition.PartitionName)
 
 		return nil
 	}

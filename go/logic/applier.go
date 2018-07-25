@@ -186,15 +186,6 @@ func (this *Applier) CreateGhostTable() error {
 		return err
 	}
 
-	// 如果针对partition做优化
-	if this.migrationContext.PartitionOpt {
-		var err error
-		this.migrationContext.PartitionInfos, err = this.GetPartitionInfos()
-		if err != nil {
-			log.Infof("GetPartitionInfos err: %v", err)
-		}
-	}
-
 	log.Infof("Ghost table created")
 	return nil
 }
