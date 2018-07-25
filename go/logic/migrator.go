@@ -1199,7 +1199,7 @@ func (this *Migrator) iterateChunks() error {
 	terminateRowIteration := func(err error) error {
 		// err == nil 只在成功处理完毕所有的数据之后才调用
 		rowRangeComplete.Set(true)
-		log.Errorf("terminateRowIteration err: %v", err)
+		log.Infof("TerminateRowIteration err: %v", err)
 		if err != nil {
 			rowRangeError.Set(true)
 		}
