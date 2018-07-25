@@ -156,6 +156,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		if i != 0 {
 			// sleep after previous iteration
 			// 如果遇到异常，最好等待一段时间，否则retry也是失败
+			log.Infof(color.RedString("sleep 1s for retry..."))
 			time.Sleep(1 * time.Second)
 		}
 		err = operation()
@@ -387,6 +388,8 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
+	// TODO：最核心的逻辑（全量数据和增量的关系？）
+	//  binlog必须在数据拷贝之前接入，但是不一定需要优先于row data copy
 	if err := this.initiateStreaming(); err != nil {
 		return err
 	}
@@ -1267,7 +1270,9 @@ func (this *Migrator) iterateChunks() error {
 
 					_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery(partition)
 					if err != nil {
-						return terminateRowIteration(err)
+						// terminateRowIteration 不能轻易调用，否则就结束了
+						// return terminateRowIteration(err)
+						return err
 					}
 
 					// 更改统计数据

@@ -256,12 +256,13 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		partitionInfo = fmt.Sprintf("partition(%s)", partition.PartitionName)
 	}
 
+	// insert/select都添加partition限制，减少锁表次数
 	result = fmt.Sprintf(`
-      insert /* gh-ost %s.%s */ ignore into %s.%s (%s)
+      insert /* gh-ost %s.%s */ ignore into %s.%s %s (%s)
       (select %s from %s.%s %s force index (%s)
         where (%s and %s %s) %s
       )
-    `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
+    `, databaseName, originalTableName, databaseName, ghostTableName, partitionInfo, mappedSharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, partitionInfo, uniqueKey,
 		rangeStartComparison, rangeEndComparison, originFilterCondition, transactionalClause)
 	return result, explodedArgs, nil
