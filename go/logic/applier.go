@@ -89,7 +89,7 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
 	}
-	if !this.migrationContext.AliyunRDS {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {
