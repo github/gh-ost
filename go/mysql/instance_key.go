@@ -19,7 +19,8 @@ const (
 var (
 	ipv4HostPortRegexp = regexp.MustCompile("^([^:]+):([0-9]+)$")
 	ipv4HostRegexp     = regexp.MustCompile("^([^:]+)$")
-	ipv6HostPortRegexp = regexp.MustCompile("^\\[(.+)\\]:([0-9]+)$") // e.g. [2001:db8:1f70::999:de8:7648:6e8]:3308
+	ipv6HostPortRegexp = regexp.MustCompile("^\\[([:0-9a-fA-F]+)\\]:([0-9]+)$") // e.g. [2001:db8:1f70::999:de8:7648:6e8]:3308
+	ipv6HostRegexp     = regexp.MustCompile("^([:0-9a-fA-F]+)$")                // e.g. 2001:db8:1f70::999:de8:7648:6e8
 )
 
 // InstanceKey is an instance indicator, identified by hostname and port
@@ -42,6 +43,8 @@ func NewRawInstanceKey(hostPort string) (*InstanceKey, error) {
 	} else if submatch := ipv6HostPortRegexp.FindStringSubmatch(hostPort); len(submatch) > 0 {
 		hostname = submatch[1]
 		port = submatch[2]
+	} else if submatch := ipv6HostRegexp.FindStringSubmatch(hostPort); len(submatch) > 0 {
+		hostname = submatch[1]
 	} else {
 		return nil, fmt.Errorf("Cannot parse address: %s", hostPort)
 	}

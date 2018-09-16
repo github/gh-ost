@@ -48,6 +48,22 @@ func TestParseInstanceKey(t *testing.T) {
 		test.S(t).ExpectEquals(key.Port, 3308)
 	}
 	{
+		key, err := ParseInstanceKey("::1")
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(key.Hostname, "::1")
+		test.S(t).ExpectEquals(key.Port, 3306)
+	}
+	{
+		key, err := ParseInstanceKey("0:0:0:0:0:0:0:0")
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(key.Hostname, "0:0:0:0:0:0:0:0")
+		test.S(t).ExpectEquals(key.Port, 3306)
+	}
+	{
+		_, err := ParseInstanceKey("[2001:xxxx:1f70::999:de8:7648:6e8]:3308")
+		test.S(t).ExpectNotNil(err)
+	}
+	{
 		_, err := ParseInstanceKey("10.0.0.4:")
 		test.S(t).ExpectNotNil(err)
 	}
