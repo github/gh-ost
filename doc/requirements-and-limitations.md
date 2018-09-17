@@ -39,7 +39,8 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
   - For example, you may not migrate `MyTable` if another table called `MYtable` exists in the same schema.
 
 - Amazon RDS works, but has it's own [limitations](rds.md).
-- Google Cloud SQL is currently not supported
+- Google Cloud SQL works, `--gcp` flag required.
+- Aliyun RDS works, `--aliyun-rds` flag required.
 
 - Multisource is not supported when migrating via replica. It _should_ work (but never tested) when connecting directly to master (`--allow-on-master`)
 

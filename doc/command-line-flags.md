@@ -2,6 +2,10 @@
 
 A more in-depth discussion of various `gh-ost` command line flags: implementation, implication, use cases.
 
+### aliyun-rds
+
+Add this flag when executing on Aliyun RDS.
+
 ### allow-master-master
 
 See [`--assume-master-host`](#assume-master-host).
@@ -102,6 +106,10 @@ While the ongoing estimated number of rows is still heuristic, it's almost exact
 ### execute
 
 Without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
+
+### gcp
+
+Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
 
 ### heartbeat-interval-millis
 
