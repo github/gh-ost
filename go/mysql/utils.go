@@ -8,6 +8,7 @@ package mysql
 import (
 	gosql "database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -173,7 +174,7 @@ func GetInstanceKey(db *gosql.DB) (instanceKey *InstanceKey, err error) {
 }
 
 // GetTableColumns reads column list from given table
-func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnList, error) {
+func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnList, *sql.ColumnList, error) {
 	query := fmt.Sprintf(`
 		show columns from %s.%s
 		`,
@@ -181,18 +182,24 @@ func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnL
 		sql.EscapeName(tableName),
 	)
 	columnNames := []string{}
+	virtualColumnNames := []string{}
 	err := sqlutils.QueryRowsMap(db, query, func(rowMap sqlutils.RowMap) error {
-		columnNames = append(columnNames, rowMap.GetString("Field"))
+		columnName := rowMap.GetString("Field")
+		columnNames = append(columnNames, columnName)
+		if strings.Contains(rowMap.GetString("Extra"), " GENERATED") {
+			log.Debugf("%s is a generated column", columnName)
+			virtualColumnNames = append(virtualColumnNames, columnName)
+		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(columnNames) == 0 {
-		return nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
+		return nil, nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
 			sql.EscapeName(databaseName),
 			sql.EscapeName(tableName),
 		)
 	}
-	return sql.NewColumnList(columnNames), nil
+	return sql.NewColumnList(columnNames), sql.NewColumnList(virtualColumnNames), nil
 }

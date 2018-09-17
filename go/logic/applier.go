@@ -89,7 +89,7 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
 	}
-	if !this.migrationContext.AliyunRDS {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {
@@ -117,7 +117,7 @@ func (this *Applier) validateAndReadTimeZone() error {
 // readTableColumns reads table columns on applier
 func (this *Applier) readTableColumns() (err error) {
 	log.Infof("Examining table structure on applier")
-	this.migrationContext.OriginalTableColumnsOnApplier, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
+	this.migrationContext.OriginalTableColumnsOnApplier, _, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
 	if err != nil {
 		return err
 	}

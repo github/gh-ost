@@ -26,10 +26,6 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 - Triggers are not supported. They may be supported in the future.
 
-- MySQL 5.7 generated columns are not supported. They may be supported in the future.
-
-- MySQL 5.7 `POINT` column type is not supported.
-
 - MySQL 5.7 `JSON` columns are supported but not as part of `PRIMARY KEY`
 
 - The two _before_ & _after_ tables must share a `PRIMARY KEY` or other `UNIQUE KEY`. This key will be used by `gh-ost` to iterate through the table rows when copying. [Read more](shared-key.md)
@@ -43,13 +39,14 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
   - For example, you may not migrate `MyTable` if another table called `MYtable` exists in the same schema.
 
 - Amazon RDS works, but has it's own [limitations](rds.md).
-- Google Cloud SQL is currently not supported
+- Google Cloud SQL works, `--gcp` flag required.
+- Aliyun RDS works, `--aliyun-rds` flag required.
 
 - Multisource is not supported when migrating via replica. It _should_ work (but never tested) when connecting directly to master (`--allow-on-master`)
 
 - Master-master setup is only supported in active-passive setup. Active-active (where table is being written to on both masters concurrently) is unsupported. It may be supported in the future.
 
-- If you have en `enum` field as part of your migration key (typically the `PRIMARY KEY`), migration performance will be degraded and potentially bad. [Read more](https://github.com/github/gh-ost/pull/277#issuecomment-254811520)
+- If you have an `enum` field as part of your migration key (typically the `PRIMARY KEY`), migration performance will be degraded and potentially bad. [Read more](https://github.com/github/gh-ost/pull/277#issuecomment-254811520)
 
 - Migrating a `FEDERATED` table is unsupported and is irrelevant to the problem `gh-ost` tackles.
 

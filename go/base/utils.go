@@ -75,7 +75,8 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 		// swallow this error. not all servers support extra_port
 	}
 	// AliyunRDS set users port to "NULL", replace it by gh-ost param
-	if migrationContext.AliyunRDS {
+	// GCP set users port to "NULL", replace it by gh-ost param
+	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform {
 		port = connectionConfig.Key.Port
 	} else {
 		portQuery := `select @@global.port`

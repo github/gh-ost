@@ -92,6 +92,7 @@ type MigrationContext struct {
 	IsTungsten               bool
 	DiscardForeignKeys       bool
 	AliyunRDS                bool
+	GoogleCloudPlatform      bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -186,8 +187,10 @@ type MigrationContext struct {
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
+	OriginalTableVirtualColumns      *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
 	GhostTableColumns                *sql.ColumnList
+	GhostTableVirtualColumns         *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
 	UniqueKey                        *sql.UniqueKey
 	SharedColumns                    *sql.ColumnList
