@@ -1105,8 +1105,11 @@ func (this *Migrator) iterateChunks() error {
 
 			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
 
-			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
-			if err != nil {
+			hasFurtherRange := false
+			if err := this.retryOperation(func() (e error) {
+				hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
+				return e
+			}); err != nil {
 				return terminateRowIteration(err)
 			}
 			if !hasFurtherRange {
@@ -1128,7 +1131,7 @@ func (this *Migrator) iterateChunks() error {
 				}
 				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
-					return terminateRowIteration(err)
+					return err // wrapping call will retry
 				}
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
