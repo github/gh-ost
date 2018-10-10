@@ -1,12 +1,12 @@
 # Shared key
 
-A requirement for a migration to run is that the two _before_ and _after_ tables have a shared unique key. This is to elaborate and illustrate on the matter.
+gh-ost requires for every migration that both the _before_ and _after_ versions of the table share the same unique not-null key columns. This page illustrates this rule.
 
 ### Introduction
 
-Consider a classic, simple migration. The table is any normal:
+Consider a simple migration, with a normal table,
 
-```
+```sql
 CREATE TABLE tbl (
   id bigint unsigned not null auto_increment,
   data varchar(255),
@@ -15,54 +15,73 @@ CREATE TABLE tbl (
 )
 ```
 
-And the migration is a simple `add column ts timestamp`.
+and the migration `add column ts timestamp`. The _after_ table version would be:
 
-In such migration there is no change in indexes, and in particular no change to any unique key, and specifically no change to the `PRIMARY KEY`. To run this migration, `gh-ost` would iterate the `tbl` table using the primary key, copy rows from `tbl` to the _ghost_ table `_tbl_gho` by order of `id`, and then apply binlog events onto `_tbl_gho`.
+```sql
+CREATE TABLE tbl (
+  id bigint unsigned not null auto_increment,
+  data varchar(255),
+  more_data int,
+  ts timestamp,
+  PRIMARY KEY(id)
+)
+```
 
-Applying the binlog events assumes the existence of a shared unique key. For example, an `UPDATE` statement in the binary log translate to a `REPLACE` statement which `gh-ost` applies to the _ghost_ table. Such statement expects to add or replace an existing row based on given row data. In particular, it would _replace_ an existing row if a unique key violation is met.
+(This is also the definition of the _ghost_ table, except that that table would be called `_tbl_gho`). 
 
-So `gh-ost` correlates `tbl` and `_tbl_gho` rows using a unique key. In the above example that would be the `PRIMARY KEY`.
+In this migration, the _before_ and _after_ versions contain the same unique not-null key (the PRIMARY KEY). To run this migration, `gh-ost` would iterate through the `tbl` table using the primary key, copy rows from `tbl` to the _ghost_ table `_tbl_gho` in primary key order, while also applying the binlog event writes from `tble` onto `_tbl_gho`.
 
-### Rules
+The applying of the binlog events is what requires the shared unique key. For example, an `UPDATE` statement to `tbl` translates to a `REPLACE` statement which `gh-ost` applies to `_tbl_gho`. A REPLACE statement expects to insert or replace an existing row based on its row's values and the table's unique key constraints. In particular, if inserting that row would result in a unique key violation (e.g., a row with that primary key already exists), it would _replace_ that existing row with the new values.
 
-There must be a shared set of not-null columns for which there is a unique constraint in both the original table and the migration (_ghost_) table.
+So `gh-ost` correlates `tbl` and `_tbl_gho` rows one to one using a unique key. In the above example that would be the `PRIMARY KEY`.
 
-### Interpreting the rules
+### Interpreting the rule
 
-The same columns must be covered by a unique key in both tables. This doesn't have to be the `PRIMARY KEY`. This doesn't have to be a key of the same name.
+The _before_ and _after_ versions of the table share the same unique not-null key, but:
+- the key doesn't have to be the PRIMARY KEY
+- the key can have a different name between the _before_ and _after_ versions (e.g., renamed via DROP INDEX and ADD INDEX) so long as it contains the exact same column(s)
 
-Upon migration, `gh-ost` inspects both the original and _ghost_ table and attempts to find at least one such unique key (or rather, a set of columns) that is shared between the two. Typically this would just be the `PRIMARY KEY`, but sometimes you may change the `PRIMARY KEY` itself, in which case `gh-ost` will look for other options.
+At the start of the migration, `gh-ost` inspects both the original and _ghost_ table it created, and attempts to find at least one such unique key (or rather, a set of columns) that is shared between the two. Typically this would just be the `PRIMARY KEY`, but some tables don't have primary keys, or sometimes the primary key is being modified. In these cases `gh-ost` will look for other options.
 
-`gh-ost` expects unique keys where no `NULL` values are found, i.e. all columns covered by the unique key are defined as `NOT NULL`. This is implicitly true for `PRIMARY KEY`s. If no such key can be found, `gh-ost` bails out. In the event there is no such key, but you happen to _know_ your columns have no `NULL` values even though they're `NULL`-able, you may take responsibility and pass the `--allow-nullable-unique-key`. The migration will run well as long as no `NULL` values are found in the unique key's columns. Any actual `NULL`s may corrupt the migration.
+`gh-ost` expects unique keys where no `NULL` values are found, i.e. all columns contained in the unique key are defined as `NOT NULL`. This is implicitly true for primary keys. If no such key can be found, `gh-ost` bails out. 
+
+If the table contains a unique key with nullable columns, but you know your columns contain no `NULL` values, use the `--allow-nullable-unique-key` option. The migration will run well as long as no `NULL` values are found in the unique key's columns. Any actual `NULL`s may corrupt the migration.
 
 ### Examples: allowed and not allowed
 
 ```
 create table some_table (
-  id int auto_increment,
+  id int not null auto_increment,
   ts timestamp,
   name varchar(128) not null,
   owner_id int not null,
-  loc_id int,
+  loc_id int not null,
   primary key(id),
   unique key name_uidx(name)
 )
 ```
 
-Following are examples of migrations that are _good to run_:
+Note the two unique, not-null indexes: the primary key and `name_uidx`.
+
+Allowed migrations:
 
 - `add column i int`
-- `add key owner_idx(owner_id)`
-- `add unique key owner_name_idx(owner_id, name)` - though you need to make sure to not write conflicting rows while this migration runs
+- `add key owner_idx (owner_id)`
+- `add unique key owner_name_idx (owner_id, name)` - be sure to not write conflicting rows while this migration runs
 - `drop key name_uidx` - `primary key` is shared between the tables
-- `drop primary key, add primary key(owner_id, loc_id)` - `name_uidx` is shared between the tables and is used for migration
-- `change id bigint unsigned` - the `'primary key` is used. The change of type still makes the `primary key` workable.
-- `drop primary key, drop key name_uidx, create primary key(name), create unique key id_uidx(id)` - swapping the two keys. `gh-ost` is still happy because `id` is still unique in both tables. So is `name`.
+- `drop primary key, add primary key(owner_id, loc_id)` - `name_uidx` is shared between the tables
+- `change id bigint unsigned not null auto_increment` - the `'primary key` changes datatype but not value, and can be used
+- `drop primary key, drop key name_uidx, add primary key(name), add unique key id_uidx(id)` - swapping the two keys. Either `id` or `name` could be used
 
 
-Following are examples of migrations that _cannot run_:
+Not allowed:
 
-- `drop primary key, drop key name_uidx` - no unique key to _ghost_ table, so clearly cannot run
-- `drop primary key, drop key name_uidx, create primary key(name, owner_id)` - no shared columns to both tables. Even though `name` exists in the _ghost_ table's `primary key`, it is only part of the key and in itself does not guarantee uniqueness in the _ghost_ table.
+- `drop primary key, drop key name_uidx` - the _ghost_ table has no unique key
+- `drop primary key, drop key name_uidx, create primary key(name, owner_id)` - no shared columns to the unique keys on both tables. Even though `name` exists in the _ghost_ table's `primary key`, it is only part of the key and in itself does not guarantee uniqueness in the _ghost_ table.
 
-Also, you cannot run a migration on a table that doesn't have some form of `unique key` in the first place, such as `some_table (id int, ts timestamp)`
+
+### Workarounds
+
+If you need to change your primary key or only not-null unique index to use different columns, you will want to do it as two separate migrations:
+1. `ADD UNIQUE KEY temp_pk (temp_pk_column,...)`
+1. `DROP PRIMARY KEY, DROP KEY temp_pk, ADD PRIMARY KEY (temp_pk_column,...)`
