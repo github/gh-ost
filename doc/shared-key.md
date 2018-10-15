@@ -6,7 +6,7 @@ A requirement for a migration to run is that the two _before_ and _after_ tables
 
 Consider a classic, simple migration. The table is any normal:
 
-```
+```sql
 CREATE TABLE tbl (
   id bigint unsigned not null auto_increment,
   data varchar(255),
@@ -37,7 +37,7 @@ Upon migration, `gh-ost` inspects both the original and _ghost_ table and attemp
 
 ### Examples: allowed and not allowed
 
-```
+```sql
 create table some_table (
   id int auto_increment,
   ts timestamp,
