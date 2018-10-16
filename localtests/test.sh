@@ -20,6 +20,7 @@ master_host=
 master_port=
 replica_host=
 replica_port=
+original_sql_mode=
 
 OPTIND=1
 while getopts "b:" OPTION
@@ -46,6 +47,8 @@ verify_master_and_replica() {
     echo "Cannot enable event_scheduler on master"
     exit 1
   fi
+  original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
+  echo "sql_mode on master is ${original_sql_mode}"
 
   if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
     echo "Cannot verify gh-ost-test-mysql-replica"
@@ -88,7 +91,6 @@ start_replication() {
 test_single() {
   local test_name
   test_name="$1"
-  original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
 
   if [ -f $tests_path/$test_name/ignore_versions ] ; then
     ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
