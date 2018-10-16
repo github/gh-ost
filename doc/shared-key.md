@@ -49,7 +49,7 @@ If the table contains a unique key with nullable columns, but you know your colu
 
 ### Examples: Allowed and Not Allowed
 
-```
+```sql
 create table some_table (
   id int not null auto_increment,
   ts timestamp,
