@@ -1,3 +1,5 @@
+set session time_zone='+00:00';
+
 drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int auto_increment,
