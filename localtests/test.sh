@@ -14,6 +14,7 @@ ghost_binary=""
 exec_command_file=/tmp/gh-ost-test.bash
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
+throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
 
 master_host=
 master_port=
@@ -108,7 +109,7 @@ test_single() {
     gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
     gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
   fi
-  
+
   gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
 
   extra_args=""
@@ -145,6 +146,7 @@ test_single() {
     --initially-drop-old-table \
     --initially-drop-ghost-table \
     --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \
+    --throttle-flag-file=$throttle_flag_file \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
     --test-on-replica \
