@@ -14,11 +14,13 @@ ghost_binary=""
 exec_command_file=/tmp/gh-ost-test.bash
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
+throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
 
 master_host=
 master_port=
 replica_host=
 replica_port=
+original_sql_mode=
 
 OPTIND=1
 while getopts "b:" OPTION
@@ -45,6 +47,8 @@ verify_master_and_replica() {
     echo "Cannot enable event_scheduler on master"
     exit 1
   fi
+  original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
+  echo "sql_mode on master is ${original_sql_mode}"
 
   if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
     echo "Cannot verify gh-ost-test-mysql-replica"
@@ -87,7 +91,6 @@ start_replication() {
 test_single() {
   local test_name
   test_name="$1"
-  original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
 
   if [ -f $tests_path/$test_name/ignore_versions ] ; then
     ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
@@ -108,7 +111,7 @@ test_single() {
     gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
     gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
   fi
-  
+
   gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
 
   extra_args=""
@@ -145,6 +148,7 @@ test_single() {
     --initially-drop-old-table \
     --initially-drop-ghost-table \
     --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \
+    --throttle-flag-file=$throttle_flag_file \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
     --test-on-replica \
