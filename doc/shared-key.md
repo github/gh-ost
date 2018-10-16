@@ -45,7 +45,7 @@ At the start of the migration, `gh-ost` inspects both the original and _ghost_ t
 
 `gh-ost` expects unique keys where no `NULL` values are found, i.e. all columns contained in the unique key are defined as `NOT NULL`. This is implicitly true for primary keys. If no such key can be found, `gh-ost` bails out. 
 
-If the table contains a unique key with nullable columns, but you know your columns contain no `NULL` values, use the `--allow-nullable-unique-key` option. The migration will run well as long as no `NULL` values are found in the unique key's columns. Any actual `NULL`s may corrupt the migration.
+If the table contains a unique key with nullable columns, but you know your columns contain no `NULL` values, use the `--allow-nullable-unique-key` option. The migration will run well as long as no `NULL` values are found in the unique key's columns. **Any actual `NULL`s may corrupt the migration.**
 
 ### Examples: allowed and not allowed
 
@@ -67,7 +67,7 @@ Allowed migrations:
 
 - `add column i int`
 - `add key owner_idx (owner_id)`
-- `add unique key owner_name_idx (owner_id, name)` - be sure to not write conflicting rows while this migration runs
+- `add unique key owner_name_idx (owner_id, name)` - **be careful not to write conflicting rows while this migration runs**
 - `drop key name_uidx` - `primary key` is shared between the tables
 - `drop primary key, add primary key(owner_id, loc_id)` - `name_uidx` is shared between the tables
 - `change id bigint unsigned not null auto_increment` - the `'primary key` changes datatype but not value, and can be used
