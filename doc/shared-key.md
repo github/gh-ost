@@ -31,7 +31,7 @@ CREATE TABLE tbl (
 
 In this migration, the _before_ and _after_ versions contain the same unique not-null key (the PRIMARY KEY). To run this migration, `gh-ost` would iterate through the `tbl` table using the primary key, copy rows from `tbl` to the _ghost_ table `_tbl_gho` in primary key order, while also applying the binlog event writes from `tble` onto `_tbl_gho`.
 
-The applying of the binlog events is what requires the shared unique key. For example, an `UPDATE` statement to `tbl` translates to a `REPLACE` statement which `gh-ost` applies to `_tbl_gho`. A REPLACE statement expects to insert or replace an existing row based on its row's values and the table's unique key constraints. In particular, if inserting that row would result in a unique key violation (e.g., a row with that primary key already exists), it would _replace_ that existing row with the new values.
+The applying of the binlog events is what requires the shared unique key. For example, an `UPDATE` statement to `tbl` translates to a `REPLACE` statement which `gh-ost` applies to `_tbl_gho`. A `REPLACE` statement expects to insert or replace an existing row based on its row's values and the table's unique key constraints. In particular, if inserting that row would result in a unique key violation (e.g., a row with that primary key already exists), it would _replace_ that existing row with the new values.
 
 So `gh-ost` correlates `tbl` and `_tbl_gho` rows one to one using a unique key. In the above example that would be the `PRIMARY KEY`.
 
@@ -41,13 +41,13 @@ The _before_ and _after_ versions of the table share the same unique not-null ke
 - the key doesn't have to be the PRIMARY KEY
 - the key can have a different name between the _before_ and _after_ versions (e.g., renamed via DROP INDEX and ADD INDEX) so long as it contains the exact same column(s)
 
-At the start of the migration, `gh-ost` inspects both the original and _ghost_ table it created, and attempts to find at least one such unique key (or rather, a set of columns) that is shared between the two. Typically this would just be the `PRIMARY KEY`, but some tables don't have primary keys, or sometimes the primary key is being modified. In these cases `gh-ost` will look for other options.
+At the start of the migration, `gh-ost` inspects both the original and _ghost_ table it created, and attempts to find at least one such unique key (or rather, a set of columns) that is shared between the two. Typically this would just be the `PRIMARY KEY`, but some tables don't have primary keys, or sometimes it is the primary key that is being modified by the migration. In these cases `gh-ost` will look for other options.
 
 `gh-ost` expects unique keys where no `NULL` values are found, i.e. all columns contained in the unique key are defined as `NOT NULL`. This is implicitly true for primary keys. If no such key can be found, `gh-ost` bails out. 
 
 If the table contains a unique key with nullable columns, but you know your columns contain no `NULL` values, use the `--allow-nullable-unique-key` option. The migration will run well as long as no `NULL` values are found in the unique key's columns. **Any actual `NULL`s may corrupt the migration.**
 
-### Examples: allowed and not allowed
+### Examples: Allowed and Not Allowed
 
 ```
 create table some_table (
@@ -70,9 +70,8 @@ Allowed migrations:
 - `add unique key owner_name_idx (owner_id, name)` - **be careful not to write conflicting rows while this migration runs**
 - `drop key name_uidx` - `primary key` is shared between the tables
 - `drop primary key, add primary key(owner_id, loc_id)` - `name_uidx` is shared between the tables
-- `change id bigint unsigned not null auto_increment` - the `'primary key` changes datatype but not value, and can be used
+- `change id bigint unsigned not null auto_increment` - the `primary key` changes datatype but not value, and can be used
 - `drop primary key, drop key name_uidx, add primary key(name), add unique key id_uidx(id)` - swapping the two keys. Either `id` or `name` could be used
-
 
 Not allowed:
 
