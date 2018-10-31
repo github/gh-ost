@@ -28,6 +28,7 @@ function build {
   echo "Building ${osname} binary"
   export GOOS
   export GOARCH
+  
   go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
 
   if [ $? -ne 0 ]; then
