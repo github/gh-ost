@@ -1087,24 +1087,33 @@ func (this *Migrator) iterateChunks() error {
 		log.Debugf("No rows found in table. Rowcopy will be implicitly empty")
 		return terminateRowIteration(nil)
 	}
+
+	var hasNoFurtherRangeFlag int64
 	// Iterate per chunk:
 	for {
-		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
 			// Done
 			// There's another such check down the line
 			return nil
 		}
 		copyRowsFunc := func() error {
-			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
 				// Done.
 				// There's another such check down the line
 				return nil
 			}
-			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
-			if err != nil {
+
+			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
+
+			hasFurtherRange := false
+			if err := this.retryOperation(func() (e error) {
+				hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
+				return e
+			}); err != nil {
 				return terminateRowIteration(err)
 			}
 			if !hasFurtherRange {
+				atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
 				return terminateRowIteration(nil)
 			}
 			// Copy task:
@@ -1122,7 +1131,7 @@ func (this *Migrator) iterateChunks() error {
 				}
 				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
-					return terminateRowIteration(err)
+					return err // wrapping call will retry
 				}
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
