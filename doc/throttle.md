@@ -48,9 +48,9 @@ An example query could be: `--throttle-query="select hour(now()) between 8 and 1
 
 #### HTTP Throttle
 
-The `--throttle-HTTP` flag allows for throttling via HTTP. Every 100ms `gh-ost` issues a `HEAD` request to the provided URL. If the response status code is not `200` throttling will kick in until a `200` response status code is returned.
+The `--throttle-http` flag allows for throttling via HTTP. Every 100ms `gh-ost` issues a `HEAD` request to the provided URL. If the response status code is not `200` throttling will kick in until a `200` response status code is returned.
 
-If no URL is provided or the URL provided doesn't contain the scheme then the HTTP check will be disabled. For example `--throttle-HTTP="http://1.2.3.4:6789/throttle"` will enable the HTTP check/throttling, but `--throttle-HTTP="1.2.3.4:6789/throttle"` will not.
+If no URL is provided or the URL provided doesn't contain the scheme then the HTTP check will be disabled. For example `--throttle-http="http://1.2.3.4:6789/throttle"` will enable the HTTP check/throttling, but `--throttle-http="1.2.3.4:6789/throttle"` will not.
 
 The URL can be queried and updated dynamically via [interactive interface](interactive-commands.md).
 
