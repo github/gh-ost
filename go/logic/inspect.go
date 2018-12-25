@@ -232,6 +232,9 @@ func (this *Inspector) validateGrants() error {
 			if strings.Contains(grant, fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.*", this.migrationContext.DatabaseName)) {
 				foundDBAll = true
 			}
+			if strings.Contains(grant, fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.*", strings.Replace(this.migrationContext.DatabaseName, "_", "\\_", -1))) {
+				foundDBAll = true
+			}
 			if base.StringContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`, ` ON *.*`) {
 				foundDBAll = true
 			}
