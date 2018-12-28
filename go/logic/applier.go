@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -459,6 +460,129 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&this.migrationContext.ChunkSize)
+	sessionQuery := fmt.Sprintf(`SET
+		SESSION time_zone = '%s',
+		sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
+		`, this.migrationContext.ApplierTimeZone)
+
+	if this.migrationContext.ManagedRowCopy {
+		selectQuery, selectExplodedArgs, err := sql.BuildRangeSelectPreparedQuery(
+			this.migrationContext.DatabaseName,
+			this.migrationContext.OriginalTableName,
+			this.migrationContext.SharedColumns.Names(),
+			this.migrationContext.UniqueKey.Name,
+			&this.migrationContext.UniqueKey.Columns,
+			this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
+			this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
+			this.migrationContext.GetIteration() == 0,
+			this.migrationContext.IsTransactionalTable(),
+		)
+		if err != nil {
+			return chunkSize, rowsAffected, duration, err
+		}
+		applyQuery, err := sql.BuildRangeApplyPreparedQuery(
+			this.migrationContext.DatabaseName,
+			this.migrationContext.GetGhostTableName(),
+			this.migrationContext.MappedSharedColumns.Names(),
+		)
+
+		applyExplodedArgs := []interface{}{}
+		placeholder := make([]string, this.migrationContext.SharedColumns.Len())
+		for i := range placeholder {
+			placeholder[i] = "?"
+		}
+		applyPreparedQuery := fmt.Sprintf(` (%s),`, strings.Join(placeholder, ","))
+
+		err = func() error {
+			tx, err := this.db.Begin()
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+
+			if _, err := tx.Exec(sessionQuery); err != nil {
+				return err
+			}
+
+			values := make([]gosql.RawBytes, this.migrationContext.SharedColumns.Len())
+			scanArgs := make([]interface{}, this.migrationContext.SharedColumns.Len())
+			for i := range values {
+				scanArgs[i] = &values[i]
+			}
+
+			rows, err := tx.Query(selectQuery, selectExplodedArgs...)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				err = rows.Scan(scanArgs...)
+				if err != nil {
+					return err
+				}
+				applyQuery += applyPreparedQuery
+				for _, value := range values {
+					if value == nil {
+						applyExplodedArgs = append(applyExplodedArgs, nil)
+					} else {
+						applyExplodedArgs = append(applyExplodedArgs, string(value))
+					}
+				}
+			}
+			return nil
+		}()
+		if err != nil {
+			return chunkSize, rowsAffected, duration, err
+		}
+		log.Debugf(
+			"Issued SELECT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
+			this.migrationContext.MigrationIterationRangeMinValues,
+			this.migrationContext.MigrationIterationRangeMaxValues,
+			this.migrationContext.GetIteration(),
+			chunkSize)
+
+		// strip the last comma
+		applyQuery = applyQuery[0 : len(applyQuery)-1]
+
+		sqlResult, err := func() (gosql.Result, error) {
+			tx, err := this.db.Begin()
+			if err != nil {
+				return nil, err
+			}
+			defer tx.Rollback()
+
+			if _, err := tx.Exec(sessionQuery); err != nil {
+				return nil, err
+			}
+			stmt, err := tx.Prepare(applyQuery)
+			if err != nil {
+				return nil, err
+			}
+			result, err := stmt.Exec(applyExplodedArgs...)
+			if err != nil {
+				return nil, err
+			}
+			err = stmt.Close()
+			if err != nil {
+				return nil, err
+			}
+			if err := tx.Commit(); err != nil {
+				return nil, err
+			}
+			return result, nil
+		}()
+		if err != nil {
+			return chunkSize, rowsAffected, duration, err
+		}
+		rowsAffected, _ = sqlResult.RowsAffected()
+		duration = time.Since(startTime)
+		log.Debugf(
+			"Issued INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
+			this.migrationContext.MigrationIterationRangeMinValues,
+			this.migrationContext.MigrationIterationRangeMaxValues,
+			this.migrationContext.GetIteration(),
+			chunkSize)
+		return chunkSize, rowsAffected, duration, nil
+	}
 
 	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
 		this.migrationContext.DatabaseName,
@@ -482,10 +606,6 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err != nil {
 			return nil, err
 		}
-		sessionQuery := fmt.Sprintf(`SET
-			SESSION time_zone = '%s',
-			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
-			`, this.migrationContext.ApplierTimeZone)
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
 		}
@@ -992,7 +1112,7 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 		// - prepended with SET FK_CHECKS=0
 		// etc.
 		//
-		// a known problem: https://github.com/golang/go/issues/9373 -- bitint unsigned values, not supported in database/sql
+		// a known problem: https://github.com/golang/go/issues/9373 -- bigint unsigned values, not supported in database/sql
 		// is solved by silently converting unsigned bigints to string values.
 		//
 
