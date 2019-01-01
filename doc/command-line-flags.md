@@ -69,6 +69,10 @@ This is somewhat similar to a Nagios `n`-times test, where `n` in our case is al
 
 Optional. Default is `safe`. See more discussion in [`cut-over`](cut-over.md)
 
+### cut-over-lock-timeout-seconds
+
+Default `3`.  Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout).
+
 ### discard-foreign-keys
 
 **Danger**: this flag will _silently_ discard any foreign keys existing on your table.
@@ -107,6 +111,10 @@ While the ongoing estimated number of rows is still heuristic, it's almost exact
 
 Without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
 
+### force-table-names
+
+Table name prefix to be used on the temporary tables.
+
 ### gcp
 
 Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
@@ -124,6 +132,10 @@ We think `gh-ost` should not take chances or make assumptions about the user's t
 ### initially-drop-old-table
 
 See [`initially-drop-ghost-table`](#initially-drop-ghost-table)
+
+### initially-drop-socket-file
+
+Default False. Should `gh-ost` forcibly delete an existing socket file. Be careful: this might drop the socket file of a running migration!
 
 ### max-lag-millis
 
@@ -168,6 +180,10 @@ See [`approve-renamed-columns`](#approve-renamed-columns)
 ### test-on-replica
 
 Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [`testing-on-replica`](testing-on-replica.md)
+
+### test-on-replica-skip-replica-stop
+
+Default `False`. When `--test-on-replica` is enabled, do not issue commands stop replication (requires `--test-on-replica`).
 
 ### throttle-control-replicas
 
