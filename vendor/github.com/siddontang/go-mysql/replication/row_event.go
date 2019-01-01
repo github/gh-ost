@@ -434,9 +434,7 @@ func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{
 		}
 	case MYSQL_TYPE_TIMESTAMP2:
 		v, n, err = decodeTimestamp2(data, meta, e.timestampStringLocation)
-		fmt.Printf("============= v0: %+v\n", v)
-		v = e.parseFracTime(v)
-		fmt.Printf("============= v1: %+v\n", v)
+		//v = e.parseFracTime(v)
 	case MYSQL_TYPE_DATETIME:
 		n = 8
 		i64 := binary.LittleEndian.Uint64(data)
@@ -705,11 +703,8 @@ func decodeTimestamp2(data []byte, dec uint16, timestampStringLocation *time.Loc
 		return formatZeroTime(int(usec), int(dec)), n, nil
 	}
 
-	return fracTime{
-		Time: time.Unix(sec, usec*1000),
-		Dec:  int(dec),
-		timestampStringLocation: timestampStringLocation,
-	}, n, nil
+	t := time.Unix(sec, usec*1000)
+	return t, n, nil
 }
 
 const DATETIMEF_INT_OFS int64 = 0x8000000000
@@ -755,14 +750,14 @@ func decodeDatetime2(data []byte, dec uint16) (interface{}, int, error) {
 	minute := int((hms >> 6) % (1 << 6))
 	hour := int((hms >> 12))
 
-	// if frac != 0 {
-	// 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%06d", year, month, day, hour, minute, second, frac), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
-	// }
-	// return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
-	return fracTime{
-		Time: time.Date(year, time.Month(month), day, hour, minute, second, int(frac*1000), time.UTC),
-		Dec:  int(dec),
-	}, n, nil
+	if frac != 0 {
+		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%06d", year, month, day, hour, minute, second, frac), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
+	}
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
+	// return fracTime{
+	// 	Time: time.Date(year, time.Month(month), day, hour, minute, second, int(frac*1000), time.UTC),
+	// 	Dec:  int(dec),
+	// }, n, nil
 }
 
 const TIMEF_OFS int64 = 0x800000000000

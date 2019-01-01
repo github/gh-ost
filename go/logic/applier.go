@@ -1002,6 +1002,7 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 				return err
 			}
 			sessionQuery := `SET
+			SESSION time_zone = '+00:00',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
 			`
 			if _, err := tx.Exec(sessionQuery); err != nil {
@@ -1046,6 +1047,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		}
 
 		sessionQuery := `SET
+			SESSION time_zone = '+00:00',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
 			`
 		if _, err := tx.Exec(sessionQuery); err != nil {
