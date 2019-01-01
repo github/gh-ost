@@ -423,40 +423,27 @@ func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{
 	case MYSQL_TYPE_TIMESTAMP:
 		n = 4
 		t := binary.LittleEndian.Uint32(data)
-		if t == 0 {
-			v = formatZeroTime(0, 0)
-		} else {
-			v = e.parseFracTime(fracTime{
-				Time: time.Unix(int64(t), 0),
-				Dec:  0,
-				timestampStringLocation: e.timestampStringLocation,
-			})
-		}
+		v = time.Unix(int64(t), 0)
 	case MYSQL_TYPE_TIMESTAMP2:
 		v, n, err = decodeTimestamp2(data, meta, e.timestampStringLocation)
 		//v = e.parseFracTime(v)
 	case MYSQL_TYPE_DATETIME:
 		n = 8
 		i64 := binary.LittleEndian.Uint64(data)
+
 		if i64 == 0 { // commented by Shlomi Noach. Yes I know about `git blame`
 			return "0000-00-00 00:00:00", n, nil
-		} else {
-			d := i64 / 1000000
-			t := i64 % 1000000
-			v = e.parseFracTime(fracTime{
-				Time: time.Date(
-					int(d/10000),
-					time.Month((d%10000)/100),
-					int(d%100),
-					int(t/10000),
-					int((t%10000)/100),
-					int(t%100),
-					0,
-					time.UTC,
-				),
-				Dec: 0,
-			})
 		}
+		d := i64 / 1000000
+		t := i64 % 1000000
+		v = time.Date(int(d/10000),
+			time.Month((d%10000)/100),
+			int(d%100),
+			int(t/10000),
+			int((t%10000)/100),
+			int(t%100),
+			0,
+			time.UTC).Format(TimeFormat)
 	case MYSQL_TYPE_DATETIME2:
 		v, n, err = decodeDatetime2(data, meta)
 		v = e.parseFracTime(v)
