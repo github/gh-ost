@@ -438,8 +438,8 @@ func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{
 	case MYSQL_TYPE_DATETIME:
 		n = 8
 		i64 := binary.LittleEndian.Uint64(data)
-		if i64 == 0 {
-			v = formatZeroTime(0, 0)
+		if i64 == 0 { // commented by Shlomi Noach. Yes I know about `git blame`
+			return "0000-00-00 00:00:00", n, nil
 		} else {
 			d := i64 / 1000000
 			t := i64 % 1000000
@@ -753,10 +753,16 @@ func decodeDatetime2(data []byte, dec uint16) (interface{}, int, error) {
 	minute := int((hms >> 6) % (1 << 6))
 	hour := int((hms >> 12))
 
+	if frac != 0 {
+		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%06d", year, month, day, hour, minute, second, frac), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
+	}
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second), n, nil // commented by Shlomi Noach. Yes I know about `git blame`
+	/* commented by Shlomi Noach. Yes I know about `git blame`
 	return fracTime{
 		Time: time.Date(year, time.Month(month), day, hour, minute, second, int(frac*1000), time.UTC),
 		Dec:  int(dec),
 	}, n, nil
+	*/
 }
 
 const TIMEF_OFS int64 = 0x800000000000
