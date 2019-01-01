@@ -70,8 +70,13 @@ func jsonbGetValueEntrySize(isSmall bool) int {
 
 // decodeJsonBinary decodes the JSON binary encoding data and returns
 // the common JSON encoding data.
-func decodeJsonBinary(data []byte) ([]byte, error) {
-	d := new(jsonBinaryDecoder)
+func (e *RowsEvent) decodeJsonBinary(data []byte) ([]byte, error) {
+	// Sometimes, we can insert a NULL JSON even we set the JSON field as NOT NULL.
+	// If we meet this case, we can return an empty slice.
+	if len(data) == 0 {
+		return []byte{}, nil
+	}
+	d := jsonBinaryDecoder{useDecimal: e.useDecimal}
 
 	if d.isDataShort(data, 1) {
 		return nil, d.err
@@ -86,7 +91,8 @@ func decodeJsonBinary(data []byte) ([]byte, error) {
 }
 
 type jsonBinaryDecoder struct {
-	err error
+	useDecimal bool
+	err        error
 }
 
 func (d *jsonBinaryDecoder) decodeValue(tp byte, data []byte) interface{} {
@@ -382,7 +388,7 @@ func (d *jsonBinaryDecoder) decodeDecimal(data []byte) interface{} {
 	precision := int(data[0])
 	scale := int(data[1])
 
-	v, _, err := decodeDecimal(data[2:], precision, scale)
+	v, _, err := decodeDecimal(data[2:], precision, scale, d.useDecimal)
 	d.err = err
 
 	return v
@@ -463,7 +469,7 @@ func (d *jsonBinaryDecoder) decodeVariableLength(data []byte) (int, int) {
 
 		if v&0x80 == 0 {
 			if length > math.MaxUint32 {
-				d.err = errors.Errorf("variable length %d must <= %d", length, math.MaxUint32)
+				d.err = errors.Errorf("variable length %d must <= %d", length, int64(math.MaxUint32))
 				return 0, 0
 			}
 

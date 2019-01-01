@@ -144,7 +144,7 @@ func (c *Conn) handleStmtExecute(data []byte) (*Result, error) {
 			}
 
 			paramTypes = data[pos : pos+(paramNum<<1)]
-			pos += (paramNum << 1)
+			pos += paramNum << 1
 
 			paramValues = data[pos:]
 		}
@@ -211,7 +211,7 @@ func (c *Conn) bindStmtArgs(s *Stmt, nullBitmap, paramTypes, paramValues []byte)
 			if isUnsigned {
 				args[i] = uint16(binary.LittleEndian.Uint16(paramValues[pos : pos+2]))
 			} else {
-				args[i] = int16((binary.LittleEndian.Uint16(paramValues[pos : pos+2])))
+				args[i] = int16(binary.LittleEndian.Uint16(paramValues[pos : pos+2]))
 			}
 			pos += 2
 			continue
@@ -270,7 +270,7 @@ func (c *Conn) bindStmtArgs(s *Stmt, nullBitmap, paramTypes, paramValues []byte)
 				return ErrMalformPacket
 			}
 
-			v, isNull, n, err = LengthEnodedString(paramValues[pos:])
+			v, isNull, n, err = LengthEncodedString(paramValues[pos:])
 			pos += n
 			if err != nil {
 				return errors.Trace(err)
@@ -290,7 +290,7 @@ func (c *Conn) bindStmtArgs(s *Stmt, nullBitmap, paramTypes, paramValues []byte)
 	return nil
 }
 
-// stmt send long data command has no repsonse
+// stmt send long data command has no response
 func (c *Conn) handleStmtSendLongData(data []byte) error {
 	if len(data) < 6 {
 		return nil
@@ -340,7 +340,7 @@ func (c *Conn) handleStmtReset(data []byte) (*Result, error) {
 	return &Result{}, nil
 }
 
-// stmt close command has no repsonse
+// stmt close command has no response
 func (c *Conn) handleStmtClose(data []byte) error {
 	if len(data) < 4 {
 		return nil
