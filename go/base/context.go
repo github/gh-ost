@@ -205,6 +205,8 @@ type MigrationContext struct {
 	ForceTmpTableName                string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
+
+	Where string
 }
 
 type ContextConfig struct {

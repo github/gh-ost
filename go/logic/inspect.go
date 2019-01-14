@@ -500,7 +500,13 @@ func (this *Inspector) validateTableTriggers() error {
 
 // estimateTableRowsViaExplain estimates number of rows on original table
 func (this *Inspector) estimateTableRowsViaExplain() error {
-	query := fmt.Sprintf(`explain select /* gh-ost */ * from %s.%s where 1=1`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+
+	whereStmt := ""
+	if this.migrationContext.Where != ""{
+		whereStmt = fmt.Sprintf(`and %s`,this.migrationContext.Where)
+	}
+
+	query := fmt.Sprintf(`explain select /* gh-ost */ * from %s.%s where 1=1 %s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName),whereStmt)
 
 	outputFound := false
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
@@ -527,7 +533,12 @@ func (this *Inspector) CountTableRows() error {
 
 	log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 
-	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	whereStmt := ""
+	if this.migrationContext.Where != ""{
+		whereStmt = fmt.Sprintf(`where %s`,this.migrationContext.Where)
+	}
+
+	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s %s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName),whereStmt)
 	var rowsEstimate int64
 	if err := this.db.QueryRow(query).Scan(&rowsEstimate); err != nil {
 		return err
