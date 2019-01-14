@@ -15,15 +15,17 @@ import (
 type Conn struct {
 	*packet.Conn
 
-	capability uint32
+	serverConf     *Server
+	capability     uint32
+	authPluginName string
+	connectionID   uint32
+	status         uint16
+	salt           []byte // should be 8 + 12 for auth-plugin-data-part-1 and auth-plugin-data-part-2
 
-	connectionID uint32
-
-	status uint16
-
-	user string
-
-	salt []byte
+	credentialProvider  CredentialProvider
+	user                string
+	password            string
+	cachingSha2FullAuth bool
 
 	h Handler
 
@@ -35,23 +37,23 @@ type Conn struct {
 
 var baseConnID uint32 = 10000
 
+// create connection with default server settings
 func NewConn(conn net.Conn, user string, password string, h Handler) (*Conn, error) {
-	c := new(Conn)
-
-	c.h = h
-
-	c.user = user
-	c.Conn = packet.NewConn(conn)
-
-	c.connectionID = atomic.AddUint32(&baseConnID, 1)
-
-	c.stmts = make(map[uint32]*Stmt)
-
-	c.salt, _ = RandomBuf(20)
-
+	p := NewInMemoryProvider()
+	p.AddUser(user, password)
+	salt, _ := RandomBuf(20)
+	c := &Conn{
+		Conn:               packet.NewConn(conn),
+		serverConf:         defaultServer,
+		credentialProvider: p,
+		h:                  h,
+		connectionID:       atomic.AddUint32(&baseConnID, 1),
+		stmts:              make(map[uint32]*Stmt),
+		salt:               salt,
+	}
 	c.closed.Set(false)
 
-	if err := c.handshake(password); err != nil {
+	if err := c.handshake(); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -59,14 +61,38 @@ func NewConn(conn net.Conn, user string, password string, h Handler) (*Conn, err
 	return c, nil
 }
 
-func (c *Conn) handshake(password string) error {
+// create connection with customized server settings
+func NewCustomizedConn(conn net.Conn, serverConf *Server, p CredentialProvider, h Handler) (*Conn, error) {
+	salt, _ := RandomBuf(20)
+	c := &Conn{
+		Conn:               packet.NewConn(conn),
+		serverConf:         serverConf,
+		credentialProvider: p,
+		h:                  h,
+		connectionID:       atomic.AddUint32(&baseConnID, 1),
+		stmts:              make(map[uint32]*Stmt),
+		salt:               salt,
+	}
+	c.closed.Set(false)
+
+	if err := c.handshake(); err != nil {
+		c.Close()
+		return nil, err
+	}
+
+	return c, nil
+}
+
+func (c *Conn) handshake() error {
 	if err := c.writeInitialHandshake(); err != nil {
 		return err
 	}
 
-	if err := c.readHandshakeResponse(password); err != nil {
+	if err := c.readHandshakeResponse(); err != nil {
+		if err == ErrAccessDenied {
+			err = NewDefaultError(ER_ACCESS_DENIED_ERROR, c.user, c.LocalAddr().String(), "Yes")
+		}
 		c.writeError(err)
-
 		return err
 	}
 

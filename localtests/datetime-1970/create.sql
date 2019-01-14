@@ -1,3 +1,5 @@
+set session time_zone='+00:00';
+
 drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int auto_increment,
@@ -7,6 +9,7 @@ create table gh_ost_test (
   primary key(id)
 ) auto_increment=1;
 
+set session time_zone='+00:00';
 insert into gh_ost_test values (1, '0000-00-00 00:00:00', now(), 0);
 
 drop event if exists gh_ost_test;
@@ -19,5 +22,6 @@ create event gh_ost_test
   enable
   do
 begin
+  set session time_zone='+00:00';
   update gh_ost_test set counter = counter + 1 where id = 1;
 end ;;

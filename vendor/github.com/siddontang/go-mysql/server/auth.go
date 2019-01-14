@@ -2,118 +2,173 @@ package server
 
 import (
 	"bytes"
-	"encoding/binary"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/tls"
+	"fmt"
 
+	"github.com/juju/errors"
 	. "github.com/siddontang/go-mysql/mysql"
 )
 
-func (c *Conn) writeInitialHandshake() error {
-	capability := CLIENT_LONG_PASSWORD | CLIENT_LONG_FLAG |
-		CLIENT_CONNECT_WITH_DB | CLIENT_PROTOCOL_41 |
-		CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION
+var ErrAccessDenied = errors.New("access denied")
 
-	data := make([]byte, 4, 128)
+func (c *Conn) compareAuthData(authPluginName string, clientAuthData []byte) error {
+	switch authPluginName {
+	case AUTH_NATIVE_PASSWORD:
+		if err := c.acquirePassword(); err != nil {
+			return err
+		}
+		return c.compareNativePasswordAuthData(clientAuthData, c.password)
 
-	//min version 10
-	data = append(data, 10)
+	case AUTH_CACHING_SHA2_PASSWORD:
+		if err := c.compareCacheSha2PasswordAuthData(clientAuthData); err != nil {
+			return err
+		}
+		if c.cachingSha2FullAuth {
+			return c.handleAuthSwitchResponse()
+		}
+		return nil
 
-	//server version[00]
-	data = append(data, ServerVersion...)
-	data = append(data, 0)
+	case AUTH_SHA256_PASSWORD:
+		if err := c.acquirePassword(); err != nil {
+			return err
+		}
+		cont, err := c.handlePublicKeyRetrieval(clientAuthData)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+		return c.compareSha256PasswordAuthData(clientAuthData, c.password)
 
-	//connection id
-	data = append(data, byte(c.connectionID), byte(c.connectionID>>8), byte(c.connectionID>>16), byte(c.connectionID>>24))
-
-	//auth-plugin-data-part-1
-	data = append(data, c.salt[0:8]...)
-
-	//filter [00]
-	data = append(data, 0)
-
-	//capability flag lower 2 bytes, using default capability here
-	data = append(data, byte(capability), byte(capability>>8))
-
-	//charset, utf-8 default
-	data = append(data, uint8(DEFAULT_COLLATION_ID))
-
-	//status
-	data = append(data, byte(c.status), byte(c.status>>8))
-
-	//below 13 byte may not be used
-	//capability flag upper 2 bytes, using default capability here
-	data = append(data, byte(capability>>16), byte(capability>>24))
-
-	//filter [0x15], for wireshark dump, value is 0x15
-	data = append(data, 0x15)
-
-	//reserved 10 [00]
-	data = append(data, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-	//auth-plugin-data-part-2
-	data = append(data, c.salt[8:]...)
-
-	//filter [00]
-	data = append(data, 0)
-
-	return c.WritePacket(data)
+	default:
+		return errors.Errorf("unknown authentication plugin name '%s'", authPluginName)
+	}
 }
 
-func (c *Conn) readHandshakeResponse(password string) error {
-	data, err := c.ReadPacket()
-
+func (c *Conn) acquirePassword() error {
+	password, found, err := c.credentialProvider.GetCredential(c.user)
 	if err != nil {
 		return err
 	}
-
-	pos := 0
-
-	//capability
-	c.capability = binary.LittleEndian.Uint32(data[:4])
-	pos += 4
-
-	//skip max packet size
-	pos += 4
-
-	//charset, skip, if you want to use another charset, use set names
-	//c.collation = CollationId(data[pos])
-	pos++
-
-	//skip reserved 23[00]
-	pos += 23
-
-	//user name
-	user := string(data[pos : pos+bytes.IndexByte(data[pos:], 0)])
-	pos += len(user) + 1
-
-	if c.user != user {
-		return NewDefaultError(ER_NO_SUCH_USER, user, c.RemoteAddr().String())
+	if !found {
+		return NewDefaultError(ER_NO_SUCH_USER, c.user, c.RemoteAddr().String())
 	}
+	c.password = password
+	return nil
+}
 
-	//auth length and auth
-	authLen := int(data[pos])
-	pos++
-	auth := data[pos : pos+authLen]
-
-	checkAuth := CalcPassword(c.salt, []byte(password))
-
-	if !bytes.Equal(auth, checkAuth) {
-		return NewDefaultError(ER_ACCESS_DENIED_ERROR, c.RemoteAddr().String(), c.user, "Yes")
+func scrambleValidation(cached, nonce, scramble []byte) bool {
+	// SHA256(SHA256(SHA256(STORED_PASSWORD)), NONCE)
+	crypt := sha256.New()
+	crypt.Write(cached)
+	crypt.Write(nonce)
+	message2 := crypt.Sum(nil)
+	// SHA256(PASSWORD)
+	if len(message2) != len(scramble) {
+		return false
 	}
+	for i := range message2 {
+		message2[i] ^= scramble[i]
+	}
+	// SHA256(SHA256(PASSWORD)
+	crypt.Reset()
+	crypt.Write(message2)
+	m := crypt.Sum(nil)
+	return bytes.Equal(m, cached)
+}
 
-	pos += authLen
+func (c *Conn) compareNativePasswordAuthData(clientAuthData []byte, password string) error {
+	if bytes.Equal(CalcPassword(c.salt, []byte(c.password)), clientAuthData) {
+		return nil
+	}
+	return ErrAccessDenied
+}
 
-	if c.capability|CLIENT_CONNECT_WITH_DB > 0 {
-		if len(data[pos:]) == 0 {
+func (c *Conn) compareSha256PasswordAuthData(clientAuthData []byte, password string) error {
+	// Empty passwords are not hashed, but sent as empty string
+	if len(clientAuthData) == 0 {
+		if password == "" {
 			return nil
 		}
-
-		db := string(data[pos : pos+bytes.IndexByte(data[pos:], 0)])
-		pos += len(db) + 1
-
-		if err = c.h.UseDB(db); err != nil {
+		return ErrAccessDenied
+	}
+	if tlsConn, ok := c.Conn.Conn.(*tls.Conn); ok {
+		if !tlsConn.ConnectionState().HandshakeComplete {
+			return errors.New("incomplete TSL handshake")
+		}
+		// connection is SSL/TLS, client should send plain password
+		// deal with the trailing \NUL added for plain text password received
+		if l := len(clientAuthData); l != 0 && clientAuthData[l-1] == 0x00 {
+			clientAuthData = clientAuthData[:l-1]
+		}
+		if bytes.Equal(clientAuthData, []byte(password)) {
+			return nil
+		}
+		return ErrAccessDenied
+	} else {
+		// client should send encrypted password
+		// decrypt
+		dbytes, err := rsa.DecryptOAEP(sha1.New(), rand.Reader, (c.serverConf.tlsConfig.Certificates[0].PrivateKey).(*rsa.PrivateKey), clientAuthData, nil)
+		if err != nil {
 			return err
 		}
+		plain := make([]byte, len(password)+1)
+		copy(plain, password)
+		for i := range plain {
+			j := i % len(c.salt)
+			plain[i] ^= c.salt[j]
+		}
+		if bytes.Equal(plain, dbytes) {
+			return nil
+		}
+		return ErrAccessDenied
 	}
+}
 
+func (c *Conn) compareCacheSha2PasswordAuthData(clientAuthData []byte) error {
+	// Empty passwords are not hashed, but sent as empty string
+	if len(clientAuthData) == 0 {
+		if err := c.acquirePassword(); err != nil {
+			return err
+		}
+		if c.password == "" {
+			return nil
+		}
+		return ErrAccessDenied
+	}
+	// the caching of 'caching_sha2_password' in MySQL, see: https://dev.mysql.com/worklog/task/?id=9591
+	if _, ok := c.credentialProvider.(*InMemoryProvider); ok {
+		// since we have already kept the password in memory and calculate the scramble is not that high of cost, we eliminate
+		// the caching part. So our server will never ask the client to do a full authentication via RSA key exchange and it appears
+		// like the auth will always hit the cache.
+		if err := c.acquirePassword(); err != nil {
+			return err
+		}
+		if bytes.Equal(CalcCachingSha2Password(c.salt, c.password), clientAuthData) {
+			// 'fast' auth: write "More data" packet (first byte == 0x01) with the second byte = 0x03
+			return c.writeAuthMoreDataFastAuth()
+		}
+		return ErrAccessDenied
+	}
+	// other type of credential provider, we use the cache
+	cached, ok := c.serverConf.cacheShaPassword.Load(fmt.Sprintf("%s@%s", c.user, c.Conn.LocalAddr()))
+	if ok {
+		// Scramble validation
+		if scrambleValidation(cached.([]byte), c.salt, clientAuthData) {
+			// 'fast' auth: write "More data" packet (first byte == 0x01) with the second byte = 0x03
+			return c.writeAuthMoreDataFastAuth()
+		}
+		return ErrAccessDenied
+	}
+	// cache miss, do full auth
+	if err := c.writeAuthMoreDataFullAuth(); err != nil {
+		return err
+	}
+	c.cachingSha2FullAuth = true
 	return nil
 }
