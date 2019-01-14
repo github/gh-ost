@@ -322,6 +322,15 @@ help                                 # This message
 		}
 	case "panic":
 		{
+			if arg == "" && this.migrationContext.ForceNamedPanicCommand {
+				err := fmt.Errorf("User commanded 'panic' without specifying table name, but --force-named-panic is set")
+				return NoPrintStatusRule, err
+			}
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'panic' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
 			err := fmt.Errorf("User commanded 'panic'. I will now panic, without cleanup. PANIC!")
 			this.migrationContext.PanicAbort <- err
 			return NoPrintStatusRule, err
