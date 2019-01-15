@@ -776,6 +776,23 @@ func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err er
 	return replicationLag, err
 }
 
+func (this *Inspector) SlaveCatchedUp(binfile string,binpos int) (bool,error){
+
+	var value gosql.NullInt64
+	log.Infof("validate whether catchup,select master_pos_wait(%s,%d,0.2)",binfile,binpos)
+	err := this.informationSchemaDb.QueryRow(`select MASTER_POS_WAIT(?,?,0.2)`,binfile,binpos).Scan(&value)
+	// fmt.Println(this.connectionConfig.Key.Hostname,value)
+	if err != nil {
+		return false,err
+	}
+
+	if ! value.Valid || value.Int64 == 0{
+		return true,nil
+	}
+
+	return false,nil
+}
+
 func (this *Inspector) Teardown() {
 	this.db.Close()
 	this.informationSchemaDb.Close()

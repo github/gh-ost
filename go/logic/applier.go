@@ -18,6 +18,7 @@ import (
 
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
+	"github.com/juju/errors"
 )
 
 const (
@@ -57,13 +58,15 @@ type Applier struct {
 	singletonDB       *gosql.DB
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
+	inspector *Inspector
 }
 
-func NewApplier(migrationContext *base.MigrationContext) *Applier {
+func NewApplier(migrationContext *base.MigrationContext,i *Inspector) *Applier {
 	return &Applier{
 		connectionConfig:  migrationContext.ApplierConnectionConfig,
 		migrationContext:  migrationContext,
 		finishedMigrating: 0,
+		inspector:i,
 	}
 }
 
@@ -361,7 +364,7 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	if err != nil {
 		return err
 	}
-	rows, err := this.db.Query(query)
+	rows, err := this.inspector.db.Query(query)
 	if err != nil {
 		return err
 	}
@@ -382,7 +385,7 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	if err != nil {
 		return err
 	}
-	rows, err := this.db.Query(query)
+	rows, err := this.inspector.db.Query(query)
 	if err != nil {
 		return err
 	}
@@ -396,8 +399,40 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	return err
 }
 
+
+func (this *Applier) getMasterStatus() (binfile string,binpos int ,err error){
+
+	binfile,binpos,err = mysql.GetMasterStatus(this.db)
+
+	return binfile,binpos,err
+}
+
+
 // ReadMigrationRangeValues reads min/max values that will be used for rowcopy
 func (this *Applier) ReadMigrationRangeValues() error {
+
+	binFile,binPos,err := this.getMasterStatus()
+
+	if err != nil {
+		return err
+	}
+
+	for i:=0;i<360;i++{
+		catched,err := this.inspector.SlaveCatchedUp(binFile,binPos)
+		if err != nil {
+			return err
+		}
+
+		if catched{
+			break
+		}
+		if i == 360{
+			return errors.New("slave cannot catch up")
+		}
+		log.Infof("slave catching up ..")
+		time.Sleep(time.Second)
+	}
+
 	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
 		return err
 	}
