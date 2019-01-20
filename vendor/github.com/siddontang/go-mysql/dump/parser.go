@@ -6,6 +6,7 @@ import (
 	"io"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/juju/errors"
 	"github.com/siddontang/go-mysql/mysql"
@@ -34,7 +35,7 @@ func init() {
 
 // Parse the dump data with Dumper generate.
 // It can not parse all the data formats with mysqldump outputs
-func Parse(r io.Reader, h ParseHandler) error {
+func Parse(r io.Reader, h ParseHandler, parseBinlogPos bool) error {
 	rb := bufio.NewReaderSize(r, 1024*16)
 
 	var db string
@@ -48,9 +49,12 @@ func Parse(r io.Reader, h ParseHandler) error {
 			break
 		}
 
-		line = line[0 : len(line)-1]
+		// Ignore '\n' on Linux or '\r\n' on Windows
+		line = strings.TrimRightFunc(line, func(c rune) bool {
+			return c == '\r' || c == '\n'
+		})
 
-		if !binlogParsed {
+		if parseBinlogPos && !binlogParsed {
 			if m := binlogExp.FindAllStringSubmatch(line, -1); len(m) == 1 {
 				name := m[0][1]
 				pos, err := strconv.ParseUint(m[0][2], 10, 64)

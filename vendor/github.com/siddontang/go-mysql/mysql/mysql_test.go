@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pingcap/check"
@@ -15,11 +16,11 @@ type mysqlTestSuite struct {
 
 var _ = check.Suite(&mysqlTestSuite{})
 
-func (s *mysqlTestSuite) SetUpSuite(c *check.C) {
+func (t *mysqlTestSuite) SetUpSuite(c *check.C) {
 
 }
 
-func (s *mysqlTestSuite) TearDownSuite(c *check.C) {
+func (t *mysqlTestSuite) TearDownSuite(c *check.C) {
 
 }
 
@@ -59,6 +60,12 @@ func (t *mysqlTestSuite) TestMysqlGTIDIntervalSlice(c *check.C) {
 	n = i.Normalize()
 	c.Assert(n, check.DeepEquals, IntervalSlice{Interval{1, 3}, Interval{4, 5}})
 
+	i = IntervalSlice{Interval{1, 4}, Interval{2, 3}}
+	i.Sort()
+	c.Assert(i, check.DeepEquals, IntervalSlice{Interval{1, 4}, Interval{2, 3}})
+	n = i.Normalize()
+	c.Assert(n, check.DeepEquals, IntervalSlice{Interval{1, 4}})
+
 	n1 := IntervalSlice{Interval{1, 3}, Interval{4, 5}}
 	n2 := IntervalSlice{Interval{1, 2}}
 
@@ -89,6 +96,15 @@ func (t *mysqlTestSuite) TestMysqlGTIDCodec(c *check.C) {
 	o, err := DecodeMysqlGTIDSet(buf)
 	c.Assert(err, check.IsNil)
 	c.Assert(gs, check.DeepEquals, o)
+}
+
+func (t *mysqlTestSuite) TestMysqlUpdate(c *check.C) {
+	g1, err := ParseMysqlGTIDSet("3E11FA47-71CA-11E1-9E33-C80AA9429562:21-57")
+	c.Assert(err, check.IsNil)
+
+	g1.Update("3E11FA47-71CA-11E1-9E33-C80AA9429562:21-58")
+
+	c.Assert(strings.ToUpper(g1.String()), check.Equals, "3E11FA47-71CA-11E1-9E33-C80AA9429562:21-58")
 }
 
 func (t *mysqlTestSuite) TestMysqlGTIDContain(c *check.C) {
@@ -150,4 +166,27 @@ func (t *mysqlTestSuite) TestMysqlParseBinaryInt64(c *check.C) {
 func (t *mysqlTestSuite) TestMysqlParseBinaryUint64(c *check.C) {
 	u64 := ParseBinaryUint64([]byte{1, 2, 3, 4, 5, 6, 7, 128})
 	c.Assert(u64, check.Equals, 128*uint64(72057594037927936)+7*uint64(281474976710656)+6*uint64(1099511627776)+5*uint64(4294967296)+4*16777216+3*65536+2*256+1)
+}
+
+func (t *mysqlTestSuite) TestErrorCode(c *check.C) {
+	tbls := []struct {
+		msg  string
+		code int
+	}{
+		{"ERROR 1094 (HY000): Unknown thread id: 1094", 1094},
+		{"error string", 0},
+		{"abcdefg", 0},
+		{"123455 ks094", 0},
+		{"ERROR 1046 (3D000): Unknown error 1046", 1046},
+	}
+	for _, v := range tbls {
+		c.Assert(ErrorCode(v.msg), check.Equals, v.code)
+	}
+}
+
+func (t *mysqlTestSuite) TestMysqlNullDecode(c *check.C) {
+	_, isNull, n := LengthEncodedInt([]byte{0xfb})
+
+	c.Assert(isNull, check.IsTrue)
+	c.Assert(n, check.Equals, 1)
 }

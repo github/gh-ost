@@ -69,6 +69,7 @@ The following variables are available on all hooks:
 - `GH_OST_INSPECTED_HOST`
 - `GH_OST_EXECUTING_HOST`
 - `GH_OST_HOOKS_HINT` - copy of `--hooks-hint` value
+- `GH_OST_DRY_RUN` - whether or not the `gh-ost` run is a dry run
 
 The following variable are available on particular hooks:
 

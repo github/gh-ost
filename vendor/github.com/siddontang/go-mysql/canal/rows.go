@@ -3,16 +3,18 @@ package canal
 import (
 	"fmt"
 
-	"github.com/juju/errors"
+	"github.com/siddontang/go-mysql/replication"
 	"github.com/siddontang/go-mysql/schema"
 )
 
+// The action name for sync.
 const (
 	UpdateAction = "update"
 	InsertAction = "insert"
 	DeleteAction = "delete"
 )
 
+// RowsEvent is the event for row replication.
 type RowsEvent struct {
 	Table  *schema.Table
 	Action string
@@ -22,35 +24,49 @@ type RowsEvent struct {
 	// Two rows for one event, format is [before update row, after update row]
 	// for update v0, only one row for a event, and we don't support this version.
 	Rows [][]interface{}
+	// Header can be used to inspect the event
+	Header *replication.EventHeader
 }
 
-func newRowsEvent(table *schema.Table, action string, rows [][]interface{}) *RowsEvent {
+func newRowsEvent(table *schema.Table, action string, rows [][]interface{}, header *replication.EventHeader) *RowsEvent {
 	e := new(RowsEvent)
 
 	e.Table = table
 	e.Action = action
 	e.Rows = rows
+	e.Header = header
+
+	e.handleUnsigned()
 
 	return e
 }
 
-// Get primary keys in one row for a table, a table may use multi fields as the PK
-func GetPKValues(table *schema.Table, row []interface{}) ([]interface{}, error) {
-	indexes := table.PKColumns
-	if len(indexes) == 0 {
-		return nil, errors.Errorf("table %s has no PK", table)
-	} else if len(table.Columns) != len(row) {
-		return nil, errors.Errorf("table %s has %d columns, but row data %v len is %d", table,
-			len(table.Columns), row, len(row))
+func (r *RowsEvent) handleUnsigned() {
+	// Handle Unsigned Columns here, for binlog replication, we can't know the integer is unsigned or not,
+	// so we use int type but this may cause overflow outside sometimes, so we must convert to the really .
+	// unsigned type
+	if len(r.Table.UnsignedColumns) == 0 {
+		return
 	}
 
-	values := make([]interface{}, 0, len(indexes))
-
-	for _, index := range indexes {
-		values = append(values, row[index])
+	for i := 0; i < len(r.Rows); i++ {
+		for _, index := range r.Table.UnsignedColumns {
+			switch t := r.Rows[i][index].(type) {
+			case int8:
+				r.Rows[i][index] = uint8(t)
+			case int16:
+				r.Rows[i][index] = uint16(t)
+			case int32:
+				r.Rows[i][index] = uint32(t)
+			case int64:
+				r.Rows[i][index] = uint64(t)
+			case int:
+				r.Rows[i][index] = uint(t)
+			default:
+				// nothing to do
+			}
+		}
 	}
-
-	return values, nil
 }
 
 // String implements fmt.Stringer interface.

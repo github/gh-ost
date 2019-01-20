@@ -31,42 +31,42 @@ func (p FieldData) Parse() (f *Field, err error) {
 	var n int
 	pos := 0
 	//skip catelog, always def
-	n, err = SkipLengthEnodedString(p)
+	n, err = SkipLengthEncodedString(p)
 	if err != nil {
 		return
 	}
 	pos += n
 
 	//schema
-	f.Schema, _, n, err = LengthEnodedString(p[pos:])
+	f.Schema, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
 		return
 	}
 	pos += n
 
 	//table
-	f.Table, _, n, err = LengthEnodedString(p[pos:])
+	f.Table, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
 		return
 	}
 	pos += n
 
 	//org_table
-	f.OrgTable, _, n, err = LengthEnodedString(p[pos:])
+	f.OrgTable, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
 		return
 	}
 	pos += n
 
 	//name
-	f.Name, _, n, err = LengthEnodedString(p[pos:])
+	f.Name, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
 		return
 	}
 	pos += n
 
 	//org_name
-	f.OrgName, _, n, err = LengthEnodedString(p[pos:])
+	f.OrgName, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
 		return
 	}
