@@ -622,8 +622,6 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
       GROUP BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME
     ) AS UNIQUES
     ON (
-      COLUMNS.TABLE_SCHEMA = UNIQUES.TABLE_SCHEMA AND
-      COLUMNS.TABLE_NAME = UNIQUES.TABLE_NAME AND
       COLUMNS.COLUMN_NAME = UNIQUES.FIRST_COLUMN_NAME
     )
     WHERE
