@@ -140,8 +140,8 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 		if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
 			// when running on replica, the heartbeat injection is also done on the replica.
 			// This means we will always get a good heartbeat value.
-			// When runnign on replica, we should instead check the `SHOW SLAVE STATUS` output.
-			if lag, err := mysql.GetReplicationLag(this.inspector.informationSchemaDb, this.inspector.connectionConfig); err != nil {
+			// When running on replica, we should instead check the `SHOW SLAVE STATUS` output.
+			if lag, err := mysql.GetReplicationLagFromSlaveStatus(this.inspector.informationSchemaDb); err != nil {
 				return log.Errore(err)
 			} else {
 				atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
