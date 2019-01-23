@@ -58,9 +58,8 @@ func GetDB(migrationUuid string, mysql_uri string) (*gosql.DB, bool, error) {
 	return knownDBs[cacheKey], exists, nil
 }
 
-// GetReplicationLag returns replication lag for a given connection config; either by explicit query
-// or via SHOW SLAVE STATUS
-func GetReplicationLag(informationSchemaDb *gosql.DB, connectionConfig *ConnectionConfig) (replicationLag time.Duration, err error) {
+// GetReplicationLagFromSlaveStatus returns replication lag for a given db; via SHOW SLAVE STATUS
+func GetReplicationLagFromSlaveStatus(informationSchemaDb *gosql.DB) (replicationLag time.Duration, err error) {
 	err = sqlutils.QueryRowsMap(informationSchemaDb, `show slave status`, func(m sqlutils.RowMap) error {
 		slaveIORunning := m.GetString("Slave_IO_Running")
 		slaveSQLRunning := m.GetString("Slave_SQL_Running")
@@ -84,9 +83,6 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 	}
 	defer db.Close()
 
-	if err != nil {
-		return nil, err
-	}
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
 		// We wish to recognize the case where the topology's master actually has replication configuration.
 		// This can happen when a DBA issues a `RESET SLAVE` instead of `RESET SLAVE ALL`.
@@ -99,7 +95,6 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 		slaveIORunning := rowMap.GetString("Slave_IO_Running")
 		slaveSQLRunning := rowMap.GetString("Slave_SQL_Running")
 
-		//
 		if slaveIORunning != "Yes" || slaveSQLRunning != "Yes" {
 			return fmt.Errorf("Replication on %+v is broken: Slave_IO_Running: %s, Slave_SQL_Running: %s. Please make sure replication runs before using gh-ost.",
 				connectionConfig.Key,

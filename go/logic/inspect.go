@@ -692,14 +692,17 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 		for _, ghostColumn := range ghostColumns.Names() {
 			if strings.EqualFold(originalColumn, ghostColumn) {
 				isSharedColumn = true
+				break
 			}
 			if strings.EqualFold(columnRenameMap[originalColumn], ghostColumn) {
 				isSharedColumn = true
+				break
 			}
 		}
 		for droppedColumn := range this.migrationContext.DroppedColumnsMap {
 			if strings.EqualFold(originalColumn, droppedColumn) {
 				isSharedColumn = false
+				break
 			}
 		}
 		for _, virtualColumn := range originalVirtualColumns.Names() {
@@ -758,9 +761,8 @@ func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.Connect
 }
 
 func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err error) {
-	replicationLag, err = mysql.GetReplicationLag(
+	replicationLag, err = mysql.GetReplicationLagFromSlaveStatus(
 		this.informationSchemaDb,
-		this.migrationContext.InspectorConnectionConfig,
 	)
 	return replicationLag, err
 }
