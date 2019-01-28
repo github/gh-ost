@@ -48,8 +48,9 @@ const (
 )
 
 const (
-	HTTPStatusOK       = 200
-	MaxEventsBatchSize = 1000
+	HTTPStatusOK            = 200
+	MaxEventsBatchSize      = 1000
+	MaxSocketFileNameLength = 104
 )
 
 var (
@@ -240,6 +241,10 @@ func NewMigrationContext() *MigrationContext {
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
 	}
+}
+
+func (this *MigrationContext) GetServeSocketFile() string {
+	return this.ServeSocketFile
 }
 
 func getSafeTableName(baseName string, suffix string) string {
