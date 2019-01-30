@@ -19,6 +19,7 @@ import (
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
 	"github.com/juju/errors"
+	"strings"
 )
 
 const (
@@ -202,6 +203,12 @@ func (this *Applier) AlterGhost() error {
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
 	log.Debugf("ALTER statement: %s", query)
+
+	if strings.ToLower(this.migrationContext.AlterStatement) == "noop"{
+		log.Infof("Noop,Just rebuild the table and not change the table structure")
+		return nil
+	}
+
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
