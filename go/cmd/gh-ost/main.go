@@ -14,6 +14,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/outbrain/golib/log"
 
 	"golang.org/x/crypto/ssh/terminal"
@@ -53,6 +54,9 @@ func main() {
 	flag.StringVar(&migrationContext.CliMasterPassword, "master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
+
+	flag.BoolVar(&migrationContext.UseTLS, "ssl", false, "Enable SSL encrypted connections to MySQL")
+	flag.StringVar(&migrationContext.TlsCACertificate, "ssl-ca", "", "CA certificate in PEM format for TLS connections. Requires --ssl")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
@@ -194,6 +198,9 @@ func main() {
 	if migrationContext.CliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
 		log.Fatalf("--master-password requires --assume-master-host")
 	}
+	if migrationContext.TlsCACertificate != "" && !migrationContext.UseTLS {
+		log.Fatalf("--ssl-ca requires --ssl")
+	}
 	if *replicationLagQuery != "" {
 		log.Warningf("--replication-lag-query is deprecated")
 	}
@@ -238,6 +245,7 @@ func main() {
 	migrationContext.SetThrottleHTTP(*throttleHTTP)
 	migrationContext.SetDefaultNumRetries(*defaultRetries)
 	migrationContext.ApplyCredentials()
+	migrationContext.SetupTLS()
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {
 		log.Errore(err)
 	}

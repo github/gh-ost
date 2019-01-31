@@ -73,7 +73,7 @@ func (this *Applier) InitDBConnections() (err error) {
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
-	singletonApplierUri := fmt.Sprintf("%s?timeout=0", applierUri)
+	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
 	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
 	}
