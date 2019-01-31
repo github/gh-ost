@@ -91,6 +91,8 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 		hostname = fmt.Sprintf("[%s]", hostname)
 	}
 	interpolateParams := true
+	// go-mysql-driver defaults to false if tls param is not provided; explicitly setting here to
+	// simplify construction of the DSN below.
 	tlsOption := "false"
 	if this.tlsConfig != nil {
 		tlsOption = this.Key.StringCode()
