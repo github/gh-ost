@@ -56,7 +56,7 @@ func main() {
 	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
 
 	flag.BoolVar(&migrationContext.UseTLS, "ssl", false, "Enable SSL encrypted connections to MySQL")
-	flag.StringVar(&migrationContext.TlsCACertificate, "ssl-ca", "", "CA certificate in PEM format for TLS connections. Requires --ssl")
+	flag.StringVar(&migrationContext.TLSCACertificate, "ssl-ca", "", "CA certificate in PEM format for TLS connections. Requires --ssl")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
@@ -198,7 +198,7 @@ func main() {
 	if migrationContext.CliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
 		log.Fatalf("--master-password requires --assume-master-host")
 	}
-	if migrationContext.TlsCACertificate != "" && !migrationContext.UseTLS {
+	if migrationContext.TLSCACertificate != "" && !migrationContext.UseTLS {
 		log.Fatalf("--ssl-ca requires --ssl")
 	}
 	if *replicationLagQuery != "" {
