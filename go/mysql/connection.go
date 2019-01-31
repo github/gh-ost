@@ -76,10 +76,7 @@ func (this *ConnectionConfig) UseTLS(caCertificatePath string) error {
 		InsecureSkipVerify: skipVerify,
 	}
 
-	if err := mysql.RegisterTLSConfig(this.Key.StringCode(), this.tlsConfig); err != nil {
-		return err
-	}
-	return nil
+	return mysql.RegisterTLSConfig(this.Key.StringCode(), this.tlsConfig)
 }
 
 func (this *ConnectionConfig) TLSConfig() *tls.Config {
