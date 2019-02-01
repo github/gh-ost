@@ -245,7 +245,9 @@ func main() {
 	migrationContext.SetThrottleHTTP(*throttleHTTP)
 	migrationContext.SetDefaultNumRetries(*defaultRetries)
 	migrationContext.ApplyCredentials()
-	migrationContext.SetupTLS()
+	if err := migrationContext.SetupTLS(); err != nil {
+		log.Fatale(err)
+	}
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {
 		log.Errore(err)
 	}
