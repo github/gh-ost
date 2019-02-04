@@ -58,22 +58,30 @@ func (this *ConnectionConfig) Equals(other *ConnectionConfig) bool {
 }
 
 func (this *ConnectionConfig) UseTLS(caCertificatePath string) error {
-	skipVerify := caCertificatePath == ""
 	var rootCertPool *x509.CertPool
-	if !skipVerify {
-		rootCertPool = x509.NewCertPool()
-		pem, err := ioutil.ReadFile(caCertificatePath)
-		if err != nil {
-			return err
-		}
-		if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
-			return errors.New("could not add ca certificate to cert pool")
+	var err error
+
+	if !this.TLSInsecureSkipVerify {
+		if caCertificatePath == "" {
+			rootCertPool, err = x509.SystemCertPool()
+			if err != nil {
+				return err
+			}
+		} else {
+			rootCertPool = x509.NewCertPool()
+			pem, err := ioutil.ReadFile(caCertificatePath)
+			if err != nil {
+				return err
+			}
+			if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
+				return errors.New("could not add ca certificate to cert pool")
+			}
 		}
 	}
 
 	this.tlsConfig = &tls.Config{
 		RootCAs:            rootCertPool,
-		InsecureSkipVerify: skipVerify,
+		InsecureSkipVerify: this.TLSInsecureSkipVerify,
 	}
 
 	return mysql.RegisterTLSConfig(this.Key.StringCode(), this.tlsConfig)

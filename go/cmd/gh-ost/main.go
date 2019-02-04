@@ -57,6 +57,7 @@ func main() {
 
 	flag.BoolVar(&migrationContext.UseTLS, "ssl", false, "Enable SSL encrypted connections to MySQL hosts")
 	flag.StringVar(&migrationContext.TLSCACertificate, "ssl-ca", "", "CA certificate in PEM format for TLS connections to MySQL hosts. Requires --ssl")
+	flag.StringVar(&migrationContext.TLSInsecureSkipVerify, "ssl-insecure", false, "Do not verify that the TLS connection is secure. Requires --ssl")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
@@ -200,6 +201,9 @@ func main() {
 	}
 	if migrationContext.TLSCACertificate != "" && !migrationContext.UseTLS {
 		log.Fatalf("--ssl-ca requires --ssl")
+	}
+	if migrationContext.TLSInsecureSkipVerify && !migrationContext.UseTLS {
+		log.Fatalf("--ssl-insecure requires --ssl")
 	}
 	if *replicationLagQuery != "" {
 		log.Warningf("--replication-lag-query is deprecated")

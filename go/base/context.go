@@ -94,15 +94,16 @@ type MigrationContext struct {
 	AliyunRDS                bool
 	GoogleCloudPlatform      bool
 
-	config            ContextConfig
-	configMutex       *sync.Mutex
-	ConfigFile        string
-	CliUser           string
-	CliPassword       string
-	UseTLS            bool
-	TLSCACertificate  string
-	CliMasterUser     string
-	CliMasterPassword string
+	config                ContextConfig
+	configMutex           *sync.Mutex
+	ConfigFile            string
+	CliUser               string
+	CliPassword           string
+	UseTLS                bool
+	TLSInsecureSkipVerify bool
+	TLSCACertificate      string
+	CliMasterUser         string
+	CliMasterPassword     string
 
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
