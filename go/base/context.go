@@ -94,16 +94,16 @@ type MigrationContext struct {
 	AliyunRDS                bool
 	GoogleCloudPlatform      bool
 
-	config                ContextConfig
-	configMutex           *sync.Mutex
-	ConfigFile            string
-	CliUser               string
-	CliPassword           string
-	UseTLS                bool
-	TLSInsecureSkipVerify bool
-	TLSCACertificate      string
-	CliMasterUser         string
-	CliMasterPassword     string
+	config            ContextConfig
+	configMutex       *sync.Mutex
+	ConfigFile        string
+	CliUser           string
+	CliPassword       string
+	UseTLS            bool
+	TLSAllowInsecure  bool
+	TLSCACertificate  string
+	CliMasterUser     string
+	CliMasterPassword string
 
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
@@ -700,7 +700,7 @@ func (this *MigrationContext) ApplyCredentials() {
 
 func (this *MigrationContext) SetupTLS() error {
 	if this.UseTLS {
-		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate)
+		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate, this.TLSAllowInsecure)
 	}
 	return nil
 }

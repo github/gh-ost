@@ -57,11 +57,11 @@ func (this *ConnectionConfig) Equals(other *ConnectionConfig) bool {
 	return this.Key.Equals(&other.Key) || this.ImpliedKey.Equals(other.ImpliedKey)
 }
 
-func (this *ConnectionConfig) UseTLS(caCertificatePath string) error {
+func (this *ConnectionConfig) UseTLS(caCertificatePath string, allowInsecure bool) error {
 	var rootCertPool *x509.CertPool
 	var err error
 
-	if !this.TLSInsecureSkipVerify {
+	if !allowInsecure {
 		if caCertificatePath == "" {
 			rootCertPool, err = x509.SystemCertPool()
 			if err != nil {
@@ -81,7 +81,7 @@ func (this *ConnectionConfig) UseTLS(caCertificatePath string) error {
 
 	this.tlsConfig = &tls.Config{
 		RootCAs:            rootCertPool,
-		InsecureSkipVerify: this.TLSInsecureSkipVerify,
+		InsecureSkipVerify: allowInsecure,
 	}
 
 	return mysql.RegisterTLSConfig(this.Key.StringCode(), this.tlsConfig)
