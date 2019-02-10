@@ -126,6 +126,8 @@ type MigrationContext struct {
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string
+	HooksHintOwner                      string
+	HooksHintToken                      string
 
 	DropServeSocket bool
 	ServeSocketFile string
