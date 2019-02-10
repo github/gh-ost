@@ -2,6 +2,10 @@
 
 A more in-depth discussion of various `gh-ost` command line flags: implementation, implication, use cases.
 
+### aliyun-rds
+
+Add this flag when executing on Aliyun RDS.
+
 ### allow-master-master
 
 See [`--assume-master-host`](#assume-master-host).
@@ -65,6 +69,10 @@ This is somewhat similar to a Nagios `n`-times test, where `n` in our case is al
 
 Optional. Default is `safe`. See more discussion in [`cut-over`](cut-over.md)
 
+### cut-over-lock-timeout-seconds
+
+Default `3`.  Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout).
+
 ### discard-foreign-keys
 
 **Danger**: this flag will _silently_ discard any foreign keys existing on your table.
@@ -82,7 +90,7 @@ The `--dml-batch-size` flag controls the size of the batched write. Allowed valu
 
 Why is this behavior configurable? Different workloads have different characteristics. Some workloads have very large writes, such that aggregating even `50` writes into a transaction makes for a significant transaction size. On other workloads write rate is high such that one just can't allow for a hundred more syncs to disk per second. The default value of `10` is a modest compromise that should probably work very well for most workloads. Your mileage may vary.
 
-Noteworthy is that setting `--dml-batch-size` to higher value _does not_ mean `gh-ost` blocks or waits on writes. The batch size is an upper limit on transaction size, not a minimal one. If `gh-ost` doesn't have "enough" events in the pipe, it does not wait on the binary log, it just writes what it already has. This conveniently suggests that if write load is light enough for `gh-ost` to only see a few events in the binary log at a given time, then it is also light neough for `gh-ost` to apply a fraction of the batch size.
+Noteworthy is that setting `--dml-batch-size` to higher value _does not_ mean `gh-ost` blocks or waits on writes. The batch size is an upper limit on transaction size, not a minimal one. If `gh-ost` doesn't have "enough" events in the pipe, it does not wait on the binary log, it just writes what it already has. This conveniently suggests that if write load is light enough for `gh-ost` to only see a few events in the binary log at a given time, then it is also light enough for `gh-ost` to apply a fraction of the batch size.
 
 ### exact-rowcount
 
@@ -103,6 +111,14 @@ While the ongoing estimated number of rows is still heuristic, it's almost exact
 
 Without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
 
+### force-table-names
+
+Table name prefix to be used on the temporary tables.
+
+### gcp
+
+Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
+
 ### heartbeat-interval-millis
 
 Default 100. See [`subsecond-lag`](subsecond-lag.md) for details.
@@ -116,6 +132,10 @@ We think `gh-ost` should not take chances or make assumptions about the user's t
 ### initially-drop-old-table
 
 See [`initially-drop-ghost-table`](#initially-drop-ghost-table)
+
+### initially-drop-socket-file
+
+Default False. Should `gh-ost` forcibly delete an existing socket file. Be careful: this might drop the socket file of a running migration!
 
 ### max-lag-millis
 
@@ -151,7 +171,7 @@ See also: [`concurrent-migrations`](cheatsheet.md#concurrent-migrations) on the 
 
 ### skip-foreign-key-checks
 
-By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not referenece other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
+By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not reference other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
 
 ### skip-renamed-columns
 
@@ -160,6 +180,10 @@ See [`approve-renamed-columns`](#approve-renamed-columns)
 ### test-on-replica
 
 Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [`testing-on-replica`](testing-on-replica.md)
+
+### test-on-replica-skip-replica-stop
+
+Default `False`. When `--test-on-replica` is enabled, do not issue commands stop replication (requires `--test-on-replica`).
 
 ### throttle-control-replicas
 

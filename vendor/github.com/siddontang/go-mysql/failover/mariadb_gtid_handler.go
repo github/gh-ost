@@ -46,12 +46,12 @@ func (h *MariadbGTIDHandler) FindBestSlaves(slaves []*Server) ([]*Server, error)
 		if len(str) == 0 {
 			seq = 0
 		} else {
-			g, err := ParseMariadbGTIDSet(str)
+			g, err := ParseMariadbGTID(str)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
 
-			seq = g.(MariadbGTID).SequenceNumber
+			seq = g.SequenceNumber
 		}
 
 		ps[i] = seq
@@ -118,7 +118,7 @@ func (h *MariadbGTIDHandler) WaitRelayLogDone(s *Server) error {
 	fname, _ := r.GetStringByName(0, "Master_Log_File")
 	pos, _ := r.GetIntByName(0, "Read_Master_Log_Pos")
 
-	return s.MasterPosWait(Position{fname, uint32(pos)}, 0)
+	return s.MasterPosWait(Position{Name: fname, Pos: uint32(pos)}, 0)
 }
 
 func (h *MariadbGTIDHandler) WaitCatchMaster(s *Server, m *Server) error {

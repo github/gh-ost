@@ -1,14 +1,14 @@
 package replication
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"path"
 	"sync"
 	"testing"
 	"time"
-
-	"golang.org/x/net/context"
 
 	. "github.com/pingcap/check"
 	uuid "github.com/satori/go.uuid"
@@ -230,6 +230,28 @@ func (t *testSyncerSuite) testSync(c *C, s *BinlogStreamer) {
 		}
 	}
 
+	str = `DROP TABLE IF EXISTS test_parse_time`
+	t.testExecute(c, str)
+
+	// Must allow zero time.
+	t.testExecute(c, `SET sql_mode=''`)
+	str = `CREATE TABLE test_parse_time (
+			a1 DATETIME, 
+			a2 DATETIME(3), 
+			a3 DATETIME(6), 
+			b1 TIMESTAMP, 
+			b2 TIMESTAMP(3) , 
+			b3 TIMESTAMP(6))`
+	t.testExecute(c, str)
+
+	t.testExecute(c, `INSERT INTO test_parse_time VALUES
+		("2014-09-08 17:51:04.123456", "2014-09-08 17:51:04.123456", "2014-09-08 17:51:04.123456", 
+		"2014-09-08 17:51:04.123456","2014-09-08 17:51:04.123456","2014-09-08 17:51:04.123456"),
+		("0000-00-00 00:00:00.000000", "0000-00-00 00:00:00.000000", "0000-00-00 00:00:00.000000",
+		"0000-00-00 00:00:00.000000", "0000-00-00 00:00:00.000000", "0000-00-00 00:00:00.000000"),
+		("2014-09-08 17:51:04.000456", "2014-09-08 17:51:04.000456", "2014-09-08 17:51:04.000456", 
+		"2014-09-08 17:51:04.000456","2014-09-08 17:51:04.000456","2014-09-08 17:51:04.000456")`)
+
 	t.wg.Wait()
 }
 
@@ -263,15 +285,16 @@ func (t *testSyncerSuite) setupTest(c *C, flavor string) {
 	}
 
 	cfg := BinlogSyncerConfig{
-		ServerID: 100,
-		Flavor:   flavor,
-		Host:     *testHost,
-		Port:     port,
-		User:     "root",
-		Password: "",
+		ServerID:   100,
+		Flavor:     flavor,
+		Host:       *testHost,
+		Port:       port,
+		User:       "root",
+		Password:   "",
+		UseDecimal: true,
 	}
 
-	t.b = NewBinlogSyncer(&cfg)
+	t.b = NewBinlogSyncer(cfg)
 }
 
 func (t *testSyncerSuite) testPositionSync(c *C) {
@@ -281,7 +304,7 @@ func (t *testSyncerSuite) testPositionSync(c *C) {
 	binFile, _ := r.GetString(0, 0)
 	binPos, _ := r.GetInt(0, 1)
 
-	s, err := t.b.StartSync(mysql.Position{binFile, uint32(binPos)})
+	s, err := t.b.StartSync(mysql.Position{Name: binFile, Pos: uint32(binPos)})
 	c.Assert(err, IsNil)
 
 	// Test re-sync.
@@ -373,12 +396,15 @@ func (t *testSyncerSuite) TestMysqlBinlogCodec(c *C) {
 		t.testSync(c, nil)
 	}()
 
-	os.RemoveAll("./var")
+	binlogDir := "./var"
 
-	err := t.b.StartBackup("./var", mysql.Position{"", uint32(0)}, 2*time.Second)
+	os.RemoveAll(binlogDir)
+
+	err := t.b.StartBackup(binlogDir, mysql.Position{Name: "", Pos: uint32(0)}, 2*time.Second)
 	c.Assert(err, IsNil)
 
 	p := NewBinlogParser()
+	p.SetVerifyChecksum(true)
 
 	f := func(e *BinlogEvent) error {
 		if *testOutputLogs {
@@ -388,9 +414,15 @@ func (t *testSyncerSuite) TestMysqlBinlogCodec(c *C) {
 		return nil
 	}
 
-	err = p.ParseFile("./var/mysql.000001", 0, f)
+	dir, err := os.Open(binlogDir)
+	c.Assert(err, IsNil)
+	defer dir.Close()
+
+	files, err := dir.Readdirnames(-1)
 	c.Assert(err, IsNil)
 
-	err = p.ParseFile("./var/mysql.000002", 0, f)
-	c.Assert(err, IsNil)
+	for _, file := range files {
+		err = p.ParseFile(path.Join(binlogDir, file), 0, f)
+		c.Assert(err, IsNil)
+	}
 }

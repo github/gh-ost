@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/satori/go.uuid"
+
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
@@ -26,23 +28,23 @@ type RowsEstimateMethod string
 
 const (
 	TableStatusRowsEstimate RowsEstimateMethod = "TableStatusRowsEstimate"
-	ExplainRowsEstimate                        = "ExplainRowsEstimate"
-	CountRowsEstimate                          = "CountRowsEstimate"
+	ExplainRowsEstimate     RowsEstimateMethod = "ExplainRowsEstimate"
+	CountRowsEstimate       RowsEstimateMethod = "CountRowsEstimate"
 )
 
 type CutOver int
 
 const (
-	CutOverAtomic  CutOver = iota
-	CutOverTwoStep         = iota
+	CutOverAtomic CutOver = iota
+	CutOverTwoStep
 )
 
 type ThrottleReasonHint string
 
 const (
 	NoThrottleReasonHint                 ThrottleReasonHint = "NoThrottleReasonHint"
-	UserCommandThrottleReasonHint                           = "UserCommandThrottleReasonHint"
-	LeavingHibernationThrottleReasonHint                    = "LeavingHibernationThrottleReasonHint"
+	UserCommandThrottleReasonHint        ThrottleReasonHint = "UserCommandThrottleReasonHint"
+	LeavingHibernationThrottleReasonHint ThrottleReasonHint = "LeavingHibernationThrottleReasonHint"
 )
 
 const (
@@ -71,6 +73,8 @@ func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleRea
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
+	Uuid string
+
 	DatabaseName      string
 	OriginalTableName string
 	AlterStatement    string
@@ -87,6 +91,8 @@ type MigrationContext struct {
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
+	AliyunRDS                bool
+	GoogleCloudPlatform      bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -114,6 +120,8 @@ type MigrationContext struct {
 	CriticalLoadHibernateSeconds        int64
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
+	CutOverExponentialBackoff           bool
+	ExponentialBackoffMaxInterval       int64
 	ForceNamedCutOverCommand            bool
 	PanicFlagFile                       string
 	HooksPath                           string
@@ -179,8 +187,10 @@ type MigrationContext struct {
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
+	OriginalTableVirtualColumns      *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
 	GhostTableColumns                *sql.ColumnList
+	GhostTableVirtualColumns         *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
 	UniqueKey                        *sql.UniqueKey
 	SharedColumns                    *sql.ColumnList
@@ -195,8 +205,6 @@ type MigrationContext struct {
 	ForceTmpTableName                string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
-
-	CanStopStreaming func() bool
 }
 
 type ContextConfig struct {
@@ -212,14 +220,9 @@ type ContextConfig struct {
 	}
 }
 
-var context *MigrationContext
-
-func init() {
-	context = newMigrationContext()
-}
-
-func newMigrationContext() *MigrationContext {
+func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
+		Uuid:                                uuid.NewV4().String(),
 		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
@@ -237,11 +240,6 @@ func newMigrationContext() *MigrationContext {
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
 	}
-}
-
-// GetMigrationContext
-func GetMigrationContext() *MigrationContext {
-	return context
 }
 
 func getSafeTableName(baseName string, suffix string) string {
@@ -346,6 +344,14 @@ func (this *MigrationContext) SetCutOverLockTimeoutSeconds(timeoutSeconds int64)
 		return fmt.Errorf("Maximal timeout is 10sec. Timeout remains at %d", this.CutOverLockTimeoutSeconds)
 	}
 	this.CutOverLockTimeoutSeconds = timeoutSeconds
+	return nil
+}
+
+func (this *MigrationContext) SetExponentialBackoffMaxInterval(intervalSeconds int64) error {
+	if intervalSeconds < 2 {
+		return fmt.Errorf("Minimal maximum interval is 2sec. Timeout remains at %d", this.ExponentialBackoffMaxInterval)
+	}
+	this.ExponentialBackoffMaxInterval = intervalSeconds
 	return nil
 }
 

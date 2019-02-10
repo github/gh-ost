@@ -1,0 +1,80 @@
+version: '3'
+services:
+
+    mysql-5.5.61:
+        image: "mysql:5.5.61"
+        container_name: "mysql-server-5.5.61"
+        ports:
+        - "5561:3306"
+        command: --ssl=TRUE --ssl-ca=/usr/local/mysql/ca.pem --ssl-cert=/usr/local/mysql/server-cert.pem --ssl-key=/usr/local/mysql/server-key.pem
+        volumes:
+            - ./resources/ca.pem:/usr/local/mysql/ca.pem
+            - ./resources/server-cert.pem:/usr/local/mysql/server-cert.pem
+            - ./resources/server-key.pem:/usr/local/mysql/server-key.pem
+        environment:
+            - MYSQL_ALLOW_EMPTY_PASSWORD=true
+            - bind-address=0.0.0.0
+
+    mysql-5.6.41:
+        image: "mysql:5.6.41"
+        container_name: "mysql-server-5.6.41"
+        ports:
+        - "5641:3306"
+        command: --ssl=TRUE --ssl-ca=/usr/local/mysql/ca.pem --ssl-cert=/usr/local/mysql/server-cert.pem --ssl-key=/usr/local/mysql/server-key.pem
+        volumes:
+        - ./resources/ca.pem:/usr/local/mysql/ca.pem
+        - ./resources/server-cert.pem:/usr/local/mysql/server-cert.pem
+        - ./resources/server-key.pem:/usr/local/mysql/server-key.pem
+        environment:
+            - MYSQL_ALLOW_EMPTY_PASSWORD=true
+            - bind-address=0.0.0.0
+
+    mysql-default:
+        image: "mysql:5.7.22"
+        container_name: "mysql-server-default"
+        ports:
+            - "3306:3306"
+        command: ["mysqld", "--log-bin=mysql-bin", "--server-id=1"]
+        environment:
+            - MYSQL_ALLOW_EMPTY_PASSWORD=true
+            - bind-address=0.0.0.0
+
+    mysql-5.7.22:
+        image: "mysql:5.7.22"
+        container_name: "mysql-server-5.7.22"
+        ports:
+            - "5722:3306"
+        environment:
+            - MYSQL_ALLOW_EMPTY_PASSWORD=true
+            - bind-address=0.0.0.0
+
+    mysql-8.0.3:
+        image: "mysql:8.0.3"
+        container_name: "mysql-server-8.0.3"
+        ports:
+            - "8003:3306"
+        environment:
+            - MYSQL_ALLOW_EMPTY_PASSWORD=true
+            - bind-address=0.0.0.0
+
+    mysql-8.0.12:
+        image: "mysql:8.0.12"
+        container_name: "mysql-server-8.0.12"
+        ports:
+            - "8012:3306"
+        environment:
+            #- MYSQL_ROOT_PASSWORD=abc123
+            - MYSQL_ALLOW_EMPTY_PASSWORD=true
+            - bind-address=0.0.0.0
+
+    mysql-8.0.12-sha256:
+        image: "mysql:8.0.12"
+        container_name: "mysql-server-8.0.12-sha256"
+        ports:
+            - "8013:3306"
+        entrypoint: ['/entrypoint.sh', '--default-authentication-plugin=sha256_password']
+        environment:
+            #- MYSQL_ROOT_PASSWORD=abc123
+            - MYSQL_ALLOW_EMPTY_PASSWORD=true
+            - bind-address=0.0.0.0
+

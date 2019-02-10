@@ -38,6 +38,8 @@ func formatTextValue(value interface{}) ([]byte, error) {
 		return v, nil
 	case string:
 		return hack.Slice(v), nil
+	case nil:
+		return nil, nil
 	default:
 		return nil, errors.Errorf("invalid type %T", value)
 	}
@@ -77,23 +79,40 @@ func formatBinaryValue(value interface{}) ([]byte, error) {
 		return nil, errors.Errorf("invalid type %T", value)
 	}
 }
+
+func fieldType(value interface{}) (typ uint8, err error) {
+	switch value.(type) {
+	case int8, int16, int32, int64, int:
+		typ = MYSQL_TYPE_LONGLONG
+	case uint8, uint16, uint32, uint64, uint:
+		typ = MYSQL_TYPE_LONGLONG
+	case float32, float64:
+		typ = MYSQL_TYPE_DOUBLE
+	case string, []byte:
+		typ = MYSQL_TYPE_VAR_STRING
+	case nil:
+		typ = MYSQL_TYPE_NULL
+	default:
+		err = errors.Errorf("unsupport type %T for resultset", value)
+	}
+	return
+}
+
 func formatField(field *Field, value interface{}) error {
 	switch value.(type) {
 	case int8, int16, int32, int64, int:
 		field.Charset = 63
-		field.Type = MYSQL_TYPE_LONGLONG
 		field.Flag = BINARY_FLAG | NOT_NULL_FLAG
 	case uint8, uint16, uint32, uint64, uint:
 		field.Charset = 63
-		field.Type = MYSQL_TYPE_LONGLONG
 		field.Flag = BINARY_FLAG | NOT_NULL_FLAG | UNSIGNED_FLAG
 	case float32, float64:
 		field.Charset = 63
-		field.Type = MYSQL_TYPE_DOUBLE
 		field.Flag = BINARY_FLAG | NOT_NULL_FLAG
 	case string, []byte:
 		field.Charset = 33
-		field.Type = MYSQL_TYPE_VAR_STRING
+	case nil:
+		field.Charset = 33
 	default:
 		return errors.Errorf("unsupport type %T for resultset", value)
 	}
@@ -106,7 +125,13 @@ func BuildSimpleTextResultset(names []string, values [][]interface{}) (*Resultse
 	r.Fields = make([]*Field, len(names))
 
 	var b []byte
-	var err error
+
+	if len(values) == 0 {
+		for i, name := range names {
+			r.Fields[i] = &Field{Name: hack.Slice(name), Charset: 33, Type: MYSQL_TYPE_NULL}
+		}
+		return r, nil
+	}
 
 	for i, vs := range values {
 		if len(vs) != len(r.Fields) {
@@ -115,13 +140,23 @@ func BuildSimpleTextResultset(names []string, values [][]interface{}) (*Resultse
 
 		var row []byte
 		for j, value := range vs {
-			if i == 0 {
-				field := &Field{}
-				r.Fields[j] = field
-				field.Name = hack.Slice(names[j])
-
-				if err = formatField(field, value); err != nil {
-					return nil, errors.Trace(err)
+			typ, err := fieldType(value)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			if r.Fields[j] == nil {
+				r.Fields[j] = &Field{Name: hack.Slice(names[j]), Type: typ}
+				formatField(r.Fields[j], value)
+			} else if typ != r.Fields[j].Type {
+				// we got another type in the same column. in general, we treat it as an error, except
+				// the case, when old value was null, and the new one isn't null, so we can update
+				// type info for fields.
+				oldIsNull, newIsNull := r.Fields[j].Type == MYSQL_TYPE_NULL, typ == MYSQL_TYPE_NULL
+				if oldIsNull && !newIsNull { // old is null, new isn't, update type info.
+					r.Fields[j].Type = typ
+					formatField(r.Fields[j], value)
+				} else if !oldIsNull && !newIsNull { // different non-null types, that's an error.
+					return nil, errors.Errorf("row types aren't consistent")
 				}
 			}
 			b, err = formatTextValue(value)
@@ -130,7 +165,12 @@ func BuildSimpleTextResultset(names []string, values [][]interface{}) (*Resultse
 				return nil, errors.Trace(err)
 			}
 
-			row = append(row, PutLengthEncodedString(b)...)
+			if b == nil {
+				// NULL value is encoded as 0xfb here (without additional info about length)
+				row = append(row, 0xfb)
+			} else {
+				row = append(row, PutLengthEncodedString(b)...)
+			}
 		}
 
 		r.RowDatas = append(r.RowDatas, row)
@@ -145,7 +185,6 @@ func BuildSimpleBinaryResultset(names []string, values [][]interface{}) (*Result
 	r.Fields = make([]*Field, len(names))
 
 	var b []byte
-	var err error
 
 	bitmapLen := ((len(names) + 7 + 2) >> 3)
 
@@ -161,8 +200,12 @@ func BuildSimpleBinaryResultset(names []string, values [][]interface{}) (*Result
 		row = append(row, nullBitmap...)
 
 		for j, value := range vs {
+			typ, err := fieldType(value)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
 			if i == 0 {
-				field := &Field{}
+				field := &Field{Type: typ}
 				r.Fields[j] = field
 				field.Name = hack.Slice(names[j])
 

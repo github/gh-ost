@@ -26,30 +26,39 @@ const startSlavePostWaitMilliseconds = 500 * time.Millisecond
 // Inspector reads data from the read-MySQL-server (typically a replica, but can be the master)
 // It is used for gaining initial status and structure, and later also follow up on progress and changelog
 type Inspector struct {
-	connectionConfig *mysql.ConnectionConfig
-	db               *gosql.DB
-	migrationContext *base.MigrationContext
+	connectionConfig    *mysql.ConnectionConfig
+	db                  *gosql.DB
+	informationSchemaDb *gosql.DB
+	migrationContext    *base.MigrationContext
 }
 
-func NewInspector() *Inspector {
+func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 	return &Inspector{
-		connectionConfig: base.GetMigrationContext().InspectorConnectionConfig,
-		migrationContext: base.GetMigrationContext(),
+		connectionConfig: migrationContext.InspectorConnectionConfig,
+		migrationContext: migrationContext,
 	}
 }
 
 func (this *Inspector) InitDBConnections() (err error) {
 	inspectorUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = sqlutils.GetDB(inspectorUri); err != nil {
+	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, inspectorUri); err != nil {
 		return err
 	}
+
+	informationSchemaUri := this.connectionConfig.GetDBUri("information_schema")
+	if this.informationSchemaDb, _, err = mysql.GetDB(this.migrationContext.Uuid, informationSchemaUri); err != nil {
+		return err
+	}
+
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
-	if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
-		return err
-	} else {
-		this.connectionConfig.ImpliedKey = impliedKey
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
+		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
+			return err
+		} else {
+			this.connectionConfig.ImpliedKey = impliedKey
+		}
 	}
 	if err := this.validateGrants(); err != nil {
 		return err
@@ -80,24 +89,24 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 	return nil
 }
 
-func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (columns *sql.ColumnList, uniqueKeys [](*sql.UniqueKey), err error) {
+func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (columns *sql.ColumnList, virtualColumns *sql.ColumnList, uniqueKeys [](*sql.UniqueKey), err error) {
 	uniqueKeys, err = this.getCandidateUniqueKeys(tableName)
 	if err != nil {
-		return columns, uniqueKeys, err
+		return columns, virtualColumns, uniqueKeys, err
 	}
 	if len(uniqueKeys) == 0 {
-		return columns, uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
+		return columns, virtualColumns, uniqueKeys, fmt.Errorf("No PRIMARY nor UNIQUE key found in table! Bailing out")
 	}
-	columns, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, tableName)
+	columns, virtualColumns, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, tableName)
 	if err != nil {
-		return columns, uniqueKeys, err
+		return columns, virtualColumns, uniqueKeys, err
 	}
 
-	return columns, uniqueKeys, nil
+	return columns, virtualColumns, uniqueKeys, nil
 }
 
 func (this *Inspector) InspectOriginalTable() (err error) {
-	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
+	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableVirtualColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
 	if err != nil {
 		return err
 	}
@@ -113,7 +122,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		return fmt.Errorf("It seems like table structure is not identical between master and replica. This scenario is not supported.")
 	}
 
-	this.migrationContext.GhostTableColumns, this.migrationContext.GhostTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.GetGhostTableName())
+	this.migrationContext.GhostTableColumns, this.migrationContext.GhostTableVirtualColumns, this.migrationContext.GhostTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.GetGhostTableName())
 	if err != nil {
 		return err
 	}
@@ -156,21 +165,15 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 			return fmt.Errorf("Chosen key (%s) has nullable columns. Bailing out. To force this operation to continue, supply --allow-nullable-unique-key flag. Only do so if you are certain there are no actual NULL values in this key. As long as there aren't, migration should be fine. NULL values in columns of this key will corrupt migration's data", this.migrationContext.UniqueKey)
 		}
 	}
-	if !this.migrationContext.UniqueKey.IsPrimary() {
-		if this.migrationContext.OriginalBinlogRowImage != "FULL" {
-			return fmt.Errorf("binlog_row_image is '%s' and chosen key is %s, which is not the primary key. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again", this.migrationContext.OriginalBinlogRowImage, this.migrationContext.UniqueKey)
-		}
-	}
 
-	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.ColumnRenameMap)
+	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.OriginalTableVirtualColumns, this.migrationContext.GhostTableVirtualColumns, this.migrationContext.ColumnRenameMap)
 	log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
 	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
 
 	// This additional step looks at which columns are unsigned. We could have merged this within
 	// the `getTableColumns()` function, but it's a later patch and introduces some complexity; I feel
 	// comfortable in doing this as a separate step.
-	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns)
-	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &this.migrationContext.UniqueKey.Columns)
+	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, &this.migrationContext.UniqueKey.Columns)
 	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
 
 	for i := range this.migrationContext.SharedColumns.Columns() {
@@ -196,13 +199,13 @@ func (this *Inspector) validateConnection() error {
 		return fmt.Errorf("MySQL replication length limited to 32 characters. See https://dev.mysql.com/doc/refman/5.7/en/assigning-passwords.html")
 	}
 
-	version, err := base.ValidateConnection(this.db, this.connectionConfig)
+	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext)
 	this.migrationContext.InspectorMySQLVersion = version
 	return err
 }
 
 // validateGrants verifies the user by which we're executing has necessary grants
-// to do its thang.
+// to do its thing.
 func (this *Inspector) validateGrants() error {
 	query := `show /* gh-ost */ grants for current_user()`
 	foundAll := false
@@ -227,6 +230,9 @@ func (this *Inspector) validateGrants() error {
 				foundReplicationSlave = true
 			}
 			if strings.Contains(grant, fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.*", this.migrationContext.DatabaseName)) {
+				foundDBAll = true
+			}
+			if strings.Contains(grant, fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.*", strings.Replace(this.migrationContext.DatabaseName, "_", "\\_", -1))) {
 				foundDBAll = true
 			}
 			if base.StringContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`, ` ON *.*`) {
@@ -261,7 +267,7 @@ func (this *Inspector) validateGrants() error {
 
 // restartReplication is required so that we are _certain_ the binlog format and
 // row image settings have actually been applied to the replication thread.
-// It is entriely possible, for example, that the replication is using 'STATEMENT'
+// It is entirely possible, for example, that the replication is using 'STATEMENT'
 // binlog format even as the variable says 'ROW'
 func (this *Inspector) restartReplication() error {
 	log.Infof("Restarting replication on %s:%d to make sure binlog settings apply to replication thread", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
@@ -349,6 +355,9 @@ func (this *Inspector) validateBinlogs() error {
 		this.migrationContext.OriginalBinlogRowImage = "FULL"
 	}
 	this.migrationContext.OriginalBinlogRowImage = strings.ToUpper(this.migrationContext.OriginalBinlogRowImage)
+	if this.migrationContext.OriginalBinlogRowImage != "FULL" {
+		return fmt.Errorf("%s:%d has '%s' binlog_row_image, and only 'FULL' is supported. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogRowImage)
+	}
 
 	log.Infof("binary logs validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 	return nil
@@ -377,7 +386,7 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	}
 
 	if this.migrationContext.InspectorIsAlsoApplier() {
-		log.Warningf("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		log.Warningf("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 		return nil
 	}
 
@@ -545,44 +554,35 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		columnName := m.GetString("COLUMN_NAME")
 		columnType := m.GetString("COLUMN_TYPE")
-		if strings.Contains(columnType, "unsigned") {
-			for _, columnsList := range columnsLists {
-				columnsList.SetUnsigned(columnName)
+		for _, columnsList := range columnsLists {
+			column := columnsList.GetColumn(columnName)
+			if column == nil {
+				continue
 			}
-		}
-		if strings.Contains(columnType, "mediumint") {
-			for _, columnsList := range columnsLists {
-				columnsList.GetColumn(columnName).Type = sql.MediumIntColumnType
+
+			if strings.Contains(columnType, "unsigned") {
+				column.IsUnsigned = true
 			}
-		}
-		if strings.Contains(columnType, "timestamp") {
-			for _, columnsList := range columnsLists {
-				columnsList.GetColumn(columnName).Type = sql.TimestampColumnType
+			if strings.Contains(columnType, "mediumint") {
+				column.Type = sql.MediumIntColumnType
 			}
-		}
-		if strings.Contains(columnType, "datetime") {
-			for _, columnsList := range columnsLists {
-				columnsList.GetColumn(columnName).Type = sql.DateTimeColumnType
+			if strings.Contains(columnType, "timestamp") {
+				column.Type = sql.TimestampColumnType
 			}
-		}
-		if strings.Contains(columnType, "json") {
-			for _, columnsList := range columnsLists {
-				columnsList.GetColumn(columnName).Type = sql.JSONColumnType
+			if strings.Contains(columnType, "datetime") {
+				column.Type = sql.DateTimeColumnType
 			}
-		}
-		if strings.Contains(columnType, "float") {
-			for _, columnsList := range columnsLists {
-				columnsList.GetColumn(columnName).Type = sql.FloatColumnType
+			if strings.Contains(columnType, "json") {
+				column.Type = sql.JSONColumnType
 			}
-		}
-		if strings.HasPrefix(columnType, "enum") {
-			for _, columnsList := range columnsLists {
-				columnsList.GetColumn(columnName).Type = sql.EnumColumnType
+			if strings.Contains(columnType, "float") {
+				column.Type = sql.FloatColumnType
 			}
-		}
-		if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
-			for _, columnsList := range columnsLists {
-				columnsList.SetCharset(columnName, charset)
+			if strings.HasPrefix(columnType, "enum") {
+				column.Type = sql.EnumColumnType
+			}
+			if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
+				column.Charset = charset
 			}
 		}
 		return nil
@@ -622,8 +622,6 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
       GROUP BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME
     ) AS UNIQUES
     ON (
-      COLUMNS.TABLE_SCHEMA = UNIQUES.TABLE_SCHEMA AND
-      COLUMNS.TABLE_NAME = UNIQUES.TABLE_NAME AND
       COLUMNS.COLUMN_NAME = UNIQUES.FIRST_COLUMN_NAME
     )
     WHERE
@@ -685,20 +683,33 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 }
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
-func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
+func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, originalVirtualColumns, ghostVirtualColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
 	sharedColumnNames := []string{}
 	for _, originalColumn := range originalColumns.Names() {
 		isSharedColumn := false
 		for _, ghostColumn := range ghostColumns.Names() {
 			if strings.EqualFold(originalColumn, ghostColumn) {
 				isSharedColumn = true
+				break
 			}
 			if strings.EqualFold(columnRenameMap[originalColumn], ghostColumn) {
 				isSharedColumn = true
+				break
 			}
 		}
 		for droppedColumn := range this.migrationContext.DroppedColumnsMap {
 			if strings.EqualFold(originalColumn, droppedColumn) {
+				isSharedColumn = false
+				break
+			}
+		}
+		for _, virtualColumn := range originalVirtualColumns.Names() {
+			if strings.EqualFold(originalColumn, virtualColumn) {
+				isSharedColumn = false
+			}
+		}
+		for _, virtualColumn := range ghostVirtualColumns.Names() {
+			if strings.EqualFold(originalColumn, virtualColumn) {
 				isSharedColumn = false
 			}
 		}
@@ -748,8 +759,14 @@ func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.Connect
 }
 
 func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err error) {
-	replicationLag, err = mysql.GetReplicationLag(
-		this.migrationContext.InspectorConnectionConfig,
+	replicationLag, err = mysql.GetReplicationLagFromSlaveStatus(
+		this.informationSchemaDb,
 	)
 	return replicationLag, err
+}
+
+func (this *Inspector) Teardown() {
+	this.db.Close()
+	this.informationSchemaDb.Close()
+	return
 }
