@@ -46,6 +46,7 @@ func NewGoMySQLReader(migrationContext *base.MigrationContext) (binlogReader *Go
 		Port:       uint16(binlogReader.connectionConfig.Key.Port),
 		User:       binlogReader.connectionConfig.User,
 		Password:   binlogReader.connectionConfig.Password,
+		TLSConfig:  binlogReader.connectionConfig.TLSConfig(),
 		UseDecimal: true,
 	}
 	binlogReader.binlogSyncer = replication.NewBinlogSyncer(binlogSyncerConfig)
