@@ -173,6 +173,10 @@ See also: [`concurrent-migrations`](cheatsheet.md#concurrent-migrations) on the 
 
 By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not reference other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
 
+### skip-strict-mode
+
+By default `gh-ost` enforces STRICT_ALL_TABLES sql_mode as a safety measure. In some cases this changes the behaviour of other modes (namely ERROR_FOR_DIVISION_BY_ZERO, NO_ZERO_DATE, and NO_ZERO_IN_DATE) which may lead to errors during migration. Use `--skip-strict-mode` to explicitly tell `gh-ost` not to enforce this. **Danger** This may have some unexpected disastrous side effects.
+
 ### skip-renamed-columns
 
 See [`approve-renamed-columns`](#approve-renamed-columns)
