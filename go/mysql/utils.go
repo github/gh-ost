@@ -8,6 +8,7 @@ package mysql
 import (
 	gosql "database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -202,4 +203,32 @@ func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnL
 		)
 	}
 	return sql.NewColumnList(columnNames), sql.NewColumnList(virtualColumnNames), nil
+}
+
+// MajorVersion returns a MySQL major version number (e.g. given "5.5.36" it returns "5.5")
+func majorVersion(version string) []string {
+	tokens := strings.Split(version, ".")
+	if len(tokens) < 2 {
+		return []string{"0", "0"}
+	}
+	return tokens[:2]
+}
+
+// IsSmallerMajorVersion tests two versions against another and returns true if
+// the former is a smaller "major" varsion than the latter.
+// e.g. 5.5.36 is NOT a smaller major version as comapred to 5.5.40, but IS as compared to 5.6.9
+func IsSmallerMajorVersion(version string, otherVersion string) bool {
+	thisMajorVersion := majorVersion(version)
+	otherMajorVersion := majorVersion(otherVersion)
+	for i := 0; i < len(thisMajorVersion); i++ {
+		thisToken, _ := strconv.Atoi(thisMajorVersion[i])
+		otherToken, _ := strconv.Atoi(otherMajorVersion[i])
+		if thisToken < otherToken {
+			return true
+		}
+		if thisToken > otherToken {
+			return false
+		}
+	}
+	return false
 }

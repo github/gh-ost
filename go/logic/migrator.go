@@ -518,19 +518,23 @@ func (this *Migrator) cutOver() (err error) {
 			}
 		}
 	}
-	if this.migrationContext.CutOverType == base.CutOverAtomic {
+	var cutOverFunc func() error
+	if !mysql.IsSmallerMajorVersion(this.migrationContext.ApplierMySQLVersion, "8.0.13") {
+		// This is MySQL 8.0 or above. We can utilize a new ALTER TABLE featiure that supports
+		// RENAME while the table is locked.
+		cutOverFunc = this.cutOverMySQL8013
+	} else if this.migrationContext.CutOverType == base.CutOverAtomic {
 		// Atomic solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
-		err := this.atomicCutOver()
-		this.handleCutOverResult(err)
-		return err
+		cutOverFunc = this.atomicCutOver
+	} else if this.migrationContext.CutOverType == base.CutOverTwoStep {
+		cutOverFunc = this.cutOverTwoStep
+	} else {
+		return log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 	}
-	if this.migrationContext.CutOverType == base.CutOverTwoStep {
-		err := this.cutOverTwoStep()
-		this.handleCutOverResult(err)
-		return err
-	}
-	return log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
+	err = cutOverFunc()
+	this.handleCutOverResult(err)
+	return err
 }
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
@@ -570,6 +574,34 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
 	this.printStatus(ForcePrintStatusAndHintRule)
 
+	return nil
+}
+
+// cutOverMySQL8013 utilizes a new deveopment starting MySQL 8.0.13 where RENAME TABLE is
+// possible where a table is LOCKED under WRITE LOCK.
+// This feature was developed specifically at the request of the `gh-ost` maintainers.
+func (this *Migrator) cutOverMySQL8013() (err error) {
+	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
+	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
+	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
+
+	if err := this.retryOperation(this.applier.LockOriginalTable); err != nil {
+		return err
+	}
+
+	if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
+		return err
+	}
+	if err := this.retryOperation(this.applier.RenameTablesMySQL8); err != nil {
+		return err
+	}
+	if err := this.retryOperation(this.applier.UnlockTables); err != nil {
+		return err
+	}
+
+	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
+	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
+	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
