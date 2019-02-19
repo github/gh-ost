@@ -519,7 +519,7 @@ func (this *Migrator) cutOver() (err error) {
 		}
 	}
 	var cutOverFunc func() error
-	if !mysql.IsSmallerMajorVersion(this.migrationContext.ApplierMySQLVersion, "8.0.13") {
+	if !mysql.IsSmallerMinorVersion(this.migrationContext.ApplierMySQLVersion, "8.0.13") {
 		// This is MySQL 8.0 or above. We can utilize a new ALTER TABLE featiure that supports
 		// RENAME while the table is locked.
 		cutOverFunc = this.cutOverMySQL8013

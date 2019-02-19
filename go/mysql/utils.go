@@ -205,30 +205,46 @@ func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnL
 	return sql.NewColumnList(columnNames), sql.NewColumnList(virtualColumnNames), nil
 }
 
-// MajorVersion returns a MySQL major version number (e.g. given "5.5.36" it returns "5.5")
-func majorVersion(version string) []string {
-	tokens := strings.Split(version, ".")
-	if len(tokens) < 2 {
-		return []string{"0", "0"}
+func versionTokens(version string, digits int) []int {
+	v := strings.Split(version, "-")[0]
+	tokens := strings.Split(v, ".")
+	intTokens := make([]int, digits)
+	for i := range tokens {
+		if i >= digits {
+			break
+		}
+		intTokens[i], _ = strconv.Atoi(tokens[i])
 	}
-	return tokens[:2]
+	return intTokens
+}
+
+func isSmallerVersion(version string, otherVersion string, digits int) bool {
+	v := versionTokens(version, digits)
+	o := versionTokens(otherVersion, digits)
+	for i := 0; i < len(v); i++ {
+		if v[i] < o[i] {
+			return true
+		}
+		if v[i] > o[i] {
+			return false
+		}
+		if i == digits {
+			break
+		}
+	}
+	return false
 }
 
 // IsSmallerMajorVersion tests two versions against another and returns true if
 // the former is a smaller "major" varsion than the latter.
 // e.g. 5.5.36 is NOT a smaller major version as comapred to 5.5.40, but IS as compared to 5.6.9
 func IsSmallerMajorVersion(version string, otherVersion string) bool {
-	thisMajorVersion := majorVersion(version)
-	otherMajorVersion := majorVersion(otherVersion)
-	for i := 0; i < len(thisMajorVersion); i++ {
-		thisToken, _ := strconv.Atoi(thisMajorVersion[i])
-		otherToken, _ := strconv.Atoi(otherMajorVersion[i])
-		if thisToken < otherToken {
-			return true
-		}
-		if thisToken > otherToken {
-			return false
-		}
-	}
-	return false
+	return isSmallerVersion(version, otherVersion, 2)
+}
+
+// IsSmallerMinorVersion tests two versions against another and returns true if
+// the former is a smaller "minor" varsion than the latter.
+// e.g. 5.5.36 is a smaller major version as comapred to 5.5.40, as well as compared to 5.6.7
+func IsSmallerMinorVersion(version string, otherVersion string) bool {
+	return isSmallerVersion(version, otherVersion, 3)
 }
