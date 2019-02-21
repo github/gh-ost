@@ -207,6 +207,7 @@ type MigrationContext struct {
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
 	Where string
+	ForceQueryMigrationRangeValuesOnMaster bool
 }
 
 type ContextConfig struct {

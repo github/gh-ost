@@ -24,6 +24,7 @@ import (
 
 const (
 	atomicCutOverMagicHint = "ghost-cut-over-sentry"
+	masterPosWaitSec = 360
 )
 
 type dmlBuildResult struct {
@@ -367,11 +368,19 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 // ReadMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.Where, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.Where, &uniqueKey.Columns,this.migrationContext.ForceQueryMigrationRangeValuesOnMaster,this.migrationContext.AllowedRunningOnMaster)
 	if err != nil {
 		return err
 	}
-	rows, err := this.inspector.db.Query(query)
+
+	var rows *gosql.Rows
+
+	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster{
+		rows, err = this.inspector.db.Query(query)	// query migration range value on slave node with where-reserve clause
+	}else{
+		rows, err = this.db.Query(query)	// query on master like usual
+	}
+
 	if err != nil {
 		return err
 	}
@@ -388,11 +397,19 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 // ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.Where, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.Where, &uniqueKey.Columns,this.migrationContext.ForceQueryMigrationRangeValuesOnMaster,this.migrationContext.AllowedRunningOnMaster)
 	if err != nil {
 		return err
 	}
-	rows, err := this.inspector.db.Query(query)
+
+	var rows *gosql.Rows
+
+	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster{
+		rows, err = this.inspector.db.Query(query)	// query migration range value on slave node with where-reserve clause
+	}else{
+		rows, err = this.db.Query(query)	// query on master like usual
+	}
+
 	if err != nil {
 		return err
 	}
@@ -418,26 +435,29 @@ func (this *Applier) getMasterStatus() (binfile string,binpos int ,err error){
 // ReadMigrationRangeValues reads min/max values that will be used for rowcopy
 func (this *Applier) ReadMigrationRangeValues() error {
 
-	binFile,binPos,err := this.getMasterStatus()
+	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster{
 
-	if err != nil {
-		return err
-	}
+		binFile,binPos,err := this.getMasterStatus()
 
-	for i:=0;i<360;i++{
-		catched,err := this.inspector.SlaveCatchedUp(binFile,binPos)
 		if err != nil {
 			return err
 		}
 
-		if catched{
-			break
+		for i:=0; i< masterPosWaitSec; i++{
+			catched,err := this.inspector.SlaveCatchedUp(binFile,binPos)
+			if err != nil {
+				return err
+			}
+
+			if catched{
+				break
+			}
+			if i == masterPosWaitSec{
+				return errors.New("slave cannot catch up")
+			}
+			log.Infof("slave catching up ..")
+			time.Sleep(time.Second)
 		}
-		if i == 360{
-			return errors.New("slave cannot catch up")
-		}
-		log.Infof("slave catching up ..")
-		time.Sleep(time.Second)
 	}
 
 	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
@@ -466,7 +486,6 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		query, explodedArgs, err := buildFunc(
 			this.migrationContext.DatabaseName,
 			this.migrationContext.OriginalTableName,
-			this.migrationContext.Where,
 			&this.migrationContext.UniqueKey.Columns,
 			this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 			this.migrationContext.MigrationRangeMaxValues.AbstractValues(),

@@ -240,7 +240,7 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, whereStmt, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
 }
 
-func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
+func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}
@@ -274,10 +274,6 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName, where
 			uniqueKeyColumnAscending[i] = fmt.Sprintf("%s asc", uniqueKeyColumnNames[i])
 			uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumnNames[i])
 		}
-	}
-
-	if whereStmt != ""{
-		whereStmt = fmt.Sprintf(`and %s`,whereStmt)
 	}
 
 	result = fmt.Sprintf(`
@@ -285,7 +281,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName, where
 						%s
 					from
 						%s.%s
-					where (%s and %s) %s
+					where (%s and %s) 
 					order by
 						%s
 					limit 1
@@ -293,14 +289,14 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName, where
     `, databaseName, tableName, hint,
 		strings.Join(uniqueKeyColumnNames, ", "),
 		databaseName, tableName,
-		rangeStartComparison, rangeEndComparison,whereStmt,
+		rangeStartComparison, rangeEndComparison,
 		strings.Join(uniqueKeyColumnAscending, ", "),
 		(chunkSize - 1),
 	)
 	return result, explodedArgs, nil
 }
 
-func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
+func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}
@@ -334,10 +330,6 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName, wh
 			uniqueKeyColumnAscending[i] = fmt.Sprintf("%s asc", uniqueKeyColumnNames[i])
 			uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumnNames[i])
 		}
-	}
-
-	if whereStmt != ""{
-		whereStmt = fmt.Sprintf(`and %s`,whereStmt)
 	}
 
 	result = fmt.Sprintf(`
@@ -347,7 +339,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName, wh
 							%s
 						from
 							%s.%s
-						where (%s and %s) %s
+						where (%s and %s)
 						order by
 							%s
 						limit %d
@@ -357,22 +349,22 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName, wh
 			limit 1
     `, databaseName, tableName, hint, strings.Join(uniqueKeyColumnNames, ", "),
 		strings.Join(uniqueKeyColumnNames, ", "), databaseName, tableName,
-		rangeStartComparison, rangeEndComparison,whereStmt,
+		rangeStartComparison, rangeEndComparison,
 		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
 		strings.Join(uniqueKeyColumnDescending, ", "),
 	)
 	return result, explodedArgs, nil
 }
 
-func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt, uniqueKeyColumns, "asc")
+func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList,forceOnMaster,runningOnMaster bool) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt, uniqueKeyColumns, "asc",forceOnMaster,runningOnMaster)
 }
 
-func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt, uniqueKeyColumns, "desc")
+func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList,forceOnMaster,runningOnMaster bool) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt, uniqueKeyColumns, "desc",forceOnMaster,runningOnMaster)
 }
 
-func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList, order string) (string, error) {
+func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList, order string,forceOnMaster,runningOnMaster bool) (string, error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
 	}
@@ -390,8 +382,10 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt 
 		}
 	}
 
-	if whereStmt != ""{
+	if whereStmt != "" && !forceOnMaster && !runningOnMaster{
 		whereStmt = fmt.Sprintf(` where %s`,whereStmt)
+	}else{
+		whereStmt = ""
 	}
 
 	query := fmt.Sprintf(`
