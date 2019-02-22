@@ -80,5 +80,5 @@ func TestGetDBUriWithTLSSetup(t *testing.T) {
 	c.tlsConfig = &tls.Config{}
 
 	uri := c.GetDBUri("test")
-	test.S(t).ExpectEquals(uri, "gromit:penguin@tcp(myhost:3306)/test?interpolateParams=true&autocommit=true&charset=utf8mb4,utf8,latin1&tls=myhost:3306")
+	test.S(t).ExpectEquals(uri, "gromit:penguin@tcp(myhost:3306)/test?interpolateParams=true&autocommit=true&charset=utf8mb4,utf8,latin1&tls=ghost")
 }

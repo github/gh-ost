@@ -57,6 +57,8 @@ func main() {
 
 	flag.BoolVar(&migrationContext.UseTLS, "ssl", false, "Enable SSL encrypted connections to MySQL hosts")
 	flag.StringVar(&migrationContext.TLSCACertificate, "ssl-ca", "", "CA certificate in PEM format for TLS connections to MySQL hosts. Requires --ssl")
+	flag.StringVar(&migrationContext.TLSCertificate, "ssl-cert", "", "Certificate in PEM format for TLS connections to MySQL hosts. Requires --ssl")
+	flag.StringVar(&migrationContext.TLSKey, "ssl-key", "", "Key in PEM format for TLS connections to MySQL hosts. Requires --ssl")
 	flag.BoolVar(&migrationContext.TLSAllowInsecure, "ssl-allow-insecure", false, "Skips verification of MySQL hosts' certificate chain and host name. Requires --ssl")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
@@ -203,6 +205,12 @@ func main() {
 	}
 	if migrationContext.TLSCACertificate != "" && !migrationContext.UseTLS {
 		log.Fatalf("--ssl-ca requires --ssl")
+	}
+	if migrationContext.TLSCertificate != "" && !migrationContext.UseTLS {
+		log.Fatalf("--ssl-cert requires --ssl")
+	}
+	if migrationContext.TLSKey != "" && !migrationContext.UseTLS {
+		log.Fatalf("--ssl-key requires --ssl")
 	}
 	if migrationContext.TLSAllowInsecure && !migrationContext.UseTLS {
 		log.Fatalf("--ssl-allow-insecure requires --ssl")
