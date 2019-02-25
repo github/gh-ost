@@ -28,3 +28,9 @@ It is therefore unlikely that `gh-ost` will support this behavior.
 Yes. TL;DR if running all on same replica/master, make sure to provide `--replica-server-id`. [Read more](cheatsheet.md#concurrent-migrations)
 
 # Why
+
+### Why Is the "Connect to Replica" mode preferred? 
+
+To avoid placing extra load on the master. `gh-ost` connects as a replication client. Each additional replica adds some load to the master. 
+
+To monitor replication lag from a replica. This makes the replication lag throttle, `--max-lag-millis`, more representative of the lag experienced by other replicas following the master (perhaps N levels deep in a tree of replicas).

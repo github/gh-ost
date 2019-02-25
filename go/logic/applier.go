@@ -73,7 +73,7 @@ func (this *Applier) InitDBConnections() (err error) {
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
-	singletonApplierUri := fmt.Sprintf("%s?timeout=0", applierUri)
+	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
 	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
 	}
@@ -126,7 +126,6 @@ func (this *Applier) readTableColumns() (err error) {
 
 // showTableStatus returns the output of `show table status like '...'` command
 func (this *Applier) showTableStatus(tableName string) (rowMap sqlutils.RowMap) {
-	rowMap = nil
 	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), tableName)
 	sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		rowMap = m
@@ -482,6 +481,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err != nil {
 			return nil, err
 		}
+		defer tx.Rollback()
 		sessionQuery := fmt.Sprintf(`SET
 			SESSION time_zone = '%s',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
@@ -1001,15 +1001,19 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 			if err != nil {
 				return err
 			}
+			rollback := func(err error) error {
+				tx.Rollback()
+				return err
+			}
 			sessionQuery := `SET
 			SESSION time_zone = '+00:00',
 			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
 			`
 			if _, err := tx.Exec(sessionQuery); err != nil {
-				return err
+				return rollback(err)
 			}
 			if _, err := tx.Exec(buildResult.query, buildResult.args...); err != nil {
-				return err
+				return rollback(err)
 			}
 			if err := tx.Commit(); err != nil {
 				return err

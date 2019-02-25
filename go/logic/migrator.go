@@ -78,7 +78,7 @@ type Migrator struct {
 
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
-	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
+	//  excessive work happens at the end of the iteration as new copy-jobs arrive before realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
 	applyEventsQueue chan *applyEventStruct
 
