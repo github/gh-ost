@@ -292,12 +292,22 @@ help                                 # This message
 		}
 	case "throttle", "pause", "suspend":
 		{
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'throttle' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
 			fmt.Fprintf(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "no-throttle", "unthrottle", "resume", "continue":
 		{
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'no-throttle' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 0)
 			return ForcePrintStatusAndHintRule, nil
 		}
