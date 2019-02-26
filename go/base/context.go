@@ -99,6 +99,9 @@ type MigrationContext struct {
 	ConfigFile        string
 	CliUser           string
 	CliPassword       string
+	UseTLS            bool
+	TLSAllowInsecure  bool
+	TLSCACertificate  string
 	CliMasterUser     string
 	CliMasterPassword string
 
@@ -126,6 +129,8 @@ type MigrationContext struct {
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string
+	HooksHintOwner                      string
+	HooksHintToken                      string
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -696,6 +701,13 @@ func (this *MigrationContext) ApplyCredentials() {
 		// Override
 		this.InspectorConnectionConfig.Password = this.CliPassword
 	}
+}
+
+func (this *MigrationContext) SetupTLS() error {
+	if this.UseTLS {
+		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate, this.TLSAllowInsecure)
+	}
+	return nil
 }
 
 // ReadConfigFile attempts to read the config file, if it exists

@@ -140,13 +140,12 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 	comparisons := []string{}
 
 	for i, column := range columns {
-		//
 		value := values[i]
 		rangeComparison, err := BuildValueComparison(column, value, comparisonSign)
 		if err != nil {
 			return "", explodedArgs, err
 		}
-		if len(columns[0:i]) > 0 {
+		if i > 0 {
 			equalitiesComparison, err := BuildEqualsComparison(columns[0:i], values[0:i])
 			if err != nil {
 				return "", explodedArgs, err

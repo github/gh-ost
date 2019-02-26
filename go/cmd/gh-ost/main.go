@@ -14,6 +14,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/outbrain/golib/log"
 
 	"golang.org/x/crypto/ssh/terminal"
@@ -53,6 +54,10 @@ func main() {
 	flag.StringVar(&migrationContext.CliMasterPassword, "master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
+
+	flag.BoolVar(&migrationContext.UseTLS, "ssl", false, "Enable SSL encrypted connections to MySQL hosts")
+	flag.StringVar(&migrationContext.TLSCACertificate, "ssl-ca", "", "CA certificate in PEM format for TLS connections to MySQL hosts. Requires --ssl")
+	flag.BoolVar(&migrationContext.TLSAllowInsecure, "ssl-allow-insecure", false, "Skips verification of MySQL hosts' certificate chain and host name. Requires --ssl")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
@@ -109,6 +114,8 @@ func main() {
 
 	flag.StringVar(&migrationContext.HooksPath, "hooks-path", "", "directory where hook files are found (default: empty, ie. hooks disabled). Hook files found on this path, and conforming to hook naming conventions will be executed")
 	flag.StringVar(&migrationContext.HooksHintMessage, "hooks-hint", "", "arbitrary message to be injected to hooks via GH_OST_HOOKS_HINT, for your convenience")
+	flag.StringVar(&migrationContext.HooksHintOwner, "hooks-hint-owner", "", "arbitrary name of owner to be injected to hooks via GH_OST_HOOKS_HINT_OWNER, for your convenience")
+	flag.StringVar(&migrationContext.HooksHintToken, "hooks-hint-token", "", "arbitrary token to be injected to hooks via GH_OST_HOOKS_HINT_TOKEN, for your convenience")
 
 	flag.UintVar(&migrationContext.ReplicaServerId, "replica-server-id", 99999, "server id used by gh-ost process. Default: 99999")
 
@@ -198,6 +205,12 @@ func main() {
 	if migrationContext.CliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
 		log.Fatalf("--master-password requires --assume-master-host")
 	}
+	if migrationContext.TLSCACertificate != "" && !migrationContext.UseTLS {
+		log.Fatalf("--ssl-ca requires --ssl")
+	}
+	if migrationContext.TLSAllowInsecure && !migrationContext.UseTLS {
+		log.Fatalf("--ssl-allow-insecure requires --ssl")
+	}
 	if *replicationLagQuery != "" {
 		log.Warningf("--replication-lag-query is deprecated")
 	}
@@ -242,6 +255,9 @@ func main() {
 	migrationContext.SetThrottleHTTP(*throttleHTTP)
 	migrationContext.SetDefaultNumRetries(*defaultRetries)
 	migrationContext.ApplyCredentials()
+	if err := migrationContext.SetupTLS(); err != nil {
+		log.Fatale(err)
+	}
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {
 		log.Errore(err)
 	}
