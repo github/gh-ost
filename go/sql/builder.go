@@ -338,7 +338,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 							%s
 						from
 							%s.%s
-						where (%s and %s)
+						where %s and %s
 						order by
 							%s
 						limit %d
