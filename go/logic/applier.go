@@ -16,15 +16,15 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
+	"github.com/juju/errors"
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
-	"github.com/juju/errors"
 	"strings"
 )
 
 const (
 	atomicCutOverMagicHint = "ghost-cut-over-sentry"
-	masterPosWaitSec = 360
+	masterPosWaitSec       = 360
 )
 
 type dmlBuildResult struct {
@@ -60,15 +60,15 @@ type Applier struct {
 	singletonDB       *gosql.DB
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
-	inspector *Inspector
+	inspector         *Inspector
 }
 
-func NewApplier(migrationContext *base.MigrationContext,i *Inspector) *Applier {
+func NewApplier(migrationContext *base.MigrationContext, i *Inspector) *Applier {
 	return &Applier{
 		connectionConfig:  migrationContext.ApplierConnectionConfig,
 		migrationContext:  migrationContext,
 		finishedMigrating: 0,
-		inspector:i,
+		inspector:         i,
 	}
 }
 
@@ -204,7 +204,7 @@ func (this *Applier) AlterGhost() error {
 	)
 	log.Debugf("ALTER statement: %s", query)
 
-	if strings.ToLower(this.migrationContext.AlterStatement) == "noop"{
+	if strings.ToLower(this.migrationContext.AlterStatement) == "noop" {
 		log.Infof("Noop,Just rebuild the table and not change the table structure")
 		return nil
 	}
@@ -367,17 +367,17 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 // ReadMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.Where, &uniqueKey.Columns,this.migrationContext.ForceQueryMigrationRangeValuesOnMaster,this.migrationContext.AllowedRunningOnMaster)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.Where, &uniqueKey.Columns, this.migrationContext.ForceQueryMigrationRangeValuesOnMaster, this.migrationContext.AllowedRunningOnMaster)
 	if err != nil {
 		return err
 	}
 
 	var rows *gosql.Rows
 
-	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster{
-		rows, err = this.inspector.db.Query(query)	// query migration range value on slave node with where-reserve clause
-	}else{
-		rows, err = this.db.Query(query)	// query on master like usual
+	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster {
+		rows, err = this.inspector.db.Query(query) // query migration range value on slave node with where-reserve clause
+	} else {
+		rows, err = this.db.Query(query) // query on master like usual
 	}
 
 	if err != nil {
@@ -396,17 +396,17 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 // ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.Where, &uniqueKey.Columns,this.migrationContext.ForceQueryMigrationRangeValuesOnMaster,this.migrationContext.AllowedRunningOnMaster)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.Where, &uniqueKey.Columns, this.migrationContext.ForceQueryMigrationRangeValuesOnMaster, this.migrationContext.AllowedRunningOnMaster)
 	if err != nil {
 		return err
 	}
 
 	var rows *gosql.Rows
 
-	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster{
-		rows, err = this.inspector.db.Query(query)	// query migration range value on slave node with where-reserve clause
-	}else{
-		rows, err = this.db.Query(query)	// query on master like usual
+	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster {
+		rows, err = this.inspector.db.Query(query) // query migration range value on slave node with where-reserve clause
+	} else {
+		rows, err = this.db.Query(query) // query on master like usual
 	}
 
 	if err != nil {
@@ -422,36 +422,34 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	return err
 }
 
+func (this *Applier) getMasterStatus() (binfile string, binpos int, err error) {
 
-func (this *Applier) getMasterStatus() (binfile string,binpos int ,err error){
+	binfile, binpos, err = mysql.GetMasterStatus(this.db)
 
-	binfile,binpos,err = mysql.GetMasterStatus(this.db)
-
-	return binfile,binpos,err
+	return binfile, binpos, err
 }
-
 
 // ReadMigrationRangeValues reads min/max values that will be used for rowcopy
 func (this *Applier) ReadMigrationRangeValues() error {
 
-	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster{
+	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster {
 
-		binFile,binPos,err := this.getMasterStatus()
+		binFile, binPos, err := this.getMasterStatus()
 
 		if err != nil {
 			return err
 		}
 
-		for i:=0; i< masterPosWaitSec; i++{
-			catched,err := this.inspector.SlaveCatchedUp(binFile,binPos)
+		for i := 0; i < masterPosWaitSec; i++ {
+			catched, err := this.inspector.SlaveCatchedUp(binFile, binPos)
 			if err != nil {
 				return err
 			}
 
-			if catched{
+			if catched {
 				break
 			}
-			if i == masterPosWaitSec{
+			if i == masterPosWaitSec {
 				return errors.New("slave cannot catch up")
 			}
 			log.Infof("slave catching up ..")

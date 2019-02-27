@@ -1046,7 +1046,7 @@ func (this *Migrator) initiateThrottler() error {
 }
 
 func (this *Migrator) initiateApplier() error {
-	this.applier = NewApplier(this.migrationContext,this.inspector)
+	this.applier = NewApplier(this.migrationContext, this.inspector)
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}

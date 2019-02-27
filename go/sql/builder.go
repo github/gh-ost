@@ -218,8 +218,8 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, wher
 		transactionalClause = "lock in share mode"
 	}
 
-	if whereStmt != ""{
-		whereStmt = fmt.Sprintf(` and %s`,whereStmt)
+	if whereStmt != "" {
+		whereStmt = fmt.Sprintf(` and %s`, whereStmt)
 	}
 
 	result = fmt.Sprintf(`
@@ -355,15 +355,15 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 	return result, explodedArgs, nil
 }
 
-func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList,forceOnMaster,runningOnMaster bool) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt, uniqueKeyColumns, "asc",forceOnMaster,runningOnMaster)
+func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList, forceOnMaster, runningOnMaster bool) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt, uniqueKeyColumns, "asc", forceOnMaster, runningOnMaster)
 }
 
-func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList,forceOnMaster,runningOnMaster bool) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt, uniqueKeyColumns, "desc",forceOnMaster,runningOnMaster)
+func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList, forceOnMaster, runningOnMaster bool) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt, uniqueKeyColumns, "desc", forceOnMaster, runningOnMaster)
 }
 
-func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList, order string,forceOnMaster,runningOnMaster bool) (string, error) {
+func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt string, uniqueKeyColumns *ColumnList, order string, forceOnMaster, runningOnMaster bool) (string, error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
 	}
@@ -381,9 +381,9 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt 
 		}
 	}
 
-	if whereStmt != "" && !forceOnMaster && !runningOnMaster{
-		whereStmt = fmt.Sprintf(` where %s`,whereStmt)
-	}else{
+	if whereStmt != "" && !forceOnMaster && !runningOnMaster {
+		whereStmt = fmt.Sprintf(` where %s`, whereStmt)
+	} else {
 		whereStmt = ""
 	}
 
@@ -395,7 +395,7 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, whereStmt 
 					%s
 				limit 1
     `, databaseName, tableName, strings.Join(uniqueKeyColumnNames, ", "),
-		databaseName, tableName,whereStmt,
+		databaseName, tableName, whereStmt,
 		strings.Join(uniqueKeyColumnOrder, ", "),
 	)
 	return query, nil
