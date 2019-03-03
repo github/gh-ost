@@ -6,6 +6,7 @@
 package logic
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math"
@@ -85,6 +86,9 @@ type Migrator struct {
 	handledChangelogStates map[string]bool
 
 	finishedMigrating int64
+
+	// Log *io.Writer
+	Log *bytes.Buffer
 }
 
 func NewMigrator(context *base.MigrationContext) *Migrator {
@@ -878,7 +882,11 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	if rule == NoPrintStatusRule {
 		return
 	}
-	writers = append(writers, os.Stdout)
+	if this.Log != nil {
+		writers = append(writers, this.Log)
+	} else {
+		writers = append(writers, os.Stdout)
+	}
 
 	elapsedTime := this.migrationContext.ElapsedTime()
 	elapsedSeconds := int64(elapsedTime.Seconds())
