@@ -88,7 +88,8 @@ type Migrator struct {
 	finishedMigrating int64
 
 	// Log *io.Writer
-	Log *bytes.Buffer
+	Log   *bytes.Buffer
+	Error error
 }
 
 func NewMigrator(context *base.MigrationContext) *Migrator {
@@ -99,6 +100,8 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
 		allEventsUpToLockProcessed: make(chan string),
+
+		// done: make(chan error),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
@@ -324,7 +327,8 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
-	go this.listenOnPanicAbort()
+
+	// go this.listenOnPanicAbort()
 
 	if err := this.initiateHooksExecutor(); err != nil {
 		return err
@@ -356,6 +360,14 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
+	go this.FinalizeMigration()
+
+	migrateErr := <-this.migrationContext.PanicAbort
+	return migrateErr
+}
+
+func (this *Migrator) FinalizeMigration() {
+
 	initialLag, _ := this.inspector.getReplicationLag()
 	log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
 	<-this.ghostTableMigrated
@@ -365,32 +377,32 @@ func (this *Migrator) Migrate() (err error) {
 	// on master this is always true, of course, and yet it also implies this knowledge
 	// is in the binlogs.
 	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 	// Validation complete! We're good to execute this migration
 	if err := this.hooksExecutor.onValidated(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 
 	if err := this.initiateServer(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 	defer this.server.RemoveSocketFile()
 
 	if err := this.countTableRows(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 	if err := this.addDMLEventsListener(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 	if err := this.initiateThrottler(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
@@ -401,12 +413,12 @@ func (this *Migrator) Migrate() (err error) {
 	this.consumeRowCopyComplete()
 	log.Infof("Row copy complete")
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 	this.printStatus(ForcePrintStatusRule)
 
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 	var retrier func(func() error, ...bool) error
 	if this.migrationContext.CutOverExponentialBackoff {
@@ -415,18 +427,20 @@ func (this *Migrator) Migrate() (err error) {
 		retrier = this.retryOperation
 	}
 	if err := retrier(this.cutOver); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- err
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 
 	if err := this.finalCleanup(); err != nil {
-		return nil
+		// return nil
+		this.migrationContext.PanicAbort <- nil
 	}
 	if err := this.hooksExecutor.onSuccess(); err != nil {
-		return err
+		this.migrationContext.PanicAbort <- nil
 	}
 	log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
-	return nil
+
+	this.migrationContext.PanicAbort <- nil
 }
 
 // ExecOnFailureHook executes the onFailure hook, and this method is provided as the only external
