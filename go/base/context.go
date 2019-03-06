@@ -102,6 +102,8 @@ type MigrationContext struct {
 	UseTLS            bool
 	TLSAllowInsecure  bool
 	TLSCACertificate  string
+	TLSCertificate    string
+	TLSKey            string
 	CliMasterUser     string
 	CliMasterPassword string
 
@@ -703,7 +705,7 @@ func (this *MigrationContext) ApplyCredentials() {
 
 func (this *MigrationContext) SetupTLS() error {
 	if this.UseTLS {
-		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate, this.TLSAllowInsecure)
+		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate, this.TLSCertificate, this.TLSKey, this.TLSAllowInsecure)
 	}
 	return nil
 }

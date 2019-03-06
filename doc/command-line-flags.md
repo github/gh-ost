@@ -197,6 +197,14 @@ Allows `gh-ost` to connect to the MySQL servers using encrypted connections, but
 
 `--ssl-ca=/path/to/ca-cert.pem`: ca certificate file (in PEM format) to use for server certificate verification. If specified, the default system ca cert pool will not be used for verification, only the ca cert provided here. Requires `--ssl`.
 
+### ssl-cert
+
+`--ssl-cert=/path/to/ssl-cert.crt`: SSL public key certificate file (in PEM format).
+
+### ssl-key
+
+`--ssl-key=/path/to/ssl-key.key`: SSL private key file (in PEM format).
+
 ### test-on-replica
 
 Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [`testing-on-replica`](testing-on-replica.md)

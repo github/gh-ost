@@ -16,6 +16,10 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
+const (
+	TLS_CONFIG_KEY = "ghost"
+)
+
 // ConnectionConfig is the minimal configuration required to connect to a MySQL server
 type ConnectionConfig struct {
 	Key        InstanceKey
@@ -57,34 +61,41 @@ func (this *ConnectionConfig) Equals(other *ConnectionConfig) bool {
 	return this.Key.Equals(&other.Key) || this.ImpliedKey.Equals(other.ImpliedKey)
 }
 
-func (this *ConnectionConfig) UseTLS(caCertificatePath string, allowInsecure bool) error {
+func (this *ConnectionConfig) UseTLS(caCertificatePath, clientCertificate, clientKey string, allowInsecure bool) error {
 	var rootCertPool *x509.CertPool
+	var certs []tls.Certificate
 	var err error
 
-	if !allowInsecure {
-		if caCertificatePath == "" {
-			rootCertPool, err = x509.SystemCertPool()
-			if err != nil {
-				return err
-			}
-		} else {
-			rootCertPool = x509.NewCertPool()
-			pem, err := ioutil.ReadFile(caCertificatePath)
-			if err != nil {
-				return err
-			}
-			if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
-				return errors.New("could not add ca certificate to cert pool")
-			}
+	if caCertificatePath == "" {
+		rootCertPool, err = x509.SystemCertPool()
+		if err != nil {
+			return err
 		}
+	} else {
+		rootCertPool = x509.NewCertPool()
+		pem, err := ioutil.ReadFile(caCertificatePath)
+		if err != nil {
+			return err
+		}
+		if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
+			return errors.New("could not add ca certificate to cert pool")
+		}
+	}
+	if clientCertificate != "" || clientKey != "" {
+		cert, err := tls.LoadX509KeyPair(clientCertificate, clientKey)
+		if err != nil {
+			return err
+		}
+		certs = []tls.Certificate{cert}
 	}
 
 	this.tlsConfig = &tls.Config{
+		Certificates:       certs,
 		RootCAs:            rootCertPool,
 		InsecureSkipVerify: allowInsecure,
 	}
 
-	return mysql.RegisterTLSConfig(this.Key.StringCode(), this.tlsConfig)
+	return mysql.RegisterTLSConfig(TLS_CONFIG_KEY, this.tlsConfig)
 }
 
 func (this *ConnectionConfig) TLSConfig() *tls.Config {
@@ -103,7 +114,7 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 	// simplify construction of the DSN below.
 	tlsOption := "false"
 	if this.tlsConfig != nil {
-		tlsOption = this.Key.StringCode()
+		tlsOption = TLS_CONFIG_KEY
 	}
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=%t&autocommit=true&charset=utf8mb4,utf8,latin1&tls=%s", this.User, this.Password, hostname, this.Key.Port, databaseName, interpolateParams, tlsOption)
 }
