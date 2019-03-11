@@ -128,6 +128,7 @@ type MigrationContext struct {
 	CutOverExponentialBackoff           bool
 	ExponentialBackoffMaxInterval       int64
 	ForceNamedCutOverCommand            bool
+	ForceNamedPanicCommand              bool
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string

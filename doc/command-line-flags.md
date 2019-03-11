@@ -111,6 +111,14 @@ While the ongoing estimated number of rows is still heuristic, it's almost exact
 
 Without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
 
+### force-named-cut-over
+
+If given, a `cut-over` command must name the migrated table, or else ignored.
+
+### force-named-panic
+
+If given, a `panic` command must name the migrated table, or else ignored.
+
 ### force-table-names
 
 Table name prefix to be used on the temporary tables.
