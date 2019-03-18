@@ -111,6 +111,14 @@ While the ongoing estimated number of rows is still heuristic, it's almost exact
 
 Without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
 
+### force-named-cut-over
+
+If given, a `cut-over` command must name the migrated table, or else ignored.
+
+### force-named-panic
+
+If given, a `panic` command must name the migrated table, or else ignored.
+
 ### force-table-names
 
 Table name prefix to be used on the temporary tables.
@@ -192,6 +200,14 @@ Allows `gh-ost` to connect to the MySQL servers using encrypted connections, but
 ### ssl-ca
 
 `--ssl-ca=/path/to/ca-cert.pem`: ca certificate file (in PEM format) to use for server certificate verification. If specified, the default system ca cert pool will not be used for verification, only the ca cert provided here. Requires `--ssl`.
+
+### ssl-cert
+
+`--ssl-cert=/path/to/ssl-cert.crt`: SSL public key certificate file (in PEM format).
+
+### ssl-key
+
+`--ssl-key=/path/to/ssl-key.key`: SSL private key file (in PEM format).
 
 ### test-on-replica
 
