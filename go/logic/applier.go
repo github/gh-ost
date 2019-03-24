@@ -483,9 +483,12 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		}
 		defer tx.Rollback()
 		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
 		if !this.migrationContext.SkipStrictMode {
-			sessionQuery += ", sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')"
+			sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
 		}
+		sessionQuery = fmt.Sprintf("%s, sql_mode = CONCAT(@@session.sql_mode, ',%s')", sessionQuery, sqlModeAddendum)
+
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
 		}
@@ -977,63 +980,6 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 	return append(results, newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)))
 }
 
-// ApplyDMLEventQuery writes an entry to the ghost table, in response to an intercepted
-// original-table binlog event
-func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
-	for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
-		if buildResult.err != nil {
-			return buildResult.err
-		}
-		// TODO The below is in preparation for transactional writes on the ghost tables.
-		// Such writes would be, for example:
-		// - prepended with sql_mode setup
-		// - prepended with time zone setup
-		// - prepended with SET SQL_LOG_BIN=0
-		// - prepended with SET FK_CHECKS=0
-		// etc.
-		//
-		// a known problem: https://github.com/golang/go/issues/9373 -- bitint unsigned values, not supported in database/sql
-		// is solved by silently converting unsigned bigints to string values.
-		//
-
-		err := func() error {
-			tx, err := this.db.Begin()
-			if err != nil {
-				return err
-			}
-			rollback := func(err error) error {
-				tx.Rollback()
-				return err
-			}
-			sessionQuery := fmt.Sprintf("SET SESSION time_zone = '+00:00'")
-			if !this.migrationContext.SkipStrictMode {
-				sessionQuery += ", sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')"
-			}
-			if _, err := tx.Exec(sessionQuery); err != nil {
-				return rollback(err)
-			}
-			if _, err := tx.Exec(buildResult.query, buildResult.args...); err != nil {
-				return rollback(err)
-			}
-			if err := tx.Commit(); err != nil {
-				return err
-			}
-			return nil
-		}()
-
-		if err != nil {
-			err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), buildResult.query, buildResult.args)
-			return log.Errore(err)
-		}
-		// no error
-		atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
-		if this.migrationContext.CountTableRows {
-			atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, buildResult.rowsDelta)
-		}
-	}
-	return nil
-}
-
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
 func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
 
@@ -1051,9 +997,13 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		}
 
 		sessionQuery := "SET SESSION time_zone = '+00:00'"
+
+		sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
 		if !this.migrationContext.SkipStrictMode {
-			sessionQuery += ", sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')"
+			sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
 		}
+		sessionQuery = fmt.Sprintf("%s, sql_mode = CONCAT(@@session.sql_mode, ',%s')", sessionQuery, sqlModeAddendum)
+
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return rollback(err)
 		}
