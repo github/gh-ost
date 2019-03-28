@@ -38,6 +38,7 @@ type CutOver int
 const (
 	CutOverAtomic CutOver = iota
 	CutOverTwoStep
+	CutOverTrigger
 )
 
 type ThrottleReasonHint string
@@ -194,6 +195,7 @@ type MigrationContext struct {
 	UserCommandedUnpostponeFlag            int64
 	CutOverCompleteFlag                    int64
 	InCutOverCriticalSectionFlag           int64
+	ApplyDMLEventState      int64
 	PanicAbort                             chan error
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
