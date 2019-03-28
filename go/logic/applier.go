@@ -518,12 +518,8 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	return chunkSize, rowsAffected, duration, nil
 }
 
-// Create triggers from the original table to the new one
-func (this *Applier) CreateTriggersOriginalTable() error {
-	///////////////////////
-	//  Trigger preffix  //
-	///////////////////////
-
+// Create the trigger prefix
+func (this *Applier) makeTriggerPrefix() string {
 	prefix := fmt.Sprintf(
 		"ghost_%s_%s",
 		this.migrationContext.DatabaseName,
@@ -540,6 +536,13 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 			oldPrefix,
 			prefix)
 	}
+
+	return prefix
+}
+
+// Create triggers from the original table to the new one
+func (this *Applier) CreateTriggersOriginalTable() error {
+	prefix := this.makeTriggerPrefix()
 
 	//////////////////////
 	//  Delete trigger  //
@@ -655,6 +658,52 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 	}()
 }
 
+// Drop triggers from the old table
+func (this *Applier) DropTriggersOldTable() error {
+	prefix := this.makeTriggerPrefix()
+
+	dropDeleteTrigger := fmt.Sprintf(
+		"DROP /* gh-ost */ TRIGGER %s.`%s_del`",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		prefix)
+
+	dropInsertTrigger := fmt.Sprintf(
+		"DROP /* gh-ost */ TRIGGER %s.`%s_ins`",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		prefix)
+
+	dropUpdateTrigger := fmt.Sprintf(
+		"DROP /* gh-ost */ TRIGGER %s.`%s_upd`",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		prefix)
+
+	/////////////////////////
+	//  Drop the triggers  //
+	/////////////////////////
+
+	return func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(dropDeleteTrigger); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(dropInsertTrigger); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(dropUpdateTrigger); err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return nil
+	}()
+}
+
 //TODO
 func (this *Applier) ObtainUniqueKeyValuesOfEvent(dmlEvent *binlog.BinlogDMLEvent) (uniqueKeys [][]interface{}) {
 	switch dmlEvent.DML {
@@ -692,50 +741,6 @@ func (this *Applier) ObtainUniqueKeyValuesOfEvent(dmlEvent *binlog.BinlogDMLEven
 	return uniqueKeys
 }
 
-//TODO
-func (this *Applier) DropUniqueKeysGhostTable(uniqueKeysArgs [][]interface{}) error {
-	query, args, err := sql.BuildDeleteQuery(
-		this.migrationContext.DatabaseName,
-		this.migrationContext.OriginalTableName,
-		this.migrationContext.GetGhostTableName(),
-		&this.migrationContext.UniqueKey.Columns,
-		uniqueKeysArgs)
-
-	if err != nil {
-		return err
-	}
-
-	log.Infof("Delete query: %s", query)
-	log.Infof("Delete query args: %+v", args)
-
-	return nil
-
-	//return func() error {
-		//tx, err := this.db.Begin()
-		//if err != nil {
-			//return err
-		//}
-
-		//if _, err := tx.Exec(deleteTrigger); err != nil {
-			//return err
-		//}
-		//if _, err := tx.Exec(insertTrigger); err != nil {
-			//return err
-		//}
-		//if _, err := tx.Exec(updateTrigger); err != nil {
-			//return err
-		//}
-
-		//if err := tx.Commit(); err != nil {
-			//return err
-		//}
-		//return nil
-	//}()
-}
-
-
-
-
 // LockOriginalTable places a write lock on the original table
 func (this *Applier) LockOriginalTable() error {
 	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
@@ -762,6 +767,31 @@ func (this *Applier) UnlockTables() error {
 		return err
 	}
 	log.Infof("Tables unlocked")
+	return nil
+}
+
+// SwapTables issues a one-step swap table operation:
+// - rename original table to _old
+// - rename ghost table to original
+func (this *Applier) SwapTables() error {
+	query := fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s, %s.%s to %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetOldTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	log.Infof("Swaping original and new table: %s", query)
+	this.migrationContext.RenameTablesStartTime = time.Now()
+	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
+		return err
+	}
+	this.migrationContext.RenameTablesEndTime = time.Now()
+
+	log.Infof("Tables swaped")
 	return nil
 }
 

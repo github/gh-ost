@@ -78,8 +78,6 @@ type Migrator struct {
 	allEventsUpToLockProcessed     chan string
 	allEventsUpToTriggersProcessed chan string
 
-	triggerCutoverUniqueKeys [][]interface {}
-
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive before realizing the copy is complete
@@ -673,14 +671,12 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 func (this *Migrator) cutOverTrigger() (err error) {
 	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
-	atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 1)
+	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
 	log.Infof(
 		"Creating triggers for %s.%s",
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName);
-
-	time.Sleep(30 * time.Second)
 
 	if err := this.retryOperation(this.applier.CreateTriggersOriginalTable); err != nil {
 		return err
@@ -689,28 +685,17 @@ func (this *Migrator) cutOverTrigger() (err error) {
 	if err := this.waitForEventsUpToTriggers(); err != nil {
 		return log.Errore(err)
 	}
-
-	uniqueKeys := this.triggerCutoverUniqueKeys
-
-	if err := this.applier.DropUniqueKeysGhostTable(uniqueKeys); err != nil {
+	if err := this.retryOperation(this.applier.SwapTables); err != nil {
+		return err
+	}
+	if err := this.retryOperation(this.applier.DropTriggersOldTable); err != nil {
 		return err
 	}
 
-	//if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
-		//return err
-	//}
-	//if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
-		//return err
-	//}
-	//if err := this.retryOperation(this.applier.UnlockTables); err != nil {
-		//return err
-	//}
-
-	//lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
-	//renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
-	//log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
+	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
+	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
-
 }
 
 // atomicCutOver
@@ -1099,7 +1084,6 @@ func (this *Migrator) initiateStreaming() error {
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
-	atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 0)
 	this.eventsStreamer.AddListener(
 		false,
 		this.migrationContext.DatabaseName,
@@ -1274,14 +1258,8 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 	}
 	if eventStruct.dmlEvent == nil {
 		return handleNonDMLEventStruct(eventStruct)
-	} // And this (?)
+	}
 	if eventStruct.dmlEvent != nil {
-		addCutoverKeys := atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState) == 1
-		if addCutoverKeys {
-			this.triggerCutoverUniqueKeys = append(
-				this.triggerCutoverUniqueKeys,
-				this.applier.ObtainUniqueKeyValuesOfEvent(eventStruct.dmlEvent)...)
-		}
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
 		var nonDmlStructToApply *applyEventStruct
@@ -1301,13 +1279,6 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 				break
 			}
 			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
-
-			addCutoverKeys = addCutoverKeys && (atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState) == 1)
-			if addCutoverKeys {
-				this.triggerCutoverUniqueKeys = append(
-					this.triggerCutoverUniqueKeys,
-					this.applier.ObtainUniqueKeyValuesOfEvent(additionalStruct.dmlEvent)...)
-			}
 		}
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 		var applyEventFunc tableWriteFunc = func() error {
