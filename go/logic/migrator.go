@@ -78,6 +78,8 @@ type Migrator struct {
 	allEventsUpToLockProcessed     chan string
 	allEventsUpToTriggersProcessed chan string
 
+	triggerCutoverUniqueKeys [][]interface {}
+
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive before realizing the copy is complete
@@ -671,7 +673,7 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 func (this *Migrator) cutOverTrigger() (err error) {
 	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
-	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
+	atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 1)
 
 	log.Infof(
 		"Creating triggers for %s.%s",
@@ -685,6 +687,11 @@ func (this *Migrator) cutOverTrigger() (err error) {
 	if err := this.waitForEventsUpToTriggers(); err != nil {
 		return log.Errore(err)
 	}
+
+	//TODO remove
+	log.Infof("Received trigger event, waiting 30s after swap it")
+	time.Sleep(30 * time.Second)
+
 	if err := this.retryOperation(this.applier.SwapTables); err != nil {
 		return err
 	}
@@ -1084,6 +1091,7 @@ func (this *Migrator) initiateStreaming() error {
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
+	atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 0)
 	this.eventsStreamer.AddListener(
 		false,
 		this.migrationContext.DatabaseName,
@@ -1260,6 +1268,13 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		return handleNonDMLEventStruct(eventStruct)
 	}
 	if eventStruct.dmlEvent != nil {
+		addCutoverKeys := atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState) == 1
+		if addCutoverKeys {
+			this.triggerCutoverUniqueKeys = append(
+				this.triggerCutoverUniqueKeys,
+				this.applier.ObtainUniqueKeyValuesOfEvent(eventStruct.dmlEvent)...)
+		}
+
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
 		var nonDmlStructToApply *applyEventStruct
@@ -1279,6 +1294,13 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 				break
 			}
 			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
+
+			addCutoverKeys = addCutoverKeys && (atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState) == 1)
+			if addCutoverKeys {
+				this.triggerCutoverUniqueKeys = append(
+					this.triggerCutoverUniqueKeys,
+					this.applier.ObtainUniqueKeyValuesOfEvent(additionalStruct.dmlEvent)...)
+			}
 		}
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 		var applyEventFunc tableWriteFunc = func() error {
