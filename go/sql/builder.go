@@ -515,3 +515,75 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	)
 	return result, sharedArgs, uniqueKeyArgs, nil
 }
+
+func ObtainUniqueKeyValues(tableColumns, uniqueKeyColumns *ColumnList, args []interface{}) (uniqueKeyArgs []interface{}) {
+	for _, column := range uniqueKeyColumns.Columns() {
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal])
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+	}
+	return uniqueKeyArgs
+}
+
+func buildColumnsPreparedValuesWhere(databaseName string, columns *ColumnList) []string {
+	values := make([]string, columns.Len(), columns.Len())
+	for i, name := range columns.Names() {
+		values[i] = fmt.Sprintf(
+			"%s.%s = ?",
+			databaseName,
+			EscapeName(name))
+	}
+	return values
+}
+
+func buildColumnsEqualsWhere(databaseName, originalTableName, ghostTableName string, columns *ColumnList) []string {
+	values := make([]string, columns.Len(), columns.Len())
+	for i, name := range columns.Names() {
+		name = EscapeName(name)
+		values[i] = fmt.Sprintf(
+			"%s.%s.%s <=> %s.%s.%s",
+			databaseName,
+			originalTableName,
+			name,
+			databaseName,
+			ghostTableName,
+			name)
+	}
+	return values
+}
+
+func BuildDeleteQuery(databaseName, originalTableName, ghostTableName string, uniqueKeyColumns *ColumnList, uniqueKeyArgs [][]interface{}) (result string, explodedArgs []interface{}, err error) {
+	databaseName = EscapeName(databaseName)
+	originalTableName = EscapeName(originalTableName)
+	ghostTableName = EscapeName(ghostTableName)
+
+	preparedValuesGetKey := buildColumnsPreparedValuesWhere(
+		databaseName,
+		uniqueKeyColumns)
+	preparedValuesExistsKey := buildColumnsEqualsWhere(
+		databaseName,
+		originalTableName,
+		ghostTableName,
+		uniqueKeyColumns)
+
+	template := fmt.Sprintf(
+		"(%s and !(%s))",
+		strings.Join(preparedValuesGetKey, " and "),
+		strings.Join(preparedValuesExistsKey, " and "))
+
+	// WHERE ((gho.PK = ?) AND !(orig.PK <=> gho.PK)) OR (XXX)
+
+	preparedValuesWhere := make([]string, len(uniqueKeyArgs), len(uniqueKeyArgs))
+	for i, uniqueKey := range uniqueKeyArgs {
+		explodedArgs = append(explodedArgs, uniqueKey...)
+		preparedValuesWhere[i] = template
+	}
+
+	result = fmt.Sprintf(
+		"DELETE /* gh-ost */ FROM %s.%s WHERE %s",
+		databaseName,
+		ghostTableName,
+		strings.Join(preparedValuesWhere, " or "))
+
+	return result, explodedArgs, nil
+}

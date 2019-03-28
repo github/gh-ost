@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"regexp"
+	"strings"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -544,6 +546,224 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		chunkSize)
 	return chunkSize, rowsAffected, duration, nil
 }
+
+// Create triggers from the original table to the new one
+func (this *Applier) CreateTriggersOriginalTable() error {
+	///////////////////////
+	//  Trigger preffix  //
+	///////////////////////
+
+	prefix := fmt.Sprintf(
+		"ghost_%s_%s",
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName)
+	r := regexp.MustCompile("\\W")
+	prefix = r.ReplaceAllString(prefix, "_")
+
+	if len(prefix) > 60 {
+		oldPrefix := prefix
+		prefix = prefix[0:60]
+
+		log.Debugf(
+			"Trigger prefix %s is over 60 characters long, truncating to %s",
+			oldPrefix,
+			prefix)
+	}
+
+	//////////////////////
+	//  Delete trigger  //
+	//////////////////////
+
+	delIndexComparations := []string{}
+	for _, name := range this.migrationContext.UniqueKey.Columns.Names() {
+		columnQuoted := sql.EscapeName(name)
+		comparation := fmt.Sprintf(
+			"%s.%s.%s <=> OLD.%s",
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+			columnQuoted,
+			columnQuoted)
+		delIndexComparations = append(delIndexComparations, comparation)
+	}
+
+	deleteTrigger := fmt.Sprintf(
+		"CREATE /* gh-ost */ TRIGGER `%s_del` AFTER DELETE ON %s.%s " +
+		"FOR EACH ROW " +
+		"DELETE /* gh-ost */ IGNORE FROM %s.%s WHERE %s",
+		prefix,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		strings.Join(delIndexComparations, " AND "))
+
+	//////////////////////
+	//  Insert trigger  //
+	//////////////////////
+
+	insertCols := []string{}
+	insertValues := []string{}
+	for i, origColumn := range this.migrationContext.SharedColumns.Names() {
+		key := sql.EscapeName(this.migrationContext.MappedSharedColumns.Columns()[i].Name)
+		insertCols = append(insertCols, key)
+
+		value := fmt.Sprintf("NEW.%s", sql.EscapeName(origColumn))
+		insertValues = append(insertValues, value)
+	}
+
+
+	insertTrigger := fmt.Sprintf(
+		"CREATE /* gh-ost */ TRIGGER `%s_ins` AFTER INSERT ON %s.%s " +
+		"FOR EACH ROW " +
+		"REPLACE /* gh-ost */ INTO %s.%s (%s) VALUES (%s)",
+		prefix,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		strings.Join(insertCols, ", "),
+		strings.Join(insertValues, ", "))
+
+	//////////////////////
+	//  Update trigger  //
+	//////////////////////
+
+	updIndexComparations := []string{}
+	for _, name := range this.migrationContext.UniqueKey.Columns.Names() {
+		columnQuoted := sql.EscapeName(name)
+		comparation := fmt.Sprintf(
+			"OLD.%s <=> NEW.%s",
+			columnQuoted,
+			columnQuoted)
+		updIndexComparations = append(updIndexComparations, comparation)
+	}
+
+	updateTrigger := fmt.Sprintf(
+		"CREATE /* gh-ost */ TRIGGER `%s_upd` AFTER UPDATE ON %s.%s " +
+		"FOR EACH ROW " +
+		"BEGIN /* gh-ost */ " +
+		"DELETE IGNORE FROM %s.%s WHERE !(%s) AND %s; " +
+		"REPLACE INTO %s.%s (%s) VALUES (%s); " +
+		"END",
+		prefix,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		strings.Join(updIndexComparations, " AND "),
+		strings.Join(delIndexComparations, " AND "),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		strings.Join(insertCols, ", "),
+		strings.Join(insertValues, ", "))
+
+	///////////////////////////
+	//  Create the triggers  //
+	///////////////////////////
+
+	return func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(deleteTrigger); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(insertTrigger); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(updateTrigger); err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return nil
+	}()
+}
+
+//TODO
+func (this *Applier) ObtainUniqueKeyValuesOfEvent(dmlEvent *binlog.BinlogDMLEvent) (uniqueKeys [][]interface{}) {
+	switch dmlEvent.DML {
+	case binlog.DeleteDML:
+		return append(uniqueKeys,
+			sql.ObtainUniqueKeyValues(
+				this.migrationContext.OriginalTableColumns,
+				&this.migrationContext.UniqueKey.Columns,
+				dmlEvent.WhereColumnValues.AbstractValues()))
+
+	case binlog.InsertDML:
+		return append(uniqueKeys,
+			sql.ObtainUniqueKeyValues(
+				this.migrationContext.OriginalTableColumns,
+				&this.migrationContext.UniqueKey.Columns,
+				dmlEvent.NewColumnValues.AbstractValues()))
+
+	case binlog.UpdateDML:
+		{
+			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
+				uniqueKeys = append(uniqueKeys,
+					sql.ObtainUniqueKeyValues(
+						this.migrationContext.OriginalTableColumns,
+						&this.migrationContext.UniqueKey.Columns,
+						dmlEvent.WhereColumnValues.AbstractValues()))
+			}
+			return append(uniqueKeys,
+				sql.ObtainUniqueKeyValues(
+					this.migrationContext.OriginalTableColumns,
+					&this.migrationContext.UniqueKey.Columns,
+					dmlEvent.NewColumnValues.AbstractValues()))
+		}
+	}
+
+	return uniqueKeys
+}
+
+//TODO
+func (this *Applier) DropUniqueKeysGhostTable(uniqueKeysArgs [][]interface{}) error {
+	query, args, err := sql.BuildDeleteQuery(
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName,
+		this.migrationContext.GetGhostTableName(),
+		&this.migrationContext.UniqueKey.Columns,
+		uniqueKeysArgs)
+
+	if err != nil {
+		return err
+	}
+
+	log.Infof("Delete query: %s", query)
+	log.Infof("Delete query args: %+v", args)
+
+	return nil
+
+	//return func() error {
+		//tx, err := this.db.Begin()
+		//if err != nil {
+			//return err
+		//}
+
+		//if _, err := tx.Exec(deleteTrigger); err != nil {
+			//return err
+		//}
+		//if _, err := tx.Exec(insertTrigger); err != nil {
+			//return err
+		//}
+		//if _, err := tx.Exec(updateTrigger); err != nil {
+			//return err
+		//}
+
+		//if err := tx.Commit(); err != nil {
+			//return err
+		//}
+		//return nil
+	//}()
+}
+
+
+
 
 // LockOriginalTable places a write lock on the original table
 func (this *Applier) LockOriginalTable() error {

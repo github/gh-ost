@@ -241,6 +241,8 @@ func main() {
 		migrationContext.CutOverType = base.CutOverAtomic
 	case "two-step":
 		migrationContext.CutOverType = base.CutOverTwoStep
+	case "trigger":
+		migrationContext.CutOverType = base.CutOverTrigger
 	default:
 		migrationContext.Log.Fatalf("Unknown cut-over: %s", *cutOver)
 	}

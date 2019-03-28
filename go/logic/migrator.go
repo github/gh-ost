@@ -19,13 +19,15 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
+	"github.com/openark/golib/log"
 )
 
 type ChangelogState string
 
 const (
-	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
-	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
+	GhostTableMigrated             ChangelogState = "GhostTableMigrated"
+	AllEventsUpToLockProcessed                    = "AllEventsUpToLockProcessed"
+	AllEventsUpToTriggersProcessed                = "AllEventsUpToTriggersProcessed"
 )
 
 func ReadChangelogState(s string) ChangelogState {
@@ -70,10 +72,13 @@ type Migrator struct {
 	hooksExecutor    *HooksExecutor
 	migrationContext *base.MigrationContext
 
-	firstThrottlingCollected   chan bool
-	ghostTableMigrated         chan bool
-	rowCopyComplete            chan error
-	allEventsUpToLockProcessed chan string
+	firstThrottlingCollected       chan bool
+	ghostTableMigrated             chan bool
+	rowCopyComplete                chan error
+	allEventsUpToLockProcessed     chan string
+	allEventsUpToTriggersProcessed chan string
+
+	triggerCutoverUniqueKeys [][]interface{}
 
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
@@ -88,17 +93,17 @@ type Migrator struct {
 
 func NewMigrator(context *base.MigrationContext) *Migrator {
 	migrator := &Migrator{
-		migrationContext:           context,
-		parser:                     sql.NewAlterTableParser(),
-		ghostTableMigrated:         make(chan bool),
-		firstThrottlingCollected:   make(chan bool, 3),
-		rowCopyComplete:            make(chan error),
-		allEventsUpToLockProcessed: make(chan string),
-
-		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
-		handledChangelogStates: make(map[string]bool),
-		finishedMigrating:      0,
+		migrationContext:               context,
+		parser:                         sql.NewAlterTableParser(),
+		ghostTableMigrated:             make(chan bool),
+		firstThrottlingCollected:       make(chan bool, 3),
+		rowCopyComplete:                make(chan error),
+		allEventsUpToLockProcessed:     make(chan string),
+		allEventsUpToTriggersProcessed: make(chan string),
+		copyRowsQueue:                  make(chan tableWriteFunc),
+		applyEventsQueue:               make(chan *applyEventStruct, base.MaxEventsBatchSize),
+		handledChangelogStates:         make(map[string]bool),
+		finishedMigrating:              0,
 	}
 	return migrator
 }
@@ -240,6 +245,17 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 			// or have event functions in applyEventsQueue.
 			// So as not to create a potential deadlock, we write this func to applyEventsQueue
 			// asynchronously, understanding it doesn't really matter.
+			go func() {
+				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
+			}()
+		}
+	case AllEventsUpToTriggersProcessed:
+		{
+			var applyEventFunc tableWriteFunc = func() error {
+				this.allEventsUpToTriggersProcessed <- changelogStateString
+				return nil
+			}
+			//TODO Explain
 			go func() {
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
@@ -556,7 +572,56 @@ func (this *Migrator) cutOver() (err error) {
 		this.handleCutOverResult(err)
 		return err
 	}
+	if this.migrationContext.CutOverType == base.CutOverTrigger {
+		err := this.cutOverTrigger()
+		this.handleCutOverResult(err)
+		return err
+	}
 	return this.migrationContext.Log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
+}
+
+// Inject the "AllEventsUpToTriggersProcessed" state hint, wait for it to appear in the binary logs,
+// make sure the queue is drained.
+func (this *Migrator) waitForEventsUpToTriggers() (err error) {
+	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
+
+	this.migrationContext.MarkPointOfInterest()
+	waitForEventsUpToTriggersStartTime := time.Now()
+
+	allEventsUpToTriggersProcessedChallenge := fmt.Sprintf(
+		"%s:%d",
+		string(AllEventsUpToTriggersProcessed),
+		waitForEventsUpToTriggersStartTime.UnixNano())
+
+	log.Infof("Writing changelog state: %+v", allEventsUpToTriggersProcessedChallenge)
+	if _, err := this.applier.WriteChangelogState(allEventsUpToTriggersProcessedChallenge); err != nil {
+		return err
+	}
+	log.Infof("Waiting for events up to triggers")
+	//atomic.StoreInt64(&this.migrationContext.AllEventsUpToTriggersProcessedInjectedFlag, 1)
+	for found := false; !found; {
+		select {
+		case <-timeout.C:
+			{
+				return log.Errorf("Timeout while waiting for events up to triggers")
+			}
+		case state := <-this.allEventsUpToTriggersProcessed:
+			{
+				if state == allEventsUpToTriggersProcessedChallenge {
+					log.Infof("Waiting for events up to triggers: got %s", state)
+					found = true
+				} else {
+					log.Infof("Waiting for events up to triggers: skipping %s", state)
+				}
+			}
+		}
+	}
+	waitForEventsUpToTriggersDuration := time.Since(waitForEventsUpToTriggersStartTime)
+
+	log.Infof("Done waiting for events up to triggers; duration=%+v", waitForEventsUpToTriggersDuration)
+	this.printStatus(ForcePrintStatusAndHintRule)
+
+	return nil
 }
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
@@ -626,6 +691,52 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
 	this.migrationContext.Log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
+}
+
+// cutOverTrigger will create some INSERT, UPDATE and DELETE triggers to keep the table updated,
+// After this it will copy the changes between the last insert and the triggers creation and do a
+// simple RENAME TABLE.
+func (this *Migrator) cutOverTrigger() (err error) {
+	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
+	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
+	atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 1)
+
+	log.Infof(
+		"Creating triggers for %s.%s",
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName)
+
+	time.Sleep(30 * time.Second)
+
+	if err := this.retryOperation(this.applier.CreateTriggersOriginalTable); err != nil {
+		return err
+	}
+
+	if err := this.waitForEventsUpToTriggers(); err != nil {
+		return log.Errore(err)
+	}
+
+	uniqueKeys := this.triggerCutoverUniqueKeys
+
+	if err := this.applier.DropUniqueKeysGhostTable(uniqueKeys); err != nil {
+		return err
+	}
+
+	//if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
+	//return err
+	//}
+	//if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
+	//return err
+	//}
+	//if err := this.retryOperation(this.applier.UnlockTables); err != nil {
+	//return err
+	//}
+
+	//lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
+	//renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
+	//log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	return nil
+
 }
 
 // atomicCutOver
@@ -1027,6 +1138,7 @@ func (this *Migrator) initiateStreaming() error {
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
+	atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 0)
 	this.eventsStreamer.AddListener(
 		false,
 		this.migrationContext.DatabaseName,
@@ -1209,8 +1321,14 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 	}
 	if eventStruct.dmlEvent == nil {
 		return handleNonDMLEventStruct(eventStruct)
-	}
+	} // And this (?)
 	if eventStruct.dmlEvent != nil {
+		addCutoverKeys := atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState) == 1
+		if addCutoverKeys {
+			this.triggerCutoverUniqueKeys = append(
+				this.triggerCutoverUniqueKeys,
+				this.applier.ObtainUniqueKeyValuesOfEvent(eventStruct.dmlEvent)...)
+		}
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
 		var nonDmlStructToApply *applyEventStruct
@@ -1230,6 +1348,13 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 				break
 			}
 			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
+
+			addCutoverKeys = addCutoverKeys && (atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState) == 1)
+			if addCutoverKeys {
+				this.triggerCutoverUniqueKeys = append(
+					this.triggerCutoverUniqueKeys,
+					this.applier.ObtainUniqueKeyValuesOfEvent(additionalStruct.dmlEvent)...)
+			}
 		}
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 		var applyEventFunc tableWriteFunc = func() error {
