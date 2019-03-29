@@ -8,15 +8,12 @@ The [facebook OSC](https://www.facebook.com/notes/mysql-at-facebook/online-schem
 
 Another option to support a atomic swap without the use of a lock is the use of triggers only in the cut-over phase,
 gh-ost philosophy is avoid the use of triggers but in some environments like a Galera cluster isn't possible use the
-lock command, and like the cut-over should take a little time it shouldn't be a problem. This method work in the next
-way:
+lock command, and like the cut-over should take a little time it shouldn't be a problem. Triggers cut-over works like the following:
 
 - A stop writes event is injected in the binlog and gh-ost disable the writes once it receive it.
 - The triggers are created to handle the modifications in the MySQL side.
 - A created triggers event is injected in the binlog and gh-ost wait until receive it.
-- Since while the first event and the second one the affected rows will be in a inconsistent state, the unique key
-    values of this events are tracked.
-- The rows tracked are deleted and inserted back from the original table, so like we have already the triggers is assured his consistence.
+- The affected rows will be in an inconsistent stata during the time between the first and the second event. For this reason, this events are checked and, the values of the fields that are part of the unique key used to do the online alter are saved to sanitize that rows.
 
 `gh-ost` solves this by using an atomic, two-step blocking swap: while one connection holds the lock, another attempts the atomic `RENAME`. The `RENAME` is guaranteed to not be executed prematurely by positioning a sentry table which blocks the `RENAME` operation until `gh-ost` is satisfied all is in order.
 
