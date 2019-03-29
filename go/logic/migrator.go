@@ -27,6 +27,7 @@ type ChangelogState string
 const (
 	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
+	StopWriteEvents                           = "StopWriteEvents"
 	AllEventsUpToTriggersProcessed            = "AllEventsUpToTriggersProcessed"
 )
 
@@ -242,9 +243,21 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
 		}
+	case StopWriteEvents:
+		{
+			var applyEventFunc tableWriteFunc = func() error {
+				atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 1)
+				return nil
+			}
+			//TODO Explain
+			go func() {
+				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
+			}()
+		}
 	case AllEventsUpToTriggersProcessed:
 		{
 			var applyEventFunc tableWriteFunc = func() error {
+				atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 2)
 				this.allEventsUpToTriggersProcessed <- changelogStateString
 				return nil
 			}
@@ -554,6 +567,26 @@ func (this *Migrator) cutOver() (err error) {
 	return log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 }
 
+// Inject the "StopWriteEvents" state hint
+func (this *Migrator) injectStopWriteEvents() (err error) {
+	this.migrationContext.MarkPointOfInterest()
+	injectStopWriteEventsStartTime := time.Now()
+
+	injectStopWriteEventsChallenge := fmt.Sprintf(
+		"%s:%d",
+		string(StopWriteEvents),
+		injectStopWriteEventsStartTime.UnixNano())
+
+	log.Infof("Writing changelog state: %+v", injectStopWriteEventsChallenge)
+	if _, err := this.applier.WriteChangelogState(injectStopWriteEventsChallenge); err != nil {
+		return err
+	}
+
+	this.printStatus(ForcePrintStatusAndHintRule)
+
+	return nil
+}
+
 // Inject the "AllEventsUpToTriggersProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
 func (this *Migrator) waitForEventsUpToTriggers() (err error) {
@@ -673,7 +706,10 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 func (this *Migrator) cutOverTrigger() (err error) {
 	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
-	atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 1)
+
+	if err := this.injectStopWriteEvents(); err != nil {
+		return err
+	}
 
 	log.Infof(
 		"Creating triggers for %s.%s",
@@ -688,9 +724,19 @@ func (this *Migrator) cutOverTrigger() (err error) {
 		return log.Errore(err)
 	}
 
+	//TODO retry the operation
+	if err := this.applier.DropUniqueKeysGhostTable(this.triggerCutoverUniqueKeys); err != nil {
+                return err
+        }
+
+	//TODO retry the operation
+	if err := this.applier.InsertSelectUniqueKeysGhostTable(this.triggerCutoverUniqueKeys); err != nil {
+                return err
+        }
+
 	//TODO remove
-	log.Infof("Received trigger event, waiting 30s after swap it")
-	time.Sleep(30 * time.Second)
+	//log.Infof("Received trigger event, waiting 30s after swap it")
+	//time.Sleep(30 * time.Second)
 
 	if err := this.retryOperation(this.applier.SwapTables); err != nil {
 		return err
@@ -1268,11 +1314,15 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		return handleNonDMLEventStruct(eventStruct)
 	}
 	if eventStruct.dmlEvent != nil {
-		addCutoverKeys := atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState) == 1
-		if addCutoverKeys {
+		applyDMLEventState := atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState)
+		if applyDMLEventState == 1 {
 			this.triggerCutoverUniqueKeys = append(
 				this.triggerCutoverUniqueKeys,
 				this.applier.ObtainUniqueKeyValuesOfEvent(eventStruct.dmlEvent)...)
+			return nil
+		}
+		if applyDMLEventState == 2 {
+			return nil
 		}
 
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
@@ -1294,13 +1344,6 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 				break
 			}
 			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
-
-			addCutoverKeys = addCutoverKeys && (atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState) == 1)
-			if addCutoverKeys {
-				this.triggerCutoverUniqueKeys = append(
-					this.triggerCutoverUniqueKeys,
-					this.applier.ObtainUniqueKeyValuesOfEvent(additionalStruct.dmlEvent)...)
-			}
 		}
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 		var applyEventFunc tableWriteFunc = func() error {

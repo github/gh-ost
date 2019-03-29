@@ -741,6 +741,52 @@ func (this *Applier) ObtainUniqueKeyValuesOfEvent(dmlEvent *binlog.BinlogDMLEven
 	return uniqueKeys
 }
 
+func (this *Applier) DropUniqueKeysGhostTable(uniqueKeysArgs [][]interface{}) error {
+        if len(uniqueKeysArgs) == 0 {
+            return nil
+        }
+
+        query, args, err := sql.BuildDeleteQuery(
+               this.migrationContext.DatabaseName,
+               this.migrationContext.GetGhostTableName(),
+               &this.migrationContext.UniqueKey.Columns,
+               uniqueKeysArgs)
+
+       if err != nil {
+               return err
+       }
+
+       log.Infof("Removing %d created rows during trigger creation",
+                len(uniqueKeysArgs))
+	_, err = sqlutils.ExecNoPrepare(this.db, query, args...)
+       return err
+}
+
+func (this *Applier) InsertSelectUniqueKeysGhostTable(uniqueKeysArgs [][]interface{}) error {
+        if len(uniqueKeysArgs) == 0 {
+            return nil
+        }
+
+        query, args, err := sql.BuildInsertSelectQuery(
+                this.migrationContext.DatabaseName,
+                this.migrationContext.OriginalTableName,
+                this.migrationContext.GetGhostTableName(),
+                this.migrationContext.SharedColumns.Names(),
+                this.migrationContext.MappedSharedColumns.Names(),
+                this.migrationContext.UniqueKey.Name,
+                &this.migrationContext.UniqueKey.Columns,
+                uniqueKeysArgs)
+
+       if err != nil {
+               return err
+       }
+
+       log.Infof("Inserting %d created rows during trigger creation",
+                len(uniqueKeysArgs))
+	_, err = sqlutils.ExecNoPrepare(this.db, query, args...)
+       return err
+}
+
 // LockOriginalTable places a write lock on the original table
 func (this *Applier) LockOriginalTable() error {
 	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
