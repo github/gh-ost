@@ -569,13 +569,9 @@ func (this *Applier) makeTriggerPrefix() string {
 	return prefix
 }
 
-// Create triggers from the original table to the new one
+// CreateTriggersOriginalTable Create triggers from the original table to the ghost one
 func (this *Applier) CreateTriggersOriginalTable() error {
 	prefix := this.makeTriggerPrefix()
-
-	//////////////////////
-	//  Delete trigger  //
-	//////////////////////
 
 	delIndexComparations := []string{}
 	for _, name := range this.migrationContext.UniqueKey.Columns.Names() {
@@ -600,10 +596,6 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 		strings.Join(delIndexComparations, " AND "))
 
-	//////////////////////
-	//  Insert trigger  //
-	//////////////////////
-
 	insertCols := []string{}
 	insertValues := []string{}
 	for i, origColumn := range this.migrationContext.SharedColumns.Names() {
@@ -626,10 +618,6 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 		strings.Join(insertCols, ", "),
 		strings.Join(insertValues, ", "))
-
-	//////////////////////
-	//  Update trigger  //
-	//////////////////////
 
 	updIndexComparations := []string{}
 	for _, name := range this.migrationContext.UniqueKey.Columns.Names() {
@@ -660,10 +648,6 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 		strings.Join(insertCols, ", "),
 		strings.Join(insertValues, ", "))
 
-	///////////////////////////
-	//  Create the triggers  //
-	///////////////////////////
-
 	return func() error {
 		tx, err := this.db.Begin()
 		if err != nil {
@@ -687,7 +671,7 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 	}()
 }
 
-// Drop triggers from the old table
+// DropTriggersOldTable Drop triggers from the old table
 func (this *Applier) DropTriggersOldTable() error {
 	prefix := this.makeTriggerPrefix()
 
@@ -705,10 +689,6 @@ func (this *Applier) DropTriggersOldTable() error {
 		"DROP /* gh-ost */ TRIGGER %s.`%s_upd`",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		prefix)
-
-	/////////////////////////
-	//  Drop the triggers  //
-	/////////////////////////
 
 	return func() error {
 		tx, err := this.db.Begin()
@@ -733,7 +713,6 @@ func (this *Applier) DropTriggersOldTable() error {
 	}()
 }
 
-//TODO
 func (this *Applier) ObtainUniqueKeyValuesOfEvent(dmlEvent *binlog.BinlogDMLEvent) (uniqueKeys [][]interface{}) {
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:

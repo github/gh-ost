@@ -593,7 +593,7 @@ func (this *Migrator) cutOver() (err error) {
 	return this.migrationContext.Log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 }
 
-// Inject the "StopWriteEvents" state hint
+// injectStopWriteEvents Inject the "StopWriteEvents" state hint
 func (this *Migrator) injectStopWriteEvents() (err error) {
 	this.migrationContext.MarkPointOfInterest()
 	injectStopWriteEventsStartTime := time.Now()
@@ -613,8 +613,8 @@ func (this *Migrator) injectStopWriteEvents() (err error) {
 	return nil
 }
 
-// Inject the "AllEventsUpToTriggersProcessed" state hint, wait for it to appear in the binary logs,
-// make sure the queue is drained.
+// waitForEventsUpToTriggers Inject the "AllEventsUpToTriggersProcessed" state hint,
+// wait for it to appear in the binary logs, make sure the queue is drained.
 func (this *Migrator) waitForEventsUpToTriggers() (err error) {
 	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
 
