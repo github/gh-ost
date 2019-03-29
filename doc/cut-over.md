@@ -6,6 +6,18 @@ MySQL poses some limitations on how the table swap can take place. While it supp
 
 The [facebook OSC](https://www.facebook.com/notes/mysql-at-facebook/online-schema-change-for-mysql/430801045932/) tool documents this nicely. Look for **"Cut-over phase"**. The Facebook solution uses a non-atomic swap: the original table is first renamed and pushed aside, then the ghost table is renamed to take its place. In between the two renames there's a brief period of time where your table just does not exist, and queries will fail.
 
+Another option to support a atomic swap without the use of a lock is the use of triggers only in the cut-over phase,
+gh-ost philosophy is avoid the use of triggers but in some environments like a Galera cluster isn't possible use the
+lock command, and like the cut-over should take a little time it shouldn't be a problem. This method work in the next
+way:
+
+- A stop writes event is injected in the binlog and gh-ost disable the writes once it receive it.
+- The triggers are created to handle the modifications in the MySQL side.
+- A created triggers event is injected in the binlog and gh-ost wait until receive it.
+- Since while the first event and the second one the affected rows will be in a inconsistent state, the unique key
+    values of this events are tracked.
+- The rows tracked are deleted and inserted back from the original table, so like we have already the triggers is assured his consistence.
+
 `gh-ost` solves this by using an atomic, two-step blocking swap: while one connection holds the lock, another attempts the atomic `RENAME`. The `RENAME` is guaranteed to not be executed prematurely by positioning a sentry table which blocks the `RENAME` operation until `gh-ost` is satisfied all is in order.
 
 This solution either:
@@ -18,4 +30,4 @@ Also note:
 
 Internals of the atomic cut-over are discussed in [Issue #82](https://github.com/github/gh-ost/issues/82).
 
-At this time the command-line argument `--cut-over` is supported, and defaults to the atomic cut-over algorithm described above. Also supported is `--cut-over=two-step`, which uses the FB non-atomic algorithm. We recommend using the default cut-over that has been battle tested in our production environments.
+At this time the command-line argument `--cut-over` is supported, and defaults to the atomic cut-over algorithm described above. Also supported is `--cut-over=two-step`, which uses the FB non-atomic algorithm and the `--cut-over=trigger`, which use the trigger algorithm. We recommend using the default cut-over that has been battle tested in our production environments.
