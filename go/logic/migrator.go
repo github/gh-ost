@@ -724,19 +724,29 @@ func (this *Migrator) cutOverTrigger() (err error) {
 		return log.Errore(err)
 	}
 
-	//TODO retry the operation
-	if err := this.applier.DropUniqueKeysGhostTable(this.triggerCutoverUniqueKeys); err != nil {
-                return err
-        }
+	this.migrationContext.TriggerCutoverUniqueKeys = nil
 
-	//TODO retry the operation
-	if err := this.applier.InsertSelectUniqueKeysGhostTable(this.triggerCutoverUniqueKeys); err != nil {
-                return err
-        }
+CompareNewRow:
+	for _, rowToAdd := range this.triggerCutoverUniqueKeys {
+CompareAddedRow:
+		for _, rowAdded := range this.migrationContext.TriggerCutoverUniqueKeys {
+			for i := range rowAdded {
+				if rowToAdd[i] != rowAdded[i] {
+					continue CompareAddedRow
+				}
+			}
 
-	//TODO remove
-	//log.Infof("Received trigger event, waiting 30s after swap it")
-	//time.Sleep(30 * time.Second)
+			continue CompareNewRow
+		}
+
+		this.migrationContext.TriggerCutoverUniqueKeys = append(
+			this.migrationContext.TriggerCutoverUniqueKeys,
+			rowToAdd)
+	}
+
+	if err := this.retryOperation(this.applier.SanitizeRowsDuringCutOver); err != nil {
+		return err
+	}
 
 	if err := this.retryOperation(this.applier.SwapTables); err != nil {
 		return err

@@ -741,50 +741,67 @@ func (this *Applier) ObtainUniqueKeyValuesOfEvent(dmlEvent *binlog.BinlogDMLEven
 	return uniqueKeys
 }
 
-func (this *Applier) DropUniqueKeysGhostTable(uniqueKeysArgs [][]interface{}) error {
-        if len(uniqueKeysArgs) == 0 {
-            return nil
-        }
+func (this *Applier) SanitizeRowsDuringCutOver() error {
+	for len(this.migrationContext.TriggerCutoverUniqueKeys) > 0 {
+		cutIndex := int64(len(this.migrationContext.TriggerCutoverUniqueKeys)) - this.migrationContext.ChunkSize
+		if cutIndex < 0 {
+			cutIndex = 0
+		}
 
-        query, args, err := sql.BuildDeleteQuery(
-               this.migrationContext.DatabaseName,
-               this.migrationContext.GetGhostTableName(),
-               &this.migrationContext.UniqueKey.Columns,
-               uniqueKeysArgs)
+		chunkValues := this.migrationContext.TriggerCutoverUniqueKeys[cutIndex:]
+		deleteQuery, deleteArgs, deleteErr := sql.BuildDeleteQuery(
+			this.migrationContext.DatabaseName,
+			this.migrationContext.GetGhostTableName(),
+			&this.migrationContext.UniqueKey.Columns,
+			chunkValues)
 
-       if err != nil {
-               return err
-       }
+		if deleteErr != nil {
+			return deleteErr
+		}
 
-       log.Infof("Removing %d created rows during trigger creation",
-                len(uniqueKeysArgs))
-	_, err = sqlutils.ExecNoPrepare(this.db, query, args...)
-       return err
-}
+		insertSelectQuery, insertSelectArgs, insertSelectErr := sql.BuildInsertSelectQuery(
+			this.migrationContext.DatabaseName,
+			this.migrationContext.OriginalTableName,
+			this.migrationContext.GetGhostTableName(),
+			this.migrationContext.SharedColumns.Names(),
+			this.migrationContext.MappedSharedColumns.Names(),
+			this.migrationContext.UniqueKey.Name,
+			&this.migrationContext.UniqueKey.Columns,
+			chunkValues)
 
-func (this *Applier) InsertSelectUniqueKeysGhostTable(uniqueKeysArgs [][]interface{}) error {
-        if len(uniqueKeysArgs) == 0 {
-            return nil
-        }
+		if insertSelectErr != nil {
+			return insertSelectErr
+		}
 
-        query, args, err := sql.BuildInsertSelectQuery(
-                this.migrationContext.DatabaseName,
-                this.migrationContext.OriginalTableName,
-                this.migrationContext.GetGhostTableName(),
-                this.migrationContext.SharedColumns.Names(),
-                this.migrationContext.MappedSharedColumns.Names(),
-                this.migrationContext.UniqueKey.Name,
-                &this.migrationContext.UniqueKey.Columns,
-                uniqueKeysArgs)
+		log.Infof("Sanitizing chunk of %d created rows during trigger creation",
+			len(chunkValues))
 
-       if err != nil {
-               return err
-       }
+		err := func() error {
+			tx, err := this.db.Begin()
+			if err != nil {
+				return err
+			}
 
-       log.Infof("Inserting %d created rows during trigger creation",
-                len(uniqueKeysArgs))
-	_, err = sqlutils.ExecNoPrepare(this.db, query, args...)
-       return err
+			if _, err := tx.Exec(deleteQuery, deleteArgs...); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(insertSelectQuery, insertSelectArgs...); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			return nil
+		}()
+
+		if err != nil {
+			return err
+		}
+
+		this.migrationContext.TriggerCutoverUniqueKeys = this.migrationContext.TriggerCutoverUniqueKeys[:cutIndex]
+	}
+
+	return nil
 }
 
 // LockOriginalTable places a write lock on the original table

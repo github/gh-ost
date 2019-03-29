@@ -217,6 +217,8 @@ type MigrationContext struct {
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 	ForceTmpTableName                string
 
+	TriggerCutoverUniqueKeys [][]interface {}
+
 	recentBinlogCoordinates mysql.BinlogCoordinates
 }
 
