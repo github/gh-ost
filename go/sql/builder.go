@@ -525,53 +525,22 @@ func ObtainUniqueKeyValues(tableColumns, uniqueKeyColumns *ColumnList, args []in
 	return uniqueKeyArgs
 }
 
-func buildColumnsPreparedValuesWhere(databaseName string, columns *ColumnList) []string {
+func buildColumnsPreparedValuesWhere(columns *ColumnList) []string {
 	values := make([]string, columns.Len(), columns.Len())
 	for i, name := range columns.Names() {
 		values[i] = fmt.Sprintf(
-			"%s.%s = ?",
-			databaseName,
+			"%s <=> ?",
 			EscapeName(name))
 	}
 	return values
 }
 
-func buildColumnsEqualsWhere(databaseName, originalTableName, ghostTableName string, columns *ColumnList) []string {
-	values := make([]string, columns.Len(), columns.Len())
-	for i, name := range columns.Names() {
-		name = EscapeName(name)
-		values[i] = fmt.Sprintf(
-			"%s.%s.%s <=> %s.%s.%s",
-			databaseName,
-			originalTableName,
-			name,
-			databaseName,
-			ghostTableName,
-			name)
-	}
-	return values
-}
-
-func BuildDeleteQuery(databaseName, originalTableName, ghostTableName string, uniqueKeyColumns *ColumnList, uniqueKeyArgs [][]interface{}) (result string, explodedArgs []interface{}, err error) {
-	databaseName = EscapeName(databaseName)
-	originalTableName = EscapeName(originalTableName)
-	ghostTableName = EscapeName(ghostTableName)
-
-	preparedValuesGetKey := buildColumnsPreparedValuesWhere(
-		databaseName,
-		uniqueKeyColumns)
-	preparedValuesExistsKey := buildColumnsEqualsWhere(
-		databaseName,
-		originalTableName,
-		ghostTableName,
-		uniqueKeyColumns)
+func BuildDeleteQuery(databaseName, ghostTableName string, uniqueKeyColumns *ColumnList, uniqueKeyArgs [][]interface{}) (result string, explodedArgs []interface{}, err error) {
+	preparedValuesGetKey := buildColumnsPreparedValuesWhere(uniqueKeyColumns)
 
 	template := fmt.Sprintf(
-		"(%s and !(%s))",
-		strings.Join(preparedValuesGetKey, " and "),
-		strings.Join(preparedValuesExistsKey, " and "))
-
-	// WHERE ((gho.PK = ?) AND !(orig.PK <=> gho.PK)) OR (XXX)
+		"(%s)",
+		strings.Join(preparedValuesGetKey, " and "))
 
 	preparedValuesWhere := make([]string, len(uniqueKeyArgs), len(uniqueKeyArgs))
 	for i, uniqueKey := range uniqueKeyArgs {
@@ -580,9 +549,49 @@ func BuildDeleteQuery(databaseName, originalTableName, ghostTableName string, un
 	}
 
 	result = fmt.Sprintf(
-		"DELETE /* gh-ost */ FROM %s.%s WHERE %s",
-		databaseName,
-		ghostTableName,
+		"delete /* gh-ost */ from %s.%s where %s",
+		EscapeName(databaseName),
+		EscapeName(ghostTableName),
+		strings.Join(preparedValuesWhere, " or "))
+
+	return result, explodedArgs, nil
+}
+
+func BuildInsertSelectQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, uniqueKeyArgs [][]interface{}) (result string, explodedArgs []interface{}, err error) {
+	databaseName = EscapeName(databaseName)
+	originalTableName = EscapeName(originalTableName)
+	ghostTableName = EscapeName(ghostTableName)
+
+	mappedSharedColumns = duplicateNames(mappedSharedColumns)
+	for i := range mappedSharedColumns {
+		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
+	}
+	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
+
+	sharedColumns = duplicateNames(sharedColumns)
+	for i := range sharedColumns {
+		sharedColumns[i] = EscapeName(sharedColumns[i])
+	}
+	sharedColumnsListing := strings.Join(sharedColumns, ", ")
+
+	preparedValuesGetKey := buildColumnsPreparedValuesWhere(uniqueKeyColumns)
+
+	template := fmt.Sprintf(
+		"(%s)",
+		strings.Join(preparedValuesGetKey, " and "))
+
+	preparedValuesWhere := make([]string, len(uniqueKeyArgs), len(uniqueKeyArgs))
+	for i, uniqueKey := range uniqueKeyArgs {
+		explodedArgs = append(explodedArgs, uniqueKey...)
+		preparedValuesWhere[i] = template
+	}
+
+	result = fmt.Sprintf(
+		"insert /* gh-ost %s.%s */ into %s.%s (%s) select %s from %s.%s force index (%s) where %s",
+		databaseName, originalTableName,
+		databaseName, ghostTableName, mappedSharedColumnsListing,
+		sharedColumnsListing, databaseName, originalTableName,
+		uniqueKey,
 		strings.Join(preparedValuesWhere, " or "))
 
 	return result, explodedArgs, nil
