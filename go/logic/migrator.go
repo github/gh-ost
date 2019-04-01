@@ -249,7 +249,11 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 				atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 1)
 				return nil
 			}
-			//TODO Explain
+			// at this point we know that the triggers will be created and we don't want write the
+			// next events from the streamer, because the streamer works sequentially. So those
+			// events are either already handled, or have event functions in applyEventsQueue.
+			// So as not to create a potential deadlock, we write this func to applyEventsQueue
+			// asynchronously, understanding it doesn't really matter.
 			go func() {
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
@@ -261,7 +265,11 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 				this.allEventsUpToTriggersProcessed <- changelogStateString
 				return nil
 			}
-			//TODO Explain
+			// at this point we know that the triggers are created and we want to sanitize the inconsistent
+			// rows between the stop and the triggers event, because the streamer works sequentially.
+			// So those events are either already handled, or have event functions in applyEventsQueue.
+			// So as not to create a potential deadlock, we write this func to applyEventsQueue
+			// asynchronously, understanding it doesn't really matter.
 			go func() {
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()

@@ -542,7 +542,7 @@ func BuildDeleteQuery(databaseName, ghostTableName string, uniqueKeyColumns *Col
 	}
 
 	result = fmt.Sprintf(
-		"delete /* gh-ost */ ignore from %s.%s where %s",
+		"delete /* gh-ost */ from %s.%s where %s",
 		EscapeName(databaseName),
 		EscapeName(ghostTableName),
 		strings.Join(preparedValuesWhere, " or "))
@@ -580,7 +580,7 @@ func BuildInsertSelectQuery(databaseName, originalTableName, ghostTableName stri
 	}
 
 	result = fmt.Sprintf(
-		"insert /* gh-ost %s.%s */ ignore into %s.%s (%s) select %s from %s.%s force index (%s) where %s",
+		"insert /* gh-ost %s.%s */ into %s.%s (%s) select %s from %s.%s force index (%s) where %s",
 		databaseName, originalTableName,
 		databaseName, ghostTableName, mappedSharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName,
