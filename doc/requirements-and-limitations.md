@@ -22,7 +22,7 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 ### Limitations
 
-- Foreign keys not supported. They may be supported in the future, to some extent.
+- Foreign key constraints are not supported. They may be supported in the future, to some extent.
 
 - Triggers are not supported. They may be supported in the future.
 
