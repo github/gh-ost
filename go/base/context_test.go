@@ -56,3 +56,12 @@ func TestGetTableNames(t *testing.T) {
 		test.S(t).ExpectEquals(context.GetChangelogTableName(), "_tmp_ghc")
 	}
 }
+
+func TestGetServeSocketFile(t *testing.T) {
+	{
+		context := NewMigrationContext()
+		socketFile := "/tmp/gh-ost.sock"
+		context.ServeSocketFile = socketFile
+		test.S(t).ExpectEquals(context.GetServeSocketFile(), "/tmp/gh-ost.sock")
+	}
+}
