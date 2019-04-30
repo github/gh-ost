@@ -22,7 +22,7 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 ### Limitations
 
-- Foreign keys not supported. They may be supported in the future, to some extent.
+- Foreign key constraints are not supported. They may be supported in the future, to some extent.
 
 - Triggers are not supported. They may be supported in the future.
 
@@ -38,7 +38,7 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 - It is not allowed to migrate a table where another table exists with same name and different upper/lower case.
   - For example, you may not migrate `MyTable` if another table called `MYtable` exists in the same schema.
 
-- Amazon RDS works, but has it's own [limitations](rds.md).
+- Amazon RDS works, but has its own [limitations](rds.md).
 - Google Cloud SQL works, `--gcp` flag required.
 - Aliyun RDS works, `--aliyun-rds` flag required.
 
