@@ -144,13 +144,13 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 	switch command {
 	case "help":
 		{
-			fmt.Fprintln(writer, `available commands:
+			fmt.Fprintf(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
 coordinates													 # Print the currently inspected coordinates
 chunk-size=<newsize>                 # Set a new chunk-size
 dml-batch-size=<newsize>             # Set a new dml-batch-size
-nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
+nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70%% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
 critical-load=<load>                 # Set a new set of max-load thresholds
 max-lag-millis=<max-lag>             # Set a new replication lag threshold
 replication-lag-query=<query>        # Set a new query that determines replication lag (no quotes)
@@ -163,8 +163,7 @@ no-throttle                          # End forced throttling (other throttling m
 unpostpone                           # Bail out a cut-over postpone; proceed to cut-over
 panic                                # panic and quit without cleanup
 help                                 # This message
-- use '?' (question mark) as argument to get info rather than set. e.g. "max-load=?" will just print out current max-load.
-`)
+- use '?' (question mark) as argument to get info rather than set. e.g. "max-load=?" will just print out current max-load.\n\n`)
 		}
 	case "sup":
 		return ForcePrintStatusOnlyRule, nil
