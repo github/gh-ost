@@ -649,6 +649,8 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 		strings.Join(insertValues, ", "))
 
 	return func() error {
+		this.migrationContext.CreateTriggersStartTime = time.Now()
+
 		tx, err := this.db.Begin()
 		if err != nil {
 			return err
