@@ -170,6 +170,7 @@ type MigrationContext struct {
 	StartTime                              time.Time
 	RowCopyStartTime                       time.Time
 	RowCopyEndTime                         time.Time
+	CreateTriggersStartTime                time.Time
 	LockTablesStartTime                    time.Time
 	RenameTablesStartTime                  time.Time
 	RenameTablesEndTime                    time.Time

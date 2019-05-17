@@ -27,7 +27,6 @@ type ChangelogState string
 const (
 	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
-	StopWriteEvents                           = "StopWriteEvents"
 	AllEventsUpToTriggersProcessed            = "AllEventsUpToTriggersProcessed"
 )
 
@@ -77,6 +76,7 @@ type Migrator struct {
 	ghostTableMigrated             chan bool
 	rowCopyComplete                chan error
 	allEventsUpToLockProcessed     chan string
+	stoppedBinlogWrites            chan bool
 	allEventsUpToTriggersProcessed chan string
 
 	triggerCutoverUniqueKeys [][]interface {}
@@ -243,30 +243,15 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
 		}
-	case StopWriteEvents:
-		{
-			var applyEventFunc tableWriteFunc = func() error {
-				atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 1)
-				return nil
-			}
-			// at this point we know that the triggers will be created and we don't want write the
-			// next events from the streamer, because the streamer works sequentially. So those
-			// events are either already handled, or have event functions in applyEventsQueue.
-			// So as not to create a potential deadlock, we write this func to applyEventsQueue
-			// asynchronously, understanding it doesn't really matter.
-			go func() {
-				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
-			}()
-		}
 	case AllEventsUpToTriggersProcessed:
 		{
 			var applyEventFunc tableWriteFunc = func() error {
-				atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 2)
+				atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 3)
 				this.allEventsUpToTriggersProcessed <- changelogStateString
 				return nil
 			}
 			// at this point we know that the triggers are created and we want to sanitize the inconsistent
-			// rows between the stop and the triggers event, because the streamer works sequentially.
+			// rows between the stop writes and the triggers event, because the streamer works sequentially.
 			// So those events are either already handled, or have event functions in applyEventsQueue.
 			// So as not to create a potential deadlock, we write this func to applyEventsQueue
 			// asynchronously, understanding it doesn't really matter.
@@ -575,22 +560,13 @@ func (this *Migrator) cutOver() (err error) {
 	return log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 }
 
-// injectStopWriteEvents Inject the "StopWriteEvents" state hint
-func (this *Migrator) injectStopWriteEvents() (err error) {
-	this.migrationContext.MarkPointOfInterest()
-	injectStopWriteEventsStartTime := time.Now()
+// waitForStopWrites Disable the writes from the binlog and keep a record of the affected rows
+func (this *Migrator) waitForStopWrites() (err error) {
+	log.Infof("Stopping the writes")
+	atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 1)
+	<-this.stoppedBinlogWrites
 
-	injectStopWriteEventsChallenge := fmt.Sprintf(
-		"%s:%d",
-		string(StopWriteEvents),
-		injectStopWriteEventsStartTime.UnixNano())
-
-	log.Infof("Writing changelog state: %+v", injectStopWriteEventsChallenge)
-	if _, err := this.applier.WriteChangelogState(injectStopWriteEventsChallenge); err != nil {
-		return err
-	}
-
-	this.printStatus(ForcePrintStatusAndHintRule)
+	log.Infof("Done waiting to stop the writes")
 
 	return nil
 }
@@ -613,7 +589,6 @@ func (this *Migrator) waitForEventsUpToTriggers() (err error) {
 		return err
 	}
 	log.Infof("Waiting for events up to triggers")
-	//atomic.StoreInt64(&this.migrationContext.AllEventsUpToTriggersProcessedInjectedFlag, 1)
 	for found := false; !found; {
 		select {
 		case <-timeout.C:
@@ -715,9 +690,7 @@ func (this *Migrator) cutOverTrigger() (err error) {
 	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
-	if err := this.injectStopWriteEvents(); err != nil {
-		return err
-	}
+	this.waitForStopWrites()
 
 	log.Infof(
 		"Creating triggers for %s.%s",
@@ -763,9 +736,9 @@ CompareAddedRow:
 		return err
 	}
 
-	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
+	createTriggersAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.CreateTriggersStartTime)
 	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
-	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	log.Debugf("Create triggers & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", createTriggersAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
@@ -1334,12 +1307,17 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 	if eventStruct.dmlEvent != nil {
 		applyDMLEventState := atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState)
 		if applyDMLEventState == 1 {
+			atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 2)
+			applyDMLEventState = 2
+			this.stoppedBinlogWrites <- true
+		}
+		if applyDMLEventState == 2 {
 			this.triggerCutoverUniqueKeys = append(
 				this.triggerCutoverUniqueKeys,
 				this.applier.ObtainUniqueKeyValuesOfEvent(eventStruct.dmlEvent)...)
 			return nil
 		}
-		if applyDMLEventState == 2 {
+		if applyDMLEventState == 3 {
 			return nil
 		}
 
