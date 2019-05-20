@@ -678,17 +678,17 @@ func (this *Applier) DropTriggersOldTable() error {
 	prefix := this.makeTriggerPrefix()
 
 	dropDeleteTrigger := fmt.Sprintf(
-		"DROP /* gh-ost */ TRIGGER %s.`%s_del`",
+		"DROP /* gh-ost */ TRIGGER IF EXISTS %s.`%s_del`",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		prefix)
 
 	dropInsertTrigger := fmt.Sprintf(
-		"DROP /* gh-ost */ TRIGGER %s.`%s_ins`",
+		"DROP /* gh-ost */ TRIGGER IF EXISTS %s.`%s_ins`",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		prefix)
 
 	dropUpdateTrigger := fmt.Sprintf(
-		"DROP /* gh-ost */ TRIGGER %s.`%s_upd`",
+		"DROP /* gh-ost */ TRIGGER IF EXISTS %s.`%s_upd`",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		prefix)
 
