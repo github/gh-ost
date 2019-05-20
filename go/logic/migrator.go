@@ -100,6 +100,7 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 		firstThrottlingCollected:       make(chan bool, 3),
 		rowCopyComplete:                make(chan error),
 		allEventsUpToLockProcessed:     make(chan string),
+		stoppedBinlogWrites:            make(chan bool),
 		allEventsUpToTriggersProcessed: make(chan string),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
@@ -691,6 +692,8 @@ func (this *Migrator) cutOverTrigger() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	this.waitForStopWrites()
+
+	defer this.applier.DropTriggersOldTable()
 
 	log.Infof(
 		"Creating triggers for %s.%s",
