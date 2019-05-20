@@ -719,7 +719,7 @@ func (this *Migrator) cutOverTrigger() (err error) {
 
 	this.waitForStopWrites()
 
-	defer this.applier.DropTriggersOldTable()
+	defer this.applier.DropTriggersOldTableIfExists()
 
 	log.Infof(
 		"Creating triggers for %s.%s",
@@ -761,7 +761,7 @@ CompareNewRow:
 	if err := this.retryOperation(this.applier.SwapTables); err != nil {
 		return err
 	}
-	if err := this.retryOperation(this.applier.DropTriggersOldTable); err != nil {
+	if err := this.retryOperation(this.applier.DropTriggersOldTableIfExists); err != nil {
 		return err
 	}
 
