@@ -644,8 +644,8 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 	}()
 }
 
-// DropTriggersOldTable Drop triggers from the old table
-func (this *Applier) DropTriggersOldTable() error {
+// DropTriggersOldTableIfExists Drop triggers from the old table if them exists
+func (this *Applier) DropTriggersOldTableIfExists() error {
 	prefix := this.makeTriggerPrefix()
 
 	dropDeleteTrigger := fmt.Sprintf(
