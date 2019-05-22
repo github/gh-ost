@@ -820,6 +820,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		tableLocked <- err
 		return err
 	}
+	defer this.DropAtomicCutOverSentryTableIfExists()
 
 	query = fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write, %s.%s write`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
