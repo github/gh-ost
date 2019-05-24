@@ -607,7 +607,11 @@ func (this *Migrator) atomicCutOver() (err error) {
 	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
-	okToUnlockTable := make(chan bool, 3)
+	okToUnlockTable := make(chan bool, 4)
+	defer func() {
+		okToUnlockTable <- true
+	}()
+
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
 	lockOriginalSessionIdChan := make(chan int64, 2)
