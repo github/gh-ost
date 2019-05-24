@@ -808,6 +808,21 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		return err
 	}
 
+	lockName = fmt.Sprintf(`gh-ost.%s.%s.lock`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetOldTableName()),
+	)
+
+	log.Infof("Grabbing cut over sentry table lock: %s", lockName)
+	if err := tx.QueryRow(query, lockName).Scan(&lockResult); err != nil || lockResult != 1 {
+		err := fmt.Errorf("Unable to acquire lock %s", lockName)
+		tableLocked <- err
+		return err
+	}
+
+	// we ignore errors
+	defer tx.Exec(`select release_lock(?)`, lockName)
+
 	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
 	log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
 	query = fmt.Sprintf(`set session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
