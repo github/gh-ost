@@ -606,17 +606,13 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 func (this *Migrator) atomicCutOver() (err error) {
 	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
-
-	okToUnlockTable := make(chan bool, 4)
-	defer func() {
-		okToUnlockTable <- true
-	}()
-
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
 	lockOriginalSessionIdChan := make(chan int64, 2)
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
+	okToUnlockTable := make(chan bool, 4)
+
 	go func() {
 		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
 			log.Errore(err)
@@ -625,6 +621,11 @@ func (this *Migrator) atomicCutOver() (err error) {
 	if err := <-tableLocked; err != nil {
 		return log.Errore(err)
 	}
+	defer func() {
+		okToUnlockTable <- true
+		<- tableUnlocked
+	}()
+
 	lockOriginalSessionId := <-lockOriginalSessionIdChan
 	log.Infof("Session locking original & magic tables is %+v", lockOriginalSessionId)
 	// At this point we know the original table is locked.
