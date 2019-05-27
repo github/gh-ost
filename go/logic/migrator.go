@@ -623,7 +623,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	}
 	defer func() {
 		okToUnlockTable <- true
-		<- tableUnlocked
+		<-tableUnlocked
 	}()
 
 	lockOriginalSessionId := <-lockOriginalSessionIdChan
