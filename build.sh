@@ -1,73 +1,77 @@
 #!/bin/bash
-#
-#
 
-RELEASE_VERSION=
-buildpath=
+set -e
 
-function setuptree() {
-  b=$( mktemp -d $buildpath/gh-ostXXXXXX ) || return 1
-  mkdir -p $b/gh-ost
-  mkdir -p $b/gh-ost/usr/bin
-  echo $b
+. ./script/common
+buildpath=build
+timestamp=$(date "+%Y%m%d%H%M%S")
+
+function build() {
+  goos=$1
+  osshort=$goos
+
+  envs="-e GOOS=$goos \
+    -e GOARCH=amd64 \
+    -e CGO_ENABLED=1 \
+    -e GOCACHE=/go/src/${PACKAGE_PATH}/.cache \
+    -e RELEASE_VERSION=${RELEASE_VERSION} \
+    -e BIN_PATH=${buildpath}/bin"
+
+  if [ "$goos" == "darwin" ]; then
+    # specify cross compiler
+    envs="$envs -e CC=x86_64h-apple-darwin14-cc"
+    osshort="osx"
+  fi
+
+  echo "Building $goos binary in ${buildpath}/bin"
+
+  docker run -u $(id -u):$(id -g) --rm $envs \
+    -v $(pwd):/go/src/${PACKAGE_PATH} \
+    -w /go/src/${PACKAGE_PATH} \
+    dockercore/golang-cross:$GO_VERSION \
+    bash -c 'go build -ldflags "-X main.AppVersion=${RELEASE_VERSION}" -o ${BIN_PATH}/gh-ost-$GOOS-$GOARCH go/cmd/gh-ost/main.go'
+
+  (
+    cp ${buildpath}/bin/gh-ost-$goos-amd64 $buildpath/dist/gh-ost \
+    && cd $buildpath/dist \
+    && tar cfz ./gh-ost-binary-${osshort}-${timestamp}.tar.gz gh-ost\
+    && rm gh-ost
+  )
 }
 
-function build {
-  osname=$1
-  osshort=$2
-  GOOS=$3
-  GOARCH=$4
+function distro_packages() {
+  echo "Creating Distro full packages"
+  docker build -t gh-ost/fpm -f docker/Dockerfile.fpm docker
 
+  fpm_cmd="docker run -u $(id -u):$(id -g) --rm \
+    -e RELEASE_VERSION=${RELEASE_VERSION} \
+    -e PACKAGE_PATH=${PACKAGE_PATH} \
+    -e BIN_PATH=/go/src/${PACKAGE_PATH}/build/bin \
+    -e OUTPUT_PATH=/go/src/${PACKAGE_PATH}/build/dist \
+    -w /gh-ost \
+    -v $(pwd):/go/src/${PACKAGE_PATH} \
+    gh-ost/fpm"
 
+  $fpm_cmd bash -c 'mkdir -p /gh-ost/usr/bin \
+      && cp ${BIN_PATH}/gh-ost-linux-amd64 /gh-ost/usr/bin/gh-ost \
+      && cd /gh-ost \
+      && fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m "shlomi-noach <shlomi-noach+gh-ost-deb@github.com>" --description "GitHub'"'"'s Online Schema Migrations for MySQL " --url "https://${PACKAGE_PATH}" --vendor "GitHub" --license "Apache 2.0" -C /gh-ost --prefix=/ -t rpm . \
+      && cp *.rpm ${OUTPUT_PATH}'
 
-  if ! go version | egrep -q 'go(1[.]9|1[.]1[0-9])' ; then
-    echo "go version is too low. Must use 1.9 or above"
-    exit 1
-  fi
-
-  echo "Building ${osname} binary"
-  export GOOS
-  export GOARCH
-  go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
-
-  if [ $? -ne 0 ]; then
-      echo "Build failed for ${osname}"
-      exit 1
-  fi
-
-  (cd $buildpath && tar cfz ./gh-ost-binary-${osshort}-${timestamp}.tar.gz $target)
-
-  if [ "$GOOS" == "linux" ] ; then
-    echo "Creating Distro full packages"
-    builddir=$(setuptree)
-    cp $buildpath/$target $builddir/gh-ost/usr/bin
-    cd $buildpath
-    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'shlomi-noach <shlomi-noach+gh-ost-deb@github.com>' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t rpm .
-    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'shlomi-noach <shlomi-noach+gh-ost-deb@github.com>' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t deb --deb-no-default-config-files .
-  fi
+  $fpm_cmd bash -c 'mkdir -p /gh-ost/usr/bin \
+      && cp ${BIN_PATH}/gh-ost-linux-amd64 /gh-ost/usr/bin/gh-ost \
+      && cd /gh-ost \
+      && fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m "shlomi-noach <shlomi-noach+gh-ost-deb@github.com>" --description "GitHub'"'"'s Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C /gh-ost --prefix=/ -t deb --deb-no-default-config-files . \
+      && cp *.deb ${OUTPUT_PATH}'
 }
 
-main() {
-  if [ -z "${RELEASE_VERSION}" ] ; then
-    RELEASE_VERSION=$(git describe --abbrev=0 --tags | tr -d 'v')
-  fi
-  if [ -z "${RELEASE_VERSION}" ] ; then
-    RELEASE_VERSION=$(cat RELEASE_VERSION)
-  fi
+mkdir -p ${buildpath}
+rm -rf ${buildpath:?}/*
+mkdir ${buildpath}/{bin,dist}
 
+build linux
+build darwin
+distro_packages
 
-  buildpath=/tmp/gh-ost-release
-  target=gh-ost
-  timestamp=$(date "+%Y%m%d%H%M%S")
-  ldflags="-X main.AppVersion=${RELEASE_VERSION}"
-
-  mkdir -p ${buildpath}
-  rm -rf ${buildpath:?}/*
-  build macOS osx darwin amd64
-  build GNU/Linux linux linux amd64
-
-  echo "Binaries found in:"
-  ls -1 $buildpath/gh-ost-binary*${timestamp}.tar.gz
-}
-
-main "$@"
+echo "Binaries found in:"
+ls -1 $buildpath/dist/gh-ost-binary*${timestamp}.tar.gz

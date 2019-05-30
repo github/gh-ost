@@ -2,16 +2,16 @@
 
 set -e
 
-. script/bootstrap
+. script/common
 
 echo "Verifying code is formatted via 'gofmt -s -w  go/'"
-gofmt -s -w  go/
-git diff --exit-code --quiet
+$DGO gofmt -s -w go
+git diff --exit-code --quiet go
 
-echo "Building"
-script/build
-
-cd .gopath/src/github.com/github/gh-ost
+if [ "$1" != "fast" ]; then
+  echo "Building"
+  ./build.sh
+fi
 
 echo "Running unit tests"
-go test ./go/...
+$DGO go test ./go/...

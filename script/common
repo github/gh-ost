@@ -1,0 +1,19 @@
+#!/bin/bash
+# Sets common variables that can be reused in other scripts
+
+PACKAGE_PATH="github.com/github/gh-ost"
+GO_VERSION=$(cat ./GO_VERSION)
+
+RELEASE_VERSION=
+if [ -z "${RELEASE_VERSION}" ] ; then
+  RELEASE_VERSION=$(git describe --abbrev=0 --tags | tr -d 'v')
+fi
+if [ -z "${RELEASE_VERSION}" ] ; then
+  RELEASE_VERSION=$(cat RELEASE_VERSION)
+fi
+
+DGO="docker run -u $(id -u):$(id -g) --rm \
+  -e GOCACHE=/go/src/${PACKAGE_PATH}/.cache \
+  -v $(pwd):/go/src/github.com/github/gh-ost \
+  -w /go/src/github.com/github/gh-ost \
+  golang:$GO_VERSION"
