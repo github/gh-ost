@@ -41,7 +41,7 @@ function build() {
 
 function distro_packages() {
   echo "Creating Distro full packages"
-  docker build -t gh-ost/fpm -f docker/Dockerfile.fpm docker
+  docker build -t gh-ost/fpm -f docker/fpm/Dockerfile docker/fpm
 
   fpm_cmd="docker run -u $(id -u):$(id -g) --rm \
     -e RELEASE_VERSION=${RELEASE_VERSION} \
