@@ -1,0 +1,11 @@
+#!/bin/bash
+
+set -e
+
+. script/common
+# ./build.sh
+
+docker build -t gh-ost/dbdeployer:5.7.21 -f docker/dbdeployer/Dockerfile --build-arg MYSQL_VERSION=5.7.21 docker/dbdeployer
+docker build -t gh-ost/dbdeployer:5.6.33 -f docker/dbdeployer/Dockerfile --build-arg MYSQL_VERSION=5.6.33 docker/dbdeployer
+
+# https://github.com/github/gh-ost-ci-env/raw/master/mysql-tarballs/5.5.52.tar.gz
