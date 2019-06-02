@@ -5,7 +5,22 @@ set -e
 . script/common
 # ./build.sh
 
-docker build -t gh-ost/dbdeployer:5.7.21 -f docker/dbdeployer/Dockerfile --build-arg MYSQL_VERSION=5.7.21 docker/dbdeployer
-docker build -t gh-ost/dbdeployer:5.6.33 -f docker/dbdeployer/Dockerfile --build-arg MYSQL_VERSION=5.6.33 docker/dbdeployer
+versions=(
+  5.7.21
+  5.6.33
+)
 
-# https://github.com/github/gh-ost-ci-env/raw/master/mysql-tarballs/5.5.52.tar.gz
+for mysql_version in "${versions[@]}"; do
+  docker build -t gh-ost/dbdeployer:$mysql_version \
+    -f docker/dbdeployer/Dockerfile \
+    --build-arg MYSQL_VERSION=$mysql_version \
+    docker/dbdeployer
+
+  echo "### Running gh-ost tests for $mysql_version"
+  if [ $(uname -s) = "Darwin" ]; then
+    bin=gh-ost-darwin-amd64
+  else
+    bin=gh-ost-linux-amd64
+  fi
+  ./localtests/test-docker.sh -b build/bin/$bin
+done

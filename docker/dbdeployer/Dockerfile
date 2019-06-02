@@ -33,16 +33,15 @@ RUN mkdir -p /sandbox/binary \
     --sandbox-binary /sandbox/binary \
     --sandbox-home /sandboxes/ \
     --sandbox-directory rsandbox \
-    --base-port 3306 \
+    --base-port $(expr $(echo ${MYSQL_VERSION} | tr -d '.') - 1) \
     --gtid \
     --my-cnf-options bind_address=0.0.0.0 \
     --my-cnf-options log_slave_updates \
     --my-cnf-options log_bin \
     --my-cnf-options binlog_format=ROW \
+    --my-cnf-options event_scheduler=ON \
   && /sandboxes/rsandbox/test_replication \
   && /sandboxes/rsandbox/m -uroot -e "grant all on *.* to 'gh-ost'@'%' identified by 'gh-ost'; flush privileges"
-
-EXPOSE 3307 3308
 
 COPY start.sh /usr/local/bin/start.sh
 CMD ["/usr/local/bin/start.sh"]
