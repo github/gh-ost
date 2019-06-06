@@ -1,100 +1,52 @@
 #!/bin/bash
 
-# Local integration tests. To be used by CI.
-# See https://github.com/github/gh-ost/tree/doc/local-tests.md
-#
+. script/common
+./build.sh
 
-# Usage: localtests/test/sh [filter]
-# By default, runs all tests. Given filter, will only run tests matching given regep
-
-tests_path=$(dirname $0)
-test_logfile=/tmp/gh-ost-test.log
-default_ghost_binary=/tmp/gh-ost-test
-ghost_binary=""
 exec_command_file=/tmp/gh-ost-test.bash
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
 throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
-
-master_host=
-master_port=
-replica_host=
-replica_port=
-original_sql_mode=
-
-OPTIND=1
-while getopts "b:" OPTION
-do
-  case $OPTION in
-    b)
-      ghost_binary="$OPTARG"
-    ;;
-  esac
-done
-shift $((OPTIND-1))
-
 test_pattern="${1:-.}"
 
-verify_master_and_replica() {
-  if [ "$(gh-ost-test-mysql-master -e "select 1" -ss)" != "1" ] ; then
-    echo "Cannot verify gh-ost-test-mysql-master"
-    exit 1
-  fi
-  read master_host master_port <<< $(gh-ost-test-mysql-master -e "select @@hostname, @@port" -ss)
-  [ "$master_host" == "$(hostname)" ] && master_host="127.0.0.1"
-  echo "# master verified at $master_host:$master_port"
-  if ! gh-ost-test-mysql-master -e "set global event_scheduler := 1" ; then
-    echo "Cannot enable event_scheduler on master"
-    exit 1
-  fi
-  original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
-  echo "sql_mode on master is ${original_sql_mode}"
+master_host=127.0.0.1
+replica_host=127.0.0.1
 
-  if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
-    echo "Cannot verify gh-ost-test-mysql-replica"
-    exit 1
-  fi
-  if [ "$(gh-ost-test-mysql-replica -e "select @@global.binlog_format" -ss)" != "ROW" ] ; then
-    echo "Expecting test replica to have binlog_format=ROW"
-    exit 1
-  fi
-  read replica_host replica_port <<< $(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
-  [ "$replica_host" == "$(hostname)" ] && replica_host="127.0.0.1"
-  echo "# replica verified at $replica_host:$replica_port"
-}
+mysql_version=
+test_logfile=
+run_master=
+run_replica=
+master_port=
+replica_port=
 
-exec_cmd() {
-  echo "$@"
-  command "$@" 1> $test_logfile 2>&1
-  return $?
+if [ $(uname -s) = "Darwin" ]; then
+  ghost_binary=build/bin/gh-ost-darwin-amd64
+else
+  ghost_binary=build/bin/gh-ost-linux-amd64
+fi
+
+function at_exit() {
+  echo "### Stopping any remaining docker containers..."
+  docker ps -f "name=gh-ost" -q --no-trunc | xargs --no-run-if-empty docker kill
 }
+trap at_exit EXIT
+
+tests_path=$(dirname $0)
 
 echo_dot() {
   echo -n "."
 }
 
 start_replication() {
-  gh-ost-test-mysql-replica -e "stop slave; start slave;"
-  num_attempts=0
-  while gh-ost-test-mysql-replica -e "show slave status\G" | grep Seconds_Behind_Master | grep -q NULL ; do
-    ((num_attempts=num_attempts+1))
-    if [ $num_attempts -gt 10 ] ; then
-      echo
-      echo "ERROR replication failure"
-      exit 1
-    fi
-    echo_dot
-    sleep 1
-  done
+  ${run_replica} -e "stop slave; start slave;"
+  wait_while_cmd "${run_replica} -e 'show slave status\G' | grep Seconds_Behind_Master | grep -q NULL" "ERROR replication failure"
 }
 
 test_single() {
-  local test_name
-  test_name="$1"
+  local test_name="$1" container_name="$2"
 
   if [ -f $tests_path/$test_name/ignore_versions ] ; then
     ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
-    mysql_version=$(gh-ost-test-mysql-master -s -s -e "select @@version")
     if echo "$mysql_version" | egrep -q "^${ignore_versions}" ; then
       echo -n "Skipping: $test_name"
       return 0
@@ -103,16 +55,18 @@ test_single() {
 
   echo -n "Testing: $test_name"
 
+  start_servers_and_set_globals "$container_name"
+
   echo_dot
-  start_replication
+  start_replication "$run_replica"
   echo_dot
 
   if [ -f $tests_path/$test_name/sql_mode ] ; then
-    gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+    ${run_master} --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+    ${run_replica} --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
   fi
 
-  gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
+  ${run_master} --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
 
   extra_args=""
   if [ -f $tests_path/$test_name/extra_args ] ; then
@@ -133,7 +87,7 @@ test_single() {
   # graceful sleep for replica to catch up
   echo_dot
   sleep 1
-  #
+
   cmd="$ghost_binary \
     --user=gh-ost \
     --password=gh-ost \
@@ -165,13 +119,8 @@ test_single() {
 
   execution_result=$?
 
-  if [ -f $tests_path/$test_name/sql_mode ] ; then
-    gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
-  fi
-
   if [ -f $tests_path/$test_name/destroy.sql ] ; then
-    gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/destroy.sql
+    ${run_master} --default-character-set=utf8mb4 test < $tests_path/$test_name/destroy.sql
   fi
 
   if [ -f $tests_path/$test_name/expect_failure ] ; then
@@ -202,8 +151,8 @@ test_single() {
   fi
 
   echo_dot
-  gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss > $orig_content_output_file
-  gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss > $ghost_content_output_file
+  ${run_replica} --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss > $orig_content_output_file
+  ${run_replica} --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss > $ghost_content_output_file
   orig_checksum=$(cat $orig_content_output_file | md5sum)
   ghost_checksum=$(cat $ghost_content_output_file | md5sum)
 
@@ -218,37 +167,127 @@ test_single() {
   fi
 }
 
-build_binary() {
-  echo "Building"
-  rm -f $default_ghost_binary
-  [ "$ghost_binary" == "" ] && ghost_binary="$default_ghost_binary"
-  if [ -f "$ghost_binary" ] ; then
-    echo "Using binary: $ghost_binary"
-    return 0
+function start_servers_and_set_globals() {
+  local container_name="$1"
+  run_master="docker exec -i ${container_name} /sandboxes/rsandbox/m"
+  run_replica="docker exec -i ${container_name} /sandboxes/rsandbox/s1"
+
+  sleep 1
+  echo_dot
+  wait_until_cmd "docker logs ${container_name} | grep -q 'Both servers started'" "ERROR waiting for docker ${container_id} servers to start"
+
+  if [ "$(${run_master} -e "select 1" -ss)" != "1" ] ; then
+    echo "Cannot verify gh-ost master"
+    exit 1
   fi
-  go build -o $ghost_binary go/cmd/gh-ost/main.go
-  if [ $? -ne 0 ] ; then
-    echo "Build failure"
+
+  if [ "$(${run_replica} -e "select 1" -ss)" != "1" ] ; then
+    echo "Cannot verify gh-ost replica"
+    exit 1
+  fi
+
+  if [ "$(${run_replica} -e "select @@global.binlog_format" -ss)" != "ROW" ] ; then
+    echo "Expecting test replica to have binlog_format=ROW"
+    exit 1
+  fi
+
+  local port
+  read port <<< $(${run_master} -e "select @@port" -ss)
+  if [ "$master_port" != "$port" ]; then
+    echo "Master port expected to be ${master_port} and instead is ${port}"
+    exit 1
+  fi
+
+  read port <<< $(${run_replica} -e "select @@port" -ss)
+  if [ "$replica_port" != "$port" ]; then
+    echo "Master port expected to be ${replica_port} and instead is ${port}"
     exit 1
   fi
 }
 
-test_all() {
-  build_binary
-  find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | egrep "$test_pattern" | while read test_name ; do
-    test_single "$test_name"
+function wait_while_cmd() {
+  local cmd="$1" msg="$2" num_attempts=0
+
+  while eval $cmd; do
+    ((num_attempts=num_attempts+1))
+    if [ $num_attempts -gt 10 ] ; then
+      echo
+      echo $msg
+      exit 1
+    fi
+    echo_dot
+    sleep 1
+  done
+}
+
+function wait_until_cmd() {
+  local cmd="$1" msg="$2" num_attempts=0
+
+  while ! eval $cmd; do
+    ((num_attempts=num_attempts+1))
+    if [ $num_attempts -gt 10 ] ; then
+      echo
+      echo $msg
+      exit 1
+    fi
+    echo_dot
+    sleep 1
+  done
+
+}
+
+function kill_docker_container() {
+  local container_id="$1"
+  docker kill "${container_id}" > /dev/null
+  wait_while_cmd "docker ps -q --no-trunc | grep ${container_id}" "ERROR waiting for docker ${container_id} to die"
+}
+
+function test_all() {
+  local container_name=gh-ost-${mysql_version}
+
+  master_port=$(echo ${mysql_version} | tr -d '.')
+  replica_port=$(expr ${master_port} + 1)
+
+  for test_name in `find $tests_path -mindepth 1 -maxdepth 1 -type d | cut -d "/" -f 3 | egrep "$test_pattern"`; do
+    local container_id=$(docker run --rm -d -p ${master_port}:${master_port} -p ${replica_port}:${replica_port} --name gh-ost-${mysql_version} gh-ost/dbdeployer:${mysql_version})
+
+    test_single "$test_name" "$container_name"
     if [ $? -ne 0 ] ; then
-      create_statement=$(gh-ost-test-mysql-replica test -t -e "show create table _gh_ost_test_gho \G")
+      create_statement=$(${run_replica} test -t -e "show create table _gh_ost_test_gho \G")
       echo "$create_statement" >> $test_logfile
       echo "+ FAIL"
+      kill_docker_container "${container_id}"
       return 1
     else
       echo
       echo "+ pass"
+      kill_docker_container "${container_id}"
     fi
-    gh-ost-test-mysql-replica -e "start slave"
   done
 }
 
-verify_master_and_replica
-test_all
+versions=(
+  5.7.21
+  5.6.33
+  5.5.52
+)
+
+for version in "${versions[@]}"; do
+  mysql_version=$version
+  echo "### Building docker image for ${mysql_version}"
+
+  dbdeployer_args="--base-port $(expr $(echo ${mysql_version} | tr -d '.') - 1)"
+  if [[ $mysql_version = 5.6.* ]] || [[ $mysql_version = 5.7.* ]]; then
+    dbdeployer_args="$dbdeployer_args --gtid"
+  fi
+
+  docker build -t gh-ost/dbdeployer:${mysql_version} \
+    -f docker/dbdeployer/Dockerfile \
+    --build-arg MYSQL_VERSION="${mysql_version}" \
+    --build-arg DBDEPLOYER_ARGS="${dbdeployer_args}" \
+    docker/dbdeployer
+
+  echo "### Running gh-ost tests for ${mysql_version}"
+  test_logfile=/tmp/gh-ost-test-${mysql_version}.log
+  test_all
+done

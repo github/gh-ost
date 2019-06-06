@@ -9,8 +9,7 @@ $DGO gofmt -s -w go
 git diff --exit-code --quiet go
 
 if [ "$1" != "fast" ]; then
-  echo "Building"
-  ./build.sh
+  ./build.sh -d
 fi
 
 echo "Running unit tests"

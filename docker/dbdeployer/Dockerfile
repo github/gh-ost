@@ -18,11 +18,10 @@ RUN origin=https://github.com/datacharmer/dbdeployer/releases/download/v$DBDEPLO
   && rm -rf /dbdeployer
 
 ARG MYSQL_VERSION
-ENV MYSQL_VERSION=${MYSQL_VERSION:-5.7.21}
+ARG DBDEPLOYER_ARGS
 
-# RUN wget --progress=bar:force:noscroll https://github.com/github/gh-ost-ci-env/raw/master/mysql-tarballs/${MYSQL_VERSION}.tar.gz
-COPY ${MYSQL_VERSION}.tar.gz /${MYSQL_VERSION}.tar.gz
-RUN mkdir -p /sandbox/binary \
+RUN wget --progress=bar:force:noscroll https://github.com/github/gh-ost-ci-env/raw/master/mysql-tarballs/${MYSQL_VERSION}.tar.gz \
+  && mkdir -p /sandbox/binary \
   && mkdir /sandboxes \
   && dbdeployer unpack ${MYSQL_VERSION}.tar.gz \
     --unpack-version=${MYSQL_VERSION} \
@@ -33,13 +32,12 @@ RUN mkdir -p /sandbox/binary \
     --sandbox-binary /sandbox/binary \
     --sandbox-home /sandboxes/ \
     --sandbox-directory rsandbox \
-    --base-port $(expr $(echo ${MYSQL_VERSION} | tr -d '.') - 1) \
-    --gtid \
     --my-cnf-options bind_address=0.0.0.0 \
     --my-cnf-options log_slave_updates \
     --my-cnf-options log_bin \
     --my-cnf-options binlog_format=ROW \
     --my-cnf-options event_scheduler=ON \
+    ${DBDEPLOYER_ARGS} \
   && /sandboxes/rsandbox/test_replication \
   && /sandboxes/rsandbox/m -uroot -e "grant all on *.* to 'gh-ost'@'%' identified by 'gh-ost'; flush privileges"
 

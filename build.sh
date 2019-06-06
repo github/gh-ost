@@ -65,13 +65,29 @@ function distro_packages() {
       && cp *.deb ${OUTPUT_PATH}'
 }
 
+
+want_dist=false
+OPTIND=1
+while getopts ":d" OPTION
+do
+  case $OPTION in
+    d)
+      want_dist=true
+    ;;
+  esac
+done
+shift $((OPTIND-1))
+
 mkdir -p ${buildpath}
 rm -rf ${buildpath:?}/*
 mkdir ${buildpath}/{bin,dist}
 
 build linux
 build darwin
-distro_packages
+
+if [ "$want_dist" = true ]; then
+  distro_packages
+fi
 
 echo "Binaries found in:"
 ls -1 $buildpath/dist/gh-ost-binary*${timestamp}.tar.gz

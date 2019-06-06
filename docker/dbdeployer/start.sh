@@ -4,7 +4,11 @@ set -e
 
 trap "/sandboxes/rsandbox/stop_all && exit" SIGINT SIGTERM
 
-/sandboxes/rsandbox/start_all
+echo "Starting servers..."
+
+/sandboxes/rsandbox/start_all > /dev/null
+
+echo "Both servers started"
 
 while :
 do
