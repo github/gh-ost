@@ -14,13 +14,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
 	"gopkg.in/gcfg.v1"
-	gcfgscanner "gopkg.in/gcfg.v1/scanner"
 )
 
 // RowsEstimateMethod is the type of row number estimation
@@ -719,8 +718,6 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if this.ConfigFile == "" {
 		return nil
 	}
-	gcfg.RelaxedParserMode = true
-	gcfgscanner.RelaxedScannerMode = true
 	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
 		return fmt.Errorf("Error reading config file %s. Details: %s", this.ConfigFile, err.Error())
 	}
