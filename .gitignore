@@ -3,4 +3,4 @@
 /libexec/
 /.vendor/
 /.cache
-/build
+/build/
