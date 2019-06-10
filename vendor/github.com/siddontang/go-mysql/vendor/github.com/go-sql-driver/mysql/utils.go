@@ -56,7 +56,7 @@ var (
 //  db, err := sql.Open("mysql", "user@tcp(localhost:3306)/test?tls=custom")
 //
 func RegisterTLSConfig(key string, config *tls.Config) error {
-	if _, isBool := readBool(key); isBool || strings.ToLower(key) == "skip-verify" {
+	if _, isBool := readBool(key); isBool || strings.ToLower(key) == "skip-verify" || strings.ToLower(key) == "preferred" {
 		return fmt.Errorf("key '%s' is reserved", key)
 	}
 
@@ -684,7 +684,7 @@ type atomicBool struct {
 	value   uint32
 }
 
-// IsSet returns wether the current boolean value is true
+// IsSet returns whether the current boolean value is true
 func (ab *atomicBool) IsSet() bool {
 	return atomic.LoadUint32(&ab.value) > 0
 }
@@ -698,7 +698,7 @@ func (ab *atomicBool) Set(value bool) {
 	}
 }
 
-// TrySet sets the value of the bool and returns wether the value changed
+// TrySet sets the value of the bool and returns whether the value changed
 func (ab *atomicBool) TrySet(value bool) bool {
 	if value {
 		return atomic.SwapUint32(&ab.value, 1) == 0
