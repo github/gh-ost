@@ -1,7 +1,10 @@
 #!/bin/bash
 
 . script/common
+
+set -e
 ./build.sh
+set +e
 
 exec_command_file=/tmp/gh-ost-test.bash
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
@@ -249,7 +252,13 @@ function test_all() {
   replica_port=$(expr ${master_port} + 1)
 
   for test_name in `find $tests_path -mindepth 1 -maxdepth 1 -type d | cut -d "/" -f 3 | egrep "$test_pattern"`; do
-    local container_id=$(docker run --rm -d -p ${master_port}:${master_port} -p ${replica_port}:${replica_port} --name gh-ost-${mysql_version} gh-ost/dbdeployer:${mysql_version})
+    local container_id
+    container_id=$(docker run --rm -d -p ${master_port}:${master_port} -p ${replica_port}:${replica_port} --name gh-ost-${mysql_version} gh-ost/dbdeployer:${mysql_version})
+
+    if [ $? -ne 0 ] ; then
+      echo "Failed to start docker container. Check that gh-ost-${mysql_version} is not currently running"
+      return 1
+    fi
 
     test_single "$test_name" "$container_name"
     if [ $? -ne 0 ] ; then
