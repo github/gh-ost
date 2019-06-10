@@ -152,7 +152,7 @@ test_single() {
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
     --test-on-replica \
-    --default-retries=1 \
+    --default-retries=3 \
     --chunk-size=10 \
     --verbose \
     --debug \
