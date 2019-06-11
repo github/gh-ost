@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -608,9 +609,12 @@ func (this *Migrator) atomicCutOver() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	okToUnlockTable := make(chan bool, 4)
+	var dropCutOverSentryTableOnce sync.Once
 	defer func() {
 		okToUnlockTable <- true
-		this.applier.DropAtomicCutOverSentryTableIfExists()
+		dropCutOverSentryTableOnce.Do(func() {
+			this.applier.DropAtomicCutOverSentryTableIfExists()
+		})
 	}()
 
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
@@ -619,7 +623,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	go func() {
-		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, dropCutOverSentryTableOnce); err != nil {
 			log.Errore(err)
 		}
 	}()

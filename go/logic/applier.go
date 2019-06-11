@@ -18,6 +18,7 @@ import (
 
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
+	"sync"
 )
 
 const (
@@ -781,7 +782,7 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 }
 
 // AtomicCutOverMagicLock
-func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
+func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error, dropCutOverSentryTableOnce sync.Once) error {
 	tx, err := this.db.Begin()
 	if err != nil {
 		tableLocked <- err
@@ -859,10 +860,13 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetOldTableName()),
 	)
-	if _, err := tx.Exec(query); err != nil {
-		log.Errore(err)
-		// We DO NOT return here because we must `UNLOCK TABLES`!
-	}
+
+	dropCutOverSentryTableOnce.Do(func() {
+		if _, err := tx.Exec(query); err != nil {
+			log.Errore(err)
+			// We DO NOT return here because we must `UNLOCK TABLES`!
+		}
+	})
 
 	// Tables still locked
 	log.Infof("Releasing lock from %s.%s, %s.%s",
