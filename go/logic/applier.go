@@ -18,6 +18,7 @@ import (
 
 	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
+	"sync"
 )
 
 const (
@@ -52,11 +53,12 @@ func newDmlBuildResultError(err error) *dmlBuildResult {
 // Applier is the one to actually write row data and apply binlog events onto the ghost table.
 // It is where the ghost & changelog tables get created. It is where the cut-over phase happens.
 type Applier struct {
-	connectionConfig  *mysql.ConnectionConfig
-	db                *gosql.DB
-	singletonDB       *gosql.DB
-	migrationContext  *base.MigrationContext
-	finishedMigrating int64
+	connectionConfig                  *mysql.ConnectionConfig
+	db                                *gosql.DB
+	singletonDB                       *gosql.DB
+	migrationContext                  *base.MigrationContext
+	finishedMigrating                 int64
+	dropAtomicCutOverSentryTableMutex sync.Mutex
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -738,6 +740,9 @@ func (this *Applier) ExpectProcess(sessionId int64, stateHint, infoHint string) 
 // DropAtomicCutOverSentryTableIfExists checks if the "old" table name
 // happens to be a cut-over magic table; if so, it drops it.
 func (this *Applier) DropAtomicCutOverSentryTableIfExists() error {
+	this.dropAtomicCutOverSentryTableMutex.Lock()
+	defer this.dropAtomicCutOverSentryTableMutex.Unlock()
+
 	log.Infof("Looking for magic cut-over table")
 	tableName := this.migrationContext.GetOldTableName()
 	rowMap := this.showTableStatus(tableName)
@@ -854,6 +859,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 
 	// The magic table is here because we locked it. And we are the only ones allowed to drop it.
 	// And in fact, we will:
+	this.dropAtomicCutOverSentryTableMutex.Lock()
 	log.Infof("Dropping magic cut-over table")
 	query = fmt.Sprintf(`drop /* gh-ost */ table if exists %s.%s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -863,6 +869,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		log.Errore(err)
 		// We DO NOT return here because we must `UNLOCK TABLES`!
 	}
+	this.dropAtomicCutOverSentryTableMutex.Unlock()
 
 	// Tables still locked
 	log.Infof("Releasing lock from %s.%s, %s.%s",
