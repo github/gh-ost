@@ -90,6 +90,7 @@ func main() {
 	cutOver := flag.String("cut-over", "atomic", "choose cut-over type (default|atomic, two-step)")
 	flag.BoolVar(&migrationContext.ForceNamedCutOverCommand, "force-named-cut-over", false, "When true, the 'unpostpone|cut-over' interactive command must name the migrated table")
 	flag.BoolVar(&migrationContext.ForceNamedPanicCommand, "force-named-panic", false, "When true, the 'panic' interactive command must name the migrated table")
+	flag.BoolVar(&migrationContext.UseBinLog, "sql-log-bin", true, "When true, gh-ost will write to the binlog for all operations that perform --test-on-replica, --migration-on-replica, and --allow-on-master")
 
 	flag.BoolVar(&migrationContext.SwitchToRowBinlogFormat, "switch-to-rbr", false, "let this tool automatically switch binary log format to 'ROW' on the replica, if needed. The format will NOT be switched back. I'm too scared to do that, and wish to protect you if you happen to execute another migration while this one is running")
 	flag.BoolVar(&migrationContext.AssumeRBR, "assume-rbr", false, "set to 'true' when you know for certain your server uses 'ROW' binlog_format. gh-ost is unable to tell, event after reading binlog_format, whether the replication process does indeed use 'ROW', and restarts replication to be certain RBR setting is applied. Such operation requires SUPER privileges which you might not have. Setting this flag avoids restarting replication and you can proceed to use gh-ost without SUPER privileges")
@@ -219,6 +220,11 @@ func main() {
 	}
 	if *replicationLagQuery != "" {
 		log.Warningf("--replication-lag-query is deprecated")
+	}
+	if !migrationContext.UseBinLog && !(migrationContext.TestOnReplica ||
+		migrationContext.MigrateOnReplica ||
+		migrationContext.AllowedRunningOnMaster) {
+		log.Fatalf("--sql-log-bin=false is only available for --test-on-replica, --migrate-on-replica, or --allow-on-master")
 	}
 
 	switch *cutOver {

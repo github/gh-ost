@@ -7,7 +7,9 @@ package logic
 
 import (
 	gosql "database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -57,6 +59,7 @@ type Applier struct {
 	singletonDB       *gosql.DB
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
+	pristineGTIDSet   GTIDSet
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -85,6 +88,10 @@ func (this *Applier) InitDBConnections() (err error) {
 	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig, this.migrationContext); err != nil {
 		return err
 	}
+	if !this.migrationContext.UseBinLog && strings.HasPrefix(version, "5.5.") {
+		return fmt.Errorf("SQL log bin is required for any MySQL version < 5.6. Current version: %+v", version)
+	}
+
 	this.migrationContext.ApplierMySQLVersion = version
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
@@ -1042,4 +1049,98 @@ func (this *Applier) Teardown() {
 	this.db.Close()
 	this.singletonDB.Close()
 	atomic.StoreInt64(&this.finishedMigrating, 1)
+}
+
+func (this *Applier) SaveExistingGTIDs() error {
+	query := `select /* gh-ost */ @@global.server_uuid as server_uuid, @@global.gtid_executed as gtid_executed`
+	err := sqlutils.QueryRowsMap(this.singletonDB, query, func(rowMap sqlutils.RowMap) error {
+		this.pristineGTIDSet = NewGTIDSet(
+			rowMap.GetString("server_uuid"),
+			rowMap.GetString("gtid_executed"),
+		)
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (this *Applier) purgeBinaryLogs() error {
+	lastLog := ""
+	if err := sqlutils.QueryRowsMap(this.singletonDB, `SHOW BINARY LOGS`, func(rowMap sqlutils.RowMap) error {
+		lastLog = rowMap.GetString("Log_name")
+		return nil
+	}); err != nil {
+		return err
+	}
+	if lastLog == "" {
+		return errors.New("No binary logs found!")
+	}
+	log.Infof("Purging Binary Logs to '%s'", lastLog)
+	query := fmt.Sprintf(`PURGE BINARY LOGS TO '%s'`, lastLog)
+	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (this *Applier) PurgeGTIDs() error {
+	err := this.purgeBinaryLogs()
+	if err != nil {
+		return err
+	}
+
+	slaveRunning := true
+	if err := sqlutils.QueryRowsMap(this.singletonDB, `SHOW SLAVE STATUS`, func(rowMap sqlutils.RowMap) error {
+		if rowMap.GetString("Slave_IO_Running") != "Yes" || rowMap.GetString("Slave_SQL_Running") != "Yes" {
+			slaveRunning = false
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if slaveRunning {
+		if _, err := sqlutils.ExecNoPrepare(this.singletonDB, `STOP SLAVE`); err != nil {
+			return err
+		}
+	}
+
+	var gtidExecuted string
+	if err := sqlutils.QueryRowsMap(this.singletonDB,
+		`select /* gh-ost */ @@global.gtid_executed as gtid_executed`,
+		func(rowMap sqlutils.RowMap) error {
+			gtidExecuted = rowMap.GetString("gtid_executed")
+			return nil
+		}); err != nil {
+		return err
+	}
+
+	log.Infof("Setting GTID_PURGED")
+	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, `RESET MASTER`); err != nil {
+		return err
+	}
+	if _, err := sqlutils.ExecNoPrepare(this.singletonDB,
+		fmt.Sprintf(`SET GLOBAL GTID_PURGED='%s'`, this.pristineGTIDSet.Revert(gtidExecuted))); err != nil {
+		return err
+	}
+	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, `FLUSH BINARY LOGS`); err != nil {
+		return err
+	}
+
+	err = this.purgeBinaryLogs()
+	if err != nil {
+		return err
+	}
+
+	if slaveRunning {
+		// Restart slave after
+		if _, err := sqlutils.ExecNoPrepare(this.singletonDB, `START SLAVE`); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

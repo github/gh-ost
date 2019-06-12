@@ -1050,6 +1050,13 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}
+
+	if !this.migrationContext.UseBinLog {
+		if err := this.applier.SaveExistingGTIDs(); err != nil {
+			return err
+		}
+	}
+
 	if err := this.applier.ValidateOrDropExistingTables(); err != nil {
 		return err
 	}
@@ -1285,6 +1292,12 @@ func (this *Migrator) finalCleanup() error {
 	}
 	if this.migrationContext.Noop {
 		if err := this.retryOperation(this.applier.DropGhostTable); err != nil {
+			return err
+		}
+	}
+
+	if !this.migrationContext.UseBinLog {
+		if err := this.applier.PurgeGTIDs(); err != nil {
 			return err
 		}
 	}

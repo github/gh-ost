@@ -148,6 +148,7 @@ type MigrationContext struct {
 	InitiallyDropOldTable        bool
 	InitiallyDropGhostTable      bool
 	TimestampOldTable            bool // Should old table name include a timestamp
+	UseBinLog                    bool
 	CutOverType                  CutOver
 	ReplicaServerId              uint
 
@@ -248,6 +249,7 @@ func NewMigrationContext() *MigrationContext {
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
+		UseBinLog:                           true,
 	}
 }
 
