@@ -137,6 +137,16 @@ test_single() {
   echo_dot
   sleep 1
   #
+
+  local callback_return
+  if [ -f $tests_path/$test_name/before.sh ] ; then
+    . $tests_path/$test_name/before.sh
+    callback_return=$?
+    if [ $callback_return -ne 0 ] ; then
+      return $callback_return
+    fi
+  fi
+
   cmd="$ghost_binary \
     --user=gh-ost \
     --password=gh-ost \
@@ -218,6 +228,14 @@ test_single() {
     echo "diff $orig_content_output_file $ghost_content_output_file"
 
     return 1
+  fi
+
+  if [ -f $tests_path/$test_name/after.sh ] ; then
+    . $tests_path/$test_name/after.sh
+    callback_return=$?
+    if [ $callback_return -ne 0 ] ; then
+      return $callback_return
+    fi
   fi
 }
 
