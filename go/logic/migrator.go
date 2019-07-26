@@ -212,6 +212,9 @@ func (this *Migrator) consumeRowCopyComplete() {
 }
 
 func (this *Migrator) canStopStreaming() bool {
+	if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+		return true
+	}
 	return atomic.LoadInt64(&this.migrationContext.CutOverCompleteFlag) != 0
 }
 
@@ -1330,6 +1333,10 @@ func (this *Migrator) teardown() {
 	if this.eventsStreamer != nil {
 		log.Infof("Tearing down streamer")
 		this.eventsStreamer.Teardown()
+
+		if err := this.eventsStreamer.Close(); err != nil {
+			log.Errore(err)
+		}
 	}
 
 	if this.throttler != nil {
