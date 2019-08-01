@@ -1,0 +1,1 @@
+--throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc'
