@@ -916,6 +916,8 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 	)
 	log.Infof("Issuing and expecting this to block: %s", query)
 	if _, err := tx.Exec(query); err != nil {
+		this.migrationContext.PanicAbortIfTableError(err)
+
 		tablesRenamed <- err
 		return log.Errore(err)
 	}

@@ -144,7 +144,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		// there's an error. Let's try again.
 	}
 	if len(notFatalHint) == 0 {
-		this.migrationContext.PanicAbort <- err
+		this.migrationContext.PanicAbortOnError(err)
 	}
 	return err
 }
@@ -172,7 +172,7 @@ func (this *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 		}
 	}
 	if len(notFatalHint) == 0 {
-		this.migrationContext.PanicAbort <- err
+		this.migrationContext.PanicAbortOnError(err)
 	}
 	return err
 }
@@ -191,14 +191,14 @@ func (this *Migrator) executeAndThrottleOnError(operation func() error) (err err
 // consumes and drops any further incoming events that may be left hanging.
 func (this *Migrator) consumeRowCopyComplete() {
 	if err := <-this.rowCopyComplete; err != nil {
-		this.migrationContext.PanicAbort <- err
+		this.migrationContext.PanicAbortOnError(err)
 	}
 	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
 	this.migrationContext.MarkRowCopyEndTime()
 	go func() {
 		for err := range this.rowCopyComplete {
 			if err != nil {
-				this.migrationContext.PanicAbort <- err
+				this.migrationContext.PanicAbortOnError(err)
 			}
 		}
 	}()
@@ -620,10 +620,12 @@ func (this *Migrator) atomicCutOver() (err error) {
 	tableUnlocked := make(chan error, 2)
 	go func() {
 		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
+			this.migrationContext.PanicAbortIfTableError(err)
 			log.Errore(err)
 		}
 	}()
 	if err := <-tableLocked; err != nil {
+		this.migrationContext.PanicAbortIfTableError(err)
 		return log.Errore(err)
 	}
 	lockOriginalSessionId := <-lockOriginalSessionIdChan
@@ -631,6 +633,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// At this point we know the original table is locked.
 	// We know any newly incoming DML on original table is blocked.
 	if err := this.waitForEventsUpToLock(); err != nil {
+		this.migrationContext.PanicAbortIfTableError(err)
 		return log.Errore(err)
 	}
 
@@ -644,6 +647,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	go func() {
 		if err := this.applier.AtomicCutoverRename(renameSessionIdChan, tablesRenamed); err != nil {
 			// Abort! Release the lock
+			this.migrationContext.PanicAbortIfTableError(err)
 			atomic.StoreInt64(&tableRenameKnownToHaveFailed, 1)
 			okToUnlockTable <- true
 		}
@@ -996,9 +1000,8 @@ func (this *Migrator) initiateStreaming() error {
 
 	go func() {
 		log.Debugf("Beginning streaming")
-		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
-		if err != nil {
-			this.migrationContext.PanicAbort <- err
+		if err := this.eventsStreamer.StreamEvents(this.canStopStreaming); err != nil {
+			this.migrationContext.PanicAbortOnError(err)
 		}
 		log.Debugf("Done streaming")
 	}()

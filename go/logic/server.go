@@ -342,7 +342,7 @@ help                                 # This message
 				return NoPrintStatusRule, err
 			}
 			err := fmt.Errorf("User commanded 'panic'. I will now panic, without cleanup. PANIC!")
-			this.migrationContext.PanicAbort <- err
+			this.migrationContext.PanicAbortOnError(err)
 			return NoPrintStatusRule, err
 		}
 	default:

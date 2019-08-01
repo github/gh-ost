@@ -18,6 +18,11 @@ import (
 	"github.com/outbrain/golib/sqlutils"
 )
 
+const (
+	Error1017CantFindFile     = "Error 1017:"
+	Error1146TableDoesntExist = "Error 1146:"
+)
+
 const MaxTableNameLength = 64
 const MaxReplicationPasswordLength = 32
 
