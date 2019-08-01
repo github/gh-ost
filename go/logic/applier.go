@@ -290,6 +290,7 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
 	_, err := sqlutils.ExecNoPrepare(this.db, query, explicitId, hint, value)
+	this.migrationContext.PanicAbortIfTableError(err)
 	return hint, err
 }
 
