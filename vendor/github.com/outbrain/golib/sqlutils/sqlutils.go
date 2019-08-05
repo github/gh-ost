@@ -21,11 +21,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/outbrain/golib/log"
 	"strconv"
 	"strings"
 	"sync"
+
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/outbrain/golib/log"
 )
 
 // RowMap represents one row in a result set. Its objective is to allow
@@ -195,34 +196,33 @@ func ScanRowsToMaps(rows *sql.Rows, on_row func(RowMap) error) error {
 
 // QueryRowsMap is a convenience function allowing querying a result set while poviding a callback
 // function activated per read row.
-func QueryRowsMap(db *sql.DB, query string, on_row func(RowMap) error, args ...interface{}) error {
-	var err error
+func QueryRowsMap(db *sql.DB, query string, on_row func(RowMap) error, args ...interface{}) (err error) {
 	defer func() {
 		if derr := recover(); derr != nil {
 			err = errors.New(fmt.Sprintf("QueryRowsMap unexpected error: %+v", derr))
 		}
 	}()
 
-	rows, err := db.Query(query, args...)
+	var rows *sql.Rows
+	rows, err = db.Query(query, args...)
 	defer rows.Close()
 	if err != nil && err != sql.ErrNoRows {
 		return log.Errore(err)
 	}
 	err = ScanRowsToMaps(rows, on_row)
-	return err
+	return
 }
 
 // queryResultData returns a raw array of rows for a given query, optionally reading and returning column names
-func queryResultData(db *sql.DB, query string, retrieveColumns bool, args ...interface{}) (ResultData, []string, error) {
-	var err error
+func queryResultData(db *sql.DB, query string, retrieveColumns bool, args ...interface{}) (resultData ResultData, columns []string, err error) {
 	defer func() {
 		if derr := recover(); derr != nil {
 			err = errors.New(fmt.Sprintf("QueryRowsMap unexpected error: %+v", derr))
 		}
 	}()
 
-	columns := []string{}
-	rows, err := db.Query(query, args...)
+	var rows *sql.Rows
+	rows, err = db.Query(query, args...)
 	defer rows.Close()
 	if err != nil && err != sql.ErrNoRows {
 		return EmptyResultData, columns, log.Errore(err)
@@ -231,7 +231,7 @@ func queryResultData(db *sql.DB, query string, retrieveColumns bool, args ...int
 		// Don't pay if you don't want to
 		columns, _ = rows.Columns()
 	}
-	resultData := ResultData{}
+	resultData = ResultData{}
 	err = ScanRowsToArrays(rows, func(rowData []CellData) error {
 		resultData = append(resultData, rowData)
 		return nil
@@ -269,15 +269,13 @@ func QueryRowsMapBuffered(db *sql.DB, query string, on_row func(RowMap) error, a
 }
 
 // ExecNoPrepare executes given query using given args on given DB, without using prepared statements.
-func ExecNoPrepare(db *sql.DB, query string, args ...interface{}) (sql.Result, error) {
-	var err error
+func ExecNoPrepare(db *sql.DB, query string, args ...interface{}) (res sql.Result, err error) {
 	defer func() {
 		if derr := recover(); derr != nil {
 			err = errors.New(fmt.Sprintf("ExecNoPrepare unexpected error: %+v", derr))
 		}
 	}()
 
-	var res sql.Result
 	res, err = db.Exec(query, args...)
 	if err != nil {
 		log.Errore(err)
@@ -287,20 +285,18 @@ func ExecNoPrepare(db *sql.DB, query string, args ...interface{}) (sql.Result, e
 
 // ExecQuery executes given query using given args on given DB. It will safele prepare, execute and close
 // the statement.
-func execInternal(silent bool, db *sql.DB, query string, args ...interface{}) (sql.Result, error) {
-	var err error
+func execInternal(silent bool, db *sql.DB, query string, args ...interface{}) (res sql.Result, err error) {
 	defer func() {
 		if derr := recover(); derr != nil {
 			err = errors.New(fmt.Sprintf("execInternal unexpected error: %+v", derr))
 		}
 	}()
-
-	stmt, err := db.Prepare(query)
+	var stmt *sql.Stmt
+	stmt, err = db.Prepare(query)
 	if err != nil {
 		return nil, err
 	}
 	defer stmt.Close()
-	var res sql.Result
 	res, err = stmt.Exec(args...)
 	if err != nil && !silent {
 		log.Errore(err)
