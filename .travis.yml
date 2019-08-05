@@ -5,6 +5,9 @@ go:
   - "1.9"
   - "1.10"
 
+services:
+  - mysql
+
 os:
   - linux
 
