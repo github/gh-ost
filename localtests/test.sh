@@ -50,6 +50,22 @@ verify_master_and_replica() {
   original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
   echo "sql_mode on master is ${original_sql_mode}"
 
+  gh-ost-test-mysql-replica -uroot -proot -e "select 1 as root" -ss
+  gh-ost-test-mysql-replica -e "select 1 as msandbox" -ss
+  sleep 1
+  gh-ost-test-mysql-replica -uroot -proot -e "select 1 as root" -ss
+  gh-ost-test-mysql-replica -e "select 1 as msandbox" -ss
+  sleep 1
+  gh-ost-test-mysql-replica -uroot -proot -e "select 1 as root" -ss
+  gh-ost-test-mysql-replica -e "select 1 as msandbox" -ss
+  sleep 1
+  gh-ost-test-mysql-replica -uroot -proot -e "select 1 as root" -ss
+  gh-ost-test-mysql-replica -e "select 1 as msandbox" -ss
+  sleep 1
+  gh-ost-test-mysql-replica -uroot -proot -e "select 1 as root" -ss
+  gh-ost-test-mysql-replica -e "select 1 as msandbox" -ss
+  sleep 1
+
   if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
     echo "Cannot verify gh-ost-test-mysql-replica"
     exit 1
