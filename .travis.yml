@@ -7,6 +7,9 @@ go:
 os:
   - linux
 
+services:
+  - mysql
+
 env:
 - MYSQL_USER=root
 - CURRENT_CI_ENV=travis
