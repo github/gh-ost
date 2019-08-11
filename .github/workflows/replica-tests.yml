@@ -1,4 +1,4 @@
-name: Replica tests
+name: migration tests
 
 on: [pull_request]
 
@@ -16,5 +16,5 @@ jobs:
         version: 1.12
       id: go
 
-    - name: Build
+    - name: migration tests
       run:  script/cibuild-gh-ost-replica-tests
