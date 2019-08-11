@@ -1,4 +1,4 @@
-name: CI
+name: Replica tests
 
 on: [pull_request]
 
