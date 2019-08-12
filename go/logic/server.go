@@ -341,7 +341,7 @@ help                                 # This message
 				err := fmt.Errorf("User commanded 'panic' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
 				return NoPrintStatusRule, err
 			}
-			err := fmt.Errorf("User commanded 'panic'. I will now panic, without cleanup. PANIC!")
+			err := fmt.Errorf("User commanded 'panic'. The migration will be aborted without cleanup. Please drop the gh-ost tables before trying again.")
 			this.migrationContext.PanicAbort <- err
 			return NoPrintStatusRule, err
 		}
