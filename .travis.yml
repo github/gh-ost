@@ -2,11 +2,13 @@
 language: go
 
 go:
-  - "1.9"
-  - "1.10"
+  - "1.12.x"
 
 os:
   - linux
+
+services:
+  - mysql
 
 env:
 - MYSQL_USER=root

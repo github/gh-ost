@@ -144,7 +144,7 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 	switch command {
 	case "help":
 		{
-			fmt.Fprintln(writer, `available commands:
+			fmt.Fprint(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
 coordinates													 # Print the currently inspected coordinates
