@@ -50,6 +50,9 @@ verify_master_and_replica() {
   original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
   echo "sql_mode on master is ${original_sql_mode}"
 
+  echo "Gracefully sleeping for 3 seconds while replica is setting up..."
+  sleep 3
+
   if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
     echo "Cannot verify gh-ost-test-mysql-replica"
     exit 1
