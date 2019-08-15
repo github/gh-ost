@@ -18,10 +18,8 @@ function build {
   GOOS=$3
   GOARCH=$4
 
-
-
-  if ! go version | egrep -q 'go(1[.]9|1[.]1[0-9])' ; then
-    echo "go version is too low. Must use 1.9 or above"
+  if ! go version | egrep -q 'go(1\.1[234])' ; then
+    echo "go version must be 1.12 or above"
     exit 1
   fi
 

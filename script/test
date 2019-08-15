@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -e
+
+. script/bootstrap
+
+echo "Verifying code is formatted via 'gofmt -s -w  go/'"
+gofmt -s -w  go/
+git diff --exit-code --quiet
+
+echo "Building"
+script/build
+
+cd .gopath/src/github.com/github/gh-ost
+
+echo "Running unit tests"
+go test ./go/...
