@@ -111,6 +111,14 @@ While the ongoing estimated number of rows is still heuristic, it's almost exact
 
 Without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
 
+### force-named-cut-over
+
+If given, a `cut-over` command must name the migrated table, or else ignored.
+
+### force-named-panic
+
+If given, a `panic` command must name the migrated table, or else ignored.
+
 ### force-table-names
 
 Table name prefix to be used on the temporary tables.
@@ -173,6 +181,10 @@ See also: [`concurrent-migrations`](cheatsheet.md#concurrent-migrations) on the 
 
 By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not reference other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
 
+### skip-strict-mode
+
+By default `gh-ost` enforces STRICT_ALL_TABLES sql_mode as a safety measure. In some cases this changes the behaviour of other modes (namely ERROR_FOR_DIVISION_BY_ZERO, NO_ZERO_DATE, and NO_ZERO_IN_DATE) which may lead to errors during migration. Use `--skip-strict-mode` to explicitly tell `gh-ost` not to enforce this. **Danger** This may have some unexpected disastrous side effects.
+
 ### skip-renamed-columns
 
 See [`approve-renamed-columns`](#approve-renamed-columns)
@@ -188,6 +200,14 @@ Allows `gh-ost` to connect to the MySQL servers using encrypted connections, but
 ### ssl-ca
 
 `--ssl-ca=/path/to/ca-cert.pem`: ca certificate file (in PEM format) to use for server certificate verification. If specified, the default system ca cert pool will not be used for verification, only the ca cert provided here. Requires `--ssl`.
+
+### ssl-cert
+
+`--ssl-cert=/path/to/ssl-cert.crt`: SSL public key certificate file (in PEM format).
+
+### ssl-key
+
+`--ssl-key=/path/to/ssl-key.key`: SSL private key file (in PEM format).
 
 ### test-on-replica
 

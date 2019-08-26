@@ -57,6 +57,8 @@ func main() {
 
 	flag.BoolVar(&migrationContext.UseTLS, "ssl", false, "Enable SSL encrypted connections to MySQL hosts")
 	flag.StringVar(&migrationContext.TLSCACertificate, "ssl-ca", "", "CA certificate in PEM format for TLS connections to MySQL hosts. Requires --ssl")
+	flag.StringVar(&migrationContext.TLSCertificate, "ssl-cert", "", "Certificate in PEM format for TLS connections to MySQL hosts. Requires --ssl")
+	flag.StringVar(&migrationContext.TLSKey, "ssl-key", "", "Key in PEM format for TLS connections to MySQL hosts. Requires --ssl")
 	flag.BoolVar(&migrationContext.TLSAllowInsecure, "ssl-allow-insecure", false, "Skips verification of MySQL hosts' certificate chain and host name. Requires --ssl")
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
@@ -72,6 +74,7 @@ func main() {
 	flag.BoolVar(&migrationContext.IsTungsten, "tungsten", false, "explicitly let gh-ost know that you are running on a tungsten-replication based topology (you are likely to also provide --assume-master-host)")
 	flag.BoolVar(&migrationContext.DiscardForeignKeys, "discard-foreign-keys", false, "DANGER! This flag will migrate a table that has foreign keys and will NOT create foreign keys on the ghost table, thus your altered table will have NO foreign keys. This is useful for intentional dropping of foreign keys")
 	flag.BoolVar(&migrationContext.SkipForeignKeyChecks, "skip-foreign-key-checks", false, "set to 'true' when you know for certain there are no foreign keys on your table, and wish to skip the time it takes for gh-ost to verify that")
+	flag.BoolVar(&migrationContext.SkipStrictMode, "skip-strict-mode", false, "explicitly tell gh-ost binlog applier not to enforce strict sql mode")
 	flag.BoolVar(&migrationContext.AliyunRDS, "aliyun-rds", false, "set to 'true' when you execute on Aliyun RDS.")
 	flag.BoolVar(&migrationContext.GoogleCloudPlatform, "gcp", false, "set to 'true' when you execute on a 1st generation Google Cloud Platform (GCP).")
 
@@ -86,6 +89,7 @@ func main() {
 	flag.BoolVar(&migrationContext.TimestampOldTable, "timestamp-old-table", false, "Use a timestamp in old table name. This makes old table names unique and non conflicting cross migrations")
 	cutOver := flag.String("cut-over", "atomic", "choose cut-over type (default|atomic, two-step)")
 	flag.BoolVar(&migrationContext.ForceNamedCutOverCommand, "force-named-cut-over", false, "When true, the 'unpostpone|cut-over' interactive command must name the migrated table")
+	flag.BoolVar(&migrationContext.ForceNamedPanicCommand, "force-named-panic", false, "When true, the 'panic' interactive command must name the migrated table")
 
 	flag.BoolVar(&migrationContext.SwitchToRowBinlogFormat, "switch-to-rbr", false, "let this tool automatically switch binary log format to 'ROW' on the replica, if needed. The format will NOT be switched back. I'm too scared to do that, and wish to protect you if you happen to execute another migration while this one is running")
 	flag.BoolVar(&migrationContext.AssumeRBR, "assume-rbr", false, "set to 'true' when you know for certain your server uses 'ROW' binlog_format. gh-ost is unable to tell, event after reading binlog_format, whether the replication process does indeed use 'ROW', and restarts replication to be certain RBR setting is applied. Such operation requires SUPER privileges which you might not have. Setting this flag avoids restarting replication and you can proceed to use gh-ost without SUPER privileges")
@@ -207,6 +211,12 @@ func main() {
 	}
 	if migrationContext.TLSCACertificate != "" && !migrationContext.UseTLS {
 		log.Fatalf("--ssl-ca requires --ssl")
+	}
+	if migrationContext.TLSCertificate != "" && !migrationContext.UseTLS {
+		log.Fatalf("--ssl-cert requires --ssl")
+	}
+	if migrationContext.TLSKey != "" && !migrationContext.UseTLS {
+		log.Fatalf("--ssl-key requires --ssl")
 	}
 	if migrationContext.TLSAllowInsecure && !migrationContext.UseTLS {
 		log.Fatalf("--ssl-allow-insecure requires --ssl")

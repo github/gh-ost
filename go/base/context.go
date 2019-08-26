@@ -86,6 +86,7 @@ type MigrationContext struct {
 	SwitchToRowBinlogFormat  bool
 	AssumeRBR                bool
 	SkipForeignKeyChecks     bool
+	SkipStrictMode           bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
@@ -102,6 +103,8 @@ type MigrationContext struct {
 	UseTLS            bool
 	TLSAllowInsecure  bool
 	TLSCACertificate  string
+	TLSCertificate    string
+	TLSKey            string
 	CliMasterUser     string
 	CliMasterPassword string
 
@@ -126,6 +129,7 @@ type MigrationContext struct {
 	CutOverExponentialBackoff           bool
 	ExponentialBackoffMaxInterval       int64
 	ForceNamedCutOverCommand            bool
+	ForceNamedPanicCommand              bool
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string
@@ -706,7 +710,7 @@ func (this *MigrationContext) ApplyCredentials() {
 
 func (this *MigrationContext) SetupTLS() error {
 	if this.UseTLS {
-		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate, this.TLSAllowInsecure)
+		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate, this.TLSCertificate, this.TLSKey, this.TLSAllowInsecure)
 	}
 	return nil
 }
