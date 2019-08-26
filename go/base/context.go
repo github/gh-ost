@@ -213,6 +213,7 @@ type MigrationContext struct {
 
 	Where                                  string
 	ForceQueryMigrationRangeValuesOnMaster bool
+	PartitionStmt						string
 }
 
 type ContextConfig struct {

@@ -212,6 +212,24 @@ func (this *Applier) AlterGhost() error {
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
+
+	if this.migrationContext.PartitionStmt != ""{
+		parStmt := fmt.Sprintf(`alter /* gh-ost */ table %s.%s %s`,
+			sql.EscapeName(this.migrationContext.DatabaseName),
+				sql.EscapeName(this.migrationContext.GetGhostTableName()),
+					this.migrationContext.PartitionStmt,
+						)
+		log.Infof("Altering ghost table %s.%s to partition",
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+				)
+		log.Debugf("ALTER statement: %s", parStmt)
+
+		if _, err := sqlutils.ExecNoPrepare(this.db, parStmt); err != nil {
+			return err
+		}
+	}
+
 	log.Infof("Ghost table altered")
 	return nil
 }

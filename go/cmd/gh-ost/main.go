@@ -134,7 +134,7 @@ func main() {
 
 	flag.StringVar(&migrationContext.Where, "where-reserve-clause", "", "used for only copy where clause stmt values")
 	flag.BoolVar(&migrationContext.ForceQueryMigrationRangeValuesOnMaster, "force-query-migration-range-values-on-master", false, "if you use where-reserve-clause flag, by default, will query initial migration range values with corresponding where stmt on slave. Also you can specify this flag to true , it will query on master and not care where clause stmt like usual and the where clause would be used at copy rows to gho table")
-
+	flag.StringVar(&migrationContext.PartitionStmt,"partition-stmt","","used for change table to partition table")
 	flag.CommandLine.SetOutput(os.Stdout)
 
 	flag.Parse()
