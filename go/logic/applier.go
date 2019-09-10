@@ -830,7 +830,7 @@ func (this *Applier) SwapTables() error {
 	)
 	log.Infof("Swaping original and new table: %s", query)
 	this.migrationContext.RenameTablesStartTime = time.Now()
-	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
 	this.migrationContext.RenameTablesEndTime = time.Now()
