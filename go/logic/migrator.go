@@ -25,10 +25,10 @@ import (
 type ChangelogState string
 
 const (
-	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
-	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
-	StopWriteEvents                           = "StopWriteEvents"
-	AllEventsUpToTriggersProcessed            = "AllEventsUpToTriggersProcessed"
+	GhostTableMigrated             ChangelogState = "GhostTableMigrated"
+	AllEventsUpToLockProcessed                    = "AllEventsUpToLockProcessed"
+	StopWriteEvents                               = "StopWriteEvents"
+	AllEventsUpToTriggersProcessed                = "AllEventsUpToTriggersProcessed"
 )
 
 func ReadChangelogState(s string) ChangelogState {
@@ -80,7 +80,7 @@ type Migrator struct {
 	stoppedWriteEvents             chan string
 	allEventsUpToTriggersProcessed chan string
 
-	triggerCutoverUniqueKeys [][]interface {}
+	triggerCutoverUniqueKeys [][]interface{}
 
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
@@ -749,7 +749,7 @@ func (this *Migrator) cutOverTrigger() (err error) {
 	log.Infof(
 		"Creating triggers for %s.%s",
 		this.migrationContext.DatabaseName,
-		this.migrationContext.OriginalTableName);
+		this.migrationContext.OriginalTableName)
 
 	if err := this.retryOperation(this.applier.CreateTriggersOriginalTable); err != nil {
 		return err
@@ -763,7 +763,7 @@ func (this *Migrator) cutOverTrigger() (err error) {
 
 CompareNewRow:
 	for _, rowToAdd := range this.triggerCutoverUniqueKeys {
-CompareAddedRow:
+	CompareAddedRow:
 		for _, rowAdded := range this.migrationContext.TriggerCutoverUniqueKeys {
 			for i := range rowAdded {
 				if rowToAdd[i] != rowAdded[i] {
