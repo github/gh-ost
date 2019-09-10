@@ -8,11 +8,11 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"regexp"
-	"strings"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -586,9 +586,9 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 	}
 
 	deleteTrigger := fmt.Sprintf(
-		"CREATE /* gh-ost */ TRIGGER `%s_del` AFTER DELETE ON %s.%s " +
-		"FOR EACH ROW " +
-		"DELETE /* gh-ost */ IGNORE FROM %s.%s WHERE %s",
+		"CREATE /* gh-ost */ TRIGGER `%s_del` AFTER DELETE ON %s.%s "+
+			"FOR EACH ROW "+
+			"DELETE /* gh-ost */ IGNORE FROM %s.%s WHERE %s",
 		prefix,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
@@ -606,11 +606,10 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 		insertValues = append(insertValues, value)
 	}
 
-
 	insertTrigger := fmt.Sprintf(
-		"CREATE /* gh-ost */ TRIGGER `%s_ins` AFTER INSERT ON %s.%s " +
-		"FOR EACH ROW " +
-		"REPLACE /* gh-ost */ INTO %s.%s (%s) VALUES (%s)",
+		"CREATE /* gh-ost */ TRIGGER `%s_ins` AFTER INSERT ON %s.%s "+
+			"FOR EACH ROW "+
+			"REPLACE /* gh-ost */ INTO %s.%s (%s) VALUES (%s)",
 		prefix,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
@@ -630,12 +629,12 @@ func (this *Applier) CreateTriggersOriginalTable() error {
 	}
 
 	updateTrigger := fmt.Sprintf(
-		"CREATE /* gh-ost */ TRIGGER `%s_upd` AFTER UPDATE ON %s.%s " +
-		"FOR EACH ROW " +
-		"BEGIN /* gh-ost */ " +
-		"DELETE IGNORE FROM %s.%s WHERE !(%s) AND %s; " +
-		"REPLACE INTO %s.%s (%s) VALUES (%s); " +
-		"END",
+		"CREATE /* gh-ost */ TRIGGER `%s_upd` AFTER UPDATE ON %s.%s "+
+			"FOR EACH ROW "+
+			"BEGIN /* gh-ost */ "+
+			"DELETE IGNORE FROM %s.%s WHERE !(%s) AND %s; "+
+			"REPLACE INTO %s.%s (%s) VALUES (%s); "+
+			"END",
 		prefix,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
