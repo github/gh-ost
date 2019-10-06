@@ -752,6 +752,13 @@ func (this *Inspector) readChangelogState(hint string) (string, error) {
 	return result, err
 }
 
+// readUptime reads MySQL server uptime (in seconds)
+func (this *Inspector) readUptime() (uptime int64, err error) {
+	var dummy string
+	err = this.db.QueryRow("show global status like 'Uptime'").Scan(&dummy, &uptime)
+	return uptime, err
+}
+
 func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
 	log.Infof("Recursively searching for replication master")
 	visitedKeys := mysql.NewInstanceKeyMap()
