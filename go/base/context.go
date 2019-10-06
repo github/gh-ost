@@ -174,6 +174,7 @@ type MigrationContext struct {
 	pointOfInterestTime                    time.Time
 	pointOfInterestTimeMutex               *sync.Mutex
 	CurrentLag                             int64
+	CurrentProgress                        uint64 // math.Float64bits([f=0..100])
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
@@ -426,6 +427,10 @@ func (this *MigrationContext) MarkRowCopyEndTime() {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
 	this.RowCopyEndTime = time.Now()
+}
+
+func (this *MigrationContext) GetCurrentLagDuration() time.Duration {
+	return time.Duration(atomic.LoadInt64(&this.CurrentLag))
 }
 
 // GetTotalRowsCopied returns the accurate number of rows being copied (affected)
