@@ -7,6 +7,7 @@ package base
 
 import (
 	"fmt"
+	"github.com/outbrain/golib/log"
 	"os"
 	"regexp"
 	"strings"
@@ -214,6 +215,25 @@ type MigrationContext struct {
 	ForceTmpTableName                string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
+
+	Log Logger
+}
+
+type Logger interface {
+	Debug(args ...interface{})
+	Debugf(format string, args ...interface{})
+	Info(args ...interface{})
+	Infof(format string, args ...interface{})
+	Warning(args ...interface{}) error
+	Warningf(format string, args ...interface{}) error
+	Error(args ...interface{}) error
+	Errorf(format string, args ...interface{}) error
+	Errore(err error) error
+	Fatal(args ...interface{}) error
+	Fatalf(format string, args ...interface{}) error
+	Fatale(err error) error
+	SetLevel(level log.LogLevel)
+	SetPrintStackTrace(printStackTraceFlag bool)
 }
 
 type ContextConfig struct {
@@ -248,6 +268,7 @@ func NewMigrationContext() *MigrationContext {
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
+		Log:                                 NewDefaultLogger(),
 	}
 }
 
