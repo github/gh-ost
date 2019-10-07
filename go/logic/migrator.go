@@ -896,7 +896,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		progressPct = 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
 	}
 	// we take the opportunity to update migration context with progressPct
-	atomic.StoreUint64(&this.migrationContext.CurrentProgress, math.Float64bits(progressPct))
+	this.migrationContext.SetProgressPct(progressPct)
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
 	shouldPrintMigrationStatusHint := (elapsedSeconds%600 == 0)
 	if rule == ForcePrintStatusAndHintRule {

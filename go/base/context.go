@@ -7,6 +7,7 @@ package base
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -174,7 +175,7 @@ type MigrationContext struct {
 	pointOfInterestTime                    time.Time
 	pointOfInterestTimeMutex               *sync.Mutex
 	CurrentLag                             int64
-	CurrentProgress                        uint64 // math.Float64bits([f=0..100])
+	currentProgress                        uint64
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
@@ -432,6 +433,16 @@ func (this *MigrationContext) MarkRowCopyEndTime() {
 func (this *MigrationContext) GetCurrentLagDuration() time.Duration {
 	return time.Duration(atomic.LoadInt64(&this.CurrentLag))
 }
+
+func (this *MigrationContext) GetProgressPct() float64 {
+	return math.Float64frombits(atomic.LoadUint64(&this.currentProgress))
+}
+
+func (this *MigrationContext) SetProgressPct(progressPct float64) {
+	atomic.StoreUint64(&this.currentProgress, math.Float64bits(progressPct))
+}
+
+// math.Float64bits([f=0..100])
 
 // GetTotalRowsCopied returns the accurate number of rows being copied (affected)
 // This is not exactly the same as the rows being iterated via chunks, but potentially close enough
