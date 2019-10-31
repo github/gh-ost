@@ -161,7 +161,7 @@ List of metrics and threshold values; topping the threshold of any will cause th
 
 ### migrate-on-replica
 
-Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but other issue will make no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
+Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but otherwise will make no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
 
 ### postpone-cut-over-flag-file
 
