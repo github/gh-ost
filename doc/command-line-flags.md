@@ -18,7 +18,7 @@ If, for some reason, you do not wish `gh-ost` to connect to a replica, you may c
 
 ### approve-renamed-columns
 
-When your migration issues a column rename (`change column old_name new_name ...`) `gh-ost` analyzes the statement to try and associate the old column name with new column name. Otherwise the new structure may also look like some column was dropped and another was added.
+When your migration issues a column rename (`change column old_name new_name ...`) `gh-ost` analyzes the statement to try an associate the old column name with new column name. Otherwise the new structure may also look like some column was dropped and another was added.
 
 `gh-ost` will print out what it thinks the _rename_ implied, but will not issue the migration unless you provide with `--approve-renamed-columns`.
 
@@ -161,7 +161,7 @@ List of metrics and threshold values; topping the threshold of any will cause th
 
 ### migrate-on-replica
 
-Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but otherwise will make no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
+Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but other issue no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
 
 ### postpone-cut-over-flag-file
 
