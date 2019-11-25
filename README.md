@@ -8,8 +8,7 @@
 
 `gh-ost` produces a light workload on the master throughout the migration, decoupled from the existing workload on the migrated table.
 
-It has been designed based on years of experience with existing solutions, and changes the paradigm of table migrations.
-
+Experience in existing solutions and paradigm migrations is the basis of gh-ost.
 
 
 ## How?
