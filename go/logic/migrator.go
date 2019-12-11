@@ -893,6 +893,8 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	} else {
 		progressPct = 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
 	}
+	// we take the opportunity to update migration context with progressPct
+	this.migrationContext.SetProgressPct(progressPct)
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
 	shouldPrintMigrationStatusHint := (elapsedSeconds%600 == 0)
 	if rule == ForcePrintStatusAndHintRule {
@@ -909,7 +911,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	eta := "N/A"
 	if progressPct >= 100.0 {
 		eta = "due"
-	} else if progressPct >= 1.0 {
+	} else if progressPct >= 0.1 {
 		elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
 		totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
 		etaSeconds = totalExpectedSeconds - elapsedRowCopySeconds
@@ -956,12 +958,13 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s",
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
+		this.migrationContext.GetCurrentLagDuration().Seconds(),
 		state,
 		eta,
 	)
