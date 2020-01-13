@@ -15,7 +15,7 @@ import (
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/outbrain/golib/log"
+	"github.com/hanchuanchuan/golib/log"
 
 	"golang.org/x/crypto/ssh/terminal"
 )

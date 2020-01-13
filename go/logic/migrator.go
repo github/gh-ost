@@ -20,7 +20,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/outbrain/golib/log"
+	"github.com/hanchuanchuan/golib/log"
 )
 
 type ChangelogState string
@@ -329,7 +329,6 @@ func (this *Migrator) Migrate() (err error) {
 	if this.migrationContext.Hostname, err = os.Hostname(); err != nil {
 		return err
 	}
-
 
 	// go this.listenOnPanicAbort()
 

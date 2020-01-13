@@ -12,8 +12,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/outbrain/golib/log"
-	test "github.com/outbrain/golib/tests"
+	"github.com/hanchuanchuan/golib/log"
+	test "github.com/hanchuanchuan/golib/tests"
 )
 
 var (

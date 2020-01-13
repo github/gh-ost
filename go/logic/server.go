@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 
 	"github.com/github/gh-ost/go/base"
-	"github.com/outbrain/golib/log"
+	"github.com/hanchuanchuan/golib/log"
 )
 
 type printStatusFunc func(PrintStatusRule, io.Writer)

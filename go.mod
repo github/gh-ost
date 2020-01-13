@@ -1,10 +1,10 @@
 module github.com/hanchuanchuan/gh-ost
 
 // replace github.com/outbrain/golib/log => github.com/sirupsen/logrus v1.2.0
-replace github.com/outbrain/golib => github.com/hanchuanchuan/golib latest
-replace github.com/outbrain/golib/log => github.com/hanchuanchuan/golib/log latest
-replace github.com/outbrain/golib/sqlutils => github.com/hanchuanchuan/golib/sqlutils latest
+replace github.com/outbrain/golib => github.com/hanchuanchuan/golib v0.0.0-20200113085747-47643bc243f1
 
+// replace github.com/outbrain/golib/log => github.com/hanchuanchuan/golib/log latest
+// replace github.com/outbrain/golib/sqlutils => github.com/hanchuanchuan/golib/sqlutils latest
 
 require (
 	github.com/github/gh-ost v1.0.48
@@ -18,3 +18,4 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
 
+go 1.13
