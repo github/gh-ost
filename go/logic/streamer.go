@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-ost/blob/master/LICENSE
+	 See https://github.com/hanchuanchuan/gh-ost/blob/master/LICENSE
 */
 
 package logic
@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/github/gh-ost/go/base"
-	"github.com/github/gh-ost/go/binlog"
-	"github.com/github/gh-ost/go/mysql"
+	"github.com/hanchuanchuan/gh-ost/go/base"
+	"github.com/hanchuanchuan/gh-ost/go/binlog"
+	"github.com/hanchuanchuan/gh-ost/go/mysql"
 
 	"github.com/hanchuanchuan/golib/log"
 	"github.com/hanchuanchuan/golib/sqlutils"

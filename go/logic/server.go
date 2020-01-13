@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-ost/blob/master/LICENSE
+	 See https://github.com/hanchuanchuan/gh-ost/blob/master/LICENSE
 */
 
 package logic
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/github/gh-ost/go/base"
+	"github.com/hanchuanchuan/gh-ost/go/base"
 	"github.com/hanchuanchuan/golib/log"
 )
 

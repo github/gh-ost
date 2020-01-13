@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-ost/blob/master/LICENSE
+	 See https://github.com/hanchuanchuan/gh-ost/blob/master/LICENSE
 */
 
 package base
@@ -16,8 +16,8 @@ import (
 
 	"github.com/satori/go.uuid"
 
-	"github.com/github/gh-ost/go/mysql"
-	"github.com/github/gh-ost/go/sql"
+	"github.com/hanchuanchuan/gh-ost/go/mysql"
+	"github.com/hanchuanchuan/gh-ost/go/sql"
 
 	"gopkg.in/gcfg.v1"
 	gcfgscanner "gopkg.in/gcfg.v1/scanner"

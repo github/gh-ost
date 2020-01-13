@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-ost/blob/master/LICENSE
+	 See https://github.com/hanchuanchuan/gh-ost/blob/master/LICENSE
 */
 
 package main
@@ -12,9 +12,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/github/gh-ost/go/base"
-	"github.com/github/gh-ost/go/logic"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/hanchuanchuan/gh-ost/go/base"
+	"github.com/hanchuanchuan/gh-ost/go/logic"
 	"github.com/hanchuanchuan/golib/log"
 
 	"golang.org/x/crypto/ssh/terminal"

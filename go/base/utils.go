@@ -1,6 +1,6 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-ost/blob/master/LICENSE
+	 See https://github.com/hanchuanchuan/gh-ost/blob/master/LICENSE
 */
 
 package base
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	gosql "database/sql"
-	"github.com/github/gh-ost/go/mysql"
+	"github.com/hanchuanchuan/gh-ost/go/mysql"
 	"github.com/hanchuanchuan/golib/log"
 )
 

@@ -1,13 +1,13 @@
 /*
    Copyright 2016 GitHub Inc.
-	 See https://github.com/github/gh-ost/blob/master/LICENSE
+	 See https://github.com/hanchuanchuan/gh-ost/blob/master/LICENSE
 */
 
 package binlog
 
 import (
 	"fmt"
-	"github.com/github/gh-ost/go/mysql"
+	"github.com/hanchuanchuan/gh-ost/go/mysql"
 )
 
 // BinlogEntry describes an entry in the binary log
