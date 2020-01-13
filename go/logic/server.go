@@ -163,8 +163,7 @@ no-throttle                          # End forced throttling (other throttling m
 unpostpone                           # Bail out a cut-over postpone; proceed to cut-over
 panic                                # panic and quit without cleanup
 help                                 # This message
-- use '?' (question mark) as argument to get info rather than set. e.g. "max-load=?" will just print out current max-load.
-`)
+- use '?' (question mark) as argument to get info rather than set. e.g. "max-load=?" will just print out current max-load.`)
 		}
 	case "sup":
 		return ForcePrintStatusOnlyRule, nil

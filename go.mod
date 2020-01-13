@@ -1,5 +1,7 @@
 module github.com/hanchuanchuan/gh-ost
 
+replace gopkg.in/gcfg.v1 => github.com/hanchuanchuan/gcfg.v1 v0.0.0-20190302111942-77c0f3dcc0b3
+
 require (
 	github.com/go-sql-driver/mysql v1.4.1
 	github.com/hanchuanchuan/golib v0.0.0-20200113085747-47643bc243f1
