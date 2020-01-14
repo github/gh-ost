@@ -13,8 +13,8 @@ import (
 	"github.com/hanchuanchuan/gh-ost/go/mysql"
 	"github.com/hanchuanchuan/gh-ost/go/sql"
 
-	gomysql "github.com/siddontang/go-mysql/mysql"
-	"github.com/siddontang/go-mysql/replication"
+	gomysql "github.com/hanchuanchuan/go-mysql/mysql"
+	"github.com/hanchuanchuan/go-mysql/replication"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 )
