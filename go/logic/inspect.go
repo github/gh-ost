@@ -17,8 +17,8 @@ import (
 	"github.com/hanchuanchuan/gh-ost/go/mysql"
 	"github.com/hanchuanchuan/gh-ost/go/sql"
 
-	"github.com/hanchuanchuan/golib/log"
 	"github.com/hanchuanchuan/golib/sqlutils"
+	log "github.com/sirupsen/logrus"
 )
 
 const startSlavePostWaitMilliseconds = 500 * time.Millisecond
@@ -137,14 +137,14 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 			switch column.Type {
 			case sql.FloatColumnType:
 				{
-					log.Warning("Will not use %+v as shared key due to FLOAT data type", sharedUniqueKey.Name)
+					log.Warningf("Will not use %+v as shared key due to FLOAT data type", sharedUniqueKey.Name)
 					uniqueKeyIsValid = false
 				}
 			case sql.JSONColumnType:
 				{
 					// Noteworthy that at this time MySQL does not allow JSON indexing anyhow, but this code
 					// will remain in place to potentially handle the future case where JSON is supported in indexes.
-					log.Warning("Will not use %+v as shared key due to JSON data type", sharedUniqueKey.Name)
+					log.Warningf("Will not use %+v as shared key due to JSON data type", sharedUniqueKey.Name)
 					uniqueKeyIsValid = false
 				}
 			}
@@ -262,7 +262,9 @@ func (this *Inspector) validateGrants() error {
 		return nil
 	}
 	log.Debugf("Privileges: Super: %t, REPLICATION CLIENT: %t, REPLICATION SLAVE: %t, ALL on *.*: %t, ALL on %s.*: %t", foundSuper, foundReplicationClient, foundReplicationSlave, foundAll, sql.EscapeName(this.migrationContext.DatabaseName), foundDBAll)
-	return log.Errorf("User has insufficient privileges for migration. Needed: SUPER|REPLICATION CLIENT, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+	err = fmt.Errorf("User has insufficient privileges for migration. Needed: SUPER|REPLICATION CLIENT, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+	log.Error(err)
+	return err
 }
 
 // restartReplication is required so that we are _certain_ the binlog format and
@@ -413,7 +415,9 @@ func (this *Inspector) validateTable() error {
 		return err
 	}
 	if !tableFound {
-		return log.Errorf("Cannot find table %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		err := fmt.Errorf("Cannot find table %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		log.Error(err)
+		return err
 	}
 	log.Infof("Table found. Engine=%s", this.migrationContext.TableEngine)
 	log.Debugf("Estimated number of rows via STATUS: %d", this.migrationContext.RowsEstimate)
@@ -457,14 +461,18 @@ func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) erro
 		return err
 	}
 	if numParentForeignKeys > 0 {
-		return log.Errorf("Found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		err := fmt.Errorf("Found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		log.Error(err)
+		return err
 	}
 	if numChildForeignKeys > 0 {
 		if allowChildForeignKeys {
 			log.Debugf("Foreign keys found and will be dropped, as per given --discard-foreign-keys flag")
 			return nil
 		}
-		return log.Errorf("Found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		err := fmt.Errorf("Found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		log.Error(err)
+		return err
 	}
 	log.Debugf("Validated no foreign keys exist on table")
 	return nil
@@ -492,7 +500,9 @@ func (this *Inspector) validateTableTriggers() error {
 		return err
 	}
 	if numTriggers > 0 {
-		return log.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		err := fmt.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		log.Error(err)
+		return err
 	}
 	log.Debugf("Validated no triggers exist on table")
 	return nil
@@ -514,7 +524,9 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 		return err
 	}
 	if !outputFound {
-		return log.Errorf("Cannot run EXPLAIN on %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		err := fmt.Errorf("Cannot run EXPLAIN on %s.%s!", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		log.Error(err)
+		return err
 	}
 	log.Infof("Estimated number of rows via EXPLAIN: %d", this.migrationContext.RowsEstimate)
 	return nil

@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/hanchuanchuan/gh-ost/go/base"
-	"github.com/hanchuanchuan/golib/log"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -82,7 +82,8 @@ func (this *HooksExecutor) executeHook(hook string, extraVariables ...string) er
 
 	combinedOutput, err := cmd.CombinedOutput()
 	fmt.Fprintln(os.Stderr, string(combinedOutput))
-	return log.Errore(err)
+	log.Error(err)
+	return (err)
 }
 
 func (this *HooksExecutor) detectHooks(baseName string) (hooks []string, err error) {

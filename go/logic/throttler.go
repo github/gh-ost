@@ -15,7 +15,7 @@ import (
 	"github.com/hanchuanchuan/gh-ost/go/base"
 	"github.com/hanchuanchuan/gh-ost/go/mysql"
 	"github.com/hanchuanchuan/gh-ost/go/sql"
-	"github.com/hanchuanchuan/golib/log"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -120,7 +120,8 @@ func parseChangelogHeartbeat(heartbeatValue string) (lag time.Duration, err erro
 // parseChangelogHeartbeat parses a string timestamp and deduces replication lag
 func (this *Throttler) parseChangelogHeartbeat(heartbeatValue string) (err error) {
 	if lag, err := parseChangelogHeartbeat(heartbeatValue); err != nil {
-		return log.Errore(err)
+		log.Error(err)
+		return (err)
 	} else {
 		atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
 		return nil
@@ -142,13 +143,15 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 			// This means we will always get a good heartbeat value.
 			// When running on replica, we should instead check the `SHOW SLAVE STATUS` output.
 			if lag, err := mysql.GetReplicationLagFromSlaveStatus(this.inspector.informationSchemaDb); err != nil {
-				return log.Errore(err)
+				log.Error(err)
+				return (err)
 			} else {
 				atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
 			}
 		} else {
 			if heartbeatValue, err := this.inspector.readChangelogState("heartbeat"); err != nil {
-				return log.Errore(err)
+				log.Error(err)
+				return (err)
 			} else {
 				this.parseChangelogHeartbeat(heartbeatValue)
 			}

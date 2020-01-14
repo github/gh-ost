@@ -20,7 +20,7 @@ import (
 	"github.com/hanchuanchuan/gh-ost/go/mysql"
 	"github.com/hanchuanchuan/gh-ost/go/sql"
 
-	"github.com/hanchuanchuan/golib/log"
+	log "github.com/sirupsen/logrus"
 )
 
 type ChangelogState string
@@ -259,7 +259,8 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 // listenOnPanicAbort aborts on abort request
 func (this *Migrator) listenOnPanicAbort() {
 	err := <-this.migrationContext.PanicAbort
-	log.Fatale(err)
+	log.Error(err)
+	// log.Fatale(err)
 }
 
 // validateStatement validates the `alter` statement meets criteria.
@@ -314,7 +315,9 @@ func (this *Migrator) createFlagFiles() (err error) {
 	if this.migrationContext.PostponeCutOverFlagFile != "" {
 		if !base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
 			if err := base.TouchFile(this.migrationContext.PostponeCutOverFlagFile); err != nil {
-				return log.Errorf("--postpone-cut-over-flag-file indicated by gh-ost is unable to create said file: %s", err.Error())
+				err = fmt.Errorf("--postpone-cut-over-flag-file indicated by gh-ost is unable to create said file: %s", err.Error())
+				log.Error(err)
+				return err
 			}
 			log.Infof("Created postpone-cut-over-flag-file: %s", this.migrationContext.PostponeCutOverFlagFile)
 		}
@@ -467,14 +470,16 @@ func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
 		// and swap the tables.
 		// The difference is that we will later swap the tables back.
 		if err := this.hooksExecutor.onStartReplication(); err != nil {
-			return log.Errore(err)
+			log.Error(err)
+			return (err)
 		}
 		if this.migrationContext.TestOnReplicaSkipReplicaStop {
 			log.Warningf("--test-on-replica-skip-replica-stop enabled, we are not starting replication.")
 		} else {
 			log.Debugf("testing on replica. Starting replication IO thread after cut-over failure")
 			if err := this.retryOperation(this.applier.StartReplication); err != nil {
-				return log.Errore(err)
+				log.Error(err)
+				return (err)
 			}
 		}
 	}
@@ -550,7 +555,9 @@ func (this *Migrator) cutOver() (err error) {
 		this.handleCutOverResult(err)
 		return err
 	}
-	return log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
+	err = fmt.Errorf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
+	log.Error(err)
+	return err
 }
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
@@ -572,7 +579,8 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 		select {
 		case <-timeout.C:
 			{
-				return log.Errorf("Timeout while waiting for events up to lock")
+				log.Error("Timeout while waiting for events up to lock")
+				return fmt.Errorf("Timeout while waiting for events up to lock")
 			}
 		case state := <-this.allEventsUpToLockProcessed:
 			{
@@ -640,18 +648,20 @@ func (this *Migrator) atomicCutOver() (err error) {
 	tableUnlocked := make(chan error, 2)
 	go func() {
 		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
-			log.Errore(err)
+			log.Error(err)
 		}
 	}()
 	if err := <-tableLocked; err != nil {
-		return log.Errore(err)
+		log.Error(err)
+		return (err)
 	}
 	lockOriginalSessionId := <-lockOriginalSessionIdChan
 	log.Infof("Session locking original & magic tables is %+v", lockOriginalSessionId)
 	// At this point we know the original table is locked.
 	// We know any newly incoming DML on original table is blocked.
 	if err := this.waitForEventsUpToLock(); err != nil {
-		return log.Errore(err)
+		log.Error(err)
+		return (err)
 	}
 
 	// Step 2
@@ -690,7 +700,8 @@ func (this *Migrator) atomicCutOver() (err error) {
 	}
 	if err := this.applier.ExpectUsedLock(lockOriginalSessionId); err != nil {
 		// Abort operation. Just make sure to drop the magic table.
-		return log.Errore(err)
+		log.Error(err)
+		return (err)
 	}
 	log.Infof("Connection holding lock on original table still exists")
 
@@ -701,10 +712,12 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// BAM! magic table dropped, original table lock is released
 	// -> RENAME released -> queries on original are unblocked.
 	if err := <-tableUnlocked; err != nil {
-		return log.Errore(err)
+		log.Error(err)
+		return (err)
 	}
 	if err := <-tablesRenamed; err != nil {
-		return log.Errore(err)
+		log.Error(err)
+		return (err)
 	}
 	this.migrationContext.RenameTablesEndTime = time.Now()
 
@@ -1101,7 +1114,8 @@ func (this *Migrator) initiateApplier() error {
 func (this *Migrator) iterateChunks() error {
 	terminateRowIteration := func(err error) error {
 		this.rowCopyComplete <- err
-		return log.Errore(err)
+		log.Error(err)
+		return (err)
 	}
 	if this.migrationContext.Noop {
 		log.Debugf("Noop operation; not really copying data")
@@ -1176,7 +1190,8 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
 		if eventStruct.writeFunc != nil {
 			if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
-				return log.Errore(err)
+				log.Error(err)
+				return (err)
 			}
 		}
 		return nil
@@ -1210,13 +1225,15 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 			return this.applier.ApplyDMLEventQueries(dmlEvents)
 		}
 		if err := this.retryOperation(applyEventFunc); err != nil {
-			return log.Errore(err)
+			log.Error(err)
+			return (err)
 		}
 		if nonDmlStructToApply != nil {
 			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
 			// We need to handle it!
 			if err := handleNonDMLEventStruct(nonDmlStructToApply); err != nil {
-				return log.Errore(err)
+				log.Error(err)
+				return (err)
 			}
 		}
 	}
@@ -1255,7 +1272,8 @@ func (this *Migrator) executeWriteFuncs() error {
 						copyRowsStartTime := time.Now()
 						// Retries are handled within the copyRowsFunc
 						if err := copyRowsFunc(); err != nil {
-							return log.Errore(err)
+							log.Error(err)
+							return (err)
 						}
 						if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
 							copyRowsDuration := time.Since(copyRowsStartTime)
@@ -1287,11 +1305,11 @@ func (this *Migrator) finalCleanup() error {
 			log.Infof("New table structure follows")
 			fmt.Println(createTableStatement)
 		} else {
-			log.Errore(err)
+			log.Error(err)
 		}
 	}
 	if err := this.eventsStreamer.Close(); err != nil {
-		log.Errore(err)
+		log.Error(err)
 	}
 
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
@@ -1334,7 +1352,8 @@ func (this *Migrator) teardown() {
 		this.eventsStreamer.Teardown()
 
 		if err := this.eventsStreamer.Close(); err != nil {
-			log.Errore(err)
+			log.Error(err)
+			// (err)
 		}
 	}
 

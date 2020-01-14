@@ -11,6 +11,7 @@ require (
 	github.com/pkg/errors v0.8.1 // indirect
 	github.com/satori/go.uuid v1.2.0
 	github.com/siddontang/go-mysql v0.0.0-20190303113352-670f74e8daf5
+	github.com/sirupsen/logrus v1.4.2
 	golang.org/x/crypto v0.0.0-20200109152110-61a87790db17
 	golang.org/x/net v0.0.0-20191209160850-c0dbc17a3553
 	golang.org/x/text v0.3.2

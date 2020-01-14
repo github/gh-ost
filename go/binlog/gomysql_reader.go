@@ -13,9 +13,9 @@ import (
 	"github.com/hanchuanchuan/gh-ost/go/mysql"
 	"github.com/hanchuanchuan/gh-ost/go/sql"
 
-	"github.com/hanchuanchuan/golib/log"
 	gomysql "github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/replication"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 )
 
@@ -57,7 +57,8 @@ func NewGoMySQLReader(migrationContext *base.MigrationContext) (binlogReader *Go
 // ConnectBinlogStreamer
 func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordinates) (err error) {
 	if coordinates.IsEmpty() {
-		return log.Errorf("Empty coordinates at ConnectBinlogStreamer()")
+		log.Error("Empty coordinates at ConnectBinlogStreamer()")
+		return fmt.Errorf("Empty coordinates at ConnectBinlogStreamer()")
 	}
 
 	this.currentCoordinates = coordinates

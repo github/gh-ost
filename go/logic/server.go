@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 
 	"github.com/hanchuanchuan/gh-ost/go/base"
-	"github.com/hanchuanchuan/golib/log"
+	log "github.com/sirupsen/logrus"
 )
 
 type printStatusFunc func(PrintStatusRule, io.Writer)
@@ -76,7 +76,8 @@ func (this *Server) Serve() (err error) {
 		for {
 			conn, err := this.unixListener.Accept()
 			if err != nil {
-				log.Errore(err)
+				log.Error(err)
+				// log.Errore(err)
 			}
 			go this.handleConnection(conn)
 		}
@@ -88,7 +89,8 @@ func (this *Server) Serve() (err error) {
 		for {
 			conn, err := this.tcpListener.Accept()
 			if err != nil {
-				log.Errore(err)
+				log.Error(err)
+				// log.Errore(err)
 			}
 			go this.handleConnection(conn)
 		}
@@ -118,7 +120,9 @@ func (this *Server) onServerCommand(command string, writer *bufio.Writer) (err e
 	} else {
 		fmt.Fprintf(writer, "%s\n", err.Error())
 	}
-	return log.Errore(err)
+	log.Error(err)
+	return err
+	// return log.Errore(err)
 }
 
 // applyServerCommand parses and executes commands by user

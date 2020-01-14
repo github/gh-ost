@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hanchuanchuan/golib/log"
 	test "github.com/hanchuanchuan/golib/tests"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
-	log.SetLevel(log.ERROR)
+	log.SetLevel(log.ErrorLevel)
 }
 
 func TestGetTableNames(t *testing.T) {

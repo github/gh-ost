@@ -12,8 +12,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/hanchuanchuan/golib/log"
 	test "github.com/hanchuanchuan/golib/tests"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -21,7 +21,7 @@ var (
 )
 
 func init() {
-	log.SetLevel(log.ERROR)
+	log.SetLevel(log.ErrorLevel)
 }
 
 func normalizeQuery(name string) string {

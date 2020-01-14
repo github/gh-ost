@@ -8,12 +8,12 @@ package base
 import (
 	"testing"
 
-	"github.com/hanchuanchuan/golib/log"
 	test "github.com/hanchuanchuan/golib/tests"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
-	log.SetLevel(log.ERROR)
+	log.SetLevel(log.ErrorLevel)
 }
 
 func TestStringContainsAll(t *testing.T) {

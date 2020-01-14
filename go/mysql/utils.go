@@ -14,8 +14,8 @@ import (
 
 	"github.com/hanchuanchuan/gh-ost/go/sql"
 
-	"github.com/hanchuanchuan/golib/log"
 	"github.com/hanchuanchuan/golib/sqlutils"
+	log "github.com/sirupsen/logrus"
 )
 
 const MaxTableNameLength = 64
@@ -196,10 +196,12 @@ func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnL
 		return nil, nil, err
 	}
 	if len(columnNames) == 0 {
-		return nil, nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
+		err := fmt.Errorf("Found 0 columns on %s.%s. Bailing out",
 			sql.EscapeName(databaseName),
 			sql.EscapeName(tableName),
 		)
+		log.Error(err)
+		return nil, nil, err
 	}
 	return sql.NewColumnList(columnNames), sql.NewColumnList(virtualColumnNames), nil
 }

@@ -16,8 +16,8 @@ import (
 	"github.com/hanchuanchuan/gh-ost/go/mysql"
 	"github.com/hanchuanchuan/gh-ost/go/sql"
 
-	"github.com/hanchuanchuan/golib/log"
 	"github.com/hanchuanchuan/golib/sqlutils"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -313,7 +313,8 @@ func (this *Applier) InitiateHeartbeat() {
 		if _, err := this.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339Nano)); err != nil {
 			numSuccessiveFailures++
 			if numSuccessiveFailures > this.migrationContext.MaxRetries() {
-				return log.Errore(err)
+				log.Error(err)
+				return err
 			}
 		} else {
 			numSuccessiveFailures = 0
@@ -348,7 +349,8 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 	}
 	var result int64
 	if err := this.db.QueryRow(throttleQuery).Scan(&result); err != nil {
-		return 0, log.Errore(err)
+		log.Error(err)
+		return 0, err
 	}
 	return result, nil
 }
@@ -612,7 +614,9 @@ func (this *Applier) RenameTablesRollback() (renameError error) {
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		renameError = err
 	}
-	return log.Errore(renameError)
+	log.Error(renameError)
+	log.Error(renameError)
+	return (renameError)
 }
 
 // StopSlaveIOThread is applicable with --test-on-replica; it stops the IO thread, duh.
@@ -857,7 +861,8 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		sql.EscapeName(this.migrationContext.GetOldTableName()),
 	)
 	if _, err := tx.Exec(query); err != nil {
-		log.Errore(err)
+		log.Error(err)
+		// (err)
 		// We DO NOT return here because we must `UNLOCK TABLES`!
 	}
 
@@ -871,7 +876,8 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 	query = `unlock tables`
 	if _, err := tx.Exec(query); err != nil {
 		tableUnlocked <- err
-		return log.Errore(err)
+		log.Error(err)
+		return (err)
 	}
 	log.Infof("Tables unlocked")
 	tableUnlocked <- nil
@@ -914,7 +920,8 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 	log.Infof("Issuing and expecting this to block: %s", query)
 	if _, err := tx.Exec(query); err != nil {
 		tablesRenamed <- err
-		return log.Errore(err)
+		log.Error(err)
+		return (err)
 	}
 	tablesRenamed <- nil
 	log.Infof("Tables renamed")
@@ -1027,7 +1034,8 @@ func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
 
 		if err != nil {
 			err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), buildResult.query, buildResult.args)
-			return log.Errore(err)
+			log.Error(err)
+			return (err)
 		}
 		// no error
 		atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
@@ -1086,7 +1094,8 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 	}()
 
 	if err != nil {
-		return log.Errore(err)
+		log.Error(err)
+		return (err)
 	}
 	// no error
 	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, int64(len(dmlEvents)))

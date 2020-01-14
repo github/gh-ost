@@ -15,7 +15,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/hanchuanchuan/gh-ost/go/base"
 	"github.com/hanchuanchuan/gh-ost/go/logic"
-	"github.com/hanchuanchuan/golib/log"
+	log "github.com/sirupsen/logrus"
 
 	"golang.org/x/crypto/ssh/terminal"
 )
@@ -33,7 +33,8 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 			case syscall.SIGHUP:
 				log.Infof("Received SIGHUP. Reloading configuration")
 				if err := migrationContext.ReadConfigFile(); err != nil {
-					log.Errore(err)
+					log.Error(err)
+					// log.Errore(err)
 				} else {
 					migrationContext.MarkPointOfInterest()
 				}
@@ -152,19 +153,19 @@ func main() {
 		return
 	}
 
-	log.SetLevel(log.ERROR)
+	log.SetLevel(log.ErrorLevel)
 	if *verbose {
-		log.SetLevel(log.INFO)
+		log.SetLevel(log.InfoLevel)
 	}
 	if *debug {
-		log.SetLevel(log.DEBUG)
+		log.SetLevel(log.DebugLevel)
 	}
 	if *stack {
-		log.SetPrintStackTrace(*stack)
+		// log.SetPrintStackTrace(*stack)
 	}
 	if *quiet {
 		// Override!!
-		log.SetLevel(log.ERROR)
+		log.SetLevel(log.ErrorLevel)
 	}
 
 	if migrationContext.DatabaseName == "" {
@@ -220,16 +221,16 @@ func main() {
 		log.Fatalf("Unknown cut-over: %s", *cutOver)
 	}
 	if err := migrationContext.ReadConfigFile(); err != nil {
-		log.Fatale(err)
+		log.Fatal(err)
 	}
 	if err := migrationContext.ReadThrottleControlReplicaKeys(*throttleControlReplicas); err != nil {
-		log.Fatale(err)
+		log.Fatal(err)
 	}
 	if err := migrationContext.ReadMaxLoad(*maxLoad); err != nil {
-		log.Fatale(err)
+		log.Fatal(err)
 	}
 	if err := migrationContext.ReadCriticalLoad(*criticalLoad); err != nil {
-		log.Fatale(err)
+		log.Fatal(err)
 	}
 	if migrationContext.ServeSocketFile == "" {
 		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
@@ -238,7 +239,7 @@ func main() {
 		fmt.Println("Password:")
 		bytePassword, err := terminal.ReadPassword(int(syscall.Stdin))
 		if err != nil {
-			log.Fatale(err)
+			log.Fatal(err)
 		}
 		migrationContext.CliPassword = string(bytePassword)
 	}
@@ -252,13 +253,15 @@ func main() {
 	migrationContext.SetDefaultNumRetries(*defaultRetries)
 	migrationContext.ApplyCredentials()
 	if err := migrationContext.SetupTLS(); err != nil {
-		log.Fatale(err)
+		log.Fatal(err)
 	}
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {
-		log.Errore(err)
+		log.Error(err)
+		// log.Errore(err)
 	}
 	if err := migrationContext.SetExponentialBackoffMaxInterval(*exponentialBackoffMaxInterval); err != nil {
-		log.Errore(err)
+		log.Error(err)
+		// log.Errore(err)
 	}
 
 	log.Infof("starting gh-ost %+v", AppVersion)
@@ -268,7 +271,7 @@ func main() {
 	err := migrator.Migrate()
 	if err != nil {
 		migrator.ExecOnFailureHook()
-		log.Fatale(err)
+		log.Fatal(err)
 	}
 	fmt.Fprintf(os.Stdout, "# Done\n")
 }

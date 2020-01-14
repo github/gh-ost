@@ -14,7 +14,7 @@ import (
 
 	gosql "database/sql"
 	"github.com/hanchuanchuan/gh-ost/go/mysql"
-	"github.com/hanchuanchuan/golib/log"
+	log "github.com/sirupsen/logrus"
 )
 
 var (

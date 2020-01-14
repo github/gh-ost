@@ -16,8 +16,8 @@ import (
 	"github.com/hanchuanchuan/gh-ost/go/binlog"
 	"github.com/hanchuanchuan/gh-ost/go/mysql"
 
-	"github.com/hanchuanchuan/golib/log"
 	"github.com/hanchuanchuan/golib/sqlutils"
+	log "github.com/sirupsen/logrus"
 )
 
 type BinlogEventListener struct {
