@@ -2,15 +2,16 @@
 language: go
 
 go:
-  - "1.9"
-  - "1.10"
+  - "1.12"
 
 os:
   - linux
 
+services:
+  - mysql
+
 env:
-- MYSQL_USER=root
-- CURRENT_CI_ENV=travis
+- MYSQL_USER=root CURRENT_CI_ENV=travis GO111MODULE=on
 
 addons:
   apt:
