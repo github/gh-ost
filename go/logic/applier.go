@@ -753,8 +753,9 @@ func (this *Applier) SanitizeRowsDuringCutOver() error {
 			return insertSelectErr
 		}
 
-		log.Infof("Sanitizing chunk of %d created rows during trigger creation",
-			len(chunkValues))
+		log.Infof("Sanitizing chunk of created rows during trigger creation (%d/%d)",
+			int64(len(this.migrationContext.TriggerCutoverUniqueKeys))-cutIndex,
+			len(this.migrationContext.TriggerCutoverUniqueKeys))
 
 		err := func() error {
 			tx, err := this.db.Begin()
