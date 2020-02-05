@@ -16,6 +16,7 @@ echo "local commit is:  $local_commit"
 if [ "$remote_commit" != "$local_commit" ] ; then
   rm -rf ./gh-ost-ci-env
   git clone https://github.com/github/gh-ost-ci-env.git
+  git checkout real-tar-gz
 fi
 
 test_mysql_version() {
