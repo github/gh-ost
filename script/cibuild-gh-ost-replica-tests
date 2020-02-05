@@ -41,7 +41,7 @@ test_mysql_version() {
 
   mkdir -p sandbox/binary
   rm -rf sandbox/binary/*
-  gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/"$mysql_version".tar.xz --unpack-version="$mysql_version" --sandbox-binary ${PWD}/sandbox/binary
+  gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/"$mysql_version".tar.xz --sandbox-binary ${PWD}/sandbox/binary
 
   mkdir -p sandboxes
   rm -rf sandboxes/*
