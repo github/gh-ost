@@ -55,7 +55,8 @@ test_mysql_version() {
 
   export PATH="${PWD}/gh-ost-ci-env/bin/:${PATH}"
 
-  gh-ost-test-mysql-master -uroot -e "grant all on *.* to 'gh-ost'@'%' identified by 'gh-ost'"
+  gh-ost-test-mysql-master -uroot -e "create user 'gh-ost'@'%' identified by 'gh-ost'"
+  gh-ost-test-mysql-master -uroot -e "grant all on *.* to 'gh-ost'@'%'"
 
   echo "### Running gh-ost tests for $mysql_version"
   ./localtests/test.sh -b bin/gh-ost
