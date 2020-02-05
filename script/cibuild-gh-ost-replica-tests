@@ -6,7 +6,7 @@ whoami
 
 # Clone gh-ost-ci-env
 # Only clone if not already running locally at latest commit
-remote_commit=$(git ls-remote https://github.com/github/gh-ost-ci-env.git | cut -f1)
+remote_commit=$(git ls-remote https://github.com/github/gh-ost-ci-env.git HEAD | cut -f1)
 local_commit="unknown"
 [ -d "gh-ost-ci-env" ] && local_commit=$(cd gh-ost-ci-env && git log --format="%H" -n 1)
 
