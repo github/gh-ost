@@ -1,0 +1,36 @@
+# Requires Docker 17.09 or later (multi stage builds)
+#
+# Orchestrator will look for a configuration file at /etc/orchestrator.conf.json.
+# It will listen on port 3000.
+# If not present a minimal configuration will be generated using the following environment variables:
+#
+# Default variables which can be used are:
+#
+# ORC_TOPOLOGY_USER (default: orchestrator): username used by orchestrator to login to MySQL when polling/discovering
+# ORC_TOPOLOGY_PASSWORD (default: orchestrator):  password needed to login to MySQL when polling/discovering
+# ORC_DB_HOST (default: orchestrator):  orchestrator backend MySQL host
+# ORC_DB_PORT (default: 3306):  port used by orchestrator backend MySQL server
+# ORC_DB_NAME (default: orchestrator): database named used by orchestrator backend MySQL server
+# ORC_USER (default: orc_server_user): username used to login to orchestrator backend MySQL server
+# ORC_PASSWORD (default: orc_server_password): password used to login to orchestrator backend MySQL server
+
+FROM golang:1.12.6
+
+RUN apt-get update
+RUN apt-get install -y ruby ruby-dev rubygems build-essential
+RUN gem install --no-ri --no-rdoc fpm
+ENV GOPATH=/tmp/go
+
+RUN apt-get install -y curl
+RUN apt-get install -y rsync
+RUN apt-get install -y gcc
+RUN apt-get install -y g++
+RUN apt-get install -y bash
+RUN apt-get install -y git
+RUN apt-get install -y tar
+RUN apt-get install -y rpm
+
+RUN mkdir -p $GOPATH/src/github.com/github/gh-ost
+WORKDIR $GOPATH/src/github.com/github/gh-ost
+COPY . .
+RUN bash build.sh
