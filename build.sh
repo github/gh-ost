@@ -61,11 +61,11 @@ main() {
 
   mkdir -p ${buildpath}
   rm -rf ${buildpath:?}/*
-  build macOS osx darwin amd64
   build GNU/Linux linux linux amd64
+  # build macOS osx darwin amd64
 
   echo "Binaries found in:"
-  ls -1 $buildpath/gh-ost-binary*${timestamp}.tar.gz
+  find $buildpath/gh-ost* -type f -maxdepth 1
 }
 
 main "$@"
