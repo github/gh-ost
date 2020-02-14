@@ -11,6 +11,8 @@ import (
 
 	"github.com/juju/errors"
 	"github.com/siddontang/go/hack"
+	"crypto/sha256"
+	"crypto/rsa"
 )
 
 func Pstack() string {
@@ -46,6 +48,62 @@ func CalcPassword(scramble, password []byte) []byte {
 		scramble[i] ^= stage1[i]
 	}
 	return scramble
+}
+
+// Hash password using MySQL 8+ method (SHA256)
+func CalcCachingSha2Password(scramble []byte, password string) []byte {
+	if len(password) == 0 {
+		return nil
+	}
+
+	// XOR(SHA256(password), SHA256(SHA256(SHA256(password)), scramble))
+
+	crypt := sha256.New()
+	crypt.Write([]byte(password))
+	message1 := crypt.Sum(nil)
+
+	crypt.Reset()
+	crypt.Write(message1)
+	message1Hash := crypt.Sum(nil)
+
+	crypt.Reset()
+	crypt.Write(message1Hash)
+	crypt.Write(scramble)
+	message2 := crypt.Sum(nil)
+
+	for i := range message1 {
+		message1[i] ^= message2[i]
+	}
+
+	return message1
+}
+
+
+func EncryptPassword(password string, seed []byte, pub *rsa.PublicKey) ([]byte, error) {
+	plain := make([]byte, len(password)+1)
+	copy(plain, password)
+	for i := range plain {
+		j := i % len(seed)
+		plain[i] ^= seed[j]
+	}
+	sha1v := sha1.New()
+	return rsa.EncryptOAEP(sha1v, rand.Reader, pub, plain, nil)
+}
+
+// encodes a uint64 value and appends it to the given bytes slice
+func AppendLengthEncodedInteger(b []byte, n uint64) []byte {
+	switch {
+	case n <= 250:
+		return append(b, byte(n))
+
+	case n <= 0xffff:
+		return append(b, 0xfc, byte(n), byte(n>>8))
+
+	case n <= 0xffffff:
+		return append(b, 0xfd, byte(n), byte(n>>8), byte(n>>16))
+	}
+	return append(b, 0xfe, byte(n), byte(n>>8), byte(n>>16), byte(n>>24),
+		byte(n>>32), byte(n>>40), byte(n>>48), byte(n>>56))
 }
 
 func RandomBuf(size int) ([]byte, error) {
@@ -84,39 +142,33 @@ func BFixedLengthInt(buf []byte) uint64 {
 }
 
 func LengthEncodedInt(b []byte) (num uint64, isNull bool, n int) {
-	switch b[0] {
+	if len(b) == 0 {
+		return 0, true, 1
+	}
 
+	switch b[0] {
 	// 251: NULL
 	case 0xfb:
-		n = 1
-		isNull = true
-		return
+		return 0, true, 1
 
-	// 252: value of following 2
+		// 252: value of following 2
 	case 0xfc:
-		num = uint64(b[1]) | uint64(b[2])<<8
-		n = 3
-		return
+		return uint64(b[1]) | uint64(b[2])<<8, false, 3
 
-	// 253: value of following 3
+		// 253: value of following 3
 	case 0xfd:
-		num = uint64(b[1]) | uint64(b[2])<<8 | uint64(b[3])<<16
-		n = 4
-		return
+		return uint64(b[1]) | uint64(b[2])<<8 | uint64(b[3])<<16, false, 4
 
-	// 254: value of following 8
+		// 254: value of following 8
 	case 0xfe:
-		num = uint64(b[1]) | uint64(b[2])<<8 | uint64(b[3])<<16 |
+		return uint64(b[1]) | uint64(b[2])<<8 | uint64(b[3])<<16 |
 			uint64(b[4])<<24 | uint64(b[5])<<32 | uint64(b[6])<<40 |
-			uint64(b[7])<<48 | uint64(b[8])<<56
-		n = 9
-		return
+			uint64(b[7])<<48 | uint64(b[8])<<56,
+			false, 9
 	}
 
 	// 0-250: value of first byte
-	num = uint64(b[0])
-	n = 1
-	return
+	return uint64(b[0]), false, 1
 }
 
 func PutLengthEncodedInt(n uint64) []byte {
@@ -137,23 +189,26 @@ func PutLengthEncodedInt(n uint64) []byte {
 	return nil
 }
 
-func LengthEnodedString(b []byte) ([]byte, bool, int, error) {
+// returns the string read as a bytes slice, whether the value is NULL,
+// the number of bytes read and an error, in case the string is longer than
+// the input slice
+func LengthEncodedString(b []byte) ([]byte, bool, int, error) {
 	// Get length
 	num, isNull, n := LengthEncodedInt(b)
 	if num < 1 {
-		return nil, isNull, n, nil
+		return b[n:n], isNull, n, nil
 	}
 
 	n += int(num)
 
 	// Check data length
 	if len(b) >= n {
-		return b[n-int(num) : n], false, n, nil
+		return b[n-int(num) : n : n], false, n, nil
 	}
 	return nil, false, n, io.EOF
 }
 
-func SkipLengthEnodedString(b []byte) (int, error) {
+func SkipLengthEncodedString(b []byte) (int, error) {
 	// Get length
 	num, _, n := LengthEncodedInt(b)
 	if num < 1 {

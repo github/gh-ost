@@ -6,16 +6,22 @@ const (
 	TimeFormat         string = "2006-01-02 15:04:05"
 )
 
-var (
-	// maybe you can change for your specified name
-	ServerVersion string = "go-mysql-0.1"
-)
-
 const (
 	OK_HEADER          byte = 0x00
+	MORE_DATE_HEADER   byte = 0x01
 	ERR_HEADER         byte = 0xff
 	EOF_HEADER         byte = 0xfe
 	LocalInFile_HEADER byte = 0xfb
+
+	CACHE_SHA2_FAST_AUTH byte = 0x03
+	CACHE_SHA2_FULL_AUTH byte = 0x04
+)
+
+const (
+	AUTH_MYSQL_OLD_PASSWORD = "mysql_old_password"
+	AUTH_NATIVE_PASSWORD = "mysql_native_password"
+	AUTH_CACHING_SHA2_PASSWORD = "caching_sha2_password"
+	AUTH_SHA256_PASSWORD = "sha256_password"
 )
 
 const (
@@ -151,7 +157,6 @@ const (
 )
 
 const (
-	AUTH_NAME                     = "mysql_native_password"
 	DEFAULT_CHARSET               = "utf8"
 	DEFAULT_COLLATION_ID   uint8  = 33
 	DEFAULT_COLLATION_NAME string = "utf8_general_ci"

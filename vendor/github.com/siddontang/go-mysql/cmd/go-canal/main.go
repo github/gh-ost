@@ -7,8 +7,10 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/siddontang/go-mysql/canal"
+	"github.com/siddontang/go-mysql/mysql"
 )
 
 var host = flag.String("host", "127.0.0.1", "MySQL host")
@@ -18,8 +20,6 @@ var password = flag.String("password", "", "MySQL password")
 
 var flavor = flag.String("flavor", "mysql", "Flavor: mysql or mariadb")
 
-var dataDir = flag.String("data-dir", "./var", "Path to store data, like master.info")
-
 var serverID = flag.Int("server-id", 101, "Unique Server ID")
 var mysqldump = flag.String("mysqldump", "mysqldump", "mysqldump execution path")
 
@@ -27,6 +27,12 @@ var dbs = flag.String("dbs", "test", "dump databases, seperated by comma")
 var tables = flag.String("tables", "", "dump tables, seperated by comma, will overwrite dbs")
 var tableDB = flag.String("table_db", "test", "database for dump tables")
 var ignoreTables = flag.String("ignore_tables", "", "ignore tables, must be database.table format, separated by comma")
+
+var startName = flag.String("bin_name", "", "start sync from binlog name")
+var startPos = flag.Uint("bin_pos", 0, "start sync from binlog position of")
+
+var heartbeatPeriod = flag.Duration("heartbeat", 60*time.Second, "master heartbeat period")
+var readTimeout = flag.Duration("read_timeout", 90*time.Second, "connection read timeout")
 
 func main() {
 	flag.Parse()
@@ -36,8 +42,10 @@ func main() {
 	cfg.User = *user
 	cfg.Password = *password
 	cfg.Flavor = *flavor
-	cfg.DataDir = *dataDir
+	cfg.UseDecimal = true
 
+	cfg.ReadTimeout = *readTimeout
+	cfg.HeartbeatPeriod = *heartbeatPeriod
 	cfg.ServerID = uint32(*serverID)
 	cfg.Dump.ExecutionPath = *mysqldump
 	cfg.Dump.DiscardErr = false
@@ -65,13 +73,19 @@ func main() {
 		c.AddDumpDatabases(subs...)
 	}
 
-	c.RegRowsEventHandler(&handler{})
+	c.SetEventHandler(&handler{})
 
-	err = c.Start()
-	if err != nil {
-		fmt.Printf("start canal err %V", err)
-		os.Exit(1)
+	startPos := mysql.Position{
+		Name: *startName,
+		Pos:  uint32(*startPos),
 	}
+
+	go func() {
+		err = c.RunFrom(startPos)
+		if err != nil {
+			fmt.Printf("start canal err %v", err)
+		}
+	}()
 
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc,
@@ -88,9 +102,10 @@ func main() {
 }
 
 type handler struct {
+	canal.DummyEventHandler
 }
 
-func (h *handler) Do(e *canal.RowsEvent) error {
+func (h *handler) OnRow(e *canal.RowsEvent) error {
 	fmt.Printf("%v\n", e)
 
 	return nil

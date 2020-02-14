@@ -18,7 +18,7 @@ If, for some reason, you do not wish `gh-ost` to connect to a replica, you may c
 
 ### approve-renamed-columns
 
-When your migration issues a column rename (`change column old_name new_name ...`) `gh-ost` analyzes the statement to try an associate the old column name with new column name. Otherwise the new structure may also look like some column was dropped and another was added.
+When your migration issues a column rename (`change column old_name new_name ...`) `gh-ost` analyzes the statement to try and associate the old column name with new column name. Otherwise the new structure may also look like some column was dropped and another was added.
 
 `gh-ost` will print out what it thinks the _rename_ implied, but will not issue the migration unless you provide with `--approve-renamed-columns`.
 
@@ -69,6 +69,10 @@ This is somewhat similar to a Nagios `n`-times test, where `n` in our case is al
 
 Optional. Default is `safe`. See more discussion in [`cut-over`](cut-over.md)
 
+### cut-over-lock-timeout-seconds
+
+Default `3`.  Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout).
+
 ### discard-foreign-keys
 
 **Danger**: this flag will _silently_ discard any foreign keys existing on your table.
@@ -107,6 +111,18 @@ While the ongoing estimated number of rows is still heuristic, it's almost exact
 
 Without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
 
+### force-named-cut-over
+
+If given, a `cut-over` command must name the migrated table, or else ignored.
+
+### force-named-panic
+
+If given, a `panic` command must name the migrated table, or else ignored.
+
+### force-table-names
+
+Table name prefix to be used on the temporary tables.
+
 ### gcp
 
 Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
@@ -125,6 +141,10 @@ We think `gh-ost` should not take chances or make assumptions about the user's t
 
 See [`initially-drop-ghost-table`](#initially-drop-ghost-table)
 
+### initially-drop-socket-file
+
+Default False. Should `gh-ost` forcibly delete an existing socket file. Be careful: this might drop the socket file of a running migration!
+
 ### max-lag-millis
 
 On a replication topology, this is perhaps the most important migration throttling factor: the maximum lag allowed for migration to work. If lag exceeds this value, migration throttles.
@@ -141,7 +161,7 @@ List of metrics and threshold values; topping the threshold of any will cause th
 
 ### migrate-on-replica
 
-Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but other issue no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
+Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but otherwise will make no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
 
 ### postpone-cut-over-flag-file
 
@@ -161,13 +181,41 @@ See also: [`concurrent-migrations`](cheatsheet.md#concurrent-migrations) on the 
 
 By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not reference other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
 
+### skip-strict-mode
+
+By default `gh-ost` enforces STRICT_ALL_TABLES sql_mode as a safety measure. In some cases this changes the behaviour of other modes (namely ERROR_FOR_DIVISION_BY_ZERO, NO_ZERO_DATE, and NO_ZERO_IN_DATE) which may lead to errors during migration. Use `--skip-strict-mode` to explicitly tell `gh-ost` not to enforce this. **Danger** This may have some unexpected disastrous side effects.
+
 ### skip-renamed-columns
 
 See [`approve-renamed-columns`](#approve-renamed-columns)
 
+### ssl
+
+By default `gh-ost` does not use ssl/tls connections to the database servers when performing migrations. This flag instructs `gh-ost` to use encrypted connections. If enabled, `gh-ost` will use the system's ca certificate pool for server certificate verification. If a different certificate is needed for server verification, see `--ssl-ca`. If you wish to skip server verification, but still use encrypted connections, use with `--ssl-allow-insecure`.
+
+### ssl-allow-insecure
+
+Allows `gh-ost` to connect to the MySQL servers using encrypted connections, but without verifying the validity of the certificate provided by the server during the connection. Requires `--ssl`.
+
+### ssl-ca
+
+`--ssl-ca=/path/to/ca-cert.pem`: ca certificate file (in PEM format) to use for server certificate verification. If specified, the default system ca cert pool will not be used for verification, only the ca cert provided here. Requires `--ssl`.
+
+### ssl-cert
+
+`--ssl-cert=/path/to/ssl-cert.crt`: SSL public key certificate file (in PEM format).
+
+### ssl-key
+
+`--ssl-key=/path/to/ssl-key.key`: SSL private key file (in PEM format).
+
 ### test-on-replica
 
 Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [`testing-on-replica`](testing-on-replica.md)
+
+### test-on-replica-skip-replica-stop
+
+Default `False`. When `--test-on-replica` is enabled, do not issue commands stop replication (requires `--test-on-replica`).
 
 ### throttle-control-replicas
 

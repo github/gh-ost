@@ -144,7 +144,7 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 	switch command {
 	case "help":
 		{
-			fmt.Fprintln(writer, `available commands:
+			fmt.Fprint(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
 coordinates													 # Print the currently inspected coordinates
@@ -292,12 +292,22 @@ help                                 # This message
 		}
 	case "throttle", "pause", "suspend":
 		{
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'throttle' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
 			fmt.Fprintf(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "no-throttle", "unthrottle", "resume", "continue":
 		{
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'no-throttle' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 0)
 			return ForcePrintStatusAndHintRule, nil
 		}
@@ -322,7 +332,16 @@ help                                 # This message
 		}
 	case "panic":
 		{
-			err := fmt.Errorf("User commanded 'panic'. I will now panic, without cleanup. PANIC!")
+			if arg == "" && this.migrationContext.ForceNamedPanicCommand {
+				err := fmt.Errorf("User commanded 'panic' without specifying table name, but --force-named-panic is set")
+				return NoPrintStatusRule, err
+			}
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'panic' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
+			err := fmt.Errorf("User commanded 'panic'. The migration will be aborted without cleanup. Please drop the gh-ost tables before trying again.")
 			this.migrationContext.PanicAbort <- err
 			return NoPrintStatusRule, err
 		}
