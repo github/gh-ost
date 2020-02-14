@@ -1,8 +1,8 @@
 drop table if exists gh_ost_test;
 create table gh_ost_test (
-  id bigint,
+  id bigint not null,
   i int not null,
-  ts timestamp(6),
+  ts timestamp(6) not null,
   unique key id_uidx(id),
   unique key its_uidx(i, ts)
 ) ;

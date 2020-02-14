@@ -62,6 +62,59 @@ func (c *Conn) writeEOF() error {
 	return c.WritePacket(data)
 }
 
+// see: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_auth_switch_request.html
+func (c *Conn) writeAuthSwitchRequest(newAuthPluginName string) error {
+	data := make([]byte, 4)
+	data = append(data, EOF_HEADER)
+	data = append(data, []byte(newAuthPluginName)...)
+	data = append(data, 0x00)
+	rnd, err := RandomBuf(20)
+	if err != nil {
+		return err
+	}
+	// new auth data
+	c.salt = rnd
+	data = append(data, c.salt...)
+	// the online doc states it's a string.EOF, however, the actual MySQL server add a \NUL to the end, without it, the
+	// official MySQL client will fail.
+	data = append(data, 0x00)
+	return c.WritePacket(data)
+}
+
+// see: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_auth_switch_response.html
+func (c *Conn) readAuthSwitchRequestResponse() ([]byte, error) {
+	data, err := c.ReadPacket()
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 1 && data[0] == 0x00 {
+		// \NUL
+		return make([]byte, 0), nil
+	}
+	return data, nil
+}
+
+func (c *Conn) writeAuthMoreDataPubkey() error {
+	data := make([]byte, 4)
+	data = append(data, MORE_DATE_HEADER)
+	data = append(data, c.serverConf.pubKey...)
+	return c.WritePacket(data)
+}
+
+func (c *Conn) writeAuthMoreDataFullAuth() error {
+	data := make([]byte, 4)
+	data = append(data, MORE_DATE_HEADER)
+	data = append(data, CACHE_SHA2_FULL_AUTH)
+	return c.WritePacket(data)
+}
+
+func (c *Conn) writeAuthMoreDataFastAuth() error {
+	data := make([]byte, 4)
+	data = append(data, MORE_DATE_HEADER)
+	data = append(data, CACHE_SHA2_FAST_AUTH)
+	return c.WritePacket(data)
+}
+
 func (c *Conn) writeResultset(r *Resultset) error {
 	columnLen := PutLengthEncodedInt(uint64(len(r.Fields)))
 

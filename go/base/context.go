@@ -7,6 +7,7 @@ package base
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -86,6 +87,7 @@ type MigrationContext struct {
 	SwitchToRowBinlogFormat  bool
 	AssumeRBR                bool
 	SkipForeignKeyChecks     bool
+	SkipStrictMode           bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
@@ -99,6 +101,11 @@ type MigrationContext struct {
 	ConfigFile        string
 	CliUser           string
 	CliPassword       string
+	UseTLS            bool
+	TLSAllowInsecure  bool
+	TLSCACertificate  string
+	TLSCertificate    string
+	TLSKey            string
 	CliMasterUser     string
 	CliMasterPassword string
 
@@ -123,9 +130,12 @@ type MigrationContext struct {
 	CutOverExponentialBackoff           bool
 	ExponentialBackoffMaxInterval       int64
 	ForceNamedCutOverCommand            bool
+	ForceNamedPanicCommand              bool
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string
+	HooksHintOwner                      string
+	HooksHintToken                      string
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -165,6 +175,7 @@ type MigrationContext struct {
 	pointOfInterestTime                    time.Time
 	pointOfInterestTimeMutex               *sync.Mutex
 	CurrentLag                             int64
+	currentProgress                        uint64
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
@@ -418,6 +429,20 @@ func (this *MigrationContext) MarkRowCopyEndTime() {
 	defer this.throttleMutex.Unlock()
 	this.RowCopyEndTime = time.Now()
 }
+
+func (this *MigrationContext) GetCurrentLagDuration() time.Duration {
+	return time.Duration(atomic.LoadInt64(&this.CurrentLag))
+}
+
+func (this *MigrationContext) GetProgressPct() float64 {
+	return math.Float64frombits(atomic.LoadUint64(&this.currentProgress))
+}
+
+func (this *MigrationContext) SetProgressPct(progressPct float64) {
+	atomic.StoreUint64(&this.currentProgress, math.Float64bits(progressPct))
+}
+
+// math.Float64bits([f=0..100])
 
 // GetTotalRowsCopied returns the accurate number of rows being copied (affected)
 // This is not exactly the same as the rows being iterated via chunks, but potentially close enough
@@ -693,6 +718,13 @@ func (this *MigrationContext) ApplyCredentials() {
 		// Override
 		this.InspectorConnectionConfig.Password = this.CliPassword
 	}
+}
+
+func (this *MigrationContext) SetupTLS() error {
+	if this.UseTLS {
+		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate, this.TLSCertificate, this.TLSKey, this.TLSAllowInsecure)
+	}
+	return nil
 }
 
 // ReadConfigFile attempts to read the config file, if it exists

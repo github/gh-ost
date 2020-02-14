@@ -26,7 +26,7 @@ func NewBinlogEntry(logFile string, logPos uint64) *BinlogEntry {
 	return binlogEntry
 }
 
-// NewBinlogEntry creates an empty, ready to go BinlogEntry object
+// NewBinlogEntryAt creates an empty, ready to go BinlogEntry object
 func NewBinlogEntryAt(coordinates mysql.BinlogCoordinates) *BinlogEntry {
 	binlogEntry := &BinlogEntry{
 		Coordinates: coordinates,
@@ -41,7 +41,7 @@ func (this *BinlogEntry) Duplicate() *BinlogEntry {
 	return binlogEntry
 }
 
-// Duplicate creates and returns a new binlog entry, with some of the attributes pre-assigned
+// String() returns a string representation of this binlog entry
 func (this *BinlogEntry) String() string {
 	return fmt.Sprintf("[BinlogEntry at %+v; dml:%+v]", this.Coordinates, this.DmlEvent)
 }

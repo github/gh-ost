@@ -50,6 +50,9 @@ verify_master_and_replica() {
   original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
   echo "sql_mode on master is ${original_sql_mode}"
 
+  echo "Gracefully sleeping for 3 seconds while replica is setting up..."
+  sleep 3
+
   if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
     echo "Cannot verify gh-ost-test-mysql-replica"
     exit 1
@@ -152,7 +155,7 @@ test_single() {
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
     --test-on-replica \
-    --default-retries=1 \
+    --default-retries=3 \
     --chunk-size=10 \
     --verbose \
     --debug \
@@ -213,6 +216,7 @@ test_single() {
     diff $orig_content_output_file $ghost_content_output_file
 
     echo "diff $orig_content_output_file $ghost_content_output_file"
+
     return 1
   fi
 }
