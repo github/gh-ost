@@ -15,11 +15,13 @@ var (
 	sanitizeQuotesRegexp = regexp.MustCompile("('[^']*')")
 	renameColumnRegexp   = regexp.MustCompile(`(?i)\bchange\s+(column\s+|)([\S]+)\s+([\S]+)\s+`)
 	dropColumnRegexp     = regexp.MustCompile(`(?i)\bdrop\s+(column\s+|)([\S]+)$`)
+	renameTableRegexp    = regexp.MustCompile(`(?i)\brename\s+(to|as)\s+`)
 )
 
 type Parser struct {
 	columnRenameMap map[string]string
 	droppedColumns  map[string]bool
+	isRenameTable   bool
 }
 
 func NewParser() *Parser {
@@ -86,6 +88,12 @@ func (this *Parser) parseAlterToken(alterToken string) (err error) {
 			this.droppedColumns[submatch[2]] = true
 		}
 	}
+	{
+		// rename table
+		if renameTableRegexp.MatchString(alterToken) {
+			this.isRenameTable = true
+		}
+	}
 	return nil
 }
 
@@ -114,4 +122,8 @@ func (this *Parser) HasNonTrivialRenames() bool {
 
 func (this *Parser) DroppedColumnsMap() map[string]bool {
 	return this.droppedColumns
+}
+
+func (this *Parser) IsRenameTable() bool {
+	return this.isRenameTable
 }

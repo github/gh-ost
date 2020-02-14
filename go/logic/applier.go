@@ -24,50 +24,77 @@ const (
 	atomicCutOverMagicHint = "ghost-cut-over-sentry"
 )
 
+type dmlBuildResult struct {
+	query     string
+	args      []interface{}
+	rowsDelta int64
+	err       error
+}
+
+func newDmlBuildResult(query string, args []interface{}, rowsDelta int64, err error) *dmlBuildResult {
+	return &dmlBuildResult{
+		query:     query,
+		args:      args,
+		rowsDelta: rowsDelta,
+		err:       err,
+	}
+}
+
+func newDmlBuildResultError(err error) *dmlBuildResult {
+	return &dmlBuildResult{
+		err: err,
+	}
+}
+
 // Applier connects and writes the the applier-server, which is the server where migration
 // happens. This is typically the master, but could be a replica when `--test-on-replica` or
 // `--execute-on-replica` are given.
 // Applier is the one to actually write row data and apply binlog events onto the ghost table.
 // It is where the ghost & changelog tables get created. It is where the cut-over phase happens.
 type Applier struct {
-	connectionConfig *mysql.ConnectionConfig
-	db               *gosql.DB
-	singletonDB      *gosql.DB
-	migrationContext *base.MigrationContext
+	connectionConfig  *mysql.ConnectionConfig
+	db                *gosql.DB
+	singletonDB       *gosql.DB
+	migrationContext  *base.MigrationContext
+	finishedMigrating int64
 }
 
-func NewApplier() *Applier {
+func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	return &Applier{
-		connectionConfig: base.GetMigrationContext().ApplierConnectionConfig,
-		migrationContext: base.GetMigrationContext(),
+		connectionConfig:  migrationContext.ApplierConnectionConfig,
+		migrationContext:  migrationContext,
+		finishedMigrating: 0,
 	}
 }
 
 func (this *Applier) InitDBConnections() (err error) {
+
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = sqlutils.GetDB(applierUri); err != nil {
+	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
-	singletonApplierUri := fmt.Sprintf("%s?timeout=0", applierUri)
-	if this.singletonDB, _, err = sqlutils.GetDB(singletonApplierUri); err != nil {
+	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
+	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
 	}
 	this.singletonDB.SetMaxOpenConns(1)
-	version, err := base.ValidateConnection(this.db, this.connectionConfig)
+	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext)
 	if err != nil {
 		return err
 	}
-	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig); err != nil {
+	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig, this.migrationContext); err != nil {
 		return err
 	}
 	this.migrationContext.ApplierMySQLVersion = version
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
 	}
-	if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
-		return err
-	} else {
-		this.connectionConfig.ImpliedKey = impliedKey
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
+		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
+			return err
+		} else {
+			this.connectionConfig.ImpliedKey = impliedKey
+		}
 	}
 	if err := this.readTableColumns(); err != nil {
 		return err
@@ -90,7 +117,7 @@ func (this *Applier) validateAndReadTimeZone() error {
 // readTableColumns reads table columns on applier
 func (this *Applier) readTableColumns() (err error) {
 	log.Infof("Examining table structure on applier")
-	this.migrationContext.OriginalTableColumnsOnApplier, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
+	this.migrationContext.OriginalTableColumnsOnApplier, _, err = mysql.GetTableColumns(this.db, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
 	if err != nil {
 		return err
 	}
@@ -99,7 +126,6 @@ func (this *Applier) readTableColumns() (err error) {
 
 // showTableStatus returns the output of `show table status like '...'` command
 func (this *Applier) showTableStatus(tableName string) (rowMap sqlutils.RowMap) {
-	rowMap = nil
 	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), tableName)
 	sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		rowMap = m
@@ -213,7 +239,7 @@ func (this *Applier) dropTable(tableName string) error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
-	log.Infof("Droppping table %s.%s",
+	log.Infof("Dropping table %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 	)
@@ -263,7 +289,7 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
-	_, err := sqlutils.Exec(this.db, query, explicitId, hint, value)
+	_, err := sqlutils.ExecNoPrepare(this.db, query, explicitId, hint, value)
 	return hint, err
 }
 
@@ -298,6 +324,9 @@ func (this *Applier) InitiateHeartbeat() {
 
 	heartbeatTick := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	for range heartbeatTick {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return
+		}
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
 		// have this block the loop rather than spam the master in the event something
 		// goes wrong
@@ -380,7 +409,7 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // CalculateNextIterationRangeEndValues reads the next-iteration-range-end unique key values,
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
-// itrating the range (and this done with copying row chunks)
+// iterating the range (and this done with copying row chunks)
 func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
@@ -452,10 +481,14 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err != nil {
 			return nil, err
 		}
-		sessionQuery := fmt.Sprintf(`SET
-			SESSION time_zone = '%s',
-			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
-			`, this.migrationContext.ApplierTimeZone)
+		defer tx.Rollback()
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
+		if !this.migrationContext.SkipStrictMode {
+			sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
+		}
+		sessionQuery = fmt.Sprintf("%s, sql_mode = CONCAT(@@session.sql_mode, ',%s')", sessionQuery, sqlModeAddendum)
+
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
 		}
@@ -899,81 +932,52 @@ func (this *Applier) ShowStatusVariable(variableName string) (result int64, err 
 	return result, nil
 }
 
+// updateModifiesUniqueKeyColumns checks whether a UPDATE DML event actually
+// modifies values of the migration's unique key (the iterated key). This will call
+// for special handling.
+func (this *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEvent) (modifiedColumn string, isModified bool) {
+	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
+		tableOrdinal := this.migrationContext.OriginalTableColumns.Ordinals[column.Name]
+		whereColumnValue := dmlEvent.WhereColumnValues.AbstractValues()[tableOrdinal]
+		newColumnValue := dmlEvent.NewColumnValues.AbstractValues()[tableOrdinal]
+		if newColumnValue != whereColumnValue {
+			return column.Name, true
+		}
+	}
+	return "", false
+}
+
 // buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
 // event entry on the original table.
-func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (query string, args []interface{}, rowsDelta int64, err error) {
+func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (results [](*dmlBuildResult)) {
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
 		{
 			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
-			return query, uniqueKeyArgs, -1, err
+			return append(results, newDmlBuildResult(query, uniqueKeyArgs, -1, err))
 		}
 	case binlog.InsertDML:
 		{
 			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
-			return query, sharedArgs, 1, err
+			return append(results, newDmlBuildResult(query, sharedArgs, 1, err))
 		}
 	case binlog.UpdateDML:
 		{
+			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
+				dmlEvent.DML = binlog.DeleteDML
+				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
+				dmlEvent.DML = binlog.InsertDML
+				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
+				return results
+			}
 			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			args := sqlutils.Args()
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
-			return query, args, 0, err
+			return append(results, newDmlBuildResult(query, args, 0, err))
 		}
 	}
-	return "", args, 0, fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)
-}
-
-// ApplyDMLEventQuery writes an entry to the ghost table, in response to an intercepted
-// original-table binlog event
-func (this *Applier) ApplyDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) error {
-	query, args, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
-	if err != nil {
-		return err
-	}
-	// TODO The below is in preparation for transactional writes on the ghost tables.
-	// Such writes would be, for example:
-	// - prepended with sql_mode setup
-	// - prepended with time zone setup
-	// - prepended with SET SQL_LOG_BIN=0
-	// - prepended with SET FK_CHECKS=0
-	// etc.
-	//
-	// a known problem: https://github.com/golang/go/issues/9373 -- bitint unsigned values, not supported in database/sql
-	// is solved by silently converting unsigned bigints to string values.
-	//
-
-	err = func() error {
-		tx, err := this.db.Begin()
-		if err != nil {
-			return err
-		}
-		sessionQuery := `SET
-			SESSION time_zone = '+00:00',
-			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
-			`
-		if _, err := tx.Exec(sessionQuery); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(query, args...); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-		return nil
-	}()
-
-	if err != nil {
-		err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), query, args)
-		return log.Errore(err)
-	}
-	// no error
-	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, 1)
-	if this.migrationContext.CountTableRows {
-		atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, rowDelta)
-	}
-	return nil
+	return append(results, newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)))
 }
 
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
@@ -992,23 +996,28 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 			return err
 		}
 
-		sessionQuery := `SET
-			SESSION time_zone = '+00:00',
-			sql_mode = CONCAT(@@session.sql_mode, ',STRICT_ALL_TABLES')
-			`
+		sessionQuery := "SET SESSION time_zone = '+00:00'"
+
+		sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
+		if !this.migrationContext.SkipStrictMode {
+			sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
+		}
+		sessionQuery = fmt.Sprintf("%s, sql_mode = CONCAT(@@session.sql_mode, ',%s')", sessionQuery, sqlModeAddendum)
+
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return rollback(err)
 		}
 		for _, dmlEvent := range dmlEvents {
-			query, args, rowDelta, err := this.buildDMLEventQuery(dmlEvent)
-			if err != nil {
-				return rollback(err)
+			for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
+				if buildResult.err != nil {
+					return rollback(buildResult.err)
+				}
+				if _, err := tx.Exec(buildResult.query, buildResult.args...); err != nil {
+					err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), buildResult.query, buildResult.args)
+					return rollback(err)
+				}
+				totalDelta += buildResult.rowsDelta
 			}
-			if _, err := tx.Exec(query, args...); err != nil {
-				err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), query, args)
-				return rollback(err)
-			}
-			totalDelta += rowDelta
 		}
 		if err := tx.Commit(); err != nil {
 			return err
@@ -1026,4 +1035,11 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 	}
 	log.Debugf("ApplyDMLEventQueries() applied %d events in one transaction", len(dmlEvents))
 	return nil
+}
+
+func (this *Applier) Teardown() {
+	log.Debugf("Tearing down...")
+	this.db.Close()
+	this.singletonDB.Close()
+	atomic.StoreInt64(&this.finishedMigrating, 1)
 }

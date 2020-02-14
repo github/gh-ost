@@ -78,16 +78,18 @@ type Migrator struct {
 
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
-	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
+	//  excessive work happens at the end of the iteration as new copy-jobs arrive before realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
 	applyEventsQueue chan *applyEventStruct
 
 	handledChangelogStates map[string]bool
+
+	finishedMigrating int64
 }
 
-func NewMigrator() *Migrator {
+func NewMigrator(context *base.MigrationContext) *Migrator {
 	migrator := &Migrator{
-		migrationContext:           base.GetMigrationContext(),
+		migrationContext:           context,
 		parser:                     sql.NewParser(),
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
@@ -97,13 +99,14 @@ func NewMigrator() *Migrator {
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
 		handledChangelogStates: make(map[string]bool),
+		finishedMigrating:      0,
 	}
 	return migrator
 }
 
 // initiateHooksExecutor
 func (this *Migrator) initiateHooksExecutor() (err error) {
-	this.hooksExecutor = NewHooksExecutor()
+	this.hooksExecutor = NewHooksExecutor(this.migrationContext)
 	if err := this.hooksExecutor.initHooks(); err != nil {
 		return err
 	}
@@ -146,6 +149,34 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	return err
 }
 
+// `retryOperationWithExponentialBackoff` attempts running given function, waiting 2^(n-1)
+// seconds between each attempt, where `n` is the running number of attempts. Exits
+// as soon as the function returns with non-error, or as soon as `MaxRetries`
+// attempts are reached. Wait intervals between attempts obey a maximum of
+// `ExponentialBackoffMaxInterval`.
+func (this *Migrator) retryOperationWithExponentialBackoff(operation func() error, notFatalHint ...bool) (err error) {
+	var interval int64
+	maxRetries := int(this.migrationContext.MaxRetries())
+	maxInterval := this.migrationContext.ExponentialBackoffMaxInterval
+	for i := 0; i < maxRetries; i++ {
+		newInterval := int64(math.Exp2(float64(i - 1)))
+		if newInterval <= maxInterval {
+			interval = newInterval
+		}
+		if i != 0 {
+			time.Sleep(time.Duration(interval) * time.Second)
+		}
+		err = operation()
+		if err == nil {
+			return nil
+		}
+	}
+	if len(notFatalHint) == 0 {
+		this.migrationContext.PanicAbort <- err
+	}
+	return err
+}
+
 // executeAndThrottleOnError executes a given function. If it errors, it
 // throttles.
 func (this *Migrator) executeAndThrottleOnError(operation func() error) (err error) {
@@ -179,7 +210,7 @@ func (this *Migrator) canStopStreaming() bool {
 
 // onChangelogStateEvent is called when a binlog event operation on the changelog table is intercepted.
 func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
-	// Hey, I created the changlog table, I know the type of columns it has!
+	// Hey, I created the changelog table, I know the type of columns it has!
 	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
 		return nil
 	}
@@ -224,7 +255,11 @@ func (this *Migrator) listenOnPanicAbort() {
 // validateStatement validates the `alter` statement meets criteria.
 // At this time this means:
 // - column renames are approved
+// - no table rename allowed
 func (this *Migrator) validateStatement() (err error) {
+	if this.parser.IsRenameTable() {
+		return fmt.Errorf("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
+	}
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
 		if !this.migrationContext.ApproveRenamedColumns {
@@ -265,6 +300,18 @@ func (this *Migrator) countTableRows() (err error) {
 	return countRowsFunc()
 }
 
+func (this *Migrator) createFlagFiles() (err error) {
+	if this.migrationContext.PostponeCutOverFlagFile != "" {
+		if !base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
+			if err := base.TouchFile(this.migrationContext.PostponeCutOverFlagFile); err != nil {
+				return log.Errorf("--postpone-cut-over-flag-file indicated by gh-ost is unable to create said file: %s", err.Error())
+			}
+			log.Infof("Created postpone-cut-over-flag-file: %s", this.migrationContext.PostponeCutOverFlagFile)
+		}
+	}
+	return nil
+}
+
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
 	log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -287,6 +334,11 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.validateStatement(); err != nil {
 		return err
 	}
+
+	// After this point, we'll need to teardown anything that's been started
+	//   so we don't leave things hanging around
+	defer this.teardown()
+
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
@@ -294,6 +346,9 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	if err := this.initiateApplier(); err != nil {
+		return err
+	}
+	if err := this.createFlagFiles(); err != nil {
 		return err
 	}
 
@@ -349,7 +404,13 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
 	}
-	if err := this.retryOperation(this.cutOver); err != nil {
+	var retrier func(func() error, ...bool) error
+	if this.migrationContext.CutOverExponentialBackoff {
+		retrier = this.retryOperationWithExponentialBackoff
+	} else {
+		retrier = this.retryOperation
+	}
+	if err := retrier(this.cutOver); err != nil {
 		return err
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
@@ -372,7 +433,7 @@ func (this *Migrator) ExecOnFailureHook() (err error) {
 
 func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
 	if this.migrationContext.TestOnReplica {
-		// We're merly testing, we don't want to keep this state. Rollback the renames as possible
+		// We're merely testing, we don't want to keep this state. Rollback the renames as possible
 		this.applier.RenameTablesRollback()
 	}
 	if cutOverError == nil {
@@ -638,7 +699,7 @@ func (this *Migrator) initiateServer() (err error) {
 	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
 		this.printStatus(rule, writer)
 	}
-	this.server = NewServer(this.hooksExecutor, f)
+	this.server = NewServer(this.migrationContext, this.hooksExecutor, f)
 	if err := this.server.BindSocketFile(); err != nil {
 		return err
 	}
@@ -658,7 +719,7 @@ func (this *Migrator) initiateServer() (err error) {
 // - heartbeat
 // When `--allow-on-master` is supplied, the inspector is actually the master.
 func (this *Migrator) initiateInspector() (err error) {
-	this.inspector = NewInspector()
+	this.inspector = NewInspector(this.migrationContext)
 	if err := this.inspector.InitDBConnections(); err != nil {
 		return err
 	}
@@ -718,6 +779,9 @@ func (this *Migrator) initiateStatus() error {
 	this.printStatus(ForcePrintStatusAndHintRule)
 	statusTick := time.Tick(1 * time.Second)
 	for range statusTick {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return nil
+		}
 		go this.printStatus(HeuristicPrintStatusRule)
 	}
 
@@ -727,7 +791,7 @@ func (this *Migrator) initiateStatus() error {
 // printMigrationStatusHint prints a detailed configuration dump, that is useful
 // to keep in mind; such as the name of migrated table, throttle params etc.
 // This gets printed at beginning and end of migration, every 10 minutes throughout
-// migration, and as reponse to the "status" interactive command.
+// migration, and as response to the "status" interactive command.
 func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s",
@@ -805,7 +869,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	}
 }
 
-// printStatus prints the prgoress status, and optionally additionally detailed
+// printStatus prints the progress status, and optionally additionally detailed
 // dump of configuration.
 // `rule` indicates the type of output expected.
 // By default the status is written to standard output, but other writers can
@@ -831,6 +895,8 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	} else {
 		progressPct = 100.0 * float64(totalRowsCopied) / float64(rowsEstimate)
 	}
+	// we take the opportunity to update migration context with progressPct
+	this.migrationContext.SetProgressPct(progressPct)
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
 	shouldPrintMigrationStatusHint := (elapsedSeconds%600 == 0)
 	if rule == ForcePrintStatusAndHintRule {
@@ -847,7 +913,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	eta := "N/A"
 	if progressPct >= 100.0 {
 		eta = "due"
-	} else if progressPct >= 1.0 {
+	} else if progressPct >= 0.1 {
 		elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
 		totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
 		etaSeconds = totalExpectedSeconds - elapsedRowCopySeconds
@@ -894,12 +960,13 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; State: %s; ETA: %s",
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
+		this.migrationContext.GetCurrentLagDuration().Seconds(),
 		state,
 		eta,
 	)
@@ -917,7 +984,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 // initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
-	this.eventsStreamer = NewEventsStreamer()
+	this.eventsStreamer = NewEventsStreamer(this.migrationContext)
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
@@ -942,6 +1009,9 @@ func (this *Migrator) initiateStreaming() error {
 	go func() {
 		ticker := time.Tick(1 * time.Second)
 		for range ticker {
+			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+				return
+			}
 			this.migrationContext.SetRecentBinlogCoordinates(*this.eventsStreamer.GetCurrentBinlogCoordinates())
 		}
 	}()
@@ -965,7 +1035,7 @@ func (this *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (this *Migrator) initiateThrottler() error {
-	this.throttler = NewThrottler(this.applier, this.inspector)
+	this.throttler = NewThrottler(this.migrationContext, this.applier, this.inspector)
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	log.Infof("Waiting for first throttle metrics to be collected")
@@ -979,7 +1049,7 @@ func (this *Migrator) initiateThrottler() error {
 }
 
 func (this *Migrator) initiateApplier() error {
-	this.applier = NewApplier()
+	this.applier = NewApplier(this.migrationContext)
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}
@@ -1020,24 +1090,33 @@ func (this *Migrator) iterateChunks() error {
 		log.Debugf("No rows found in table. Rowcopy will be implicitly empty")
 		return terminateRowIteration(nil)
 	}
+
+	var hasNoFurtherRangeFlag int64
 	// Iterate per chunk:
 	for {
-		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
 			// Done
 			// There's another such check down the line
 			return nil
 		}
 		copyRowsFunc := func() error {
-			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
 				// Done.
 				// There's another such check down the line
 				return nil
 			}
-			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
-			if err != nil {
+
+			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
+
+			hasFurtherRange := false
+			if err := this.retryOperation(func() (e error) {
+				hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
+				return e
+			}); err != nil {
 				return terminateRowIteration(err)
 			}
 			if !hasFurtherRange {
+				atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
 				return terminateRowIteration(nil)
 			}
 			// Copy task:
@@ -1055,7 +1134,7 @@ func (this *Migrator) iterateChunks() error {
 				}
 				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
-					return terminateRowIteration(err)
+					return err // wrapping call will retry
 				}
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
@@ -1132,6 +1211,10 @@ func (this *Migrator) executeWriteFuncs() error {
 		return nil
 	}
 	for {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return nil
+		}
+
 		this.throttler.throttle(nil)
 
 		// We give higher priority to event processing, then secondary priority to
@@ -1210,4 +1293,28 @@ func (this *Migrator) finalCleanup() error {
 	}
 
 	return nil
+}
+
+func (this *Migrator) teardown() {
+	atomic.StoreInt64(&this.finishedMigrating, 1)
+
+	if this.inspector != nil {
+		log.Infof("Tearing down inspector")
+		this.inspector.Teardown()
+	}
+
+	if this.applier != nil {
+		log.Infof("Tearing down applier")
+		this.applier.Teardown()
+	}
+
+	if this.eventsStreamer != nil {
+		log.Infof("Tearing down streamer")
+		this.eventsStreamer.Teardown()
+	}
+
+	if this.throttler != nil {
+		log.Infof("Tearing down throttler")
+		this.throttler.Teardown()
+	}
 }

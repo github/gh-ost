@@ -30,9 +30,9 @@ type Server struct {
 	printStatus      printStatusFunc
 }
 
-func NewServer(hooksExecutor *HooksExecutor, printStatus printStatusFunc) *Server {
+func NewServer(migrationContext *base.MigrationContext, hooksExecutor *HooksExecutor, printStatus printStatusFunc) *Server {
 	return &Server{
-		migrationContext: base.GetMigrationContext(),
+		migrationContext: migrationContext,
 		hooksExecutor:    hooksExecutor,
 		printStatus:      printStatus,
 	}
@@ -130,6 +130,9 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 	arg := ""
 	if len(tokens) > 1 {
 		arg = strings.TrimSpace(tokens[1])
+		if unquoted, err := strconv.Unquote(arg); err == nil {
+			arg = unquoted
+		}
 	}
 	argIsQuestion := (arg == "?")
 	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
@@ -141,13 +144,13 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 	switch command {
 	case "help":
 		{
-			fmt.Fprintln(writer, `available commands:
+			fmt.Fprint(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
 coordinates													 # Print the currently inspected coordinates
 chunk-size=<newsize>                 # Set a new chunk-size
 dml-batch-size=<newsize>             # Set a new dml-batch-size
-nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is agrressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
+nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
 critical-load=<load>                 # Set a new set of max-load thresholds
 max-lag-millis=<max-lag>             # Set a new replication lag threshold
 replication-lag-query=<query>        # Set a new query that determines replication lag (no quotes)
@@ -289,12 +292,22 @@ help                                 # This message
 		}
 	case "throttle", "pause", "suspend":
 		{
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'throttle' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
 			fmt.Fprintf(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "no-throttle", "unthrottle", "resume", "continue":
 		{
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'no-throttle' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 0)
 			return ForcePrintStatusAndHintRule, nil
 		}
@@ -305,8 +318,8 @@ help                                 # This message
 				return NoPrintStatusRule, err
 			}
 			if arg != "" && arg != this.migrationContext.OriginalTableName {
-				// User exlpicitly provided table name. This is a courtesy protection mechanism
-				err := fmt.Errorf("User commanded 'unpostpone' on %s, but migrated table is %s; ingoring request.", arg, this.migrationContext.OriginalTableName)
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'unpostpone' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
 				return NoPrintStatusRule, err
 			}
 			if atomic.LoadInt64(&this.migrationContext.IsPostponingCutOver) > 0 {
@@ -319,7 +332,16 @@ help                                 # This message
 		}
 	case "panic":
 		{
-			err := fmt.Errorf("User commanded 'panic'. I will now panic, without cleanup. PANIC!")
+			if arg == "" && this.migrationContext.ForceNamedPanicCommand {
+				err := fmt.Errorf("User commanded 'panic' without specifying table name, but --force-named-panic is set")
+				return NoPrintStatusRule, err
+			}
+			if arg != "" && arg != this.migrationContext.OriginalTableName {
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("User commanded 'panic' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
+			err := fmt.Errorf("User commanded 'panic'. The migration will be aborted without cleanup. Please drop the gh-ost tables before trying again.")
 			this.migrationContext.PanicAbort <- err
 			return NoPrintStatusRule, err
 		}

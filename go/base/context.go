@@ -7,12 +7,15 @@ package base
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/satori/go.uuid"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
@@ -26,23 +29,23 @@ type RowsEstimateMethod string
 
 const (
 	TableStatusRowsEstimate RowsEstimateMethod = "TableStatusRowsEstimate"
-	ExplainRowsEstimate                        = "ExplainRowsEstimate"
-	CountRowsEstimate                          = "CountRowsEstimate"
+	ExplainRowsEstimate     RowsEstimateMethod = "ExplainRowsEstimate"
+	CountRowsEstimate       RowsEstimateMethod = "CountRowsEstimate"
 )
 
 type CutOver int
 
 const (
-	CutOverAtomic  CutOver = iota
-	CutOverTwoStep         = iota
+	CutOverAtomic CutOver = iota
+	CutOverTwoStep
 )
 
 type ThrottleReasonHint string
 
 const (
 	NoThrottleReasonHint                 ThrottleReasonHint = "NoThrottleReasonHint"
-	UserCommandThrottleReasonHint                           = "UserCommandThrottleReasonHint"
-	LeavingHibernationThrottleReasonHint                    = "LeavingHibernationThrottleReasonHint"
+	UserCommandThrottleReasonHint        ThrottleReasonHint = "UserCommandThrottleReasonHint"
+	LeavingHibernationThrottleReasonHint ThrottleReasonHint = "LeavingHibernationThrottleReasonHint"
 )
 
 const (
@@ -71,6 +74,8 @@ func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleRea
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
+	Uuid string
+
 	DatabaseName      string
 	OriginalTableName string
 	AlterStatement    string
@@ -82,17 +87,25 @@ type MigrationContext struct {
 	SwitchToRowBinlogFormat  bool
 	AssumeRBR                bool
 	SkipForeignKeyChecks     bool
+	SkipStrictMode           bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
+	AliyunRDS                bool
+	GoogleCloudPlatform      bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
 	ConfigFile        string
 	CliUser           string
 	CliPassword       string
+	UseTLS            bool
+	TLSAllowInsecure  bool
+	TLSCACertificate  string
+	TLSCertificate    string
+	TLSKey            string
 	CliMasterUser     string
 	CliMasterPassword string
 
@@ -114,10 +127,15 @@ type MigrationContext struct {
 	CriticalLoadHibernateSeconds        int64
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
+	CutOverExponentialBackoff           bool
+	ExponentialBackoffMaxInterval       int64
 	ForceNamedCutOverCommand            bool
+	ForceNamedPanicCommand              bool
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string
+	HooksHintOwner                      string
+	HooksHintToken                      string
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -157,6 +175,7 @@ type MigrationContext struct {
 	pointOfInterestTime                    time.Time
 	pointOfInterestTimeMutex               *sync.Mutex
 	CurrentLag                             int64
+	currentProgress                        uint64
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
@@ -179,8 +198,10 @@ type MigrationContext struct {
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
+	OriginalTableVirtualColumns      *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
 	GhostTableColumns                *sql.ColumnList
+	GhostTableVirtualColumns         *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
 	UniqueKey                        *sql.UniqueKey
 	SharedColumns                    *sql.ColumnList
@@ -195,8 +216,6 @@ type MigrationContext struct {
 	ForceTmpTableName                string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
-
-	CanStopStreaming func() bool
 }
 
 type ContextConfig struct {
@@ -212,14 +231,9 @@ type ContextConfig struct {
 	}
 }
 
-var context *MigrationContext
-
-func init() {
-	context = newMigrationContext()
-}
-
-func newMigrationContext() *MigrationContext {
+func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
+		Uuid:                                uuid.NewV4().String(),
 		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
@@ -237,11 +251,6 @@ func newMigrationContext() *MigrationContext {
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
 	}
-}
-
-// GetMigrationContext
-func GetMigrationContext() *MigrationContext {
-	return context
 }
 
 func getSafeTableName(baseName string, suffix string) string {
@@ -349,6 +358,14 @@ func (this *MigrationContext) SetCutOverLockTimeoutSeconds(timeoutSeconds int64)
 	return nil
 }
 
+func (this *MigrationContext) SetExponentialBackoffMaxInterval(intervalSeconds int64) error {
+	if intervalSeconds < 2 {
+		return fmt.Errorf("Minimal maximum interval is 2sec. Timeout remains at %d", this.ExponentialBackoffMaxInterval)
+	}
+	this.ExponentialBackoffMaxInterval = intervalSeconds
+	return nil
+}
+
 func (this *MigrationContext) SetDefaultNumRetries(retries int64) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
@@ -412,6 +429,20 @@ func (this *MigrationContext) MarkRowCopyEndTime() {
 	defer this.throttleMutex.Unlock()
 	this.RowCopyEndTime = time.Now()
 }
+
+func (this *MigrationContext) GetCurrentLagDuration() time.Duration {
+	return time.Duration(atomic.LoadInt64(&this.CurrentLag))
+}
+
+func (this *MigrationContext) GetProgressPct() float64 {
+	return math.Float64frombits(atomic.LoadUint64(&this.currentProgress))
+}
+
+func (this *MigrationContext) SetProgressPct(progressPct float64) {
+	atomic.StoreUint64(&this.currentProgress, math.Float64bits(progressPct))
+}
+
+// math.Float64bits([f=0..100])
 
 // GetTotalRowsCopied returns the accurate number of rows being copied (affected)
 // This is not exactly the same as the rows being iterated via chunks, but potentially close enough
@@ -687,6 +718,13 @@ func (this *MigrationContext) ApplyCredentials() {
 		// Override
 		this.InspectorConnectionConfig.Password = this.CliPassword
 	}
+}
+
+func (this *MigrationContext) SetupTLS() error {
+	if this.UseTLS {
+		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate, this.TLSCertificate, this.TLSKey, this.TLSAllowInsecure)
+	}
+	return nil
 }
 
 // ReadConfigFile attempts to read the config file, if it exists

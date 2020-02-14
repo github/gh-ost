@@ -11,7 +11,7 @@ Related issue: https://github.com/github/gh-ost/issues/0123456789
 
 ### Description
 
-This PR [briefly explain what is does]
+This PR [briefly explain what it does]
 
 > In case this PR introduced Go code changes:
 

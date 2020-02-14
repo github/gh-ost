@@ -9,15 +9,31 @@
 
 tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
-ghost_binary=/tmp/gh-ost-test
+default_ghost_binary=/tmp/gh-ost-test
+ghost_binary=""
 exec_command_file=/tmp/gh-ost-test.bash
-
-test_pattern="${1:-.}"
+orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
+ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
+throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
 
 master_host=
 master_port=
 replica_host=
 replica_port=
+original_sql_mode=
+
+OPTIND=1
+while getopts "b:" OPTION
+do
+  case $OPTION in
+    b)
+      ghost_binary="$OPTARG"
+    ;;
+  esac
+done
+shift $((OPTIND-1))
+
+test_pattern="${1:-.}"
 
 verify_master_and_replica() {
   if [ "$(gh-ost-test-mysql-master -e "select 1" -ss)" != "1" ] ; then
@@ -25,6 +41,18 @@ verify_master_and_replica() {
     exit 1
   fi
   read master_host master_port <<< $(gh-ost-test-mysql-master -e "select @@hostname, @@port" -ss)
+  [ "$master_host" == "$(hostname)" ] && master_host="127.0.0.1"
+  echo "# master verified at $master_host:$master_port"
+  if ! gh-ost-test-mysql-master -e "set global event_scheduler := 1" ; then
+    echo "Cannot enable event_scheduler on master"
+    exit 1
+  fi
+  original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
+  echo "sql_mode on master is ${original_sql_mode}"
+
+  echo "Gracefully sleeping for 3 seconds while replica is setting up..."
+  sleep 3
+
   if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ] ; then
     echo "Cannot verify gh-ost-test-mysql-replica"
     exit 1
@@ -34,6 +62,8 @@ verify_master_and_replica() {
     exit 1
   fi
   read replica_host replica_port <<< $(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
+  [ "$replica_host" == "$(hostname)" ] && replica_host="127.0.0.1"
+  echo "# replica verified at $replica_host:$replica_port"
 }
 
 exec_cmd() {
@@ -65,11 +95,26 @@ test_single() {
   local test_name
   test_name="$1"
 
+  if [ -f $tests_path/$test_name/ignore_versions ] ; then
+    ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
+    mysql_version=$(gh-ost-test-mysql-master -s -s -e "select @@version")
+    if echo "$mysql_version" | egrep -q "^${ignore_versions}" ; then
+      echo -n "Skipping: $test_name"
+      return 0
+    fi
+  fi
+
   echo -n "Testing: $test_name"
 
   echo_dot
   start_replication
   echo_dot
+
+  if [ -f $tests_path/$test_name/sql_mode ] ; then
+    gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+  fi
+
   gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
 
   extra_args=""
@@ -97,6 +142,7 @@ test_single() {
     --password=gh-ost \
     --host=$replica_host \
     --port=$replica_port \
+    --assume-master-host=${master_host}:${master_port}
     --database=test \
     --table=gh_ost_test \
     --alter='engine=innodb' \
@@ -105,11 +151,11 @@ test_single() {
     --initially-drop-old-table \
     --initially-drop-ghost-table \
     --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \
+    --throttle-flag-file=$throttle_flag_file \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
-    --postpone-cut-over-flag-file=/tmp/gh-ost.test.postpone.flag \
     --test-on-replica \
-    --default-retries=1 \
+    --default-retries=3 \
     --chunk-size=10 \
     --verbose \
     --debug \
@@ -121,6 +167,11 @@ test_single() {
   bash $exec_command_file 1> $test_logfile 2>&1
 
   execution_result=$?
+
+  if [ -f $tests_path/$test_name/sql_mode ] ; then
+    gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
+  fi
 
   if [ -f $tests_path/$test_name/destroy.sql ] ; then
     gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/destroy.sql
@@ -148,27 +199,41 @@ test_single() {
 
   if [ $execution_result -ne 0 ] ; then
     echo
-    echo "ERROR $test_name execution failure. cat $test_logfile"
+    echo "ERROR $test_name execution failure. cat $test_logfile:"
+    cat $test_logfile
     return 1
   fi
 
   echo_dot
-  orig_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss | md5sum)
-  ghost_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss | md5sum)
+  gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss > $orig_content_output_file
+  gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss > $ghost_content_output_file
+  orig_checksum=$(cat $orig_content_output_file | md5sum)
+  ghost_checksum=$(cat $ghost_content_output_file | md5sum)
 
   if [ "$orig_checksum" != "$ghost_checksum" ] ; then
     echo "ERROR $test_name: checksum mismatch"
     echo "---"
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test" -ss
-    echo "---"
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho" -ss
+    diff $orig_content_output_file $ghost_content_output_file
+
+    echo "diff $orig_content_output_file $ghost_content_output_file"
+
     return 1
   fi
 }
 
 build_binary() {
   echo "Building"
+  rm -f $default_ghost_binary
+  [ "$ghost_binary" == "" ] && ghost_binary="$default_ghost_binary"
+  if [ -f "$ghost_binary" ] ; then
+    echo "Using binary: $ghost_binary"
+    return 0
+  fi
   go build -o $ghost_binary go/cmd/gh-ost/main.go
+  if [ $? -ne 0 ] ; then
+    echo "Build failure"
+    exit 1
+  fi
 }
 
 test_all() {

@@ -17,7 +17,7 @@ create event gh_ost_test
   starts current_timestamp
   ends current_timestamp + interval 60 second
   on completion not preserve
-  enable
+  disable on slave
   do
 begin
   insert into gh_ost_test values (null, 11, now(), now(), now(), 0);

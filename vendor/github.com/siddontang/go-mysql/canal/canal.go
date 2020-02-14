@@ -1,25 +1,24 @@
 package canal
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
-	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/juju/errors"
-	"github.com/ngaut/log"
+	"github.com/siddontang/go-log/log"
 	"github.com/siddontang/go-mysql/client"
 	"github.com/siddontang/go-mysql/dump"
 	"github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/replication"
 	"github.com/siddontang/go-mysql/schema"
-	"github.com/siddontang/go/sync2"
 )
-
-var errCanalClosed = errors.New("canal was closed")
 
 // Canal can sync your MySQL data into everywhere, like Elasticsearch, Redis, etc...
 // MySQL must open row format for binlog
@@ -30,48 +29,49 @@ type Canal struct {
 
 	master     *masterInfo
 	dumper     *dump.Dumper
+	dumped     bool
 	dumpDoneCh chan struct{}
 	syncer     *replication.BinlogSyncer
 
-	rsLock     sync.Mutex
-	rsHandlers []RowsEventHandler
+	eventHandler EventHandler
 
 	connLock sync.Mutex
 	conn     *client.Conn
 
-	wg sync.WaitGroup
+	tableLock          sync.RWMutex
+	tables             map[string]*schema.Table
+	errorTablesGetTime map[string]time.Time
 
-	tableLock sync.Mutex
-	tables    map[string]*schema.Table
+	tableMatchCache   map[string]bool
+	includeTableRegex []*regexp.Regexp
+	excludeTableRegex []*regexp.Regexp
 
-	quit   chan struct{}
-	closed sync2.AtomicBool
+	ctx    context.Context
+	cancel context.CancelFunc
 }
+
+// canal will retry fetching unknown table's meta after UnknownTableRetryPeriod
+var UnknownTableRetryPeriod = time.Second * time.Duration(10)
+var ErrExcludedTable = errors.New("excluded table meta")
 
 func NewCanal(cfg *Config) (*Canal, error) {
 	c := new(Canal)
 	c.cfg = cfg
-	c.closed.Set(false)
-	c.quit = make(chan struct{})
 
-	os.MkdirAll(cfg.DataDir, 0755)
+	c.ctx, c.cancel = context.WithCancel(context.Background())
 
 	c.dumpDoneCh = make(chan struct{})
-	c.rsHandlers = make([]RowsEventHandler, 0, 4)
+	c.eventHandler = &DummyEventHandler{}
+
 	c.tables = make(map[string]*schema.Table)
+	if c.cfg.DiscardNoMetaRowEvent {
+		c.errorTablesGetTime = make(map[string]time.Time)
+	}
+	c.master = &masterInfo{}
 
 	var err error
-	if c.master, err = loadMasterInfo(c.masterInfoPath()); err != nil {
-		return nil, errors.Trace(err)
-	} else if len(c.master.Addr) != 0 && c.master.Addr != c.cfg.Addr {
-		log.Infof("MySQL addr %s in old master.info, but new %s, reset", c.master.Addr, c.cfg.Addr)
-		// may use another MySQL, reset
-		c.master = &masterInfo{}
-	}
 
-	c.master.Addr = c.cfg.Addr
-
-	if err := c.prepareDumper(); err != nil {
+	if err = c.prepareDumper(); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -81,6 +81,33 @@ func NewCanal(cfg *Config) (*Canal, error) {
 
 	if err := c.checkBinlogRowFormat(); err != nil {
 		return nil, errors.Trace(err)
+	}
+
+	// init table filter
+	if n := len(c.cfg.IncludeTableRegex); n > 0 {
+		c.includeTableRegex = make([]*regexp.Regexp, n)
+		for i, val := range c.cfg.IncludeTableRegex {
+			reg, err := regexp.Compile(val)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			c.includeTableRegex[i] = reg
+		}
+	}
+
+	if n := len(c.cfg.ExcludeTableRegex); n > 0 {
+		c.excludeTableRegex = make([]*regexp.Regexp, n)
+		for i, val := range c.cfg.ExcludeTableRegex {
+			reg, err := regexp.Compile(val)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			c.excludeTableRegex[i] = reg
+		}
+	}
+
+	if c.includeTableRegex != nil || c.excludeTableRegex != nil {
+		c.tableMatchCache = make(map[string]bool)
 	}
 
 	return c, nil
@@ -114,6 +141,15 @@ func (c *Canal) prepareDumper() error {
 		c.dumper.AddTables(tableDB, tables...)
 	}
 
+	charset := c.cfg.Charset
+	c.dumper.SetCharset(charset)
+
+	c.dumper.SetWhere(c.cfg.Dump.Where)
+	c.dumper.SkipMasterData(c.cfg.Dump.SkipMasterData)
+	c.dumper.SetMaxAllowedPacket(c.cfg.Dump.MaxAllowedPacketMB)
+	// Use hex blob for mysqldump
+	c.dumper.SetHexBlob(true)
+
 	for _, ignoreTable := range c.cfg.Dump.IgnoreTables {
 		if seps := strings.Split(ignoreTable, ","); len(seps) == 2 {
 			c.dumper.AddIgnoreTables(seps[0], seps[1])
@@ -129,90 +165,206 @@ func (c *Canal) prepareDumper() error {
 	return nil
 }
 
-func (c *Canal) Start() error {
-	c.wg.Add(1)
-	go c.run()
+// Run will first try to dump all data from MySQL master `mysqldump`,
+// then sync from the binlog position in the dump data.
+// It will run forever until meeting an error or Canal closed.
+func (c *Canal) Run() error {
+	return c.run()
+}
 
-	return nil
+// RunFrom will sync from the binlog position directly, ignore mysqldump.
+func (c *Canal) RunFrom(pos mysql.Position) error {
+	c.master.Update(pos)
+
+	return c.Run()
+}
+
+func (c *Canal) StartFromGTID(set mysql.GTIDSet) error {
+	c.master.UpdateGTIDSet(set)
+
+	return c.Run()
+}
+
+// Dump all data from MySQL master `mysqldump`, ignore sync binlog.
+func (c *Canal) Dump() error {
+	if c.dumped {
+		return errors.New("the method Dump can't be called twice")
+	}
+	c.dumped = true
+	defer close(c.dumpDoneCh)
+	return c.dump()
 }
 
 func (c *Canal) run() error {
-	defer c.wg.Done()
+	defer func() {
+		c.cancel()
+	}()
 
-	if err := c.tryDump(); err != nil {
-		log.Errorf("canal dump mysql err: %v", err)
-		return errors.Trace(err)
+	c.master.UpdateTimestamp(uint32(time.Now().Unix()))
+
+	if !c.dumped {
+		c.dumped = true
+
+		err := c.tryDump()
+		close(c.dumpDoneCh)
+
+		if err != nil {
+			log.Errorf("canal dump mysql err: %v", err)
+			return errors.Trace(err)
+		}
 	}
 
-	close(c.dumpDoneCh)
-
-	if err := c.startSyncBinlog(); err != nil {
-		if !c.isClosed() {
-			log.Errorf("canal start sync binlog err: %v", err)
-		}
+	if err := c.runSyncBinlog(); err != nil {
+		log.Errorf("canal start sync binlog err: %v", err)
 		return errors.Trace(err)
 	}
 
 	return nil
 }
 
-func (c *Canal) isClosed() bool {
-	return c.closed.Get()
-}
-
 func (c *Canal) Close() {
-	log.Infof("close canal")
+	log.Infof("closing canal")
 
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	if c.isClosed() {
-		return
-	}
-
-	c.closed.Set(true)
-
-	close(c.quit)
-
+	c.cancel()
 	c.connLock.Lock()
 	c.conn.Close()
 	c.conn = nil
 	c.connLock.Unlock()
+	c.syncer.Close()
 
-	if c.syncer != nil {
-		c.syncer.Close()
-		c.syncer = nil
-	}
-
-	c.master.Close()
-
-	c.wg.Wait()
+	c.eventHandler.OnPosSynced(c.master.Position(), true)
 }
 
 func (c *Canal) WaitDumpDone() <-chan struct{} {
 	return c.dumpDoneCh
 }
 
+func (c *Canal) Ctx() context.Context {
+	return c.ctx
+}
+
+func (c *Canal) checkTableMatch(key string) bool {
+	// no filter, return true
+	if c.tableMatchCache == nil {
+		return true
+	}
+
+	c.tableLock.RLock()
+	rst, ok := c.tableMatchCache[key]
+	c.tableLock.RUnlock()
+	if ok {
+		// cache hit
+		return rst
+	}
+	matchFlag := false
+	// check include
+	if c.includeTableRegex != nil {
+		for _, reg := range c.includeTableRegex {
+			if reg.MatchString(key) {
+				matchFlag = true
+				break
+			}
+		}
+	}
+	// check exclude
+	if matchFlag && c.excludeTableRegex != nil {
+		for _, reg := range c.excludeTableRegex {
+			if reg.MatchString(key) {
+				matchFlag = false
+				break
+			}
+		}
+	}
+	c.tableLock.Lock()
+	c.tableMatchCache[key] = matchFlag
+	c.tableLock.Unlock()
+	return matchFlag
+}
+
 func (c *Canal) GetTable(db string, table string) (*schema.Table, error) {
 	key := fmt.Sprintf("%s.%s", db, table)
-	c.tableLock.Lock()
+	// if table is excluded, return error and skip parsing event or dump
+	if !c.checkTableMatch(key) {
+		return nil, ErrExcludedTable
+	}
+	c.tableLock.RLock()
 	t, ok := c.tables[key]
-	c.tableLock.Unlock()
+	c.tableLock.RUnlock()
 
 	if ok {
 		return t, nil
 	}
 
+	if c.cfg.DiscardNoMetaRowEvent {
+		c.tableLock.RLock()
+		lastTime, ok := c.errorTablesGetTime[key]
+		c.tableLock.RUnlock()
+		if ok && time.Now().Sub(lastTime) < UnknownTableRetryPeriod {
+			return nil, schema.ErrMissingTableMeta
+		}
+	}
+
 	t, err := schema.NewTable(c, db, table)
 	if err != nil {
-		return nil, errors.Trace(err)
+		// check table not exists
+		if ok, err1 := schema.IsTableExist(c, db, table); err1 == nil && !ok {
+			return nil, schema.ErrTableNotExist
+		}
+		// work around : RDS HAHeartBeat
+		// ref : https://github.com/alibaba/canal/blob/master/parse/src/main/java/com/alibaba/otter/canal/parse/inbound/mysql/dbsync/LogEventConvert.java#L385
+		// issue : https://github.com/alibaba/canal/issues/222
+		// This is a common error in RDS that canal can't get HAHealthCheckSchema's meta, so we mock a table meta.
+		// If canal just skip and log error, as RDS HA heartbeat interval is very short, so too many HAHeartBeat errors will be logged.
+		if key == schema.HAHealthCheckSchema {
+			// mock ha_health_check meta
+			ta := &schema.Table{
+				Schema:  db,
+				Name:    table,
+				Columns: make([]schema.TableColumn, 0, 2),
+				Indexes: make([]*schema.Index, 0),
+			}
+			ta.AddColumn("id", "bigint(20)", "", "")
+			ta.AddColumn("type", "char(1)", "", "")
+			c.tableLock.Lock()
+			c.tables[key] = ta
+			c.tableLock.Unlock()
+			return ta, nil
+		}
+		// if DiscardNoMetaRowEvent is true, we just log this error
+		if c.cfg.DiscardNoMetaRowEvent {
+			c.tableLock.Lock()
+			c.errorTablesGetTime[key] = time.Now()
+			c.tableLock.Unlock()
+			// log error and return ErrMissingTableMeta
+			log.Errorf("canal get table meta err: %v", errors.Trace(err))
+			return nil, schema.ErrMissingTableMeta
+		}
+		return nil, err
 	}
 
 	c.tableLock.Lock()
 	c.tables[key] = t
+	if c.cfg.DiscardNoMetaRowEvent {
+		// if get table info success, delete this key from errorTablesGetTime
+		delete(c.errorTablesGetTime, key)
+	}
 	c.tableLock.Unlock()
 
 	return t, nil
+}
+
+// ClearTableCache clear table cache
+func (c *Canal) ClearTableCache(db []byte, table []byte) {
+	key := fmt.Sprintf("%s.%s", db, table)
+	c.tableLock.Lock()
+	delete(c.tables, key)
+	if c.cfg.DiscardNoMetaRowEvent {
+		delete(c.errorTablesGetTime, key)
+	}
+	c.tableLock.Unlock()
 }
 
 // Check MySQL binlog row image, must be in FULL, MINIMAL, NOBLOB
@@ -246,32 +398,39 @@ func (c *Canal) checkBinlogRowFormat() error {
 }
 
 func (c *Canal) prepareSyncer() error {
-	seps := strings.Split(c.cfg.Addr, ":")
-	if len(seps) != 2 {
-		return errors.Errorf("invalid mysql addr format %s, must host:port", c.cfg.Addr)
-	}
-
-	port, err := strconv.ParseUint(seps[1], 10, 16)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
 	cfg := replication.BinlogSyncerConfig{
-		ServerID: c.cfg.ServerID,
-		Flavor:   c.cfg.Flavor,
-		Host:     seps[0],
-		Port:     uint16(port),
-		User:     c.cfg.User,
-		Password: c.cfg.Password,
+		ServerID:        c.cfg.ServerID,
+		Flavor:          c.cfg.Flavor,
+		User:            c.cfg.User,
+		Password:        c.cfg.Password,
+		Charset:         c.cfg.Charset,
+		HeartbeatPeriod: c.cfg.HeartbeatPeriod,
+		ReadTimeout:     c.cfg.ReadTimeout,
+		UseDecimal:      c.cfg.UseDecimal,
+		ParseTime:       c.cfg.ParseTime,
+		SemiSyncEnabled: c.cfg.SemiSyncEnabled,
 	}
 
-	c.syncer = replication.NewBinlogSyncer(&cfg)
+	if strings.Contains(c.cfg.Addr, "/") {
+		cfg.Host = c.cfg.Addr
+	} else {
+		seps := strings.Split(c.cfg.Addr, ":")
+		if len(seps) != 2 {
+			return errors.Errorf("invalid mysql addr format %s, must host:port", c.cfg.Addr)
+		}
+
+		port, err := strconv.ParseUint(seps[1], 10, 16)
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		cfg.Host = seps[0]
+		cfg.Port = uint16(port)
+	}
+
+	c.syncer = replication.NewBinlogSyncer(cfg)
 
 	return nil
-}
-
-func (c *Canal) masterInfoPath() string {
-	return path.Join(c.cfg.DataDir, "master.info")
 }
 
 // Execute a SQL
@@ -303,5 +462,13 @@ func (c *Canal) Execute(cmd string, args ...interface{}) (rr *mysql.Result, err 
 }
 
 func (c *Canal) SyncedPosition() mysql.Position {
-	return c.master.Pos()
+	return c.master.Position()
+}
+
+func (c *Canal) SyncedTimestamp() uint32 {
+	return c.master.timestamp
+}
+
+func (c *Canal) SyncedGTIDSet() mysql.GTIDSet {
+	return c.master.GTIDSet()
 }

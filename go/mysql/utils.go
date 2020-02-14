@@ -8,6 +8,8 @@ package mysql
 import (
 	gosql "database/sql"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/github/gh-ost/go/sql"
@@ -33,16 +35,32 @@ func (this *ReplicationLagResult) HasLag() bool {
 	return this.Lag > 0
 }
 
-// GetReplicationLag returns replication lag for a given connection config; either by explicit query
-// or via SHOW SLAVE STATUS
-func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.Duration, err error) {
-	dbUri := connectionConfig.GetDBUri("information_schema")
-	var db *gosql.DB
-	if db, _, err = sqlutils.GetDB(dbUri); err != nil {
-		return replicationLag, err
-	}
+// knownDBs is a DB cache by uri
+var knownDBs map[string]*gosql.DB = make(map[string]*gosql.DB)
+var knownDBsMutex = &sync.Mutex{}
 
-	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
+func GetDB(migrationUuid string, mysql_uri string) (*gosql.DB, bool, error) {
+	cacheKey := migrationUuid + ":" + mysql_uri
+
+	knownDBsMutex.Lock()
+	defer func() {
+		knownDBsMutex.Unlock()
+	}()
+
+	var exists bool
+	if _, exists = knownDBs[cacheKey]; !exists {
+		if db, err := gosql.Open("mysql", mysql_uri); err == nil {
+			knownDBs[cacheKey] = db
+		} else {
+			return db, exists, err
+		}
+	}
+	return knownDBs[cacheKey], exists, nil
+}
+
+// GetReplicationLagFromSlaveStatus returns replication lag for a given db; via SHOW SLAVE STATUS
+func GetReplicationLagFromSlaveStatus(informationSchemaDb *gosql.DB) (replicationLag time.Duration, err error) {
+	err = sqlutils.QueryRowsMap(informationSchemaDb, `show slave status`, func(m sqlutils.RowMap) error {
 		slaveIORunning := m.GetString("Slave_IO_Running")
 		slaveSQLRunning := m.GetString("Slave_SQL_Running")
 		secondsBehindMaster := m.GetNullInt64("Seconds_Behind_Master")
@@ -52,15 +70,19 @@ func GetReplicationLag(connectionConfig *ConnectionConfig) (replicationLag time.
 		replicationLag = time.Duration(secondsBehindMaster.Int64) * time.Second
 		return nil
 	})
+
 	return replicationLag, err
 }
 
 func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
 	currentUri := connectionConfig.GetDBUri("information_schema")
-	db, _, err := sqlutils.GetDB(currentUri)
+	// This function is only called once, okay to not have a cached connection pool
+	db, err := gosql.Open("mysql", currentUri)
 	if err != nil {
 		return nil, err
 	}
+	defer db.Close()
+
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
 		// We wish to recognize the case where the topology's master actually has replication configuration.
 		// This can happen when a DBA issues a `RESET SLAVE` instead of `RESET SLAVE ALL`.
@@ -73,7 +95,6 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 		slaveIORunning := rowMap.GetString("Slave_IO_Running")
 		slaveSQLRunning := rowMap.GetString("Slave_SQL_Running")
 
-		//
 		if slaveIORunning != "Yes" || slaveSQLRunning != "Yes" {
 			return fmt.Errorf("Replication on %+v is broken: Slave_IO_Running: %s, Slave_SQL_Running: %s. Please make sure replication runs before using gh-ost.",
 				connectionConfig.Key,
@@ -153,7 +174,7 @@ func GetInstanceKey(db *gosql.DB) (instanceKey *InstanceKey, err error) {
 }
 
 // GetTableColumns reads column list from given table
-func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnList, error) {
+func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnList, *sql.ColumnList, error) {
 	query := fmt.Sprintf(`
 		show columns from %s.%s
 		`,
@@ -161,18 +182,24 @@ func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnL
 		sql.EscapeName(tableName),
 	)
 	columnNames := []string{}
+	virtualColumnNames := []string{}
 	err := sqlutils.QueryRowsMap(db, query, func(rowMap sqlutils.RowMap) error {
-		columnNames = append(columnNames, rowMap.GetString("Field"))
+		columnName := rowMap.GetString("Field")
+		columnNames = append(columnNames, columnName)
+		if strings.Contains(rowMap.GetString("Extra"), " GENERATED") {
+			log.Debugf("%s is a generated column", columnName)
+			virtualColumnNames = append(virtualColumnNames, columnName)
+		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(columnNames) == 0 {
-		return nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
+		return nil, nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
 			sql.EscapeName(databaseName),
 			sql.EscapeName(tableName),
 		)
 	}
-	return sql.NewColumnList(columnNames), nil
+	return sql.NewColumnList(columnNames), sql.NewColumnList(virtualColumnNames), nil
 }
