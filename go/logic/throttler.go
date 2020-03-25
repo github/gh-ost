@@ -84,6 +84,7 @@ func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint 
 	if statusCode != 0 && statusCode != http.StatusOK {
 		return true, this.throttleHttpMessage(int(statusCode)), base.NoThrottleReasonHint
 	}
+
 	// Replication lag throttle
 	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
 	lag := atomic.LoadInt64(&this.migrationContext.CurrentLag)
@@ -104,7 +105,7 @@ func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint 
 		}
 	}
 	// Got here? No metrics indicates we need throttling.
-	return true, "", base.NoThrottleReasonHint
+	return false, "", base.NoThrottleReasonHint
 }
 
 // parseChangelogHeartbeat parses a string timestamp and deduces replication lag
@@ -288,7 +289,11 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 		return false, nil
 	}
 
-	collectFunc()
+	_, err := collectFunc()
+	if err != nil {
+		atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(-1))
+	}
+
 	firstThrottlingCollected <- true
 
 	ticker := time.Tick(100 * time.Millisecond)
