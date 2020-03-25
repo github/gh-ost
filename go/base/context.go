@@ -119,7 +119,7 @@ type MigrationContext struct {
 	ThrottleAdditionalFlagFile          string
 	throttleQuery                       string
 	throttleHTTP                        string
-	ignoreHTTPErrors                    bool
+	IgnoreHTTPErrors                    bool
 	ThrottleCommandedByUser             int64
 	HibernateUntil                      int64
 	maxLoad                             LoadMap
@@ -579,7 +579,7 @@ func (this *MigrationContext) SetIgnoreHTTPErrors(ignoreHTTPErrors bool) {
 	this.throttleHTTPMutex.Lock()
 	defer this.throttleHTTPMutex.Unlock()
 
-	this.ignoreHTTPErrors = ignoreHTTPErrors
+	this.IgnoreHTTPErrors = ignoreHTTPErrors
 }
 
 func (this *MigrationContext) GetMaxLoad() LoadMap {

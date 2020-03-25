@@ -291,8 +291,10 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 
 	_, err := collectFunc()
 	if err != nil {
-		// If an error occurs during the HTTP throttle check, let's throttle to be safe
-		atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(-1))
+		// If not told to ignore errors, we'll throttle on HTTP connection issues
+		if !this.migrationContext.IgnoreHTTPErrors {
+			atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(-1))
+		}
 	}
 
 	firstThrottlingCollected <- true
