@@ -119,7 +119,7 @@ type MigrationContext struct {
 	ThrottleAdditionalFlagFile          string
 	throttleQuery                       string
 	throttleHTTP                        string
-	ignoreHTTPErrors					bool
+	ignoreHTTPErrors                    bool
 	ThrottleCommandedByUser             int64
 	HibernateUntil                      int64
 	maxLoad                             LoadMap
