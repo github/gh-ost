@@ -291,6 +291,7 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 
 	_, err := collectFunc()
 	if err != nil {
+		// If an error occurs during the HTTP throttle check, let's throttle to be safe
 		atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(-1))
 	}
 
