@@ -104,7 +104,7 @@ func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint 
 		}
 	}
 	// Got here? No metrics indicates we need throttling.
-	return false, "", base.NoThrottleReasonHint
+	return true, "", base.NoThrottleReasonHint
 }
 
 // parseChangelogHeartbeat parses a string timestamp and deduces replication lag
