@@ -19,20 +19,22 @@ import (
 )
 
 var (
-	httpStatusMessages map[int]string = map[int]string{
+	httpStatusMessages = map[int]string{
 		200: "OK",
 		404: "Not found",
 		417: "Expectation failed",
 		429: "Too many requests",
 		500: "Internal server error",
+		-1:  "Connection error",
 	}
 	// See https://github.com/github/freno/blob/master/doc/http.md
-	httpStatusFrenoMessages map[int]string = map[int]string{
+	httpStatusFrenoMessages = map[int]string{
 		200: "OK",
 		404: "freno: unknown metric",
 		417: "freno: access forbidden",
 		429: "freno: threshold exceeded",
 		500: "freno: internal error",
+		-1:  "freno: connection error",
 	}
 )
 
@@ -84,6 +86,7 @@ func (this *Throttler) shouldThrottle() (result bool, reason string, reasonHint 
 	if statusCode != 0 && statusCode != http.StatusOK {
 		return true, this.throttleHttpMessage(int(statusCode)), base.NoThrottleReasonHint
 	}
+
 	// Replication lag throttle
 	maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
 	lag := atomic.LoadInt64(&this.migrationContext.CurrentLag)
@@ -288,7 +291,14 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 		return false, nil
 	}
 
-	collectFunc()
+	_, err := collectFunc()
+	if err != nil {
+		// If not told to ignore errors, we'll throttle on HTTP connection issues
+		if !this.migrationContext.IgnoreHTTPErrors {
+			atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(-1))
+		}
+	}
+
 	firstThrottlingCollected <- true
 
 	ticker := time.Tick(100 * time.Millisecond)
@@ -297,7 +307,15 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 			return
 		}
 
-		if sleep, _ := collectFunc(); sleep {
+		sleep, err := collectFunc()
+		if err != nil {
+			// If not told to ignore errors, we'll throttle on HTTP connection issues
+			if !this.migrationContext.IgnoreHTTPErrors {
+				atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(-1))
+			}
+		}
+
+		if sleep {
 			time.Sleep(1 * time.Second)
 		}
 	}
