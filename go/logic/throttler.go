@@ -306,7 +306,16 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 			return
 		}
 
-		if sleep, _ := collectFunc(); sleep {
+		sleep, err := collectFunc()
+		if err != nil {
+			// If not told to ignore errors, we'll throttle on HTTP connection issues
+			if !this.migrationContext.IgnoreHTTPErrors {
+				log.Errorf("errors occurred during HTTP throttle check: %+v", err)
+				atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(-1))
+			}
+		}
+
+		if sleep {
 			time.Sleep(1 * time.Second)
 		}
 	}
