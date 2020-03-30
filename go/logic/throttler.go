@@ -25,7 +25,7 @@ var (
 		417: "Expectation failed",
 		429: "Too many requests",
 		500: "Internal server error",
-		 -1: "Connection error",
+		-1:  "Connection error",
 	}
 	// See https://github.com/github/freno/blob/master/doc/http.md
 	httpStatusFrenoMessages = map[int]string{
@@ -295,7 +295,6 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 	if err != nil {
 		// If not told to ignore errors, we'll throttle on HTTP connection issues
 		if !this.migrationContext.IgnoreHTTPErrors {
-			log.Errorf("errors occurred during HTTP throttle check: %+v", err)
 			atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(-1))
 		}
 	}
@@ -312,7 +311,6 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 		if err != nil {
 			// If not told to ignore errors, we'll throttle on HTTP connection issues
 			if !this.migrationContext.IgnoreHTTPErrors {
-				log.Errorf("errors occurred during HTTP throttle check: %+v", err)
 				atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(-1))
 			}
 		}
