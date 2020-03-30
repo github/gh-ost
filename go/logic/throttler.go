@@ -19,20 +19,22 @@ import (
 )
 
 var (
-	httpStatusMessages map[int]string = map[int]string{
+	httpStatusMessages = map[int]string{
 		200: "OK",
 		404: "Not found",
 		417: "Expectation failed",
 		429: "Too many requests",
 		500: "Internal server error",
+		 -1: "Connection error",
 	}
 	// See https://github.com/github/freno/blob/master/doc/http.md
-	httpStatusFrenoMessages map[int]string = map[int]string{
+	httpStatusFrenoMessages = map[int]string{
 		200: "OK",
 		404: "freno: unknown metric",
 		417: "freno: access forbidden",
 		429: "freno: threshold exceeded",
 		500: "freno: internal error",
+		-1:  "freno: connection error",
 	}
 )
 
