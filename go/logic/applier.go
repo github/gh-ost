@@ -444,6 +444,9 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			}
 			hasFurtherRange = true
 		}
+		if err = rows.Err(); err != nil {
+			return hasFurtherRange, err
+		}
 		if hasFurtherRange {
 			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
 			return hasFurtherRange, nil
