@@ -217,6 +217,10 @@ type MigrationContext struct {
 	ForceTmpTableName                string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
+
+	Where                                  string
+	ForceQueryMigrationRangeValuesOnMaster bool
+	PartitionStmt						string
 }
 
 type ContextConfig struct {
