@@ -38,6 +38,7 @@ type CutOver int
 const (
 	CutOverAtomic CutOver = iota
 	CutOverTwoStep
+	CutOverTrigger
 )
 
 type ThrottleReasonHint string
@@ -170,6 +171,7 @@ type MigrationContext struct {
 	StartTime                              time.Time
 	RowCopyStartTime                       time.Time
 	RowCopyEndTime                         time.Time
+	CreateTriggersStartTime                time.Time
 	LockTablesStartTime                    time.Time
 	RenameTablesStartTime                  time.Time
 	RenameTablesEndTime                    time.Time
@@ -195,6 +197,7 @@ type MigrationContext struct {
 	UserCommandedUnpostponeFlag            int64
 	CutOverCompleteFlag                    int64
 	InCutOverCriticalSectionFlag           int64
+	ApplyDMLEventState                     int64
 	PanicAbort                             chan error
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
@@ -215,6 +218,8 @@ type MigrationContext struct {
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 	ForceTmpTableName                string
+
+	TriggerCutoverUniqueKeys [][]interface{}
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 }

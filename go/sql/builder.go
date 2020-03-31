@@ -508,3 +508,84 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	)
 	return result, sharedArgs, uniqueKeyArgs, nil
 }
+
+func ObtainUniqueKeyValues(tableColumns, uniqueKeyColumns *ColumnList, args []interface{}) (uniqueKeyArgs []interface{}) {
+	for _, column := range uniqueKeyColumns.Columns() {
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal])
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+	}
+	return uniqueKeyArgs
+}
+
+func buildColumnsPreparedValuesWhere(columns *ColumnList) []string {
+	values := make([]string, columns.Len(), columns.Len())
+	for i, name := range columns.Names() {
+		values[i] = fmt.Sprintf(
+			"%s <=> ?",
+			EscapeName(name))
+	}
+	return values
+}
+
+func BuildDeleteQuery(databaseName, ghostTableName string, uniqueKeyColumns *ColumnList, uniqueKeyArgs [][]interface{}) (result string, explodedArgs []interface{}, err error) {
+	preparedValuesGetKey := buildColumnsPreparedValuesWhere(uniqueKeyColumns)
+
+	template := fmt.Sprintf(
+		"(%s)",
+		strings.Join(preparedValuesGetKey, " and "))
+
+	preparedValuesWhere := make([]string, len(uniqueKeyArgs), len(uniqueKeyArgs))
+	for i, uniqueKey := range uniqueKeyArgs {
+		explodedArgs = append(explodedArgs, uniqueKey...)
+		preparedValuesWhere[i] = template
+	}
+
+	result = fmt.Sprintf(
+		"delete /* gh-ost */ from %s.%s where %s",
+		EscapeName(databaseName),
+		EscapeName(ghostTableName),
+		strings.Join(preparedValuesWhere, " or "))
+
+	return result, explodedArgs, nil
+}
+
+func BuildInsertSelectQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, uniqueKeyArgs [][]interface{}) (result string, explodedArgs []interface{}, err error) {
+	databaseName = EscapeName(databaseName)
+	originalTableName = EscapeName(originalTableName)
+	ghostTableName = EscapeName(ghostTableName)
+
+	mappedSharedColumns = duplicateNames(mappedSharedColumns)
+	for i := range mappedSharedColumns {
+		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
+	}
+	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
+
+	sharedColumns = duplicateNames(sharedColumns)
+	for i := range sharedColumns {
+		sharedColumns[i] = EscapeName(sharedColumns[i])
+	}
+	sharedColumnsListing := strings.Join(sharedColumns, ", ")
+
+	preparedValuesGetKey := buildColumnsPreparedValuesWhere(uniqueKeyColumns)
+
+	template := fmt.Sprintf(
+		"(%s)",
+		strings.Join(preparedValuesGetKey, " and "))
+
+	preparedValuesWhere := make([]string, len(uniqueKeyArgs), len(uniqueKeyArgs))
+	for i, uniqueKey := range uniqueKeyArgs {
+		explodedArgs = append(explodedArgs, uniqueKey...)
+		preparedValuesWhere[i] = template
+	}
+
+	result = fmt.Sprintf(
+		"insert /* gh-ost %s.%s */ into %s.%s (%s) select %s from %s.%s force index (%s) where %s",
+		databaseName, originalTableName,
+		databaseName, ghostTableName, mappedSharedColumnsListing,
+		sharedColumnsListing, databaseName, originalTableName,
+		uniqueKey,
+		strings.Join(preparedValuesWhere, " or "))
+
+	return result, explodedArgs, nil
+}

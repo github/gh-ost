@@ -8,6 +8,8 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"regexp"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -516,6 +518,273 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	return chunkSize, rowsAffected, duration, nil
 }
 
+// Create the trigger prefix
+func (this *Applier) makeTriggerPrefix() string {
+	prefix := fmt.Sprintf(
+		"ghost_%s_%s",
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName)
+	r := regexp.MustCompile("\\W")
+	prefix = r.ReplaceAllString(prefix, "_")
+
+	if len(prefix) > 60 {
+		oldPrefix := prefix
+		prefix = prefix[0:60]
+
+		log.Debugf(
+			"Trigger prefix %s is over 60 characters long, truncating to %s",
+			oldPrefix,
+			prefix)
+	}
+
+	return prefix
+}
+
+// CreateTriggersOriginalTable Create triggers from the original table to the ghost one
+func (this *Applier) CreateTriggersOriginalTable() error {
+	prefix := this.makeTriggerPrefix()
+
+	delIndexComparations := []string{}
+	for _, name := range this.migrationContext.UniqueKey.Columns.Names() {
+		columnQuoted := sql.EscapeName(name)
+		comparation := fmt.Sprintf(
+			"%s.%s.%s <=> OLD.%s",
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+			columnQuoted,
+			columnQuoted)
+		delIndexComparations = append(delIndexComparations, comparation)
+	}
+
+	deleteTrigger := fmt.Sprintf(
+		"CREATE /* gh-ost */ TRIGGER `%s_del` AFTER DELETE ON %s.%s "+
+			"FOR EACH ROW "+
+			"DELETE /* gh-ost */ IGNORE FROM %s.%s WHERE %s",
+		prefix,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		strings.Join(delIndexComparations, " AND "))
+
+	insertCols := []string{}
+	insertValues := []string{}
+	for i, origColumn := range this.migrationContext.SharedColumns.Names() {
+		key := sql.EscapeName(this.migrationContext.MappedSharedColumns.Columns()[i].Name)
+		insertCols = append(insertCols, key)
+
+		value := fmt.Sprintf("NEW.%s", sql.EscapeName(origColumn))
+		insertValues = append(insertValues, value)
+	}
+
+	insertTrigger := fmt.Sprintf(
+		"CREATE /* gh-ost */ TRIGGER `%s_ins` AFTER INSERT ON %s.%s "+
+			"FOR EACH ROW "+
+			"REPLACE /* gh-ost */ INTO %s.%s (%s) VALUES (%s)",
+		prefix,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		strings.Join(insertCols, ", "),
+		strings.Join(insertValues, ", "))
+
+	updIndexComparations := []string{}
+	for _, name := range this.migrationContext.UniqueKey.Columns.Names() {
+		columnQuoted := sql.EscapeName(name)
+		comparation := fmt.Sprintf(
+			"OLD.%s <=> NEW.%s",
+			columnQuoted,
+			columnQuoted)
+		updIndexComparations = append(updIndexComparations, comparation)
+	}
+
+	updateTrigger := fmt.Sprintf(
+		"CREATE /* gh-ost */ TRIGGER `%s_upd` AFTER UPDATE ON %s.%s "+
+			"FOR EACH ROW "+
+			"BEGIN /* gh-ost */ "+
+			"DELETE IGNORE FROM %s.%s WHERE !(%s) AND %s; "+
+			"REPLACE INTO %s.%s (%s) VALUES (%s); "+
+			"END",
+		prefix,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		strings.Join(updIndexComparations, " AND "),
+		strings.Join(delIndexComparations, " AND "),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		strings.Join(insertCols, ", "),
+		strings.Join(insertValues, ", "))
+
+	return func() error {
+		this.migrationContext.CreateTriggersStartTime = time.Now()
+
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(deleteTrigger); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(insertTrigger); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(updateTrigger); err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return nil
+	}()
+}
+
+// DropTriggersOldTableIfExists Drop triggers from the old table if them exists
+func (this *Applier) DropTriggersOldTableIfExists() error {
+	prefix := this.makeTriggerPrefix()
+
+	dropDeleteTrigger := fmt.Sprintf(
+		"DROP /* gh-ost */ TRIGGER IF EXISTS %s.`%s_del`",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		prefix)
+
+	dropInsertTrigger := fmt.Sprintf(
+		"DROP /* gh-ost */ TRIGGER IF EXISTS %s.`%s_ins`",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		prefix)
+
+	dropUpdateTrigger := fmt.Sprintf(
+		"DROP /* gh-ost */ TRIGGER IF EXISTS %s.`%s_upd`",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		prefix)
+
+	return func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(dropDeleteTrigger); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(dropInsertTrigger); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(dropUpdateTrigger); err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return nil
+	}()
+}
+
+func (this *Applier) ObtainUniqueKeyValuesOfEvent(dmlEvent *binlog.BinlogDMLEvent) (uniqueKeys [][]interface{}) {
+	switch dmlEvent.DML {
+	case binlog.DeleteDML:
+		return append(uniqueKeys,
+			sql.ObtainUniqueKeyValues(
+				this.migrationContext.OriginalTableColumns,
+				&this.migrationContext.UniqueKey.Columns,
+				dmlEvent.WhereColumnValues.AbstractValues()))
+
+	case binlog.InsertDML:
+		return append(uniqueKeys,
+			sql.ObtainUniqueKeyValues(
+				this.migrationContext.OriginalTableColumns,
+				&this.migrationContext.UniqueKey.Columns,
+				dmlEvent.NewColumnValues.AbstractValues()))
+
+	case binlog.UpdateDML:
+		{
+			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
+				uniqueKeys = append(uniqueKeys,
+					sql.ObtainUniqueKeyValues(
+						this.migrationContext.OriginalTableColumns,
+						&this.migrationContext.UniqueKey.Columns,
+						dmlEvent.WhereColumnValues.AbstractValues()))
+			}
+			return append(uniqueKeys,
+				sql.ObtainUniqueKeyValues(
+					this.migrationContext.OriginalTableColumns,
+					&this.migrationContext.UniqueKey.Columns,
+					dmlEvent.NewColumnValues.AbstractValues()))
+		}
+	}
+
+	return uniqueKeys
+}
+
+func (this *Applier) SanitizeRowsDuringCutOver() error {
+	for len(this.migrationContext.TriggerCutoverUniqueKeys) > 0 {
+		cutIndex := int64(len(this.migrationContext.TriggerCutoverUniqueKeys)) - this.migrationContext.ChunkSize
+		if cutIndex < 0 {
+			cutIndex = 0
+		}
+
+		chunkValues := this.migrationContext.TriggerCutoverUniqueKeys[cutIndex:]
+		deleteQuery, deleteArgs, deleteErr := sql.BuildDeleteQuery(
+			this.migrationContext.DatabaseName,
+			this.migrationContext.GetGhostTableName(),
+			&this.migrationContext.UniqueKey.Columns,
+			chunkValues)
+
+		if deleteErr != nil {
+			return deleteErr
+		}
+
+		insertSelectQuery, insertSelectArgs, insertSelectErr := sql.BuildInsertSelectQuery(
+			this.migrationContext.DatabaseName,
+			this.migrationContext.OriginalTableName,
+			this.migrationContext.GetGhostTableName(),
+			this.migrationContext.SharedColumns.Names(),
+			this.migrationContext.MappedSharedColumns.Names(),
+			this.migrationContext.UniqueKey.Name,
+			&this.migrationContext.UniqueKey.Columns,
+			chunkValues)
+
+		if insertSelectErr != nil {
+			return insertSelectErr
+		}
+
+		log.Infof("Sanitizing chunk of created rows during trigger creation (%d/%d)",
+			int64(len(this.migrationContext.TriggerCutoverUniqueKeys))-cutIndex,
+			len(this.migrationContext.TriggerCutoverUniqueKeys))
+
+		err := func() error {
+			tx, err := this.db.Begin()
+			if err != nil {
+				return err
+			}
+
+			if _, err := tx.Exec(deleteQuery, deleteArgs...); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(insertSelectQuery, insertSelectArgs...); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			return nil
+		}()
+
+		if err != nil {
+			return err
+		}
+
+		this.migrationContext.TriggerCutoverUniqueKeys = this.migrationContext.TriggerCutoverUniqueKeys[:cutIndex]
+	}
+
+	return nil
+}
+
 // LockOriginalTable places a write lock on the original table
 func (this *Applier) LockOriginalTable() error {
 	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
@@ -542,6 +811,31 @@ func (this *Applier) UnlockTables() error {
 		return err
 	}
 	log.Infof("Tables unlocked")
+	return nil
+}
+
+// SwapTables issues a one-step swap table operation:
+// - rename original table to _old
+// - rename ghost table to original
+func (this *Applier) SwapTables() error {
+	query := fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s, %s.%s to %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetOldTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	log.Infof("Swaping original and new table: %s", query)
+	this.migrationContext.RenameTablesStartTime = time.Now()
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	this.migrationContext.RenameTablesEndTime = time.Now()
+
+	log.Infof("Tables swaped")
 	return nil
 }
 

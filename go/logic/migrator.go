@@ -25,8 +25,10 @@ import (
 type ChangelogState string
 
 const (
-	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
-	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
+	GhostTableMigrated             ChangelogState = "GhostTableMigrated"
+	AllEventsUpToLockProcessed                    = "AllEventsUpToLockProcessed"
+	StopWriteEvents                               = "StopWriteEvents"
+	AllEventsUpToTriggersProcessed                = "AllEventsUpToTriggersProcessed"
 )
 
 func ReadChangelogState(s string) ChangelogState {
@@ -71,10 +73,14 @@ type Migrator struct {
 	hooksExecutor    *HooksExecutor
 	migrationContext *base.MigrationContext
 
-	firstThrottlingCollected   chan bool
-	ghostTableMigrated         chan bool
-	rowCopyComplete            chan error
-	allEventsUpToLockProcessed chan string
+	firstThrottlingCollected       chan bool
+	ghostTableMigrated             chan bool
+	rowCopyComplete                chan error
+	allEventsUpToLockProcessed     chan string
+	stoppedWriteEvents             chan string
+	allEventsUpToTriggersProcessed chan string
+
+	triggerCutoverUniqueKeys [][]interface{}
 
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
@@ -89,12 +95,14 @@ type Migrator struct {
 
 func NewMigrator(context *base.MigrationContext) *Migrator {
 	migrator := &Migrator{
-		migrationContext:           context,
-		parser:                     sql.NewParser(),
-		ghostTableMigrated:         make(chan bool),
-		firstThrottlingCollected:   make(chan bool, 3),
-		rowCopyComplete:            make(chan error),
-		allEventsUpToLockProcessed: make(chan string),
+		migrationContext:               context,
+		parser:                         sql.NewParser(),
+		ghostTableMigrated:             make(chan bool),
+		firstThrottlingCollected:       make(chan bool, 3),
+		rowCopyComplete:                make(chan error),
+		allEventsUpToLockProcessed:     make(chan string),
+		stoppedWriteEvents:             make(chan string),
+		allEventsUpToTriggersProcessed: make(chan string),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
@@ -231,6 +239,38 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 			// at this point we know all events up to lock have been read from the streamer,
 			// because the streamer works sequentially. So those events are either already handled,
 			// or have event functions in applyEventsQueue.
+			// So as not to create a potential deadlock, we write this func to applyEventsQueue
+			// asynchronously, understanding it doesn't really matter.
+			go func() {
+				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
+			}()
+		}
+	case StopWriteEvents:
+		{
+			var applyEventFunc tableWriteFunc = func() error {
+				atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 1)
+				this.stoppedWriteEvents <- changelogStateString
+				return nil
+			}
+			// at this point we know that the triggers will be created and we don't want write the
+			// next events from the streamer, because the streamer works sequentially. So those
+			// events are either already handled, or have event functions in applyEventsQueue.
+			// So as not to create a potential deadlock, we write this func to applyEventsQueue
+			// asynchronously, understanding it doesn't really matter.
+			go func() {
+				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
+			}()
+		}
+	case AllEventsUpToTriggersProcessed:
+		{
+			var applyEventFunc tableWriteFunc = func() error {
+				atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 2)
+				this.allEventsUpToTriggersProcessed <- changelogStateString
+				return nil
+			}
+			// at this point we know that the triggers are created and we want to sanitize the inconsistent
+			// rows between the stop writes and the triggers event, because the streamer works sequentially.
+			// So those events are either already handled, or have event functions in applyEventsQueue.
 			// So as not to create a potential deadlock, we write this func to applyEventsQueue
 			// asynchronously, understanding it doesn't really matter.
 			go func() {
@@ -530,7 +570,98 @@ func (this *Migrator) cutOver() (err error) {
 		this.handleCutOverResult(err)
 		return err
 	}
+	if this.migrationContext.CutOverType == base.CutOverTrigger {
+		err := this.cutOverTrigger()
+		this.handleCutOverResult(err)
+		return err
+	}
 	return log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
+}
+
+// waitForStopWriteEvents Inject the "StopWriteEvents" state hint,
+// wait for it to appear in the binary logs, make sure the queue is drained.
+func (this *Migrator) waitForStopWriteEvents() (err error) {
+	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
+
+	this.migrationContext.MarkPointOfInterest()
+	stopWriteEventsStartTime := time.Now()
+
+	stopWriteEventsChallenge := fmt.Sprintf(
+		"%s:%d",
+		string(StopWriteEvents),
+		stopWriteEventsStartTime.UnixNano())
+
+	log.Infof("Writing changelog state: %+v", stopWriteEventsChallenge)
+	if _, err := this.applier.WriteChangelogState(stopWriteEventsChallenge); err != nil {
+		return err
+	}
+	log.Infof("Waiting for stop writes")
+	for found := false; !found; {
+		select {
+		case <-timeout.C:
+			{
+				return log.Errorf("Timeout while waiting for stop writes")
+			}
+		case state := <-this.stoppedWriteEvents:
+			{
+				if state == stopWriteEventsChallenge {
+					log.Infof("Waiting for stop writes: got %s", state)
+					found = true
+				} else {
+					log.Infof("Waiting for stop writes: skipping %s", state)
+				}
+			}
+		}
+	}
+	stopWriteEventsDuration := time.Since(stopWriteEventsStartTime)
+
+	log.Infof("Done waiting for stop writes; duration=%+v", stopWriteEventsDuration)
+	this.printStatus(ForcePrintStatusAndHintRule)
+
+	return nil
+}
+
+// waitForEventsUpToTriggers Inject the "AllEventsUpToTriggersProcessed" state hint,
+// wait for it to appear in the binary logs, make sure the queue is drained.
+func (this *Migrator) waitForEventsUpToTriggers() (err error) {
+	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
+
+	this.migrationContext.MarkPointOfInterest()
+	waitForEventsUpToTriggersStartTime := time.Now()
+
+	allEventsUpToTriggersProcessedChallenge := fmt.Sprintf(
+		"%s:%d",
+		string(AllEventsUpToTriggersProcessed),
+		waitForEventsUpToTriggersStartTime.UnixNano())
+
+	log.Infof("Writing changelog state: %+v", allEventsUpToTriggersProcessedChallenge)
+	if _, err := this.applier.WriteChangelogState(allEventsUpToTriggersProcessedChallenge); err != nil {
+		return err
+	}
+	log.Infof("Waiting for events up to triggers")
+	for found := false; !found; {
+		select {
+		case <-timeout.C:
+			{
+				return log.Errorf("Timeout while waiting for events up to triggers")
+			}
+		case state := <-this.allEventsUpToTriggersProcessed:
+			{
+				if state == allEventsUpToTriggersProcessedChallenge {
+					log.Infof("Waiting for events up to triggers: got %s", state)
+					found = true
+				} else {
+					log.Infof("Waiting for events up to triggers: skipping %s", state)
+				}
+			}
+		}
+	}
+	waitForEventsUpToTriggersDuration := time.Since(waitForEventsUpToTriggersStartTime)
+
+	log.Infof("Done waiting for events up to triggers; duration=%+v", waitForEventsUpToTriggersDuration)
+	this.printStatus(ForcePrintStatusAndHintRule)
+
+	return nil
 }
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
@@ -599,6 +730,69 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
 	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
 	log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	return nil
+}
+
+// cutOverTrigger will create some INSERT, UPDATE and DELETE triggers to keep the table updated,
+// After this it will copy the changes between the last insert and the triggers creation and do a
+// simple RENAME TABLE.
+func (this *Migrator) cutOverTrigger() (err error) {
+	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
+	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
+
+	if err := this.waitForStopWriteEvents(); err != nil {
+		return err
+	}
+
+	defer this.applier.DropTriggersOldTableIfExists()
+
+	log.Infof(
+		"Creating triggers for %s.%s",
+		this.migrationContext.DatabaseName,
+		this.migrationContext.OriginalTableName)
+
+	if err := this.retryOperation(this.applier.CreateTriggersOriginalTable); err != nil {
+		return err
+	}
+
+	if err := this.waitForEventsUpToTriggers(); err != nil {
+		return log.Errore(err)
+	}
+
+	this.migrationContext.TriggerCutoverUniqueKeys = nil
+
+CompareNewRow:
+	for _, rowToAdd := range this.triggerCutoverUniqueKeys {
+	CompareAddedRow:
+		for _, rowAdded := range this.migrationContext.TriggerCutoverUniqueKeys {
+			for i := range rowAdded {
+				if rowToAdd[i] != rowAdded[i] {
+					continue CompareAddedRow
+				}
+			}
+
+			continue CompareNewRow
+		}
+
+		this.migrationContext.TriggerCutoverUniqueKeys = append(
+			this.migrationContext.TriggerCutoverUniqueKeys,
+			rowToAdd)
+	}
+
+	if err := this.retryOperation(this.applier.SanitizeRowsDuringCutOver); err != nil {
+		return err
+	}
+
+	if err := this.retryOperation(this.applier.SwapTables); err != nil {
+		return err
+	}
+	if err := this.retryOperation(this.applier.DropTriggersOldTableIfExists); err != nil {
+		return err
+	}
+
+	createTriggersAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.CreateTriggersStartTime)
+	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
+	log.Debugf("Create triggers & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", createTriggersAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
@@ -988,6 +1182,7 @@ func (this *Migrator) initiateStreaming() error {
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
+	atomic.StoreInt64(&this.migrationContext.ApplyDMLEventState, 0)
 	this.eventsStreamer.AddListener(
 		false,
 		this.migrationContext.DatabaseName,
@@ -1164,6 +1359,17 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		return handleNonDMLEventStruct(eventStruct)
 	}
 	if eventStruct.dmlEvent != nil {
+		applyDMLEventState := atomic.LoadInt64(&this.migrationContext.ApplyDMLEventState)
+		if applyDMLEventState == 1 {
+			this.triggerCutoverUniqueKeys = append(
+				this.triggerCutoverUniqueKeys,
+				this.applier.ObtainUniqueKeyValuesOfEvent(eventStruct.dmlEvent)...)
+			return nil
+		}
+		if applyDMLEventState == 2 {
+			return nil
+		}
+
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
 		var nonDmlStructToApply *applyEventStruct
