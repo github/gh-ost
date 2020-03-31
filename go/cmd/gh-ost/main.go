@@ -267,7 +267,7 @@ func main() {
 		log.Fatale(err)
 	}
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {
-		log.Errore(err)
+		log.Fatale(err)
 	}
 	if err := migrationContext.SetExponentialBackoffMaxInterval(*exponentialBackoffMaxInterval); err != nil {
 		log.Errore(err)
