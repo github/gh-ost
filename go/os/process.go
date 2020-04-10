@@ -45,6 +45,8 @@ func CommandRun(commandText string, arguments ...string) error {
 		return log.Errore(err)
 	}
 	err = cmd.Run()
+
+	// returning err
 	return log.Errore(err)
 }
 
