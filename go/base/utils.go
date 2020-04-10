@@ -110,9 +110,18 @@ func HiddenPasswordFromCmdline() {
 	argsLength := len(os.Args)
 	for i, arg := range os.Args {
 		switch arg {
+		// -password aaa, --password aaa
 		case "--password", "-password", "-master-password", "--master-password":
 			if i+1 < argsLength {
 				os.Args[i+1] = "xxx"
+			}
+		default:
+			// -password=aaa, --password=aaa
+			switch strings.Split(arg, "=")[0] {
+			case "--password", "-password":
+				arg = "-password=xxx"
+			case "-master-password", "--master-password":
+				arg = "-master-password=xxx"
 			}
 		}
 		cmdline = append(cmdline, arg)
