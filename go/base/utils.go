@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
 	gosql "database/sql"
+	"github.com/ErikDubbelboer/gspt"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/outbrain/golib/log"
 )
@@ -93,4 +95,28 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	} else {
 		return "", fmt.Errorf("Unexpected database port reported: %+v / extra_port: %+v", port, extraPort)
 	}
+}
+
+// HiddenPasswordFromCmdline hidden password from `ps` command, Linux just change /proc/{pid}/cmdline
+func HiddenPasswordFromCmdline() {
+	// third party package `gspt` use cgo, not cross platform available
+	switch runtime.GOOS {
+	case "linux", "darwin":
+	default:
+		return
+	}
+	// replace password with `xxx`
+	var cmdline []string
+	argsLength := len(os.Args)
+	for i, arg := range os.Args {
+		switch arg {
+		case "--password", "-password", "-master-password", "--master-password":
+			if i+1 < argsLength {
+				os.Args[i+1] = "xxx"
+			}
+		}
+		cmdline = append(cmdline, arg)
+	}
+	// call third party function set process's `/proc/{pid}/cmdline`
+	gspt.SetProcTitle(strings.Join(cmdline, " "))
 }
