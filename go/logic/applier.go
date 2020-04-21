@@ -371,6 +371,8 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 		}
 	}
 	log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
+
+	err = rows.Err()
 	return err
 }
 
@@ -392,6 +394,8 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 		}
 	}
 	log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+
+	err = rows.Err()
 	return err
 }
 
