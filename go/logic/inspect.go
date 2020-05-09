@@ -293,9 +293,11 @@ func (this *Inspector) restartReplication() error {
 	return nil
 }
 
-// applyBinlogFormat sets ROW binlog format and restarts replication to make
+// applyBinlogFormat sets ROW binlog format and FULL binlog row image and restarts replication to make
 // the replication thread apply it.
 func (this *Inspector) applyBinlogFormat() error {
+	changesApplied := false
+
 	if this.migrationContext.RequiresBinlogFormatChange() {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
 			return fmt.Errorf("Existing binlog_format is %s. Am not switching it to ROW unless you specify --switch-to-rbr", this.migrationContext.OriginalBinlogFormat)
@@ -310,8 +312,28 @@ func (this *Inspector) applyBinlogFormat() error {
 			return err
 		}
 		log.Debugf("'ROW' binlog format applied")
+		changesApplied = true
+	}
+	if this.migrationContext.RequiresBinlogRowImageChange() {
+		if !this.migrationContext.SwitchToFullBinlogRowImage {
+			return fmt.Errorf("Existing binlog_row_image is %s. Am not switching it to FULL unless you specify --switch-to-rbr-full", this.migrationContext.OriginalBinlogRowImage)
+		}
+		if _, err := sqlutils.ExecNoPrepare(this.db, `set global binlog_row_image='FULL'`); err != nil {
+			return err
+		}
+		if _, err := sqlutils.ExecNoPrepare(this.db, `set session binlog_row_image='FULL'`); err != nil {
+			return err
+		}
+		if err := this.restartReplication(); err != nil {
+			return err
+		}
+		log.Debugf("'FULL' binlog row image applied")
+		changesApplied = true
+	}
+	if changesApplied {
 		return nil
 	}
+
 	// We already have RBR, no explicit switch
 	if !this.migrationContext.AssumeRBR {
 		if err := this.restartReplication(); err != nil {
@@ -319,6 +341,18 @@ func (this *Inspector) applyBinlogFormat() error {
 		}
 	}
 	return nil
+}
+
+func (this *Inspector) countReplicas() (int, error) {
+	countReplicas := 0
+
+	query := fmt.Sprintf(`show /* gh-ost */ slave hosts`)
+	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+		countReplicas++
+		return nil
+	})
+
+	return countReplicas, err
 }
 
 // validateBinlogs checks that binary log configuration is good to go
@@ -335,19 +369,17 @@ func (this *Inspector) validateBinlogs() error {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
 			return fmt.Errorf("You must be using ROW binlog format. I can switch it for you, provided --switch-to-rbr and that %s:%d doesn't have replicas", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 		}
-		query := fmt.Sprintf(`show /* gh-ost */ slave hosts`)
-		countReplicas := 0
-		err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-			countReplicas++
-			return nil
-		})
+
+		countReplicas, err := this.countReplicas()
 		if err != nil {
 			return err
 		}
+
 		if countReplicas > 0 {
-			return fmt.Errorf("%s:%d has %s binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
+			return fmt.Errorf("%s:%d has '%s' binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
 		}
-		log.Infof("%s:%d has %s binlog_format. I will change it to ROW, and will NOT change it back, even in the event of failure.", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
+
+		log.Infof("%s:%d has '%s' binlog_format. I will change it to ROW, and will NOT change it back, even in the event of failure.", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
 	}
 	query = `select @@global.binlog_row_image`
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.OriginalBinlogRowImage); err != nil {
@@ -356,7 +388,18 @@ func (this *Inspector) validateBinlogs() error {
 	}
 	this.migrationContext.OriginalBinlogRowImage = strings.ToUpper(this.migrationContext.OriginalBinlogRowImage)
 	if this.migrationContext.OriginalBinlogRowImage != "FULL" {
-		return fmt.Errorf("%s:%d has '%s' binlog_row_image, and only 'FULL' is supported. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogRowImage)
+		if !this.migrationContext.SwitchToFullBinlogRowImage {
+			return fmt.Errorf("%s:%d has '%s' binlog_row_image, and only 'FULL' is supported. I can switch it for you, provided --switch-to-full-rbr and that %s:%d doesn't have replicas. Alternatively, you may `set global binlog_row_image='full'` and try again", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogRowImage, this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		}
+
+		countReplicas, err := this.countReplicas()
+		if err != nil {
+			return err
+		}
+
+		if countReplicas > 0 {
+			return fmt.Errorf("%s:%d has '%s' binlog_row_image, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogRowImage)
+		}
 	}
 
 	log.Infof("binary logs validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)

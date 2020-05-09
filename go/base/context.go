@@ -80,21 +80,22 @@ type MigrationContext struct {
 	OriginalTableName string
 	AlterStatement    string
 
-	CountTableRows           bool
-	ConcurrentCountTableRows bool
-	AllowedRunningOnMaster   bool
-	AllowedMasterMaster      bool
-	SwitchToRowBinlogFormat  bool
-	AssumeRBR                bool
-	SkipForeignKeyChecks     bool
-	SkipStrictMode           bool
-	NullableUniqueKeyAllowed bool
-	ApproveRenamedColumns    bool
-	SkipRenamedColumns       bool
-	IsTungsten               bool
-	DiscardForeignKeys       bool
-	AliyunRDS                bool
-	GoogleCloudPlatform      bool
+	CountTableRows             bool
+	ConcurrentCountTableRows   bool
+	AllowedRunningOnMaster     bool
+	AllowedMasterMaster        bool
+	SwitchToRowBinlogFormat    bool
+	SwitchToFullBinlogRowImage bool
+	AssumeRBR                  bool
+	SkipForeignKeyChecks       bool
+	SkipStrictMode             bool
+	NullableUniqueKeyAllowed   bool
+	ApproveRenamedColumns      bool
+	SkipRenamedColumns         bool
+	IsTungsten                 bool
+	DiscardForeignKeys         bool
+	AliyunRDS                  bool
+	GoogleCloudPlatform        bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -311,6 +312,11 @@ func (this *MigrationContext) GetVoluntaryLockName() string {
 // RequiresBinlogFormatChange is `true` when the original binlog format isn't `ROW`
 func (this *MigrationContext) RequiresBinlogFormatChange() bool {
 	return this.OriginalBinlogFormat != "ROW"
+}
+
+// RequiresBinlogRowImageChange is `true` when the original binlog format isn't `FULL`
+func (this *MigrationContext) RequiresBinlogRowImageChange() bool {
+	return this.OriginalBinlogRowImage != "FULL"
 }
 
 // GetApplierHostname is a safe access method to the applier hostname
