@@ -343,6 +343,7 @@ func (this *Inspector) applyBinlogFormat() error {
 	return nil
 }
 
+// countReplicas returns the number of hosts replicating from `this.db`
 func (this *Inspector) countReplicas() (int, error) {
 	countReplicas := 0
 
