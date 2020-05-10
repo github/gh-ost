@@ -1012,11 +1012,20 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 				if buildResult.err != nil {
 					return rollback(buildResult.err)
 				}
-				if _, err := tx.Exec(buildResult.query, buildResult.args...); err != nil {
+				result, err := tx.Exec(buildResult.query, buildResult.args...)
+				if err != nil {
 					err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), buildResult.query, buildResult.args)
 					return rollback(err)
 				}
-				totalDelta += buildResult.rowsDelta
+
+				rowsAffected, err := result.RowsAffected()
+				if err != nil {
+					log.Warningf("error getting rows affected from DML event query: %s. this might not be supported by go-sql-driver. i'm going to assume that the DML affected a row, but this may result in inaccurate statistics", err)
+					rowsAffected = 1
+				}
+				// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
+				// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
+				totalDelta += buildResult.rowsDelta * rowsAffected
 			}
 		}
 		if err := tx.Commit(); err != nil {
