@@ -6,6 +6,7 @@
 package logic
 
 import (
+	"context"
 	gosql "database/sql"
 	"fmt"
 	"reflect"
@@ -521,7 +522,7 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 }
 
 // CountTableRows counts exact number of rows on the original table
-func (this *Inspector) CountTableRows() error {
+func (this *Inspector) CountTableRows(ctx context.Context) error {
 	atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 0)
 
@@ -529,9 +530,20 @@ func (this *Inspector) CountTableRows() error {
 
 	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	var rowsEstimate int64
-	if err := this.db.QueryRow(query).Scan(&rowsEstimate); err != nil {
+	if err := this.db.QueryRowContext(ctx, query).Scan(&rowsEstimate); err != nil {
 		return err
 	}
+	select {
+	case <-ctx.Done():
+		log.Infof("exact row count cancelled (%s), likely because I'm about to cut over", ctx.Err())
+		return nil
+	default:
+		// row count query finished. nil out the cancel func, so the main migration thread
+		// doesn't bother calling it after row copy is done.
+		this.migrationContext.CountTableRowsCancelFunc = nil
+		break
+	}
+
 	atomic.StoreInt64(&this.migrationContext.RowsEstimate, rowsEstimate)
 	this.migrationContext.UsedRowsEstimateMethod = base.CountRowsEstimate
 

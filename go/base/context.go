@@ -80,6 +80,7 @@ type MigrationContext struct {
 	OriginalTableName string
 	AlterStatement    string
 
+	CountTableRowsCancelFunc func()
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
 	AllowedRunningOnMaster   bool
