@@ -540,7 +540,7 @@ func (this *Inspector) CountTableRows(ctx context.Context) error {
 	default:
 		// row count query finished. nil out the cancel func, so the main migration thread
 		// doesn't bother calling it after row copy is done.
-		this.migrationContext.CountTableRowsCancelFunc = nil
+		this.migrationContext.SetCountTableRowsCancelFunc(nil)
 		break
 	}
 
