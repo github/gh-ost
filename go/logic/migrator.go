@@ -295,7 +295,7 @@ func (this *Migrator) countTableRows() (err error) {
 	if this.migrationContext.ConcurrentCountTableRows {
 		// store a cancel func so we can stop this query before a cut over
 		rowCountContext, rowCountCancel := context.WithCancel(context.Background())
-		this.migrationContext.CountTableRowsCancelFunc = rowCountCancel
+		this.migrationContext.SetCountTableRowsCancelFunc(rowCountCancel)
 
 		log.Infof("As instructed, counting rows in the background; meanwhile I will use an estimated count, and will update it later on")
 		go countRowsFunc(rowCountContext)
@@ -406,9 +406,9 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	this.printStatus(ForcePrintStatusRule)
 
-	if this.migrationContext.CountTableRowsCancelFunc != nil {
+	if this.migrationContext.IsCountingTableRows() {
 		log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
-		this.migrationContext.CountTableRowsCancelFunc()
+		this.migrationContext.CancelTableRowsCount()
 	}
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err

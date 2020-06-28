@@ -81,7 +81,7 @@ type MigrationContext struct {
 	AlterStatement    string
 
 	countMutex               sync.Mutex
-	CountTableRowsCancelFunc func()
+	countTableRowsCancelFunc func()
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
 	AllowedRunningOnMaster   bool
@@ -403,7 +403,7 @@ func (this *MigrationContext) SetCountTableRowsCancelFunc(f func()) {
 	this.countMutex.Lock()
 	defer this.countMutex.Unlock()
 
-	this.CountTableRowsCancelFunc = f
+	this.countTableRowsCancelFunc = f
 }
 
 // IsCountingTableRows returns true if the migration has a table count query running
@@ -411,7 +411,7 @@ func (this *MigrationContext) IsCountingTableRows() bool {
 	this.countMutex.Lock()
 	defer this.countMutex.Unlock()
 
-	return this.CountTableRowsCancelFunc != nil
+	return this.countTableRowsCancelFunc != nil
 }
 
 // CancelTableRowsCount cancels the CountTableRows query context. It is safe to
@@ -420,12 +420,12 @@ func (this *MigrationContext) CancelTableRowsCount() {
 	this.countMutex.Lock()
 	defer this.countMutex.Unlock()
 
-	if this.CountTableRowsCancelFunc == nil {
+	if this.countTableRowsCancelFunc == nil {
 		return
 	}
 
-	this.CountTableRowsCancelFunc()
-	this.CountTableRowsCancelFunc = nil
+	this.countTableRowsCancelFunc()
+	this.countTableRowsCancelFunc = nil
 }
 
 // ElapsedTime returns time since very beginning of the process
