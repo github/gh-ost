@@ -82,6 +82,7 @@ type MigrationContext struct {
 
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
+	ChecksumData             bool
 	AllowedRunningOnMaster   bool
 	AllowedMasterMaster      bool
 	SwitchToRowBinlogFormat  bool

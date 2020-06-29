@@ -455,11 +455,11 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
 // data actually gets copied from original table.
-func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, checksumComparison *base.ChecksumComparison, err error) {
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&this.migrationContext.ChunkSize)
 
-	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
+	insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.GetGhostTableName(),
@@ -473,7 +473,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.IsTransactionalTable(),
 	)
 	if err != nil {
-		return chunkSize, rowsAffected, duration, err
+		return chunkSize, rowsAffected, duration, checksumComparison, err
 	}
 
 	sqlResult, err := func() (gosql.Result, error) {
@@ -492,7 +492,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
 		}
-		result, err := tx.Exec(query, explodedArgs...)
+		result, err := tx.Exec(insertQuery, explodedArgs...)
 		if err != nil {
 			return nil, err
 		}
@@ -503,7 +503,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	}()
 
 	if err != nil {
-		return chunkSize, rowsAffected, duration, err
+		return chunkSize, rowsAffected, duration, checksumComparison, err
 	}
 	rowsAffected, _ = sqlResult.RowsAffected()
 	duration = time.Since(startTime)
@@ -513,7 +513,56 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.MigrationIterationRangeMaxValues,
 		this.migrationContext.GetIteration(),
 		chunkSize)
-	return chunkSize, rowsAffected, duration, nil
+
+	groupConcatMaxLen := 1024 * 1024
+	var originalTableChecksumFunc base.ChecksumFunc = func() (checksum string, err error) {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return checksum, err
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`set session group_concat_max_len := ?`, groupConcatMaxLen); err != nil {
+			return checksum, err
+		}
+
+		err = tx.QueryRow(originalChecksumQuery, explodedArgs...).Scan(&checksum)
+		return checksum, err
+	}
+	var ghostTableChecksumFunc base.ChecksumFunc = func() (checksum string, err error) {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return checksum, err
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`set session group_concat_max_len := ?`, groupConcatMaxLen); err != nil {
+			return checksum, err
+		}
+
+		err = tx.QueryRow(ghostChecksumQuery, explodedArgs...).Scan(&checksum)
+		return checksum, err
+	}
+	checksumComparison = base.NewChecksumComparison(
+		originalTableChecksumFunc, ghostTableChecksumFunc,
+		this.migrationContext.MigrationIterationRangeMinValues,
+		this.migrationContext.MigrationIterationRangeMaxValues,
+	)
+
+	return chunkSize, rowsAffected, duration, checksumComparison, nil
+}
+
+func (this *Applier) CompareChecksum(checksumComparison *base.ChecksumComparison) error {
+	originalChecksum, err := checksumComparison.OriginalTableChecksumFunc()
+	if err != nil {
+		return err
+	}
+	ghostChecksum, err := checksumComparison.GhostTableChecksumFunc()
+	if err != nil {
+		return err
+	}
+	if originalChecksum != ghostChecksum {
+		return fmt.Errorf("Checksum failure")
+	}
+	return nil
 }
 
 // LockOriginalTable places a write lock on the original table
