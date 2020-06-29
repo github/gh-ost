@@ -43,7 +43,7 @@ func (this *ChecksumComparison) IncrementAttempts() {
 }
 
 func (this *ChecksumComparison) String() string {
-	return fmt.Sprintf("range: [%s]..[%s]; attempts: %d",
-		this.MigrationIterationRangeMinValues, this.MigrationIterationRangeMaxValues, this.Attempts,
+	return fmt.Sprintf("iteration: %d, range: [%s]..[%s], attempts: %d",
+		this.Iteration, this.MigrationIterationRangeMinValues, this.MigrationIterationRangeMaxValues, this.Attempts,
 	)
 }
