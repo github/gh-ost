@@ -465,6 +465,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.GetGhostTableName(),
 		this.migrationContext.SharedColumns.Names(),
 		this.migrationContext.MappedSharedColumns.Names(),
+		this.migrationContext.ColumnRenameMap,
 		this.migrationContext.UniqueKey.Name,
 		&this.migrationContext.UniqueKey.Columns,
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),

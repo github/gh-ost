@@ -164,6 +164,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 	originalTableName := "tbl"
 	ghostTableName := "ghost"
 	sharedColumns := []string{"id", "name", "position"}
+	columnRenameMap := map[string]string{}
 	{
 		uniqueKey := "PRIMARY"
 		uniqueKeyColumns := NewColumnList([]string{"id"})
@@ -172,7 +173,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3}
 		rangeEndArgs := []interface{}{103}
 
-		insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, columnRenameMap, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -183,7 +184,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(insertQuery), normalizeQuery(expected))
 
 		expectedOriginalChecksumQuery := `
-			select /* gh-ost checksum gh-ost mydb.tbl */
+			select /* gh-ost checksum mydb.tbl */
 			sha2(
 				group_concat(
 					sha2(concat_ws(',', id, name, position), 256) order by id
@@ -195,7 +196,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(originalChecksumQuery), normalizeQuery(expectedOriginalChecksumQuery))
 
 		expectedGhostChecksumQuery := `
-			select /* gh-ost checksum gh-ost mydb.ghost */
+			select /* gh-ost checksum mydb.ghost */
 			sha2(
 				group_concat(
 					sha2(concat_ws(',', id, name, position), 256) order by id
@@ -215,7 +216,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, columnRenameMap, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -226,7 +227,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(insertQuery), normalizeQuery(expected))
 
 		expectedOriginalChecksumQuery := `
-			select /* gh-ost checksum gh-ost mydb.tbl */
+			select /* gh-ost checksum mydb.tbl */
 			sha2(
 				group_concat(
 					sha2(concat_ws(',', id, name, position), 256) order by name, position
@@ -238,7 +239,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(originalChecksumQuery), normalizeQuery(expectedOriginalChecksumQuery))
 
 		expectedGhostChecksumQuery := `
-			select /* gh-ost checksum gh-ost mydb.ghost */
+			select /* gh-ost checksum mydb.ghost */
 			sha2(
 				group_concat(
 					sha2(concat_ws(',', id, name, position), 256) order by name, position
@@ -259,6 +260,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 	ghostTableName := "ghost"
 	sharedColumns := []string{"id", "name", "position"}
 	mappedSharedColumns := []string{"id", "name", "location"}
+	columnRenameMap := map[string]string{"position": "location"}
 	{
 		uniqueKey := "PRIMARY"
 		uniqueKeyColumns := NewColumnList([]string{"id"})
@@ -267,7 +269,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeStartArgs := []interface{}{3}
 		rangeEndArgs := []interface{}{103}
 
-		insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, columnRenameMap, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, location)
@@ -278,7 +280,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(insertQuery), normalizeQuery(expected))
 
 		expectedOriginalChecksumQuery := `
-			select /* gh-ost checksum gh-ost mydb.tbl */
+			select /* gh-ost checksum mydb.tbl */
 			sha2(
 				group_concat(
 					sha2(concat_ws(',', id, name, position), 256) order by id
@@ -290,7 +292,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(originalChecksumQuery), normalizeQuery(expectedOriginalChecksumQuery))
 
 		expectedGhostChecksumQuery := `
-			select /* gh-ost checksum gh-ost mydb.ghost */
+			select /* gh-ost checksum mydb.ghost */
 			sha2(
 				group_concat(
 					sha2(concat_ws(',', id, name, location), 256) order by id
@@ -311,7 +313,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, columnRenameMap, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, location)
@@ -319,10 +321,10 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 				  where (((name > @v1s) or (((name = @v1s)) AND (position > @v2s)) or ((name = @v1s) and (position = @v2s))) and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e)) or ((name = @v1e) and (position = @v2e))))
 				)
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectEquals(normalizeQuery(insertQuery), normalizeQuery(expected))
 
 		expectedOriginalChecksumQuery := `
-			select /* gh-ost checksum gh-ost mydb.tbl */
+			select /* gh-ost checksum mydb.tbl */
 			sha2(
 				group_concat(
 					sha2(concat_ws(',', id, name, position), 256) order by name, position
@@ -334,7 +336,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(originalChecksumQuery), normalizeQuery(expectedOriginalChecksumQuery))
 
 		expectedGhostChecksumQuery := `
-			select /* gh-ost checksum gh-ost mydb.ghost */
+			select /* gh-ost checksum mydb.ghost */
 			sha2(
 				group_concat(
 					sha2(concat_ws(',', id, name, location), 256) order by name, location
@@ -354,13 +356,14 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 	originalTableName := "tbl"
 	ghostTableName := "ghost"
 	sharedColumns := []string{"id", "name", "position"}
+	columnRenameMap := map[string]string{}
 	{
 		uniqueKey := "name_position_uidx"
 		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, _, _, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true, true)
+		query, _, _, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, columnRenameMap, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)

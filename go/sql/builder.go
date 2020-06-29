@@ -178,7 +178,17 @@ func BuildRangePreparedComparison(columns *ColumnList, args []interface{}, compa
 	return BuildRangeComparison(columns.Names(), values, args, comparisonSign)
 }
 
-func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (insertQuery, originalChecksumQuery, ghostChecksumQuery string, explodedArgs []interface{}, err error) {
+func BuildRangeInsertQuery(
+	databaseName, originalTableName, ghostTableName string,
+	sharedColumns []string, mappedSharedColumns []string,
+	columnRenameMap map[string]string,
+	uniqueKey string, uniqueKeyColumns *ColumnList,
+	rangeStartValues, rangeEndValues []string,
+	rangeStartArgs, rangeEndArgs []interface{},
+	includeRangeStartValues bool, transactionalTable bool,
+) (
+	insertQuery, originalChecksumQuery, ghostChecksumQuery string, explodedArgs []interface{}, err error,
+) {
 	if len(sharedColumns) == 0 {
 		return "", "", "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
@@ -225,6 +235,7 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
     `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
 		rangeStartComparison, rangeEndComparison, transactionalClause)
+
 	// escape unique key columns for comparison queries
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
 	for i := range uniqueKeyColumnNames {
@@ -245,6 +256,17 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		sharedColumnsListing, uniqueKeyColumnsListing,
 		databaseName, originalTableName, uniqueKey,
 		rangeStartComparison, rangeEndComparison)
+
+	mappedUniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
+	for i, name := range mappedUniqueKeyColumnNames {
+		if mappedName, ok := columnRenameMap[name]; ok {
+			mappedUniqueKeyColumnNames[i] = EscapeName(mappedName)
+		} else {
+			mappedUniqueKeyColumnNames[i] = EscapeName(name)
+		}
+	}
+	mappedUniqueKeyColumnsListing := strings.Join(mappedUniqueKeyColumnNames, ", ")
+
 	ghostChecksumQuery = fmt.Sprintf(`
 		select /* gh-ost checksum %s.%s */
 			sha2(
@@ -255,16 +277,25 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 			from %s.%s force index (%s)
 			where (%s and %s)
 	`, databaseName, ghostTableName,
-		mappedSharedColumnsListing, uniqueKeyColumnsListing,
+		mappedSharedColumnsListing, mappedUniqueKeyColumnsListing,
 		databaseName, ghostTableName, uniqueKey,
 		rangeStartComparison, rangeEndComparison)
 	return insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, nil
 }
 
-func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (insertQuery, originalChecksumQuery, ghostChecksumQuery string, explodedArgs []interface{}, err error) {
+func BuildRangeInsertPreparedQuery(
+	databaseName, originalTableName, ghostTableName string,
+	sharedColumns []string, mappedSharedColumns []string,
+	columnRenameMap map[string]string,
+	uniqueKey string, uniqueKeyColumns *ColumnList,
+	rangeStartArgs, rangeEndArgs []interface{},
+	includeRangeStartValues bool, transactionalTable bool,
+) (
+	insertQuery, originalChecksumQuery, ghostChecksumQuery string, explodedArgs []interface{}, err error,
+) {
 	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
 	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
-	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
+	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, columnRenameMap, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
 }
 
 func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
