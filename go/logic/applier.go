@@ -543,6 +543,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		return checksum, err
 	}
 	checksumComparison = base.NewChecksumComparison(
+		this.migrationContext.GetIteration(),
 		originalTableChecksumFunc, ghostTableChecksumFunc,
 		this.migrationContext.MigrationIterationRangeMinValues,
 		this.migrationContext.MigrationIterationRangeMaxValues,

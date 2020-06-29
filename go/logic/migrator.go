@@ -79,9 +79,11 @@ type Migrator struct {
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive before realizing the copy is complete
-	copyRowsQueue           chan tableWriteFunc
-	applyEventsQueue        chan *applyEventStruct
+	copyRowsQueue    chan tableWriteFunc
+	applyEventsQueue chan *applyEventStruct
+
 	checksumComparisonQueue chan *base.ChecksumComparison
+	checksumComparisonMap   map[int64]*base.ChecksumComparison
 
 	handledChangelogStates map[string]bool
 
@@ -97,11 +99,14 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 		rowCopyComplete:            make(chan error),
 		allEventsUpToLockProcessed: make(chan string),
 
-		copyRowsQueue:           make(chan tableWriteFunc),
-		applyEventsQueue:        make(chan *applyEventStruct, base.MaxEventsBatchSize),
+		copyRowsQueue:    make(chan tableWriteFunc),
+		applyEventsQueue: make(chan *applyEventStruct, base.MaxEventsBatchSize),
+
 		checksumComparisonQueue: make(chan *base.ChecksumComparison),
-		handledChangelogStates:  make(map[string]bool),
-		finishedMigrating:       0,
+		checksumComparisonMap:   make(map[int64]*base.ChecksumComparison),
+
+		handledChangelogStates: make(map[string]bool),
+		finishedMigrating:      0,
 	}
 	return migrator
 }
@@ -255,14 +260,22 @@ func (this *Migrator) listenOnPanicAbort() {
 }
 
 func (this *Migrator) processChecksumComparisons() {
-	for checksumComparison := range this.checksumComparisonQueue {
-		if err := this.applier.CompareChecksum(checksumComparison); err != nil {
-			checksumComparison.IncrementAttempts()
-			go func() { this.checksumComparisonQueue <- checksumComparison }()
-			log.Errorf("Checksum error. Checksum=%s, err=%+v", checksumComparison.String(), err)
-		} else {
-			log.Debugf("Checksum match. Checksum=%s", checksumComparison.String())
+	for {
+		newChecksums := len(this.checksumComparisonQueue)
+		for i := 0; i < newChecksums; i++ {
+			checksumComparison := <-this.checksumComparisonQueue
+			this.checksumComparisonMap[checksumComparison.Iteration] = checksumComparison
 		}
+		for iteration, checksumComparison := range this.checksumComparisonMap {
+			if err := this.applier.CompareChecksum(checksumComparison); err != nil {
+				checksumComparison.IncrementAttempts()
+				log.Errorf("Checksum error. Checksum=%s, err=%+v", checksumComparison.String(), err)
+			} else {
+				delete(this.checksumComparisonMap, iteration)
+				log.Debugf("Checksum match. Checksum=%s", checksumComparison.String())
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -558,7 +571,7 @@ func (this *Migrator) waitForChecksumToClear() (err error) {
 			}
 		default:
 			{
-				if len(this.checksumComparisonQueue) == 0 {
+				if len(this.checksumComparisonMap) == 0 {
 					return nil
 				}
 				time.Sleep(250 * time.Millisecond)

@@ -15,6 +15,7 @@ type ChecksumFunc func() (checksum string, err error)
 
 // BinlogCoordinates described binary log coordinates in the form of log file & log position.
 type ChecksumComparison struct {
+	Iteration                        int64
 	OriginalTableChecksumFunc        ChecksumFunc
 	GhostTableChecksumFunc           ChecksumFunc
 	MigrationIterationRangeMinValues *sql.ColumnValues
@@ -23,10 +24,12 @@ type ChecksumComparison struct {
 }
 
 func NewChecksumComparison(
+	iteration int64,
 	originalTableChecksumFunc, ghostTableChecksumFunc ChecksumFunc,
 	rangeMinValues, rangeMaxValues *sql.ColumnValues,
 ) *ChecksumComparison {
 	return &ChecksumComparison{
+		Iteration:                        iteration,
 		OriginalTableChecksumFunc:        originalTableChecksumFunc,
 		GhostTableChecksumFunc:           ghostTableChecksumFunc,
 		MigrationIterationRangeMinValues: rangeMinValues,
