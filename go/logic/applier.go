@@ -861,6 +861,10 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 	}
 
 	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
+	if this.migrationContext.ChecksumData {
+		// Allow extra time for checksum to evaluate
+		tableLockTimeoutSeconds += this.migrationContext.CutOverLockTimeoutSeconds
+	}
 	log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
 	query = fmt.Sprintf(`set session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
