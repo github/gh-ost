@@ -194,7 +194,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		`
 		test.S(t).ExpectEquals(normalizeQuery(originalChecksumQuery), normalizeQuery(expectedOriginalChecksumQuery))
 
-		expectedOriginalChecksumQuery := `
+		expectedGhostChecksumQuery := `
 			select /* gh-ost checksum gh-ost mydb.ghost */
 			sha2(
 				group_concat(
@@ -204,7 +204,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 			from mydb.ghost force index (PRIMARY)
 			where (((id > @v1s) or ((id = @v1s))) and ((id < @v1e) or ((id = @v1e))))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(originalChecksumQuery), normalizeQuery(expectedOriginalChecksumQuery))
+		test.S(t).ExpectEquals(normalizeQuery(ghostChecksumQuery), normalizeQuery(expectedGhostChecksumQuery))
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
 	}
 	{
@@ -237,7 +237,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		`
 		test.S(t).ExpectEquals(normalizeQuery(originalChecksumQuery), normalizeQuery(expectedOriginalChecksumQuery))
 
-		expectedOriginalChecksumQuery := `
+		expectedGhostChecksumQuery := `
 			select /* gh-ost checksum gh-ost mydb.ghost */
 			sha2(
 				group_concat(
@@ -247,7 +247,8 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 			from mydb.ghost force index (name_position_uidx)
 			where (((name > @v1s) or (((name = @v1s)) AND (position > @v2s)) or ((name = @v1s) and (position = @v2s))) and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e)) or ((name = @v1e) and (position = @v2e))))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(originalChecksumQuery), normalizeQuery(expectedOriginalChecksumQuery))
+		test.S(t).ExpectEquals(normalizeQuery(ghostChecksumQuery), normalizeQuery(expectedGhostChecksumQuery))
+
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
 	}
 }
@@ -266,7 +267,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeStartArgs := []interface{}{3}
 		rangeEndArgs := []interface{}{103}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, location)
@@ -274,7 +275,32 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 					where (((id > @v1s) or ((id = @v1s))) and ((id < @v1e) or ((id = @v1e))))
 				)
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectEquals(normalizeQuery(insertQuery), normalizeQuery(expected))
+
+		expectedOriginalChecksumQuery := `
+			select /* gh-ost checksum gh-ost mydb.tbl */
+			sha2(
+				group_concat(
+					sha2(concat_ws(',', id, name, position), 256) order by id
+				), 256
+			)
+			from mydb.tbl force index (PRIMARY)
+			where (((id > @v1s) or ((id = @v1s))) and ((id < @v1e) or ((id = @v1e))))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(originalChecksumQuery), normalizeQuery(expectedOriginalChecksumQuery))
+
+		expectedGhostChecksumQuery := `
+			select /* gh-ost checksum gh-ost mydb.ghost */
+			sha2(
+				group_concat(
+					sha2(concat_ws(',', id, name, location), 256) order by id
+				), 256
+			)
+			from mydb.ghost force index (PRIMARY)
+			where (((id > @v1s) or ((id = @v1s))) and ((id < @v1e) or ((id = @v1e))))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(ghostChecksumQuery), normalizeQuery(expectedGhostChecksumQuery))
+
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
 	}
 	{
@@ -294,6 +320,31 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 				)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+
+		expectedOriginalChecksumQuery := `
+			select /* gh-ost checksum gh-ost mydb.tbl */
+			sha2(
+				group_concat(
+					sha2(concat_ws(',', id, name, position), 256) order by name, position
+				), 256
+			)
+			from mydb.tbl force index (name_position_uidx)
+			where (((name > @v1s) or (((name = @v1s)) AND (position > @v2s)) or ((name = @v1s) and (position = @v2s))) and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e)) or ((name = @v1e) and (position = @v2e))))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(originalChecksumQuery), normalizeQuery(expectedOriginalChecksumQuery))
+
+		expectedGhostChecksumQuery := `
+			select /* gh-ost checksum gh-ost mydb.ghost */
+			sha2(
+				group_concat(
+					sha2(concat_ws(',', id, name, location), 256) order by name, location
+				), 256
+			)
+			from mydb.ghost force index (name_position_uidx)
+			where (((name > @v1s) or (((name = @v1s)) AND (position > @v2s)) or ((name = @v1s) and (position = @v2s))) and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e)) or ((name = @v1e) and (position = @v2e))))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(ghostChecksumQuery), normalizeQuery(expectedGhostChecksumQuery))
+
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
 	}
 }
