@@ -178,6 +178,8 @@ type MigrationContext struct {
 	pointOfInterestTimeMutex               *sync.Mutex
 	CurrentLag                             int64
 	currentProgress                        uint64
+	PendingChecksumComparisons             int64
+	SuccessfulChecksumComparisons          int64
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64

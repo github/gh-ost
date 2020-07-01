@@ -261,21 +261,27 @@ func (this *Migrator) listenOnPanicAbort() {
 
 func (this *Migrator) processChecksumComparisons() {
 	for {
+		// Avoid blocking. Only pull from the queue the amount of items known at this time:
 		newChecksums := len(this.checksumComparisonQueue)
 		for i := 0; i < newChecksums; i++ {
 			checksumComparison := <-this.checksumComparisonQueue
 			this.checksumComparisonMap[checksumComparison.Iteration] = checksumComparison
 		}
+		// Iterate the pending checksums. Some of these have been pulled from the queue just above;
+		// others may be subsuccessful checksums from previous iterations
 		for iteration, checksumComparison := range this.checksumComparisonMap {
 			if err := this.applier.CompareChecksum(checksumComparison); err != nil {
 				checksumComparison.IncrementAttempts()
 				log.Errorf("Checksum error. Checksum=%s, err=%+v", checksumComparison.String(), err)
 			} else {
+				atomic.AddInt64(&this.migrationContext.SuccessfulChecksumComparisons, 1)
 				delete(this.checksumComparisonMap, iteration)
 				log.Debugf("Checksum match. Checksum=%s", checksumComparison.String())
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		atomic.StoreInt64(&this.migrationContext.PendingChecksumComparisons, int64(len(this.checksumComparisonMap)))
+
+		time.Sleep(250 * time.Millisecond)
 	}
 }
 
@@ -1012,10 +1018,11 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, State: %s; ETA: %s",
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Checksums: %d,%d, Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
+		atomic.LoadInt64(&this.migrationContext.PendingChecksumComparisons), atomic.LoadInt64(&this.migrationContext.SuccessfulChecksumComparisons),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
 		this.migrationContext.GetCurrentLagDuration().Seconds(),
