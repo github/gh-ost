@@ -180,6 +180,7 @@ type MigrationContext struct {
 	currentProgress                        uint64
 	PendingChecksumComparisons             int64
 	SuccessfulChecksumComparisons          int64
+	SubmittedChecksumComparisons           int64
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64

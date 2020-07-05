@@ -22,6 +22,7 @@ import (
 
 const (
 	atomicCutOverMagicHint = "ghost-cut-over-sentry"
+	groupConcatMaxLength   = 1024 * 1024
 )
 
 type dmlBuildResult struct {
@@ -69,7 +70,7 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 
 func (this *Applier) InitDBConnections() (err error) {
 
-	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
+	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName, fmt.Sprintf("group_concat_max_len=%d", groupConcatMaxLength))
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
@@ -515,31 +516,12 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.GetIteration(),
 		chunkSize)
 
-	groupConcatMaxLen := 1024 * 1024
 	var originalTableChecksumFunc base.ChecksumFunc = func() (checksum string, err error) {
-		tx, err := this.db.Begin()
-		if err != nil {
-			return checksum, err
-		}
-		defer tx.Rollback()
-		if _, err := tx.Exec(`set session group_concat_max_len := ?`, groupConcatMaxLen); err != nil {
-			return checksum, err
-		}
-
-		err = tx.QueryRow(originalChecksumQuery, explodedArgs...).Scan(&checksum)
+		err = this.db.QueryRow(originalChecksumQuery, explodedArgs...).Scan(&checksum)
 		return checksum, err
 	}
 	var ghostTableChecksumFunc base.ChecksumFunc = func() (checksum string, err error) {
-		tx, err := this.db.Begin()
-		if err != nil {
-			return checksum, err
-		}
-		defer tx.Rollback()
-		if _, err := tx.Exec(`set session group_concat_max_len := ?`, groupConcatMaxLen); err != nil {
-			return checksum, err
-		}
-
-		err = tx.QueryRow(ghostChecksumQuery, explodedArgs...).Scan(&checksum)
+		err = this.db.QueryRow(ghostChecksumQuery, explodedArgs...).Scan(&checksum)
 		return checksum, err
 	}
 	checksumComparison = base.NewChecksumComparison(
@@ -562,7 +544,7 @@ func (this *Applier) CompareChecksum(checksumComparison *base.ChecksumComparison
 		return err
 	}
 	if originalChecksum != ghostChecksum {
-		return fmt.Errorf("Checksum failure")
+		return fmt.Errorf("Checksum failure. Iteration: %d", checksumComparison.Iteration)
 	}
 	return nil
 }

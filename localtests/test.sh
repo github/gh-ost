@@ -148,7 +148,7 @@ test_single() {
     --alter='engine=innodb' \
     --exact-rowcount \
     --assume-rbr \
-    --checksum-data=true \
+    --checksum-data \
     --initially-drop-old-table \
     --initially-drop-ghost-table \
     --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \

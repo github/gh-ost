@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"strings"
 
 	"github.com/go-sql-driver/mysql"
 )
@@ -102,7 +103,7 @@ func (this *ConnectionConfig) TLSConfig() *tls.Config {
 	return this.tlsConfig
 }
 
-func (this *ConnectionConfig) GetDBUri(databaseName string) string {
+func (this *ConnectionConfig) GetDBUri(databaseName string, extraOptions ...string) string {
 	hostname := this.Key.Hostname
 	var ip = net.ParseIP(hostname)
 	if (ip != nil) && (ip.To4() == nil) {
@@ -116,5 +117,11 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 	if this.tlsConfig != nil {
 		tlsOption = TLS_CONFIG_KEY
 	}
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=%t&autocommit=true&charset=utf8mb4,utf8,latin1&tls=%s", this.User, this.Password, hostname, this.Key.Port, databaseName, interpolateParams, tlsOption)
+	extraOptionsParams := ""
+	if len(extraOptions) > 0 {
+		extraOptionsParams = fmt.Sprintf("&%s", strings.Join(extraOptions, "&"))
+	}
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=%t&autocommit=true&charset=utf8mb4,utf8,latin1&tls=%s%s",
+		this.User, this.Password, hostname, this.Key.Port, databaseName, interpolateParams, tlsOption, extraOptionsParams,
+	)
 }

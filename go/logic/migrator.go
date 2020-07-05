@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,8 +26,9 @@ import (
 type ChangelogState string
 
 const (
-	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
-	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
+	GhostTableMigrated            ChangelogState = "GhostTableMigrated"
+	AllEventsUpToLockProcessed                   = "AllEventsUpToLockProcessed"
+	checksumComparisonQueueBuffer                = 10
 )
 
 func ReadChangelogState(s string) ChangelogState {
@@ -82,8 +84,9 @@ type Migrator struct {
 	copyRowsQueue    chan tableWriteFunc
 	applyEventsQueue chan *applyEventStruct
 
-	checksumComparisonQueue chan *base.ChecksumComparison
-	checksumComparisonMap   map[int64]*base.ChecksumComparison
+	rowChecksumCompleteQueue chan bool
+	checksumComparisonQueue  chan *base.ChecksumComparison
+	checksumComparisonMap    map[int64]*base.ChecksumComparison
 
 	handledChangelogStates map[string]bool
 
@@ -102,8 +105,9 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 		copyRowsQueue:    make(chan tableWriteFunc),
 		applyEventsQueue: make(chan *applyEventStruct, base.MaxEventsBatchSize),
 
-		checksumComparisonQueue: make(chan *base.ChecksumComparison),
-		checksumComparisonMap:   make(map[int64]*base.ChecksumComparison),
+		rowChecksumCompleteQueue: make(chan bool),
+		checksumComparisonQueue:  make(chan *base.ChecksumComparison, checksumComparisonQueueBuffer),
+		checksumComparisonMap:    make(map[int64]*base.ChecksumComparison),
 
 		handledChangelogStates: make(map[string]bool),
 		finishedMigrating:      0,
@@ -211,6 +215,10 @@ func (this *Migrator) consumeRowCopyComplete() {
 	}()
 }
 
+func (this *Migrator) consumeChecksumComparisonsComplete() {
+	<-this.rowChecksumCompleteQueue
+}
+
 func (this *Migrator) canStopStreaming() bool {
 	return atomic.LoadInt64(&this.migrationContext.CutOverCompleteFlag) != 0
 }
@@ -260,27 +268,39 @@ func (this *Migrator) listenOnPanicAbort() {
 }
 
 func (this *Migrator) processChecksumComparisons() {
+	var completeOnce sync.Once
 	for {
-		// Avoid blocking. Only pull from the queue the amount of items known at this time:
-		newChecksums := len(this.checksumComparisonQueue)
-		for i := 0; i < newChecksums; i++ {
-			checksumComparison := <-this.checksumComparisonQueue
-			this.checksumComparisonMap[checksumComparison.Iteration] = checksumComparison
-		}
+		func() {
+			// Avoid blocking. Only pull from the queue the available events
+			for {
+				select {
+				case checksumComparison := <-this.checksumComparisonQueue:
+					log.Debugf("new checksums!!!!!!!!! %+v", checksumComparison)
+					this.checksumComparisonMap[checksumComparison.Iteration] = checksumComparison
+				default:
+					return
+				}
+			}
+		}()
 		// Iterate the pending checksums. Some of these have been pulled from the queue just above;
 		// others may be subsuccessful checksums from previous iterations
+		atomic.StoreInt64(&this.migrationContext.PendingChecksumComparisons, int64(len(this.checksumComparisonMap)))
+		log.Debugf("-----checksum iterations")
 		for iteration, checksumComparison := range this.checksumComparisonMap {
+			log.Debugf("-----checksum iteration")
 			if err := this.applier.CompareChecksum(checksumComparison); err != nil {
 				checksumComparison.IncrementAttempts()
-				log.Errorf("Checksum error. Checksum=%s, err=%+v", checksumComparison.String(), err)
+				log.Errorf("--------------Checksum error. Checksum=%s, err=%+v", checksumComparison.String(), err)
 			} else {
 				atomic.AddInt64(&this.migrationContext.SuccessfulChecksumComparisons, 1)
 				delete(this.checksumComparisonMap, iteration)
-				log.Debugf("Checksum match. Checksum=%s", checksumComparison.String())
+				log.Debugf("-------------Checksum match. Checksum=%s", checksumComparison.String())
 			}
 		}
 		atomic.StoreInt64(&this.migrationContext.PendingChecksumComparisons, int64(len(this.checksumComparisonMap)))
-
+		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+			go completeOnce.Do(func() { this.rowChecksumCompleteQueue <- true })
+		}
 		time.Sleep(250 * time.Millisecond)
 	}
 }
@@ -432,6 +452,11 @@ func (this *Migrator) Migrate() (err error) {
 	log.Infof("Row copy complete")
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
 		return err
+	}
+	if this.migrationContext.ChecksumData {
+		log.Debugf("Operating until checksum comparison iteration is complete")
+		this.consumeChecksumComparisonsComplete()
+		log.Infof("+ checksum comparison iteration compelete")
 	}
 	this.printStatus(ForcePrintStatusRule)
 
@@ -1018,11 +1043,11 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Checksums: %d,%d, Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, State: %s; ETA: %s",
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Checksums: %d/%d,%d, Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
-		atomic.LoadInt64(&this.migrationContext.PendingChecksumComparisons), atomic.LoadInt64(&this.migrationContext.SuccessfulChecksumComparisons),
+		atomic.LoadInt64(&this.migrationContext.SuccessfulChecksumComparisons), atomic.LoadInt64(&this.migrationContext.SubmittedChecksumComparisons), atomic.LoadInt64(&this.migrationContext.PendingChecksumComparisons),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
 		this.migrationContext.GetCurrentLagDuration().Seconds(),
@@ -1195,8 +1220,11 @@ func (this *Migrator) iterateChunks() error {
 				if err != nil {
 					return err // wrapping call will retry
 				}
+
 				if this.migrationContext.ChecksumData {
-					go func() { this.checksumComparisonQueue <- checksumComparison }()
+					log.Debugf("adding checksum")
+					atomic.AddInt64(&this.migrationContext.SubmittedChecksumComparisons, 1)
+					this.checksumComparisonQueue <- checksumComparison
 				}
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
