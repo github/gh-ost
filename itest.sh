@@ -64,24 +64,75 @@ master_port="$(/root/sandboxes/gh-ost-test/m -e"select @@port" -ss)"
 replica_host="127.0.0.1"
 replica_port="$(/root/sandboxes/gh-ost-test/s1 -e"select @@port" -ss)"
 
-test_path=localtests/trivial
-throttle_flag_file=trivial.trottle-flag
-extra_args=""
-if [ -f $test_path/extra_args ];
-then
-  extra_args="$(cat $test_path/extra_args)"
-fi
+start_replication() {
+  gh-ost-test-mysql-replica -e "stop slave; start slave;"
+  num_attempts=0
+  while gh-ost-test-mysql-replica -e "show slave status\G" | grep Seconds_Behind_Master | grep -q NULL ; do
+    ((num_attempts=num_attempts+1))
+    if [ "$num_attempts" -gt 10 ] ; then
+      echo
+      echo "ERROR replication failure"
+      exit 1
+    fi
+    sleep 1
+  done
+}
 
-echo "Setting up test case"
-/root/sandboxes/gh-ost-test/m -uroot test <$test_path/create.sql
+test_single() {
+  local test_name="$1"
 
-echo "Running gh-ost"
-/usr/local/bin/gh-ost \
+  test_path="${TEST_DIR}/${test_name}"
+  test_logfile="/tmp/gh-ost-test.${test_name}.log"
+  exec_command_file="/tmp/gh-ost-test.${test_name}.bash"
+  orig_content_output_file="/tmp/gh-ost-test.${test_name}.orig.content.csv"
+  ghost_content_output_file="/tmp/gh-ost-test.${test_name}.ghost.content.csv"
+  throttle_flag_file="/tmp/gh-ost-test.${test_name}.ghost.throttle.flag"
+
+  if [ -f "${test_path}/ignore_versions" ] ; then
+    ignore_versions=$(cat "${test_path}/ignore_versions")
+    if echo "$MYSQL_VERSION" | egrep -q "^${ignore_versions}" ; then
+      echo "Skipping: $test_name"
+      return 0
+    fi
+  fi
+
+  original_sql_mode="$(gh-ost-test-mysql-primary -e 'select @@global.sql_mode' -ss)"
+
+  echo -n "Testing: $test_name..."
+  start_replication
+
+  if [ -f "${test_path}/sql_mode" ] ; then
+    gh-ost-test-mysql-primary --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat "${test_path}/sql_mode")'"
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat "${test_path}/sql_mode")'"
+  fi
+
+  gh-ost-test-mysql-primary --default-character-set=utf8mb4 test <"${test_path}/create.sql"
+
+  extra_args=""
+  if [ -f "${test_path}/extra_args" ] ; then
+    extra_args=$(cat "${test_path}/extra_args")
+  fi
+
+  orig_columns="*"
+  ghost_columns="*"
+  order_by=""
+  if [ -f "${test_path}/orig_columns" ] ; then
+    orig_columns="$(cat "${test_path}/orig_columns")"
+  fi
+  if [ -f "${test_path}/ghost_columns" ] ; then
+    ghost_columns="$(cat "${test_path}/ghost_columns")"
+  fi
+  if [ -f "${test_path}/order_by" ] ; then
+    order_by="order by $(cat "${test_path}/order_by")"
+  fi
+
+  cat <<EOF > "$exec_command_file"
+  $GHOST_BINARY \
     --user=gh-ost \
     --password=gh-ost \
-    --host="$replica_host" \
-    --port="$replica_port" \
-    --assume-master-host="${master_host}:${master_port}" \
+    --host=$replica_host \
+    --port=$replica_port \
+    --assume-master-host=${master_host}:${master_port} \
     --database=test \
     --table=gh_ost_test \
     --alter='engine=innodb' \
@@ -99,15 +150,70 @@ echo "Running gh-ost"
     --verbose \
     --debug \
     --stack \
-    --execute "${extra_args[@]}" 1>trivial.log 2>&1
+    --execute ${extra_args[@]}
+EOF
 
-result=$?
-if [ $result -ne 0 ];
-then
-  echo
-  echo "ERROR execution failure"
-  cat trivial.log
-  exit 1
-fi
+  bash "$exec_command_file" 1> "$test_logfile" 2>&1
 
-echo "Success!"
+  execution_result=$?
+
+  if [ -f "${test_path}/sql_mode" ] ; then
+    gh-ost-test-mysql-primary --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
+  fi
+
+  if [ -f "${test_path}/destroy.sql" ] ; then
+    gh-ost-test-mysql-primary --default-character-set=utf8mb4 test < "${test_path}/destroy.sql"
+  fi
+
+  if [ -f "${test_path}/expect_failure" ] ; then
+    if [ $execution_result -eq 0 ] ; then
+      echo " FAIL"
+      echo "ERROR $test_name execution was expected to exit on error but did not. cat $test_logfile"
+      return 1
+    fi
+    if [ -s "${test_path}/expect_failure" ] ; then
+      # 'expect_failure' file has content. We expect to find this content in the log.
+      expected_error_message="$(cat "${test_path}/expect_failure")"
+      if grep -q "$expected_error_message" "$test_logfile" ; then
+          echo " pass"
+          return 0
+      fi
+      echo " FAIL"
+      echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not. cat $test_logfile"
+      return 1
+    fi
+    # 'expect_failure' file has no content. We generally agree that the failure is correct
+    echo " pass"
+    return 0
+  fi
+
+  if [ $execution_result -ne 0 ] ; then
+    echo " FAIL"
+    echo "ERROR $test_name execution failure. cat $test_logfile:"
+    cat "$test_logfile"
+    return 1
+  fi
+
+  gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss > "$orig_content_output_file"
+  gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss > "$ghost_content_output_file"
+  orig_checksum=$(cat "$orig_content_output_file" | md5sum)
+  ghost_checksum=$(cat "$ghost_content_output_file" | md5sum)
+
+  if [ "$orig_checksum" != "$ghost_checksum" ] ; then
+    echo " FAIL"
+    echo "ERROR $test_name: checksum mismatch"
+    echo "---"
+    diff "$orig_content_output_file" "$ghost_content_output_file"
+
+    echo "diff $orig_content_output_file $ghost_content_output_file"
+
+    return 1
+  fi
+
+  echo " pass"
+}
+
+find "$TEST_DIR" -mindepth 1 ! -path . -type d | cut -d "/" -f 3 | grep -E "$TEST_PATTERN" | while read test_name ; do
+  test_single "$test_name"
+done
