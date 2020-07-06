@@ -1,0 +1,33 @@
+# See https://gist.github.com/ajm188/9488bc9c2b5b10d645f5e168e94cfb77
+# for why this is xenial
+FROM ubuntu:xenial
+
+ARG DBDEPLOYER_VERSION=1.52.0
+ARG MYSQL_VERSION_APT=5.7
+ARG MYSQL_VERSION=5.7.26
+
+RUN echo ${MYSQL_VERSION} > /mysql_version
+
+# We install mysql-server as a hack to make sure dbdeployer has all libs it
+# needs to run mysqls.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        mysql-server-${MYSQL_VERSION_APT} \
+        wget \
+    && apt-get autoremove
+
+RUN wget https://github.com/datacharmer/dbdeployer/releases/download/v${DBDEPLOYER_VERSION}/dbdeployer-${DBDEPLOYER_VERSION}.linux.tar.gz \
+    && tar -xzvf dbdeployer-${DBDEPLOYER_VERSION}.linux.tar.gz \
+    && chmod +x dbdeployer-${DBDEPLOYER_VERSION}.linux \
+    && mv dbdeployer-${DBDEPLOYER_VERSION}.linux /usr/local/bin/dbdeployer
+
+RUN dbdeployer init --skip-all-downloads --skip-shell-completion \
+    && dbdeployer downloads get-by-version ${MYSQL_VERSION} --minimal \
+    && dbdeployer unpack mysql-${MYSQL_VERSION}.tar.xz --unpack-version ${MYSQL_VERSION}
+
+ADD itest.sh /itest.sh
+ADD bin/gh-ost /usr/local/bin/gh-ost
+ADD localtests /localtests
+
+CMD ["/itest.sh"]
