@@ -4,6 +4,7 @@
 #/
 #/ Options:
 #/    --gh-ost-binary | -b path to gh-ost binary. defaults to /tmp/gh-ost-test
+#/    --test-dir           path to test directories. defaults to /localtests
 
 usage() {
   code="$1"
@@ -13,15 +14,19 @@ usage() {
   exit "$code"
 }
 
-GHOST_BINARY=
+GHOST_BINARY=/tmp/gh-ost-test
+TEST_DIR=/localtests
+
 while [ "$#" -gt 0 ];
 do
   case "$1" in
     --gh-ost-binary|-b) GHOST_BINARY="$2"; shift 2;;
     --gh-ost-binary=*) GHOST_BINARY="$(echo "$1" | cut -d"=" -f"2-")"; shift;;
+    --test-dir) TEST_DIR="$2"; shift 2;;
+    --test-dir=*) TEST_DIR="$(echo "$1" | cut -d"=" -f"2-")"; shift;;
     --help|-h) usage 0;;
     -*) usage 1;;
-    *) ;;
+    *) break ;;
   esac
 done
 

@@ -30,4 +30,4 @@ ADD itest.sh /itest.sh
 ADD bin/gh-ost /usr/local/bin/gh-ost
 ADD localtests /localtests
 
-CMD ["/itest.sh"]
+ENTRYPOINT ["/itest.sh", "-b", "/usr/local/bin/gh-ost"]
