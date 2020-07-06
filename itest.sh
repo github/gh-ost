@@ -46,9 +46,17 @@ dbdeployer deploy replication $MYSQL_VERSION \
   --my-cnf-options binlog_format=ROW \
   --sandbox-directory gh-ost-test
 
+echo '#!/bin/bash' > /usr/local/bin/gh-ost-test-mysql-master
+echo '/root/sandboxes/gh-ost-test/m "$@"' >> /usr/local/bin/gh-ost-test-mysql-master
+chmod +x /usr/local/bin/gh-ost-test-mysql-master
+
+echo '#!/bin/bash' > /usr/local/bin/gh-ost-test-mysql-replica
+echo '/root/sandboxes/gh-ost-test/s1 "$@"' > /usr/local/bin/gh-ost-test-mysql-replica
+chmod +x /usr/local/bin/gh-ost-test-mysql-replica
+
 echo "Creating gh-ost user"
-/root/sandboxes/gh-ost-test/m -uroot -e"CREATE USER IF NOT EXISTS 'gh-ost'@'%' IDENTIFIED BY 'gh-ost'"
-/root/sandboxes/gh-ost-test/m -uroot -e"GRANT ALL ON *.* TO 'gh-ost'@'%'"
+gh-ost-test-mysql-master -uroot -e"CREATE USER IF NOT EXISTS 'gh-ost'@'%' IDENTIFIED BY 'gh-ost'"
+gh-ost-test-mysql-master -uroot -e"GRANT ALL PRIVILEGES ON *.* TO 'gh-ost'@'%'"
 
 echo "Reading database topology"
 master_host="127.0.0.1"
