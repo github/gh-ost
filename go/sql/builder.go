@@ -196,17 +196,17 @@ func BuildRangeInsertQuery(
 	originalTableName = EscapeName(originalTableName)
 	ghostTableName = EscapeName(ghostTableName)
 
-	mappedSharedColumns = duplicateNames(mappedSharedColumns)
-	for i := range mappedSharedColumns {
-		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
-	}
-	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
-
 	sharedColumns = duplicateNames(sharedColumns)
 	for i := range sharedColumns {
 		sharedColumns[i] = EscapeName(sharedColumns[i])
 	}
 	sharedColumnsListing := strings.Join(sharedColumns, ", ")
+
+	mappedSharedColumns = duplicateNames(mappedSharedColumns)
+	for i := range mappedSharedColumns {
+		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
+	}
+	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
 
 	uniqueKeyName := EscapeName(uniqueKey.Name)
 	ghostUniqueKeyName := EscapeName(ghostUniqueKey.Name)
@@ -237,6 +237,20 @@ func BuildRangeInsertQuery(
 		sharedColumnsListing, databaseName, originalTableName, uniqueKeyName,
 		rangeStartComparison, rangeEndComparison, transactionalClause)
 
+	// Now for checksum comparisons
+
+	sharedColumns = duplicateNames(sharedColumns) // already escaped
+	for i := range sharedColumns {
+		sharedColumns[i] = fmt.Sprintf(`IFNULL(%s, 'NULL')`, sharedColumns[i])
+	}
+	sharedColumnsListing = strings.Join(sharedColumns, ", ")
+
+	mappedSharedColumns = duplicateNames(mappedSharedColumns)
+	for i := range mappedSharedColumns {
+		mappedSharedColumns[i] = fmt.Sprintf(`IFNULL(%s, 'NULL')`, mappedSharedColumns[i])
+	}
+	mappedSharedColumnsListing = strings.Join(mappedSharedColumns, ", ")
+
 	// escape unique key columns for comparison queries
 	uniqueKeyColumnNames := duplicateNames(uniqueKey.Columns.Names())
 	for i := range uniqueKeyColumnNames {
@@ -257,16 +271,6 @@ func BuildRangeInsertQuery(
 		sharedColumnsListing, uniqueKeyColumnsListing,
 		databaseName, originalTableName, uniqueKeyName,
 		rangeStartComparison, rangeEndComparison)
-
-	// mappedUniqueKeyColumnNames := duplicateNames(uniqueKey.Columns.Names())
-	// for i, name := range mappedUniqueKeyColumnNames {
-	// 	if mappedName, ok := columnRenameMap[name]; ok {
-	// 		mappedUniqueKeyColumnNames[i] = EscapeName(mappedName)
-	// 	} else {
-	// 		mappedUniqueKeyColumnNames[i] = EscapeName(name)
-	// 	}
-	// }
-	// mappedUniqueKeyColumnsListing := strings.Join(mappedUniqueKeyColumnNames, ", ")
 
 	ghostUniqueKeyColumnNames := duplicateNames(ghostUniqueKey.Columns.Names())
 	for i := range ghostUniqueKeyColumnNames {

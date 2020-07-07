@@ -193,7 +193,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 			select /* gh-ost checksum mydb.tbl */
 			sha2(
 				group_concat(
-					sha2(concat_ws(',', id, name, position), 256) order by id
+					sha2(concat_ws(',', IFNULL(id, 'NULL'), IFNULL(name, 'NULL'), IFNULL(position, 'NULL')), 256) order by id
 				), 256
 			)
 			from mydb.tbl force index (PRIMARY)
@@ -205,7 +205,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 			select /* gh-ost checksum mydb.ghost */
 			sha2(
 				group_concat(
-					sha2(concat_ws(',', id, name, position), 256) order by id
+					sha2(concat_ws(',', IFNULL(id, 'NULL'), IFNULL(name, 'NULL'), IFNULL(position, 'NULL')), 256) order by id
 				), 256
 			)
 			from mydb.ghost force index (PRIMARY)
@@ -243,7 +243,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 			select /* gh-ost checksum mydb.tbl */
 			sha2(
 				group_concat(
-					sha2(concat_ws(',', id, name, position), 256) order by name, position
+					sha2(concat_ws(',', IFNULL(id, 'NULL'), IFNULL(name, 'NULL'), IFNULL(position, 'NULL')), 256) order by name, position
 				), 256
 			)
 			from mydb.tbl force index (name_position_uidx)
@@ -255,7 +255,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 			select /* gh-ost checksum mydb.ghost */
 			sha2(
 				group_concat(
-					sha2(concat_ws(',', id, name, position), 256) order by name, position
+					sha2(concat_ws(',', IFNULL(id, 'NULL'), IFNULL(name, 'NULL'), IFNULL(position, 'NULL')), 256) order by name, position
 				), 256
 			)
 			from mydb.ghost force index (name_position_uidx)
@@ -301,7 +301,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 			select /* gh-ost checksum mydb.tbl */
 			sha2(
 				group_concat(
-					sha2(concat_ws(',', id, name, position), 256) order by id
+					sha2(concat_ws(',', IFNULL(id, 'NULL'), IFNULL(name, 'NULL'), IFNULL(position, 'NULL')), 256) order by id
 				), 256
 			)
 			from mydb.tbl force index (PRIMARY)
@@ -313,7 +313,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 			select /* gh-ost checksum mydb.ghost */
 			sha2(
 				group_concat(
-					sha2(concat_ws(',', id, name, location), 256) order by id
+					sha2(concat_ws(',', IFNULL(id, 'NULL'), IFNULL(name, 'NULL'), IFNULL(location, 'NULL')), 256) order by id
 				), 256
 			)
 			from mydb.ghost force index (PRIMARY)
@@ -352,7 +352,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 			select /* gh-ost checksum mydb.tbl */
 			sha2(
 				group_concat(
-					sha2(concat_ws(',', id, name, position), 256) order by name, position
+					sha2(concat_ws(',', IFNULL(id, 'NULL'), IFNULL(name, 'NULL'), IFNULL(position, 'NULL')), 256) order by name, position
 				), 256
 			)
 			from mydb.tbl force index (name_position_uidx)
@@ -364,7 +364,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 			select /* gh-ost checksum mydb.ghost */
 			sha2(
 				group_concat(
-					sha2(concat_ws(',', id, name, location), 256) order by name, location
+					sha2(concat_ws(',', IFNULL(id, 'NULL'), IFNULL(name, 'NULL'), IFNULL(location, 'NULL')), 256) order by name, location
 				), 256
 			)
 			from mydb.ghost force index (name_position_uidx)
