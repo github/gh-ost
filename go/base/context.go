@@ -94,7 +94,8 @@ type MigrationContext struct {
 	IsTungsten               bool
 	DiscardForeignKeys       bool
 	AliyunRDS                bool
-	GoogleCloudPlatform      bool
+	GoogleCloudPlatformV1    bool
+	GoogleCloudPlatformV2    bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex

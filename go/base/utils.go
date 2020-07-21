@@ -76,7 +76,7 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	}
 	// AliyunRDS set users port to "NULL", replace it by gh-ost param
 	// GCP set users port to "NULL", replace it by gh-ost param
-	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform {
+	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatformV1 {
 		port = connectionConfig.Key.Port
 	} else {
 		portQuery := `select @@global.port`

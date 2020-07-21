@@ -127,6 +127,10 @@ Table name prefix to be used on the temporary tables.
 
 Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
 
+### gcpv2
+
+Add this flag when executing on a 2nd generation Google Cloud Platform (GCP).
+
 ### heartbeat-interval-millis
 
 Default 100. See [`subsecond-lag`](subsecond-lag.md) for details.

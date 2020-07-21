@@ -53,7 +53,7 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
-	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatformV1 {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {
@@ -729,7 +729,7 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 }
 
 // showCreateTable returns the `show create table` statement for given table
-func (this *Inspector) showCreateTable(tableName string) (createTableStatement string, err error) {
+func (this *Inspector) ShowCreateTable(tableName string) (createTableStatement string, err error) {
 	var dummy string
 	query := fmt.Sprintf(`show /* gh-ost */ create table %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(tableName))
 	err = this.db.QueryRow(query).Scan(&dummy, &createTableStatement)
