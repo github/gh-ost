@@ -1048,6 +1048,46 @@ func (this *Migrator) initiateThrottler() error {
 	return nil
 }
 
+func (this *Migrator) getCreateGhostTableStatement() (string, error) {
+	fullOriginalTableName := fmt.Sprintf(`%s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+	)
+	fullGhostTableName := fmt.Sprintf(`%s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	)
+
+	var createGhostTableStatement string
+	// XXX: It would be better to have a unified way of creating tables - is there a downside to
+	// using the rename? The replace strategy seems a bit "simple", but it is how other tools do
+	// it too (e.g., ghostferry)
+	if this.migrationContext.GoogleCloudPlatformV2 {
+		createTableStatement, err := this.inspector.ShowCreateTable(this.migrationContext.OriginalTableName)
+		if err != nil {
+			return "", err
+		}
+
+		createGhostTableStatement = strings.Replace(
+			createTableStatement,
+			// NOTE: MySQL always gives a CREATE TABLE using the quotes table name without
+			// the database name
+			fmt.Sprintf("CREATE TABLE %s", sql.EscapeName(this.migrationContext.OriginalTableName)),
+			fmt.Sprintf("CREATE TABLE %s", fullGhostTableName),
+			1,
+		)
+		log.Debugf("Using GCP-compatible create statement: %s", createGhostTableStatement)
+	} else {
+		createGhostTableStatement = fmt.Sprintf(`create /* gh-ost */ table %s like %s`,
+			fullGhostTableName,
+			fullOriginalTableName,
+		)
+		log.Debugf("Using default create statement: %s", createGhostTableStatement)
+	}
+
+	return createGhostTableStatement, nil
+}
+
 func (this *Migrator) initiateApplier() error {
 	this.applier = NewApplier(this.migrationContext)
 	if err := this.applier.InitDBConnections(); err != nil {
@@ -1060,7 +1100,13 @@ func (this *Migrator) initiateApplier() error {
 		log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
 		return err
 	}
-	if err := this.applier.CreateGhostTable(); err != nil {
+
+	createTableStatement, err := this.getCreateGhostTableStatement()
+	if err != nil {
+		log.Errorf("Unable to get ghost table schema, see further error details.")
+		return err
+	}
+	if err := this.applier.CreateGhostTable(createTableStatement); err != nil {
 		log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
 		return err
 	}
@@ -1262,7 +1308,7 @@ func (this *Migrator) finalCleanup() error {
 	atomic.StoreInt64(&this.migrationContext.CleanupImminentFlag, 1)
 
 	if this.migrationContext.Noop {
-		if createTableStatement, err := this.inspector.showCreateTable(this.migrationContext.GetGhostTableName()); err == nil {
+		if createTableStatement, err := this.inspector.ShowCreateTable(this.migrationContext.GetGhostTableName()); err == nil {
 			log.Infof("New table structure follows")
 			fmt.Println(createTableStatement)
 		} else {

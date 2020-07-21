@@ -89,7 +89,7 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
 	}
-	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatformV1 {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {
@@ -168,18 +168,12 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 }
 
 // CreateGhostTable creates the ghost table on the applier host
-func (this *Applier) CreateGhostTable() error {
-	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s like %s.%s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-	log.Infof("Creating ghost table %s.%s",
+func (this *Applier) CreateGhostTable(createTableStatement string) error {
+	log.Infof("Creating ghost table `%s`.`%s`",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
-	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+	if _, err := sqlutils.ExecNoPrepare(this.db, createTableStatement); err != nil {
 		return err
 	}
 	log.Infof("Ghost table created")
