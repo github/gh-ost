@@ -33,7 +33,8 @@ type AlterTableParser struct {
 	droppedColumns  map[string]bool
 	isRenameTable   bool
 
-	alterTokens []string
+	alterStatementOptions string
+	alterTokens           []string
 
 	explicitSchema string
 	explicitTable  string
@@ -120,22 +121,23 @@ func (this *AlterTableParser) parseAlterToken(alterToken string) (err error) {
 
 func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err error) {
 
+	this.alterStatementOptions = alterStatement
 	for _, alterTableRegexp := range alterTableExplicitSchemaTableRegexps {
-		if submatch := alterTableRegexp.FindStringSubmatch(alterStatement); len(submatch) > 0 {
+		if submatch := alterTableRegexp.FindStringSubmatch(this.alterStatementOptions); len(submatch) > 0 {
 			this.explicitSchema = submatch[1]
 			this.explicitTable = submatch[2]
-			alterStatement = submatch[3]
+			this.alterStatementOptions = submatch[3]
 			break
 		}
 	}
 	for _, alterTableRegexp := range alterTableExplicitTableRegexps {
-		if submatch := alterTableRegexp.FindStringSubmatch(alterStatement); len(submatch) > 0 {
+		if submatch := alterTableRegexp.FindStringSubmatch(this.alterStatementOptions); len(submatch) > 0 {
 			this.explicitTable = submatch[1]
-			alterStatement = submatch[2]
+			this.alterStatementOptions = submatch[2]
 			break
 		}
 	}
-	alterTokens, _ := this.tokenizeAlterStatement(alterStatement)
+	alterTokens, _ := this.tokenizeAlterStatement(this.alterStatementOptions)
 	for _, alterToken := range alterTokens {
 		alterToken = this.sanitizeQuotesFromAlterStatement(alterToken)
 		this.parseAlterToken(alterToken)
@@ -179,4 +181,8 @@ func (this *AlterTableParser) GetExplicitTable() string {
 
 func (this *AlterTableParser) HasExplicitTable() bool {
 	return this.GetExplicitTable() != ""
+}
+
+func (this *AlterTableParser) GetAlterStatementOptions() string {
+	return this.alterStatementOptions
 }

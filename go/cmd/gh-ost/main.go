@@ -177,6 +177,7 @@ func main() {
 		log.Fatalf("--alter must be provided and statement must not be empty")
 	}
 	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
+	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
 
 	if migrationContext.DatabaseName == "" {
 		if parser.HasExplicitSchema() {
