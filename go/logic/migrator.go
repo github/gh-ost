@@ -283,16 +283,12 @@ func (this *Migrator) processChecksumComparisons() {
 		// Iterate the pending checksums. Some of these have been pulled from the queue just above;
 		// others may be subsuccessful checksums from previous iterations
 		atomic.StoreInt64(&this.migrationContext.PendingChecksumComparisons, int64(len(this.checksumComparisonMap)))
-		log.Debugf("-----checksum iterations")
 		for iteration, checksumComparison := range this.checksumComparisonMap {
-			log.Debugf("-----checksum iteration")
 			if err := this.applier.CompareChecksum(checksumComparison); err != nil {
 				checksumComparison.IncrementAttempts()
-				log.Errorf("--------------Checksum error. Checksum=%s, err=%+v", checksumComparison.String(), err)
 			} else {
 				atomic.AddInt64(&this.migrationContext.SuccessfulChecksumComparisons, 1)
 				delete(this.checksumComparisonMap, iteration)
-				log.Debugf("-------------Checksum match. Checksum=%s", checksumComparison.String())
 			}
 		}
 		atomic.StoreInt64(&this.migrationContext.PendingChecksumComparisons, int64(len(this.checksumComparisonMap)))
