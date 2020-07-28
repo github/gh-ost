@@ -18,7 +18,7 @@ function build {
   GOOS=$3
   GOARCH=$4
 
-  if ! go version | egrep -q 'go(1\.1[23456])' ; then
+  if ! go version | egrep -q 'go(1\.1[456])' ; then
     echo "go version must be 1.14 or above"
     exit 1
   fi
