@@ -273,7 +273,7 @@ func (this *Migrator) processChecksumComparisons() {
 			for {
 				select {
 				case checksumComparison := <-this.checksumComparisonQueue:
-					log.Debugf("new checksums!!!!!!!!! %+v", checksumComparison)
+					this.migrationContext.Log.Debugf("new checksums!!!!!!!!! %+v", checksumComparison)
 					this.checksumComparisonMap[checksumComparison.Iteration] = checksumComparison
 				default:
 					return
@@ -448,9 +448,9 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	if this.migrationContext.ChecksumData {
-		log.Debugf("Operating until checksum comparison iteration is complete")
+		this.migrationContext.Log.Debugf("Operating until checksum comparison iteration is complete")
 		this.consumeChecksumComparisonsComplete()
-		log.Infof("+ checksum comparison iteration compelete")
+		this.migrationContext.Log.Infof("+ checksum comparison iteration compelete")
 	}
 	this.printStatus(ForcePrintStatusRule)
 
@@ -592,7 +592,7 @@ func (this *Migrator) waitForChecksumToClear() (err error) {
 		select {
 		case <-timeout.C:
 			{
-				return log.Errorf("Timeout while waiting for checksums to clear. There are still checksum mismatches")
+				return this.migrationContext.Log.Errorf("Timeout while waiting for checksums to clear. There are still checksum mismatches")
 			}
 		default:
 			{
@@ -709,7 +709,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 		return this.migrationContext.Log.Errore(err)
 	}
 	if err := this.waitForChecksumToClear(); err != nil {
-		return log.Errore(err)
+		return this.migrationContext.Log.Errore(err)
 	}
 	// Step 2
 	// We now attempt an atomic RENAME on original & ghost tables, and expect it to block.
@@ -1216,7 +1216,7 @@ func (this *Migrator) iterateChunks() error {
 				}
 
 				if this.migrationContext.ChecksumData {
-					log.Debugf("adding checksum")
+					this.migrationContext.Log.Debugf("adding checksum")
 					atomic.AddInt64(&this.migrationContext.SubmittedChecksumComparisons, 1)
 					this.checksumComparisonQueue <- checksumComparison
 				}
