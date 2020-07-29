@@ -190,7 +190,7 @@ func (this *Applier) AlterGhost() error {
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s %s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		this.migrationContext.AlterStatement,
+		this.migrationContext.AlterStatementOptions,
 	)
 	this.migrationContext.Log.Infof("Altering ghost table %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),

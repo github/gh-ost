@@ -14,6 +14,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
+	"github.com/github/gh-ost/go/sql"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/outbrain/golib/log"
 
@@ -172,14 +173,25 @@ func main() {
 		migrationContext.Log.SetLevel(log.ERROR)
 	}
 
+	if migrationContext.AlterStatement == "" {
+		log.Fatalf("--alter must be provided and statement must not be empty")
+	}
+	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
+	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
+
 	if migrationContext.DatabaseName == "" {
-		migrationContext.Log.Fatalf("--database must be provided and database name must not be empty")
+		if parser.HasExplicitSchema() {
+			migrationContext.DatabaseName = parser.GetExplicitSchema()
+		} else {
+			log.Fatalf("--database must be provided and database name must not be empty, or --alter must specify database name")
+		}
 	}
 	if migrationContext.OriginalTableName == "" {
-		migrationContext.Log.Fatalf("--table must be provided and table name must not be empty")
-	}
-	if migrationContext.AlterStatement == "" {
-		migrationContext.Log.Fatalf("--alter must be provided and statement must not be empty")
+		if parser.HasExplicitTable() {
+			migrationContext.OriginalTableName = parser.GetExplicitTable()
+		} else {
+			log.Fatalf("--table must be provided and table name must not be empty, or --alter must specify table name")
+		}
 	}
 	migrationContext.Noop = !(*executeFlag)
 	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {
