@@ -297,4 +297,14 @@ func TestParseAlterStatementExplicitTable(t *testing.T) {
 		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b, add index idx(i)")
 		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b", "add index idx(i)"}))
 	}
+	{
+		parser := NewAlterTableParser()
+		statement := "alter online table tbl drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.explicitSchema, "")
+		test.S(t).ExpectEquals(parser.explicitTable, "tbl")
+		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b")
+		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b"}))
+	}
 }
