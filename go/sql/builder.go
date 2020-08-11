@@ -167,8 +167,7 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 			explodedArgs = append(explodedArgs, args[i])
 		}
 	}
-	/* this origin login handle equal is meaningless now
-	 */
+
 	result = strings.Join(comparisons, " or ")
 	result = fmt.Sprintf("(%s)", result)
 	return result, explodedArgs, nil
