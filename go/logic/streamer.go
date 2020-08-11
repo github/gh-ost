@@ -16,6 +16,7 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 
+	"github.com/outbrain/golib/log"
 	"github.com/outbrain/golib/sqlutils"
 )
 
@@ -184,6 +185,11 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			if canStopStreaming() {
 				return nil
 			}
+			// if found dml in binlog stream, data may lose, gh-ost must exit,
+			if err.Error() == "ERROR_FOUND_DML_SQL_IN_BINLOG_STREAM" {
+				this.migrationContext.PanicAbort <- err
+			}
+			log.Infof("StreamEvents encountered unexpected error: %+v", err)
 
 			this.migrationContext.Log.Infof("StreamEvents encountered unexpected error: %+v", err)
 			this.migrationContext.MarkPointOfInterest()

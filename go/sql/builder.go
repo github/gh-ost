@@ -128,19 +128,27 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 	if len(columns) != len(args) {
 		return "", explodedArgs, fmt.Errorf("Got %d columns but %d args in GetEqualsComparison", len(columns), len(args))
 	}
-	includeEquals := false
+	// includeEquals := false
+	// define origin sign
+	originComparisonSign := comparisonSign
 	if comparisonSign == LessThanOrEqualsComparisonSign {
 		comparisonSign = LessThanComparisonSign
-		includeEquals = true
+		// includeEquals = true
 	}
 	if comparisonSign == GreaterThanOrEqualsComparisonSign {
 		comparisonSign = GreaterThanComparisonSign
-		includeEquals = true
+		// includeEquals = true
 	}
 	comparisons := []string{}
 
+	// change the equal expression to the last compare one
+	cLen := len(columns)
 	for i, column := range columns {
 		value := values[i]
+		// do compare sign merge if the origin sign contain Equal Meaning
+		if i == cLen-1 {
+			comparisonSign = originComparisonSign
+		}
 		rangeComparison, err := BuildValueComparison(column, value, comparisonSign)
 		if err != nil {
 			return "", explodedArgs, err
@@ -159,15 +167,8 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 			explodedArgs = append(explodedArgs, args[i])
 		}
 	}
-
-	if includeEquals {
-		comparison, err := BuildEqualsComparison(columns, values)
-		if err != nil {
-			return "", explodedArgs, nil
-		}
-		comparisons = append(comparisons, comparison)
-		explodedArgs = append(explodedArgs, args...)
-	}
+	/* this origin login handle equal is meaningless now
+	 */
 	result = strings.Join(comparisons, " or ")
 	result = fmt.Sprintf("(%s)", result)
 	return result, explodedArgs, nil
