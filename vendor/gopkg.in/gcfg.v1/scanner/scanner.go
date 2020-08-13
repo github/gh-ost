@@ -16,11 +16,11 @@ import (
 	"path/filepath"
 	"unicode"
 	"unicode/utf8"
-
-	"gopkg.in/gcfg.v1/token"
 )
 
-var RelaxedScannerMode = false
+import (
+	"gopkg.in/gcfg.v1/token"
+)
 
 // An ErrorHandler may be provided to Scanner.Init. If a syntax error is
 // encountered and a handler was installed, the handler is called with a
@@ -148,7 +148,7 @@ func (s *Scanner) scanComment() string {
 }
 
 func isLetter(ch rune) bool {
-	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_' || ch >= 0x80 && unicode.IsLetter(ch)
+	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch >= 0x80 && unicode.IsLetter(ch)
 }
 
 func isDigit(ch rune) bool {
@@ -231,8 +231,8 @@ loop:
 				hasCR = true
 				s.next()
 			}
-			if s.ch != '\n' && !RelaxedScannerMode {
-				s.error(offs, "unquoted '\\' must be followed by new line")
+			if s.ch != '\n' && s.ch != '"' {
+				s.error(offs, "unquoted '\\' must be followed by new line or double quote")
 				break loop
 			}
 			s.next()

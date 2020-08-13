@@ -1,6 +1,6 @@
 package mysql
 
-import "github.com/juju/errors"
+import "github.com/pingcap/errors"
 
 type GTIDSet interface {
 	String() string

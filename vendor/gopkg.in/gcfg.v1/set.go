@@ -1,6 +1,9 @@
 package gcfg
 
 import (
+	"bytes"
+	"encoding"
+	"encoding/gob"
 	"fmt"
 	"math/big"
 	"reflect"
@@ -9,14 +12,13 @@ import (
 	"unicode/utf8"
 
 	"gopkg.in/gcfg.v1/types"
+	"gopkg.in/warnings.v0"
 )
 
 type tag struct {
 	ident   string
 	intMode string
 }
-
-var RelaxedParserMode = false
 
 func newTag(ts string) tag {
 	t := tag{}
@@ -64,7 +66,7 @@ var setters = []setter{
 }
 
 func textUnmarshalerSetter(d interface{}, blank bool, val string, t tag) error {
-	dtu, ok := d.(textUnmarshaler)
+	dtu, ok := d.(encoding.TextUnmarshaler)
 	if !ok {
 		return errUnsupportedType
 	}
@@ -191,20 +193,47 @@ func scanSetter(d interface{}, blank bool, val string, tt tag) error {
 	return types.ScanFully(d, val, 'v')
 }
 
-func set(cfg interface{}, sect, sub, name string, blank bool, value string) error {
+func newValue(c *warnings.Collector, sect string, vCfg reflect.Value,
+	vType reflect.Type) (reflect.Value, error) {
+	//
+	pv := reflect.New(vType)
+	dfltName := "default-" + sect
+	dfltField, _ := fieldFold(vCfg, dfltName)
+	var err error
+	if dfltField.IsValid() {
+		b := bytes.NewBuffer(nil)
+		ge := gob.NewEncoder(b)
+		if err = c.Collect(ge.EncodeValue(dfltField)); err != nil {
+			return pv, err
+		}
+		gd := gob.NewDecoder(bytes.NewReader(b.Bytes()))
+		if err = c.Collect(gd.DecodeValue(pv.Elem())); err != nil {
+			return pv, err
+		}
+	}
+	return pv, nil
+}
+
+func set(c *warnings.Collector, cfg interface{}, sect, sub, name string,
+	blank bool, value string, subsectPass bool) error {
+	//
 	vPCfg := reflect.ValueOf(cfg)
 	if vPCfg.Kind() != reflect.Ptr || vPCfg.Elem().Kind() != reflect.Struct {
 		panic(fmt.Errorf("config must be a pointer to a struct"))
 	}
 	vCfg := vPCfg.Elem()
 	vSect, _ := fieldFold(vCfg, sect)
+	l := loc{section: sect}
 	if !vSect.IsValid() {
-		if RelaxedParserMode {
-			return nil
-		}
-		return fmt.Errorf("invalid section: section %q", sect)
+		err := extraData{loc: l}
+		return c.Collect(err)
 	}
-	if vSect.Kind() == reflect.Map {
+	isSubsect := vSect.Kind() == reflect.Map
+	if subsectPass != isSubsect {
+		return nil
+	}
+	if isSubsect {
+		l.subsection = &sub
 		vst := vSect.Type()
 		if vst.Key().Kind() != reflect.String ||
 			vst.Elem().Kind() != reflect.Ptr ||
@@ -219,7 +248,10 @@ func set(cfg interface{}, sect, sub, name string, blank bool, value string) erro
 		pv := vSect.MapIndex(k)
 		if !pv.IsValid() {
 			vType := vSect.Type().Elem().Elem()
-			pv = reflect.New(vType)
+			var err error
+			if pv, err = newValue(c, sect, vCfg, vType); err != nil {
+				return err
+			}
 			vSect.SetMapIndex(k, pv)
 		}
 		vSect = pv.Elem()
@@ -227,8 +259,7 @@ func set(cfg interface{}, sect, sub, name string, blank bool, value string) erro
 		panic(fmt.Errorf("field for section must be a map or a struct: "+
 			"section %q", sect))
 	} else if sub != "" {
-		return fmt.Errorf("invalid subsection: "+
-			"section %q subsection %q", sect, sub)
+		return c.Collect(extraData{loc: l})
 	}
 	// Empty name is a special value, meaning that only the
 	// section/subsection object is to be created, with no values set.
@@ -236,12 +267,9 @@ func set(cfg interface{}, sect, sub, name string, blank bool, value string) erro
 		return nil
 	}
 	vVar, t := fieldFold(vSect, name)
+	l.variable = &name
 	if !vVar.IsValid() {
-		if RelaxedParserMode {
-			return nil
-		}
-		return fmt.Errorf("invalid variable: "+
-			"section %q subsection %q variable %q", sect, sub, name)
+		return c.Collect(extraData{loc: l})
 	}
 	// vVal is either single-valued var, or newly allocated value within multi-valued var
 	var vVal reflect.Value
@@ -284,12 +312,12 @@ func set(cfg interface{}, sect, sub, name string, blank bool, value string) erro
 			break
 		}
 		if err != errUnsupportedType {
-			return err
+			return locErr{msg: err.Error(), loc: l}
 		}
 	}
 	if !ok {
 		// in case all setters returned errUnsupportedType
-		return err
+		return locErr{msg: err.Error(), loc: l}
 	}
 	if isNew { // set reference if it was dereferenced and newly allocated
 		vVal.Set(vAddr)

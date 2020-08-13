@@ -6,7 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/juju/errors"
+	"github.com/pingcap/errors"
 	. "github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/packet"
 )
@@ -34,7 +34,7 @@ func (c *Conn) readInitialHandshake() error {
 	}
 
 	if data[0] == ERR_HEADER {
-		return errors.New("read initial handshake error")
+		return errors.Annotate(c.handleErrorPacket(data), "read initial handshake error")
 	}
 
 	if data[0] < MinProtocolVersion {
