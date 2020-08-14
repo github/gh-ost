@@ -14,6 +14,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
+	"github.com/github/gh-ost/go/sql"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/outbrain/golib/log"
 
@@ -66,6 +67,7 @@ func main() {
 	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
 	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
 	flag.BoolVar(&migrationContext.ConcurrentCountTableRows, "concurrent-rowcount", true, "(with --exact-rowcount), when true (default): count rows after row-copy begins, concurrently, and adjust row estimate later on; when false: first count rows, then start row copy")
+	flag.BoolVar(&migrationContext.ChecksumData, "checksum-data", false, "if true, checksum original and ghost table shared data on the fly, fail migration if checksum mismatches. Checksum queries run on applier node (the master unless testing on replica)")
 	flag.BoolVar(&migrationContext.AllowedRunningOnMaster, "allow-on-master", false, "allow this migration to run directly on master. Preferably it would run on a replica")
 	flag.BoolVar(&migrationContext.AllowedMasterMaster, "allow-master-master", false, "explicitly allow running in a master-master setup")
 	flag.BoolVar(&migrationContext.NullableUniqueKeyAllowed, "allow-nullable-unique-key", false, "allow gh-ost to migrate based on a unique key with nullable columns. As long as no NULL values exist, this should be OK. If NULL values exist in chosen key, data may be corrupted. Use at your own risk!")
@@ -172,14 +174,25 @@ func main() {
 		migrationContext.Log.SetLevel(log.ERROR)
 	}
 
+	if migrationContext.AlterStatement == "" {
+		log.Fatalf("--alter must be provided and statement must not be empty")
+	}
+	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
+	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
+
 	if migrationContext.DatabaseName == "" {
-		migrationContext.Log.Fatalf("--database must be provided and database name must not be empty")
+		if parser.HasExplicitSchema() {
+			migrationContext.DatabaseName = parser.GetExplicitSchema()
+		} else {
+			log.Fatalf("--database must be provided and database name must not be empty, or --alter must specify database name")
+		}
 	}
 	if migrationContext.OriginalTableName == "" {
-		migrationContext.Log.Fatalf("--table must be provided and table name must not be empty")
-	}
-	if migrationContext.AlterStatement == "" {
-		migrationContext.Log.Fatalf("--alter must be provided and statement must not be empty")
+		if parser.HasExplicitTable() {
+			migrationContext.OriginalTableName = parser.GetExplicitTable()
+		} else {
+			log.Fatalf("--table must be provided and table name must not be empty, or --alter must specify table name")
+		}
 	}
 	migrationContext.Noop = !(*executeFlag)
 	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {

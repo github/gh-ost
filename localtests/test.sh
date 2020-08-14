@@ -148,6 +148,7 @@ test_single() {
     --alter='engine=innodb' \
     --exact-rowcount \
     --assume-rbr \
+    --checksum-data \
     --initially-drop-old-table \
     --initially-drop-ghost-table \
     --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \
@@ -229,11 +230,12 @@ build_binary() {
     echo "Using binary: $ghost_binary"
     return 0
   fi
-  go build -o $ghost_binary go/cmd/gh-ost/main.go
+  ./script/build
   if [ $? -ne 0 ] ; then
     echo "Build failure"
     exit 1
   fi
+  cp bin/gh-ost $ghost_binary
 }
 
 test_all() {

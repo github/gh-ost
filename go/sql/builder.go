@@ -178,19 +178,23 @@ func BuildRangePreparedComparison(columns *ColumnList, args []interface{}, compa
 	return BuildRangeComparison(columns.Names(), values, args, comparisonSign)
 }
 
-func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+func BuildRangeInsertQuery(
+	databaseName, originalTableName, ghostTableName string,
+	sharedColumns []string, mappedSharedColumns []string,
+	uniqueKey *UniqueKey,
+	ghostUniqueKey *UniqueKey,
+	rangeStartValues, rangeEndValues []string,
+	rangeStartArgs, rangeEndArgs []interface{},
+	includeRangeStartValues bool, transactionalTable bool,
+) (
+	insertQuery, originalChecksumQuery, ghostChecksumQuery string, explodedArgs []interface{}, err error,
+) {
 	if len(sharedColumns) == 0 {
-		return "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
+		return "", "", "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
 	databaseName = EscapeName(databaseName)
 	originalTableName = EscapeName(originalTableName)
 	ghostTableName = EscapeName(ghostTableName)
-
-	mappedSharedColumns = duplicateNames(mappedSharedColumns)
-	for i := range mappedSharedColumns {
-		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
-	}
-	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
 
 	sharedColumns = duplicateNames(sharedColumns)
 	for i := range sharedColumns {
@@ -198,40 +202,111 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	}
 	sharedColumnsListing := strings.Join(sharedColumns, ", ")
 
-	uniqueKey = EscapeName(uniqueKey)
+	mappedSharedColumns = duplicateNames(mappedSharedColumns)
+	for i := range mappedSharedColumns {
+		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
+	}
+	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
+
+	uniqueKeyName := EscapeName(uniqueKey.Name)
+	ghostUniqueKeyName := EscapeName(ghostUniqueKey.Name)
 	var minRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
 	if includeRangeStartValues {
 		minRangeComparisonSign = GreaterThanOrEqualsComparisonSign
 	}
-	rangeStartComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns.Names(), rangeStartValues, rangeStartArgs, minRangeComparisonSign)
+	rangeStartComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKey.Columns.Names(), rangeStartValues, rangeStartArgs, minRangeComparisonSign)
 	if err != nil {
-		return "", explodedArgs, err
+		return "", "", "", explodedArgs, err
 	}
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
-	rangeEndComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns.Names(), rangeEndValues, rangeEndArgs, LessThanOrEqualsComparisonSign)
+	rangeEndComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKey.Columns.Names(), rangeEndValues, rangeEndArgs, LessThanOrEqualsComparisonSign)
 	if err != nil {
-		return "", explodedArgs, err
+		return "", "", "", explodedArgs, err
 	}
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
 	transactionalClause := ""
 	if transactionalTable {
 		transactionalClause = "lock in share mode"
 	}
-	result = fmt.Sprintf(`
+	insertQuery = fmt.Sprintf(`
       insert /* gh-ost %s.%s */ ignore into %s.%s (%s)
       (select %s from %s.%s force index (%s)
         where (%s and %s) %s
       )
     `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
-		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
+		sharedColumnsListing, databaseName, originalTableName, uniqueKeyName,
 		rangeStartComparison, rangeEndComparison, transactionalClause)
-	return result, explodedArgs, nil
+
+	// Now for checksum comparisons
+
+	sharedColumns = duplicateNames(sharedColumns) // already escaped
+	for i := range sharedColumns {
+		sharedColumns[i] = fmt.Sprintf(`IFNULL(%s, 'NULL')`, sharedColumns[i])
+	}
+	sharedColumnsListing = strings.Join(sharedColumns, ", ")
+
+	mappedSharedColumns = duplicateNames(mappedSharedColumns)
+	for i := range mappedSharedColumns {
+		mappedSharedColumns[i] = fmt.Sprintf(`IFNULL(%s, 'NULL')`, mappedSharedColumns[i])
+	}
+	mappedSharedColumnsListing = strings.Join(mappedSharedColumns, ", ")
+
+	// escape unique key columns for comparison queries
+	uniqueKeyColumnNames := duplicateNames(uniqueKey.Columns.Names())
+	for i := range uniqueKeyColumnNames {
+		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
+	}
+	uniqueKeyColumnsListing := strings.Join(uniqueKeyColumnNames, ", ")
+
+	originalChecksumQuery = fmt.Sprintf(`
+		select /* gh-ost checksum %s.%s */
+			sha2(
+				group_concat(
+					sha2(concat_ws(',', %s), 256) order by %s
+				), 256
+			)
+			from %s.%s force index (%s)
+			where (%s and %s)
+	`, databaseName, originalTableName,
+		sharedColumnsListing, uniqueKeyColumnsListing,
+		databaseName, originalTableName, uniqueKeyName,
+		rangeStartComparison, rangeEndComparison)
+
+	ghostUniqueKeyColumnNames := duplicateNames(ghostUniqueKey.Columns.Names())
+	for i := range ghostUniqueKeyColumnNames {
+		ghostUniqueKeyColumnNames[i] = EscapeName(ghostUniqueKeyColumnNames[i])
+	}
+	ghostUniqueKeyColumnsListing := strings.Join(ghostUniqueKeyColumnNames, ", ")
+
+	ghostChecksumQuery = fmt.Sprintf(`
+		select /* gh-ost checksum %s.%s */
+			sha2(
+				group_concat(
+					sha2(concat_ws(',', %s), 256) order by %s
+				), 256
+			)
+			from %s.%s force index (%s)
+			where (%s and %s)
+	`, databaseName, ghostTableName,
+		mappedSharedColumnsListing, ghostUniqueKeyColumnsListing,
+		databaseName, ghostTableName, ghostUniqueKeyName,
+		rangeStartComparison, rangeEndComparison)
+	return insertQuery, originalChecksumQuery, ghostChecksumQuery, explodedArgs, nil
 }
 
-func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
-	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
-	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
-	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
+func BuildRangeInsertPreparedQuery(
+	databaseName, originalTableName, ghostTableName string,
+	sharedColumns []string, mappedSharedColumns []string,
+	uniqueKey *UniqueKey,
+	ghostUniqueKey *UniqueKey,
+	rangeStartArgs, rangeEndArgs []interface{},
+	includeRangeStartValues bool, transactionalTable bool,
+) (
+	insertQuery, originalChecksumQuery, ghostChecksumQuery string, explodedArgs []interface{}, err error,
+) {
+	rangeStartValues := buildColumnsPreparedValues(&uniqueKey.Columns)
+	rangeEndValues := buildColumnsPreparedValues(&uniqueKey.Columns)
+	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, ghostUniqueKey, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
 }
 
 func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {

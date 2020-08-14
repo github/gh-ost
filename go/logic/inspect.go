@@ -125,7 +125,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	if err != nil {
 		return err
 	}
-	sharedUniqueKeys, err := this.getSharedUniqueKeys(this.migrationContext.OriginalTableUniqueKeys, this.migrationContext.GhostTableUniqueKeys)
+	sharedUniqueKeys, ghostSharedUniqueKeys, err := this.getSharedUniqueKeys(this.migrationContext.OriginalTableUniqueKeys, this.migrationContext.GhostTableUniqueKeys)
 	if err != nil {
 		return err
 	}
@@ -150,13 +150,15 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		}
 		if uniqueKeyIsValid {
 			this.migrationContext.UniqueKey = sharedUniqueKeys[i]
+			this.migrationContext.GhostUniqueKey = ghostSharedUniqueKeys[i]
 			break
 		}
 	}
 	if this.migrationContext.UniqueKey == nil {
 		return fmt.Errorf("No shared unique key can be found after ALTER! Bailing out")
 	}
-	this.migrationContext.Log.Infof("Chosen shared unique key is %s", this.migrationContext.UniqueKey.Name)
+	this.migrationContext.Log.Infof("Chosen shared unique key is %s. ghost unique key is %s", this.migrationContext.UniqueKey.Name, this.migrationContext.GhostUniqueKey.Name)
+	this.migrationContext.Log.Infof("Chosen shared unique key columns %+v. ghost unique key columns: %+v", this.migrationContext.UniqueKey.Columns.Names(), this.migrationContext.GhostUniqueKey.Columns.Names())
 	if this.migrationContext.UniqueKey.HasNullable {
 		if this.migrationContext.NullableUniqueKeyAllowed {
 			this.migrationContext.Log.Warningf("Chosen key (%s) has nullable columns. You have supplied with --allow-nullable-unique-key and so this migration proceeds. As long as there aren't NULL values in this key's column, migration should be fine. NULL values will corrupt migration's data", this.migrationContext.UniqueKey)
@@ -668,17 +670,18 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
 
 // getSharedUniqueKeys returns the intersection of two given unique keys,
 // testing by list of columns
-func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [](*sql.UniqueKey)) (uniqueKeys [](*sql.UniqueKey), err error) {
+func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [](*sql.UniqueKey)) (sharedUniqueKeys [](*sql.UniqueKey), ghostSharedUniqueKeys [](*sql.UniqueKey), err error) {
 	// We actually do NOT rely on key name, just on the set of columns. This is because maybe
 	// the ALTER is on the name itself...
 	for _, originalUniqueKey := range originalUniqueKeys {
 		for _, ghostUniqueKey := range ghostUniqueKeys {
 			if originalUniqueKey.Columns.EqualsByNames(&ghostUniqueKey.Columns) {
-				uniqueKeys = append(uniqueKeys, originalUniqueKey)
+				sharedUniqueKeys = append(sharedUniqueKeys, originalUniqueKey)
+				ghostSharedUniqueKeys = append(ghostSharedUniqueKeys, ghostUniqueKey)
 			}
 		}
 	}
-	return uniqueKeys, nil
+	return sharedUniqueKeys, ghostSharedUniqueKeys, nil
 }
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list

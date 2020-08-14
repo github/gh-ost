@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -23,8 +24,9 @@ import (
 type ChangelogState string
 
 const (
-	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
-	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
+	GhostTableMigrated            ChangelogState = "GhostTableMigrated"
+	AllEventsUpToLockProcessed                   = "AllEventsUpToLockProcessed"
+	checksumComparisonQueueBuffer                = 10
 )
 
 func ReadChangelogState(s string) ChangelogState {
@@ -60,7 +62,7 @@ const (
 
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
-	parser           *sql.Parser
+	parser           *sql.AlterTableParser
 	inspector        *Inspector
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
@@ -80,6 +82,10 @@ type Migrator struct {
 	copyRowsQueue    chan tableWriteFunc
 	applyEventsQueue chan *applyEventStruct
 
+	rowChecksumCompleteQueue chan bool
+	checksumComparisonQueue  chan *base.ChecksumComparison
+	checksumComparisonMap    map[int64]*base.ChecksumComparison
+
 	handledChangelogStates map[string]bool
 
 	finishedMigrating int64
@@ -88,14 +94,19 @@ type Migrator struct {
 func NewMigrator(context *base.MigrationContext) *Migrator {
 	migrator := &Migrator{
 		migrationContext:           context,
-		parser:                     sql.NewParser(),
+		parser:                     sql.NewAlterTableParser(),
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
 		allEventsUpToLockProcessed: make(chan string),
 
-		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
+		copyRowsQueue:    make(chan tableWriteFunc),
+		applyEventsQueue: make(chan *applyEventStruct, base.MaxEventsBatchSize),
+
+		rowChecksumCompleteQueue: make(chan bool),
+		checksumComparisonQueue:  make(chan *base.ChecksumComparison, checksumComparisonQueueBuffer),
+		checksumComparisonMap:    make(map[int64]*base.ChecksumComparison),
+
 		handledChangelogStates: make(map[string]bool),
 		finishedMigrating:      0,
 	}
@@ -202,6 +213,10 @@ func (this *Migrator) consumeRowCopyComplete() {
 	}()
 }
 
+func (this *Migrator) consumeChecksumComparisonsComplete() {
+	<-this.rowChecksumCompleteQueue
+}
+
 func (this *Migrator) canStopStreaming() bool {
 	return atomic.LoadInt64(&this.migrationContext.CutOverCompleteFlag) != 0
 }
@@ -248,6 +263,40 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 func (this *Migrator) listenOnPanicAbort() {
 	err := <-this.migrationContext.PanicAbort
 	this.migrationContext.Log.Fatale(err)
+}
+
+func (this *Migrator) processChecksumComparisons() {
+	var completeOnce sync.Once
+	for {
+		func() {
+			// Avoid blocking. Only pull from the queue the available events
+			for {
+				select {
+				case checksumComparison := <-this.checksumComparisonQueue:
+					this.migrationContext.Log.Debugf("new checksums!!!!!!!!! %+v", checksumComparison)
+					this.checksumComparisonMap[checksumComparison.Iteration] = checksumComparison
+				default:
+					return
+				}
+			}
+		}()
+		// Iterate the pending checksums. Some of these have been pulled from the queue just above;
+		// others may be subsuccessful checksums from previous iterations
+		atomic.StoreInt64(&this.migrationContext.PendingChecksumComparisons, int64(len(this.checksumComparisonMap)))
+		for iteration, checksumComparison := range this.checksumComparisonMap {
+			if err := this.applier.CompareChecksum(checksumComparison); err != nil {
+				checksumComparison.IncrementAttempts()
+			} else {
+				atomic.AddInt64(&this.migrationContext.SuccessfulChecksumComparisons, 1)
+				delete(this.checksumComparisonMap, iteration)
+			}
+		}
+		atomic.StoreInt64(&this.migrationContext.PendingChecksumComparisons, int64(len(this.checksumComparisonMap)))
+		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+			go completeOnce.Do(func() { this.rowChecksumCompleteQueue <- true })
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // validateStatement validates the `alter` statement meets criteria.
@@ -388,6 +437,7 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
+	go this.processChecksumComparisons()
 	this.migrationContext.MarkRowCopyStartTime()
 	go this.initiateStatus()
 
@@ -396,6 +446,11 @@ func (this *Migrator) Migrate() (err error) {
 	this.migrationContext.Log.Infof("Row copy complete")
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
 		return err
+	}
+	if this.migrationContext.ChecksumData {
+		this.migrationContext.Log.Debugf("Operating until checksum comparison iteration is complete")
+		this.consumeChecksumComparisonsComplete()
+		this.migrationContext.Log.Infof("+ checksum comparison iteration compelete")
 	}
 	this.printStatus(ForcePrintStatusRule)
 
@@ -531,6 +586,25 @@ func (this *Migrator) cutOver() (err error) {
 	return this.migrationContext.Log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 }
 
+func (this *Migrator) waitForChecksumToClear() (err error) {
+	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
+	for {
+		select {
+		case <-timeout.C:
+			{
+				return this.migrationContext.Log.Errorf("Timeout while waiting for checksums to clear. There are still checksum mismatches")
+			}
+		default:
+			{
+				if len(this.checksumComparisonMap) == 0 {
+					return nil
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+		}
+	}
+}
+
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
 func (this *Migrator) waitForEventsUpToLock() (err error) {
@@ -587,6 +661,9 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
 		return err
 	}
+	if err := this.retryOperation(this.waitForChecksumToClear); err != nil {
+		return err
+	}
 	if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
 		return err
 	}
@@ -631,7 +708,9 @@ func (this *Migrator) atomicCutOver() (err error) {
 	if err := this.waitForEventsUpToLock(); err != nil {
 		return this.migrationContext.Log.Errore(err)
 	}
-
+	if err := this.waitForChecksumToClear(); err != nil {
+		return this.migrationContext.Log.Errore(err)
+	}
 	// Step 2
 	// We now attempt an atomic RENAME on original & ghost tables, and expect it to block.
 	this.migrationContext.RenameTablesStartTime = time.Now()
@@ -958,10 +1037,11 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, State: %s; ETA: %s",
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Checksums: %d/%d,%d, Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
+		atomic.LoadInt64(&this.migrationContext.SuccessfulChecksumComparisons), atomic.LoadInt64(&this.migrationContext.SubmittedChecksumComparisons), atomic.LoadInt64(&this.migrationContext.PendingChecksumComparisons),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
 		this.migrationContext.GetCurrentLagDuration().Seconds(),
@@ -1130,9 +1210,15 @@ func (this *Migrator) iterateChunks() error {
 					// _ghost_ table, which no longer exists. So, bothering error messages and all, but no damage.
 					return nil
 				}
-				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
+				_, rowsAffected, _, checksumComparison, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
 					return err // wrapping call will retry
+				}
+
+				if this.migrationContext.ChecksumData {
+					this.migrationContext.Log.Debugf("adding checksum")
+					atomic.AddInt64(&this.migrationContext.SubmittedChecksumComparisons, 1)
+					this.checksumComparisonQueue <- checksumComparison
 				}
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
