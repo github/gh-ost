@@ -60,7 +60,7 @@ const (
 
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
-	parser           *sql.Parser
+	parser           *sql.AlterTableParser
 	inspector        *Inspector
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
@@ -88,7 +88,7 @@ type Migrator struct {
 func NewMigrator(context *base.MigrationContext) *Migrator {
 	migrator := &Migrator{
 		migrationContext:           context,
-		parser:                     sql.NewParser(),
+		parser:                     sql.NewAlterTableParser(),
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
