@@ -17,3 +17,9 @@ jobs:
 
     - name: Build
       run: script/cibuild
+
+    - name: Upload gh-ost binary artifact
+      uses: actions/upload-artifact@v1
+      with:
+        name: gh-ost
+        path: bin/gh-ost
