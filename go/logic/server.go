@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 
 	"github.com/github/gh-ost/go/base"
-	"github.com/outbrain/golib/log"
 )
 
 type printStatusFunc func(PrintStatusRule, io.Writer)
@@ -49,12 +48,12 @@ func (this *Server) BindSocketFile() (err error) {
 	if err != nil {
 		return err
 	}
-	log.Infof("Listening on unix socket file: %s", this.migrationContext.ServeSocketFile)
+	this.migrationContext.Log.Infof("Listening on unix socket file: %s", this.migrationContext.ServeSocketFile)
 	return nil
 }
 
 func (this *Server) RemoveSocketFile() (err error) {
-	log.Infof("Removing socket file: %s", this.migrationContext.ServeSocketFile)
+	this.migrationContext.Log.Infof("Removing socket file: %s", this.migrationContext.ServeSocketFile)
 	return os.Remove(this.migrationContext.ServeSocketFile)
 }
 
@@ -66,7 +65,7 @@ func (this *Server) BindTCPPort() (err error) {
 	if err != nil {
 		return err
 	}
-	log.Infof("Listening on tcp port: %d", this.migrationContext.ServeTCPPort)
+	this.migrationContext.Log.Infof("Listening on tcp port: %d", this.migrationContext.ServeTCPPort)
 	return nil
 }
 
@@ -76,7 +75,7 @@ func (this *Server) Serve() (err error) {
 		for {
 			conn, err := this.unixListener.Accept()
 			if err != nil {
-				log.Errore(err)
+				this.migrationContext.Log.Errore(err)
 			}
 			go this.handleConnection(conn)
 		}
@@ -88,7 +87,7 @@ func (this *Server) Serve() (err error) {
 		for {
 			conn, err := this.tcpListener.Accept()
 			if err != nil {
-				log.Errore(err)
+				this.migrationContext.Log.Errore(err)
 			}
 			go this.handleConnection(conn)
 		}
@@ -118,7 +117,7 @@ func (this *Server) onServerCommand(command string, writer *bufio.Writer) (err e
 	} else {
 		fmt.Fprintf(writer, "%s\n", err.Error())
 	}
-	return log.Errore(err)
+	return this.migrationContext.Log.Errore(err)
 }
 
 // applyServerCommand parses and executes commands by user
@@ -144,7 +143,7 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 	switch command {
 	case "help":
 		{
-			fmt.Fprintln(writer, `available commands:
+			fmt.Fprint(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
 coordinates													 # Print the currently inspected coordinates
@@ -341,7 +340,7 @@ help                                 # This message
 				err := fmt.Errorf("User commanded 'panic' on %s, but migrated table is %s; ignoring request.", arg, this.migrationContext.OriginalTableName)
 				return NoPrintStatusRule, err
 			}
-			err := fmt.Errorf("User commanded 'panic'. I will now panic, without cleanup. PANIC!")
+			err := fmt.Errorf("User commanded 'panic'. The migration will be aborted without cleanup. Please drop the gh-ost tables before trying again.")
 			this.migrationContext.PanicAbort <- err
 			return NoPrintStatusRule, err
 		}

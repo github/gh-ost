@@ -4,6 +4,7 @@ set -e
 
 # Make sure we have the version of Go we want to depend on, either from the
 # system or one we grab ourselves.
+# If executing from within Dockerfile then this assumption is inherently true, since we use a `golang` docker image.
 . script/ensure-go-installed
 
 # Since we want to be able to build this outside of GOPATH, we set it

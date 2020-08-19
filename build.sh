@@ -18,10 +18,8 @@ function build {
   GOOS=$3
   GOARCH=$4
 
-
-
-  if ! go version | egrep -q 'go(1[.]9|1[.]1[0-9])' ; then
-    echo "go version is too low. Must use 1.9 or above"
+  if ! go version | egrep -q 'go(1\.1[456])' ; then
+    echo "go version must be 1.14 or above"
     exit 1
   fi
 
@@ -63,11 +61,11 @@ main() {
 
   mkdir -p ${buildpath}
   rm -rf ${buildpath:?}/*
-  build macOS osx darwin amd64
   build GNU/Linux linux linux amd64
+  # build macOS osx darwin amd64
 
   echo "Binaries found in:"
-  ls -1 $buildpath/gh-ost-binary*${timestamp}.tar.gz
+  find $buildpath/gh-ost* -type f -maxdepth 1
 }
 
 main "$@"
