@@ -862,8 +862,8 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 
 	dropCutOverSentryTableOnce.Do(func() {
 		if _, err := tx.Exec(query); err != nil {
-		  this.migrationContext.Log.Errore(err)
-		  // We DO NOT return here because we must `UNLOCK TABLES`!
+			this.migrationContext.Log.Errore(err)
+			// We DO NOT return here because we must `UNLOCK TABLES`!
 		}
 	})
 
