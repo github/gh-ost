@@ -97,7 +97,11 @@ func (s IntervalSlice) Normalize() IntervalSlice {
 			n = append(n, s[i])
 			continue
 		} else {
-			n[len(n)-1] = Interval{last.Start, s[i].Stop}
+			stop := s[i].Stop
+			if last.Stop > stop {
+				stop = last.Stop
+			}
+			n[len(n)-1] = Interval{last.Start, stop}
 		}
 	}
 
@@ -285,16 +289,27 @@ func (s *UUIDSet) Decode(data []byte) error {
 	return err
 }
 
+func (s *UUIDSet) Clone() *UUIDSet {
+	clone := new(UUIDSet)
+
+	clone.SID, _ = uuid.FromString(s.SID.String())
+	clone.Intervals = s.Intervals.Normalize()
+
+	return clone
+}
+
 type MysqlGTIDSet struct {
 	Sets map[string]*UUIDSet
 }
 
 func ParseMysqlGTIDSet(str string) (GTIDSet, error) {
 	s := new(MysqlGTIDSet)
+	s.Sets = make(map[string]*UUIDSet)
+	if str == "" {
+		return s, nil
+	}
 
 	sp := strings.Split(str, ",")
-
-	s.Sets = make(map[string]*UUIDSet, len(sp))
 
 	//todo, handle redundant same uuid
 	for i := 0; i < len(sp); i++ {
@@ -334,6 +349,9 @@ func DecodeMysqlGTIDSet(data []byte) (*MysqlGTIDSet, error) {
 }
 
 func (s *MysqlGTIDSet) AddSet(set *UUIDSet) {
+	if set == nil {
+		return
+	}
 	sid := set.SID.String()
 	o, ok := s.Sets[sid]
 	if ok {
@@ -341,6 +359,17 @@ func (s *MysqlGTIDSet) AddSet(set *UUIDSet) {
 	} else {
 		s.Sets[sid] = set
 	}
+}
+
+func (s *MysqlGTIDSet) Update(GTIDStr string) error {
+	uuidSet, err := ParseUUIDSet(GTIDStr)
+	if err != nil {
+		return err
+	}
+
+	s.AddSet(uuidSet)
+
+	return nil
 }
 
 func (s *MysqlGTIDSet) Contain(o GTIDSet) bool {
@@ -406,4 +435,15 @@ func (s *MysqlGTIDSet) Encode() []byte {
 	}
 
 	return buf.Bytes()
+}
+
+func (gtid *MysqlGTIDSet) Clone() GTIDSet {
+	clone := &MysqlGTIDSet{
+		Sets: make(map[string]*UUIDSet),
+	}
+	for sid, uuidSet := range gtid.Sets {
+		clone.Sets[sid] = uuidSet.Clone()
+	}
+
+	return clone
 }

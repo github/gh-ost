@@ -19,17 +19,19 @@ func init() {
 
 func TestParseAlterStatement(t *testing.T) {
 	statement := "add column t int, engine=innodb"
-	parser := NewParser()
+	parser := NewAlterTableParser()
 	err := parser.ParseAlterStatement(statement)
 	test.S(t).ExpectNil(err)
+	test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
 	test.S(t).ExpectFalse(parser.HasNonTrivialRenames())
 }
 
 func TestParseAlterStatementTrivialRename(t *testing.T) {
 	statement := "add column t int, change ts ts timestamp, engine=innodb"
-	parser := NewParser()
+	parser := NewAlterTableParser()
 	err := parser.ParseAlterStatement(statement)
 	test.S(t).ExpectNil(err)
+	test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
 	test.S(t).ExpectFalse(parser.HasNonTrivialRenames())
 	test.S(t).ExpectEquals(len(parser.columnRenameMap), 1)
 	test.S(t).ExpectEquals(parser.columnRenameMap["ts"], "ts")
@@ -37,9 +39,10 @@ func TestParseAlterStatementTrivialRename(t *testing.T) {
 
 func TestParseAlterStatementTrivialRenames(t *testing.T) {
 	statement := "add column t int, change ts ts timestamp, CHANGE f `f` float, engine=innodb"
-	parser := NewParser()
+	parser := NewAlterTableParser()
 	err := parser.ParseAlterStatement(statement)
 	test.S(t).ExpectNil(err)
+	test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
 	test.S(t).ExpectFalse(parser.HasNonTrivialRenames())
 	test.S(t).ExpectEquals(len(parser.columnRenameMap), 2)
 	test.S(t).ExpectEquals(parser.columnRenameMap["ts"], "ts")
@@ -58,9 +61,10 @@ func TestParseAlterStatementNonTrivial(t *testing.T) {
 	}
 
 	for _, statement := range statements {
-		parser := NewParser()
+		parser := NewAlterTableParser()
 		err := parser.ParseAlterStatement(statement)
 		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
 		renames := parser.GetNonTrivialRenames()
 		test.S(t).ExpectEquals(len(renames), 2)
 		test.S(t).ExpectEquals(renames["i"], "count")
@@ -69,7 +73,7 @@ func TestParseAlterStatementNonTrivial(t *testing.T) {
 }
 
 func TestTokenizeAlterStatement(t *testing.T) {
-	parser := NewParser()
+	parser := NewAlterTableParser()
 	{
 		alterStatement := "add column t int"
 		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
@@ -108,7 +112,7 @@ func TestTokenizeAlterStatement(t *testing.T) {
 }
 
 func TestSanitizeQuotesFromAlterStatement(t *testing.T) {
-	parser := NewParser()
+	parser := NewAlterTableParser()
 	{
 		alterStatement := "add column e enum('a','b','c')"
 		strippedStatement := parser.sanitizeQuotesFromAlterStatement(alterStatement)
@@ -124,7 +128,7 @@ func TestSanitizeQuotesFromAlterStatement(t *testing.T) {
 func TestParseAlterStatementDroppedColumns(t *testing.T) {
 
 	{
-		parser := NewParser()
+		parser := NewAlterTableParser()
 		statement := "drop column b"
 		err := parser.ParseAlterStatement(statement)
 		test.S(t).ExpectNil(err)
@@ -132,16 +136,17 @@ func TestParseAlterStatementDroppedColumns(t *testing.T) {
 		test.S(t).ExpectTrue(parser.droppedColumns["b"])
 	}
 	{
-		parser := NewParser()
+		parser := NewAlterTableParser()
 		statement := "drop column b, drop key c_idx, drop column `d`"
 		err := parser.ParseAlterStatement(statement)
 		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
 		test.S(t).ExpectEquals(len(parser.droppedColumns), 2)
 		test.S(t).ExpectTrue(parser.droppedColumns["b"])
 		test.S(t).ExpectTrue(parser.droppedColumns["d"])
 	}
 	{
-		parser := NewParser()
+		parser := NewAlterTableParser()
 		statement := "drop column b, drop key c_idx, drop column `d`, drop `e`, drop primary key, drop foreign key fk_1"
 		err := parser.ParseAlterStatement(statement)
 		test.S(t).ExpectNil(err)
@@ -151,11 +156,145 @@ func TestParseAlterStatementDroppedColumns(t *testing.T) {
 		test.S(t).ExpectTrue(parser.droppedColumns["e"])
 	}
 	{
-		parser := NewParser()
+		parser := NewAlterTableParser()
 		statement := "drop column b, drop bad statement, add column i int"
 		err := parser.ParseAlterStatement(statement)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(len(parser.droppedColumns), 1)
 		test.S(t).ExpectTrue(parser.droppedColumns["b"])
+	}
+}
+
+func TestParseAlterStatementRenameTable(t *testing.T) {
+
+	{
+		parser := NewAlterTableParser()
+		statement := "drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectFalse(parser.isRenameTable)
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "rename as something_else"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectTrue(parser.isRenameTable)
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "drop column b, rename as something_else"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
+		test.S(t).ExpectTrue(parser.isRenameTable)
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "engine=innodb rename as something_else"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectTrue(parser.isRenameTable)
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "rename as something_else, engine=innodb"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectTrue(parser.isRenameTable)
+	}
+}
+
+func TestParseAlterStatementExplicitTable(t *testing.T) {
+
+	{
+		parser := NewAlterTableParser()
+		statement := "drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.explicitSchema, "")
+		test.S(t).ExpectEquals(parser.explicitTable, "")
+		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b")
+		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b"}))
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "alter table tbl drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.explicitSchema, "")
+		test.S(t).ExpectEquals(parser.explicitTable, "tbl")
+		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b")
+		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b"}))
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "alter table `tbl` drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.explicitSchema, "")
+		test.S(t).ExpectEquals(parser.explicitTable, "tbl")
+		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b")
+		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b"}))
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "alter table `scm with spaces`.`tbl` drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.explicitSchema, "scm with spaces")
+		test.S(t).ExpectEquals(parser.explicitTable, "tbl")
+		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b")
+		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b"}))
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "alter table `scm`.`tbl with spaces` drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.explicitSchema, "scm")
+		test.S(t).ExpectEquals(parser.explicitTable, "tbl with spaces")
+		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b")
+		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b"}))
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "alter table `scm`.tbl drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.explicitSchema, "scm")
+		test.S(t).ExpectEquals(parser.explicitTable, "tbl")
+		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b")
+		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b"}))
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "alter table scm.`tbl` drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.explicitSchema, "scm")
+		test.S(t).ExpectEquals(parser.explicitTable, "tbl")
+		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b")
+		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b"}))
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "alter table scm.tbl drop column b"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.explicitSchema, "scm")
+		test.S(t).ExpectEquals(parser.explicitTable, "tbl")
+		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b")
+		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b"}))
+	}
+	{
+		parser := NewAlterTableParser()
+		statement := "alter table scm.tbl drop column b, add index idx(i)"
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.explicitSchema, "scm")
+		test.S(t).ExpectEquals(parser.explicitTable, "tbl")
+		test.S(t).ExpectEquals(parser.alterStatementOptions, "drop column b, add index idx(i)")
+		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b", "add index idx(i)"}))
 	}
 }

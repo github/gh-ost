@@ -7,17 +7,18 @@ package binlog
 
 import (
 	"fmt"
-	"github.com/github/gh-ost/go/sql"
 	"strings"
+
+	"github.com/github/gh-ost/go/sql"
 )
 
 type EventDML string
 
 const (
 	NotDML    EventDML = "NoDML"
-	InsertDML          = "Insert"
-	UpdateDML          = "Update"
-	DeleteDML          = "Delete"
+	InsertDML EventDML = "Insert"
+	UpdateDML EventDML = "Update"
+	DeleteDML EventDML = "Delete"
 )
 
 func ToEventDML(description string) EventDML {

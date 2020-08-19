@@ -4,11 +4,10 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
-
-	"golang.org/x/net/context"
 
 	"github.com/juju/errors"
 	"github.com/siddontang/go-mysql/mysql"
@@ -41,13 +40,14 @@ func main() {
 		Port:            uint16(*port),
 		User:            *user,
 		Password:        *password,
-		RawModeEanbled:  *rawMode,
+		RawModeEnabled:  *rawMode,
 		SemiSyncEnabled: *semiSync,
+		UseDecimal:      true,
 	}
 
 	b := replication.NewBinlogSyncer(cfg)
 
-	pos := mysql.Position{*file, uint32(*pos)}
+	pos := mysql.Position{Name: *file, Pos: uint32(*pos)}
 	if len(*backupPath) > 0 {
 		// Backup will always use RawMode.
 		err := b.StartBackup(*backupPath, pos, 0)
@@ -65,6 +65,11 @@ func main() {
 		for {
 			e, err := s.GetEvent(context.Background())
 			if err != nil {
+				// Try to output all left events
+				events := s.DumpEvents()
+				for _, e := range events {
+					e.Dump(os.Stdout)
+				}
 				fmt.Printf("Get event error: %v\n", errors.ErrorStack(err))
 				return
 			}

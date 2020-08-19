@@ -50,7 +50,8 @@ test_mysql_version() {
 
   export PATH="${PWD}/gh-ost-ci-env/bin/:${PATH}"
 
-  gh-ost-test-mysql-master -uroot -e "grant all on *.* to 'gh-ost'@'%' identified by 'gh-ost'"
+  gh-ost-test-mysql-master -uroot -e "create user 'gh-ost'@'%' identified by 'gh-ost'"
+  gh-ost-test-mysql-master -uroot -e "grant all on *.* to 'gh-ost'@'%'"
 
   echo "### Running gh-ost tests for $mysql_version"
   ./localtests/test.sh -b bin/gh-ost
@@ -61,6 +62,9 @@ test_mysql_version() {
 echo "Building..."
 . script/build
 # Test all versions:
+find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.gz" | while read f ; do basename $f ".tar.gz" ; done | sort -r | while read mysql_version ; do
+  echo "found MySQL version: $mysql_version"
+done
 find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.gz" | while read f ; do basename $f ".tar.gz" ; done | sort -r | while read mysql_version ; do
   test_mysql_version "$mysql_version"
 done

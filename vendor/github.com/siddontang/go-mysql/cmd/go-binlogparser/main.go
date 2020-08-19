@@ -23,6 +23,6 @@ func main() {
 	err := p.ParseFile(*name, *offset, f)
 
 	if err != nil {
-		println(err)
+		println(err.Error())
 	}
 }
