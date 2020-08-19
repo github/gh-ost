@@ -50,4 +50,5 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 - Migrating a `FEDERATED` table is unsupported and is irrelevant to the problem `gh-ost` tackles.
 
+- [Encrypted binary logs](https://www.percona.com/blog/2018/03/08/binlog-encryption-percona-server-mysql/) are not supported.
 - `ALTER TABLE ... RENAME TO some_other_name` is not supported (and you shouldn't use `gh-ost` for such a trivial operation).
