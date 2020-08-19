@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 
 	"github.com/github/gh-ost/go/base"
-	"github.com/outbrain/golib/log"
 )
 
 type printStatusFunc func(PrintStatusRule, io.Writer)
@@ -49,12 +48,12 @@ func (this *Server) BindSocketFile() (err error) {
 	if err != nil {
 		return err
 	}
-	log.Infof("Listening on unix socket file: %s", this.migrationContext.ServeSocketFile)
+	this.migrationContext.Log.Infof("Listening on unix socket file: %s", this.migrationContext.ServeSocketFile)
 	return nil
 }
 
 func (this *Server) RemoveSocketFile() (err error) {
-	log.Infof("Removing socket file: %s", this.migrationContext.ServeSocketFile)
+	this.migrationContext.Log.Infof("Removing socket file: %s", this.migrationContext.ServeSocketFile)
 	return os.Remove(this.migrationContext.ServeSocketFile)
 }
 
@@ -66,7 +65,7 @@ func (this *Server) BindTCPPort() (err error) {
 	if err != nil {
 		return err
 	}
-	log.Infof("Listening on tcp port: %d", this.migrationContext.ServeTCPPort)
+	this.migrationContext.Log.Infof("Listening on tcp port: %d", this.migrationContext.ServeTCPPort)
 	return nil
 }
 
@@ -76,7 +75,7 @@ func (this *Server) Serve() (err error) {
 		for {
 			conn, err := this.unixListener.Accept()
 			if err != nil {
-				log.Errore(err)
+				this.migrationContext.Log.Errore(err)
 			}
 			go this.handleConnection(conn)
 		}
@@ -88,7 +87,7 @@ func (this *Server) Serve() (err error) {
 		for {
 			conn, err := this.tcpListener.Accept()
 			if err != nil {
-				log.Errore(err)
+				this.migrationContext.Log.Errore(err)
 			}
 			go this.handleConnection(conn)
 		}
@@ -118,7 +117,7 @@ func (this *Server) onServerCommand(command string, writer *bufio.Writer) (err e
 	} else {
 		fmt.Fprintf(writer, "%s\n", err.Error())
 	}
-	return log.Errore(err)
+	return this.migrationContext.Log.Errore(err)
 }
 
 // applyServerCommand parses and executes commands by user
