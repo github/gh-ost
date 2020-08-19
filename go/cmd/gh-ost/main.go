@@ -14,6 +14,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
+	"github.com/github/gh-ost/go/sql"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/outbrain/golib/log"
 
@@ -48,6 +49,7 @@ func main() {
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unable to determine the master")
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
+	flag.Float64Var(&migrationContext.InspectorConnectionConfig.Timeout, "mysql-timeout", 0.0, "Connect, read and write timeout for MySQL")
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
 	flag.StringVar(&migrationContext.CliMasterUser, "master-user", "", "MySQL user on master, if different from that on replica. Requires --assume-master-host")
@@ -172,14 +174,25 @@ func main() {
 		migrationContext.Log.SetLevel(log.ERROR)
 	}
 
+	if migrationContext.AlterStatement == "" {
+		log.Fatalf("--alter must be provided and statement must not be empty")
+	}
+	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
+	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
+
 	if migrationContext.DatabaseName == "" {
-		migrationContext.Log.Fatalf("--database must be provided and database name must not be empty")
+		if parser.HasExplicitSchema() {
+			migrationContext.DatabaseName = parser.GetExplicitSchema()
+		} else {
+			log.Fatalf("--database must be provided and database name must not be empty, or --alter must specify database name")
+		}
 	}
 	if migrationContext.OriginalTableName == "" {
-		migrationContext.Log.Fatalf("--table must be provided and table name must not be empty")
-	}
-	if migrationContext.AlterStatement == "" {
-		migrationContext.Log.Fatalf("--alter must be provided and statement must not be empty")
+		if parser.HasExplicitTable() {
+			migrationContext.OriginalTableName = parser.GetExplicitTable()
+		} else {
+			log.Fatalf("--table must be provided and table name must not be empty, or --alter must specify table name")
+		}
 	}
 	migrationContext.Noop = !(*executeFlag)
 	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {
