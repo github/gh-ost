@@ -28,8 +28,10 @@ gzip $tarball
 mkdir -p "$BUILD_ARTIFACT_DIR"/gh-ost
 cp ${tarball}.gz "$BUILD_ARTIFACT_DIR"/gh-ost/
 
-### HACK HACK HACK ###
-# blame @carlosmn and @mattr-
-# Allow builds on stretch to also be used for jessie
-jessie_tarball_name=$(echo $(basename "${tarball}") | sed s/-stretch-/-jessie-/)
+### HACK HACK HACK HACK ###
+# blame @carlosmn, @mattr and @timvaillancourt-
+# Allow builds on buster to also be used for stretch + jessie
+stretch_tarball_name=$(echo $(basename "${tarball}") | sed s/-buster-/-stretch-/)
+jessie_tarball_name=$(echo $(basename "${stretch_tarball_name}") | sed s/-stretch-/-jessie-/)
+cp ${tarball}.gz "$BUILD_ARTIFACT_DIR/gh-ost/${stretch_tarball_name}.gz"
 cp ${tarball}.gz "$BUILD_ARTIFACT_DIR/gh-ost/${jessie_tarball_name}.gz"
