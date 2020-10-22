@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 	"testing"
 
 	. "github.com/pingcap/check"
@@ -38,6 +39,7 @@ func (s *schemaTestSuite) SetUpSuite(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(s.d, NotNil)
 
+	s.d.SetCharset("utf8")
 	s.d.SetErrOut(os.Stderr)
 
 	_, err = s.conn.Execute("CREATE DATABASE IF NOT EXISTS test1")
@@ -177,7 +179,7 @@ func (s *schemaTestSuite) TestParse(c *C) {
 	err := s.d.Dump(&buf)
 	c.Assert(err, IsNil)
 
-	err = Parse(&buf, new(testParseHandler))
+	err = Parse(&buf, new(testParseHandler), true)
 	c.Assert(err, IsNil)
 }
 
@@ -195,4 +197,30 @@ func (s *parserTestSuite) TestParseValue(c *C) {
 	str = `123,'\Z#÷QÎx£. Æ‘ÇoPâÅ_\r—\\','','qn\'`
 	values, err = parseValues(str)
 	c.Assert(err, NotNil)
+}
+
+func (s *parserTestSuite) TestParseLine(c *C) {
+	lines := []struct {
+		line     string
+		expected string
+	}{
+		{line: "INSERT INTO `test` VALUES (1, 'first', 'hello mysql; 2', 'e1', 'a,b');",
+			expected: "1, 'first', 'hello mysql; 2', 'e1', 'a,b'"},
+		{line: "INSERT INTO `test` VALUES (0x22270073646661736661736466, 'first', 'hello mysql; 2', 'e1', 'a,b');",
+			expected: "0x22270073646661736661736466, 'first', 'hello mysql; 2', 'e1', 'a,b'"},
+	}
+
+	f := func(c rune) bool {
+		return c == '\r' || c == '\n'
+	}
+
+	for _, t := range lines {
+		l := strings.TrimRightFunc(t.line, f)
+
+		m := valuesExp.FindAllStringSubmatch(l, -1)
+
+		c.Assert(m, HasLen, 1)
+		c.Assert(m[0][1], Matches, "test")
+		c.Assert(m[0][2], Matches, t.expected)
+	}
 }

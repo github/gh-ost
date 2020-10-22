@@ -1,40 +1,55 @@
 package client
 
 import (
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/juju/errors"
 	. "github.com/pingcap/check"
+	"github.com/siddontang/go-mysql/test_util/test_keys"
 
 	"github.com/siddontang/go-mysql/mysql"
 )
 
 var testHost = flag.String("host", "127.0.0.1", "MySQL server host")
-var testPort = flag.Int("port", 3306, "MySQL server port")
+// We cover the whole range of MySQL server versions using docker-compose to bind them to different ports for testing.
+// MySQL is constantly updating auth plugin to make it secure:
+// starting from MySQL 8.0.4, a new auth plugin is introduced, causing plain password auth to fail with error:
+// ERROR 1251 (08004): Client does not support authentication protocol requested by server; consider upgrading MySQL client
+// Hint: use docker-compose to start corresponding MySQL docker containers and add the their ports here
+var testPort = flag.String("port", "3306", "MySQL server port") // choose one or more form 5561,5641,3306,5722,8003,8012,8013, e.g. '3306,5722,8003'
 var testUser = flag.String("user", "root", "MySQL user")
 var testPassword = flag.String("pass", "", "MySQL password")
 var testDB = flag.String("db", "test", "MySQL test database")
 
 func Test(t *testing.T) {
+	segs := strings.Split(*testPort, ",")
+	for _, seg := range segs {
+		Suite(&clientTestSuite{port: seg})
+	}
 	TestingT(t)
 }
 
 type clientTestSuite struct {
-	c *Conn
+	c    *Conn
+	port string
 }
-
-var _ = Suite(&clientTestSuite{})
 
 func (s *clientTestSuite) SetUpSuite(c *C) {
 	var err error
-	addr := fmt.Sprintf("%s:%d", *testHost, *testPort)
-	s.c, err = Connect(addr, *testUser, *testPassword, *testDB)
+	addr := fmt.Sprintf("%s:%s", *testHost, s.port)
+	s.c, err = Connect(addr, *testUser, *testPassword, "")
 	if err != nil {
 		c.Fatal(err)
 	}
+
+	_, err = s.c.Execute("CREATE DATABASE IF NOT EXISTS " + *testDB)
+	c.Assert(err, IsNil)
+
+	_, err = s.c.Execute("USE " + *testDB)
+	c.Assert(err, IsNil)
 
 	s.testConn_CreateTable(c)
 	s.testStmt_CreateTable(c)
@@ -78,12 +93,15 @@ func (s *clientTestSuite) TestConn_Ping(c *C) {
 	c.Assert(err, IsNil)
 }
 
-func (s *clientTestSuite) TestConn_TLS(c *C) {
+// NOTE for MySQL 5.5 and 5.6, server side has to config SSL to pass the TLS test, otherwise, it will throw error that
+//      MySQL server does not support TLS required by the client. However, for MySQL 5.7 and above, auto generated certificates
+//      are used by default so that manual config is no longer necessary.
+func (s *clientTestSuite) TestConn_TLS_Verify(c *C) {
 	// Verify that the provided tls.Config is used when attempting to connect to mysql.
 	// An empty tls.Config will result in a connection error.
-	addr := fmt.Sprintf("%s:%d", *testHost, *testPort)
+	addr := fmt.Sprintf("%s:%s", *testHost, s.port)
 	_, err := Connect(addr, *testUser, *testPassword, *testDB, func(c *Conn) {
-		c.TLSConfig = &tls.Config{}
+		c.UseSSL(false)
 	})
 	if err == nil {
 		c.Fatal("expected error")
@@ -91,7 +109,34 @@ func (s *clientTestSuite) TestConn_TLS(c *C) {
 
 	expected := "either ServerName or InsecureSkipVerify must be specified in the tls.Config"
 	if !strings.Contains(err.Error(), expected) {
-		c.Fatal("expected '%s' to contain '%s'", err.Error(), expected)
+		c.Fatalf("expected '%s' to contain '%s'", err.Error(), expected)
+	}
+}
+
+func (s *clientTestSuite) TestConn_TLS_Skip_Verify(c *C) {
+	// An empty tls.Config will result in a connection error but we can configure to skip it.
+	addr := fmt.Sprintf("%s:%s", *testHost, s.port)
+	_, err := Connect(addr, *testUser, *testPassword, *testDB, func(c *Conn) {
+		c.UseSSL(true)
+	})
+	c.Assert(err, Equals, nil)
+}
+
+func (s *clientTestSuite) TestConn_TLS_Certificate(c *C) {
+	// This test uses the TLS suite in 'go-mysql/docker/resources'. The certificates are not valid for any names.
+	// And if server uses auto-generated certificates, it will be an error like:
+	// "x509: certificate is valid for MySQL_Server_8.0.12_Auto_Generated_Server_Certificate, not not-a-valid-name"
+	tlsConfig := NewClientTLSConfig(test_keys.CaPem, test_keys.CertPem, test_keys.KeyPem, false, "not-a-valid-name")
+	addr := fmt.Sprintf("%s:%s", *testHost, s.port)
+	_, err := Connect(addr, *testUser, *testPassword, *testDB, func(c *Conn) {
+		c.SetTLSConfig(tlsConfig)
+	})
+	if err == nil {
+		c.Fatal("expected error")
+	}
+	if !strings.Contains(errors.Details(err), "certificate is not valid for any names") &&
+		!strings.Contains(errors.Details(err), "certificate is valid for") {
+		c.Fatalf("expected errors for server name verification, but got unknown error: %s", errors.Details(err))
 	}
 }
 

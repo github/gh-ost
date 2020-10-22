@@ -6,6 +6,7 @@
 package mysql
 
 import (
+	"crypto/tls"
 	"testing"
 
 	"github.com/outbrain/golib/log"
@@ -31,6 +32,10 @@ func TestDuplicateCredentials(t *testing.T) {
 	c.Key = InstanceKey{Hostname: "myhost", Port: 3306}
 	c.User = "gromit"
 	c.Password = "penguin"
+	c.tlsConfig = &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         "feathers",
+	}
 
 	dup := c.DuplicateCredentials(InstanceKey{Hostname: "otherhost", Port: 3310})
 	test.S(t).ExpectEquals(dup.Key.Hostname, "otherhost")
@@ -39,6 +44,7 @@ func TestDuplicateCredentials(t *testing.T) {
 	test.S(t).ExpectEquals(dup.ImpliedKey.Port, 3310)
 	test.S(t).ExpectEquals(dup.User, "gromit")
 	test.S(t).ExpectEquals(dup.Password, "penguin")
+	test.S(t).ExpectEquals(dup.tlsConfig, c.tlsConfig)
 }
 
 func TestDuplicate(t *testing.T) {
@@ -54,4 +60,25 @@ func TestDuplicate(t *testing.T) {
 	test.S(t).ExpectEquals(dup.ImpliedKey.Port, 3306)
 	test.S(t).ExpectEquals(dup.User, "gromit")
 	test.S(t).ExpectEquals(dup.Password, "penguin")
+}
+
+func TestGetDBUri(t *testing.T) {
+	c := NewConnectionConfig()
+	c.Key = InstanceKey{Hostname: "myhost", Port: 3306}
+	c.User = "gromit"
+	c.Password = "penguin"
+
+	uri := c.GetDBUri("test")
+	test.S(t).ExpectEquals(uri, "gromit:penguin@tcp(myhost:3306)/test?timeout=0.000000s&readTimeout=0.000000s&writeTimeout=0.000000s&interpolateParams=true&autocommit=true&charset=utf8mb4,utf8,latin1&tls=false")
+}
+
+func TestGetDBUriWithTLSSetup(t *testing.T) {
+	c := NewConnectionConfig()
+	c.Key = InstanceKey{Hostname: "myhost", Port: 3306}
+	c.User = "gromit"
+	c.Password = "penguin"
+	c.tlsConfig = &tls.Config{}
+
+	uri := c.GetDBUri("test")
+	test.S(t).ExpectEquals(uri, "gromit:penguin@tcp(myhost:3306)/test?timeout=0.000000s&readTimeout=0.000000s&writeTimeout=0.000000s&interpolateParams=true&autocommit=true&charset=utf8mb4,utf8,latin1&tls=ghost")
 }

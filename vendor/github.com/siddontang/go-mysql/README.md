@@ -25,9 +25,9 @@ cfg := replication.BinlogSyncerConfig {
     User:     "root",
     Password: "",
 }
-syncer := replication.NewBinlogSyncer(&cfg)
+syncer := replication.NewBinlogSyncer(cfg)
 
-// Start sync with sepcified binlog file and position
+// Start sync with specified binlog file and position
 streamer, _ := syncer.StartSync(mysql.Position{binlogFile, binlogPos})
 
 // or you can start a gtid replication like
@@ -44,7 +44,7 @@ for {
 // or we can use a timeout context
 for {
     ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-    e, _ := s.GetEvent(ctx)
+    ev, err := s.GetEvent(ctx)
     cancel()
 
     if err == context.DeadlineExceeded {
@@ -105,20 +105,21 @@ cfg.Dump.Tables = []string{"canal_test"}
 
 c, err := NewCanal(cfg)
 
-type myRowsEventHandler struct {
+type MyEventHandler struct {
+    DummyEventHandler
 }
 
-func (h *myRowsEventHandler) Do(e *RowsEvent) error {
+func (h *MyEventHandler) OnRow(e *RowsEvent) error {
     log.Infof("%s %v\n", e.Action, e.Rows)
     return nil
 }
 
-func (h *myRowsEventHandler) String() string {
-    return "myRowsEventHandler"
+func (h *MyEventHandler) String() string {
+    return "MyEventHandler"
 }
 
 // Register a handler to handle RowsEvent
-c.RegRowsEventHandler(&MyRowsEventHandler{})
+c.SetEventHandler(&MyEventHandler{})
 
 // Start canal
 c.Start()
@@ -137,8 +138,15 @@ import (
     "github.com/siddontang/go-mysql/client"
 )
 
-// Connect MySQL at 127.0.0.1:3306, with user root, an empty passowrd and database test
+// Connect MySQL at 127.0.0.1:3306, with user root, an empty password and database test
 conn, _ := client.Connect("127.0.0.1:3306", "root", "", "test")
+
+// Or to use SSL/TLS connection if MySQL server supports TLS
+//conn, _ := client.Connect("127.0.0.1:3306", "root", "", "test", func(c *Conn) {c.UseSSL(true)})
+
+// or to set your own client-side certificates for identity verification for security
+//tlsConfig := NewClientTLSConfig(caPem, certPem, keyPem, false, "your-server-name")
+//conn, _ := client.Connect("127.0.0.1:3306", "root", "", "test", func(c *Conn) {c.SetTLSConfig(tlsConfig)})
 
 conn.Ping()
 
@@ -156,10 +164,17 @@ v, _ := r.GetInt(0, 0)
 v, _ = r.GetIntByName(0, "id") 
 ```
 
+Tested MySQL versions for the client include:
+- 5.5.x
+- 5.6.x
+- 5.7.x
+- 8.0.x
+
 ## Server
 
 Server package supplies a framework to implement a simple MySQL server which can handle the packets from the MySQL client. 
-You can use it to build your own MySQL proxy. 
+You can use it to build your own MySQL proxy. The server connection is compatible with MySQL 5.5, 5.6, 5.7, and 8.0 versions,
+so that most MySQL clients should be able to connect to the Server without modifications.
 
 ### Example
 
@@ -173,14 +188,14 @@ l, _ := net.Listen("tcp", "127.0.0.1:4000")
 
 c, _ := l.Accept()
 
-// Create a connection with user root and an empty passowrd
-// We only an empty handler to handle command too
+// Create a connection with user root and an empty password.
+// You can use your own handler to handle command here.
 conn, _ := server.NewConn(c, "root", "", server.EmptyHandler{})
 
 for {
     conn.HandleCommand()
 }
-```
+``` 
 
 Another shell
 
@@ -188,6 +203,15 @@ Another shell
 mysql -h127.0.0.1 -P4000 -uroot -p 
 //Becuase empty handler does nothing, so here the MySQL client can only connect the proxy server. :-) 
 ```
+
+> ```NewConn()``` will use default server configurations:
+> 1. automatically generate default server certificates and enable TLS/SSL support.
+> 2. support three mainstream authentication methods **'mysql_native_password'**, **'caching_sha2_password'**, and **'sha256_password'**
+>    and use **'mysql_native_password'** as default.
+> 3. use an in-memory user credential provider to store user and password.
+>
+> To customize server configurations, use ```NewServer()``` and create connection via ```NewCustomizedConn()```.
+
 
 ## Failover
 
@@ -205,10 +229,12 @@ Although there are many companies use MySQL 5.0 - 5.5, I think upgrade MySQL to 
 Driver is the package that you can use go-mysql with go database/sql like other drivers. A simple example:
 
 ```
+package main
+
 import (
     "database/sql"
 
-    - "github.com/siddontang/go-mysql/driver"
+    _ "github.com/siddontang/go-mysql/driver"
 )
 
 func main() {
@@ -220,6 +246,14 @@ func main() {
 ```
 
 We pass all tests in https://github.com/bradfitz/go-sql-test using go-mysql driver. :-)
+
+## Donate
+
+If you like the project and want to buy me a cola, you can through: 
+
+|PayPal|微信|
+|------|---|
+|[![](https://www.paypalobjects.com/webstatic/paypalme/images/pp_logo_small.png)](https://paypal.me/siddontang)|[![](https://github.com/siddontang/blog/blob/master/donate/weixin.png)|
 
 ## Feedback
 

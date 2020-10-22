@@ -3,9 +3,9 @@ create table gh_ost_test (
   id int unsigned auto_increment,
   i int not null,
   ts0 timestamp default current_timestamp,
-  ts1 timestamp,
+  ts1 timestamp null,
   dt2 datetime,
-  t   datetime,
+  t   datetime null,
   updated tinyint unsigned default 0,
   primary key(id),
   key i_idx(i)

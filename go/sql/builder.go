@@ -15,11 +15,11 @@ type ValueComparisonSign string
 
 const (
 	LessThanComparisonSign            ValueComparisonSign = "<"
-	LessThanOrEqualsComparisonSign                        = "<="
-	EqualsComparisonSign                                  = "="
-	GreaterThanOrEqualsComparisonSign                     = ">="
-	GreaterThanComparisonSign                             = ">"
-	NotEqualsComparisonSign                               = "!="
+	LessThanOrEqualsComparisonSign    ValueComparisonSign = "<="
+	EqualsComparisonSign              ValueComparisonSign = "="
+	GreaterThanOrEqualsComparisonSign ValueComparisonSign = ">="
+	GreaterThanComparisonSign         ValueComparisonSign = ">"
+	NotEqualsComparisonSign           ValueComparisonSign = "!="
 )
 
 // EscapeName will escape a db/table/column/... name by wrapping with backticks.
@@ -38,6 +38,8 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 		var token string
 		if column.timezoneConversion != nil {
 			token = fmt.Sprintf("convert_tz(?, '%s', '%s')", column.timezoneConversion.ToTimezone, "+00:00")
+		} else if column.Type == JSONColumnType {
+			token = "convert(? using utf8mb4)"
 		} else {
 			token = "?"
 		}
@@ -106,6 +108,8 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 		var setToken string
 		if column.timezoneConversion != nil {
 			setToken = fmt.Sprintf("%s=convert_tz(?, '%s', '%s')", EscapeName(column.Name), column.timezoneConversion.ToTimezone, "+00:00")
+		} else if column.Type == JSONColumnType {
+			setToken = fmt.Sprintf("%s=convert(? using utf8mb4)", EscapeName(column.Name))
 		} else {
 			setToken = fmt.Sprintf("%s=?", EscapeName(column.Name))
 		}
@@ -136,13 +140,12 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 	comparisons := []string{}
 
 	for i, column := range columns {
-		//
 		value := values[i]
 		rangeComparison, err := BuildValueComparison(column, value, comparisonSign)
 		if err != nil {
 			return "", explodedArgs, err
 		}
-		if len(columns[0:i]) > 0 {
+		if i > 0 {
 			equalitiesComparison, err := BuildEqualsComparison(columns[0:i], values[0:i])
 			if err != nil {
 				return "", explodedArgs, err
@@ -231,7 +234,62 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
 }
 
-func BuildUniqueKeyRangeEndPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
+func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
+	if uniqueKeyColumns.Len() == 0 {
+		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+
+	var startRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
+	if includeRangeStartValues {
+		startRangeComparisonSign = GreaterThanOrEqualsComparisonSign
+	}
+	rangeStartComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeStartArgs, startRangeComparisonSign)
+	if err != nil {
+		return "", explodedArgs, err
+	}
+	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+	rangeEndComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeEndArgs, LessThanOrEqualsComparisonSign)
+	if err != nil {
+		return "", explodedArgs, err
+	}
+	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+
+	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
+	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
+	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
+	for i, column := range uniqueKeyColumns.Columns() {
+		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
+		if column.Type == EnumColumnType {
+			uniqueKeyColumnAscending[i] = fmt.Sprintf("concat(%s) asc", uniqueKeyColumnNames[i])
+			uniqueKeyColumnDescending[i] = fmt.Sprintf("concat(%s) desc", uniqueKeyColumnNames[i])
+		} else {
+			uniqueKeyColumnAscending[i] = fmt.Sprintf("%s asc", uniqueKeyColumnNames[i])
+			uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumnNames[i])
+		}
+	}
+	result = fmt.Sprintf(`
+				select  /* gh-ost %s.%s %s */
+						%s
+					from
+						%s.%s
+					where %s and %s
+					order by
+						%s
+					limit 1
+					offset %d
+    `, databaseName, tableName, hint,
+		strings.Join(uniqueKeyColumnNames, ", "),
+		databaseName, tableName,
+		rangeStartComparison, rangeEndComparison,
+		strings.Join(uniqueKeyColumnAscending, ", "),
+		(chunkSize - 1),
+	)
+	return result, explodedArgs, nil
+}
+
+func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}
@@ -434,6 +492,9 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	}
 
 	setClause, err := BuildSetPreparedClause(mappedSharedColumns)
+	if err != nil {
+		return "", sharedArgs, uniqueKeyArgs, err
+	}
 
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
 	result = fmt.Sprintf(`
