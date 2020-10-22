@@ -1,0 +1,7 @@
+version: "3.5"
+services:
+  app:
+    image: app
+    build:
+      context: .
+      dockerfile: Dockerfile.test

@@ -1,37 +1,47 @@
-#!/bin/sh
+#!/bin/bash
 
-set -e
+output_fold() {
+  # Exit early if no label provided
+  if [ -z "$1" ]; then
+    echo "output_fold(): requires a label argument."
+    return
+  fi
 
-script/cibuild
+  exit_value=0  # exit_value is used to record exit status of the given command
+  label=$1      # human-readable label describing what's being folded up
+  shift 1       # having retrieved the output_fold()-specific arguments, strip them off $@
 
-# Get a fresh directory and make sure to delete it afterwards
-build_dir=tmp/build
-rm -rf $build_dir
-mkdir -p $build_dir
-trap "rm -rf $build_dir" EXIT
+  # Only echo the tags when in CI_MODE
+  if [ "$CI_MODE" ]; then
+    echo "%%%FOLD {$label}%%%"
+  fi
 
-commit_sha=$(git rev-parse HEAD)
+  # run the remaining arguments. If the command exits non-0, the `||` will
+  # prevent the `-e` flag from seeing the failure exit code, and we'll see
+  # the second echo execute
+  "$@" || exit_value=$?
 
-if [ $(uname -s) = "Darwin" ]; then
-    build_arch="$(uname -sr | tr -d ' ' | tr '[:upper:]' '[:lower:]')-$(uname -m)"
-else
-    build_arch="$(lsb_release -sc | tr -d ' ' | tr '[:upper:]' '[:lower:]')-$(uname -m)"
-fi
+  # Only echo the tags when in CI_MODE
+  if [ "$CI_MODE" ]; then
+    echo "%%%END FOLD%%%"
+  fi
 
-tarball=$build_dir/${commit_sha}-${build_arch}.tar
+  # preserve the exit code from the subcommand.
+  return $exit_value
+}
 
-# Create the tarball
-tar cvf $tarball --mode="ugo=rx" bin/
+function cleanup() {
+  echo
+  echo "%%%FOLD {Shutting down services...}%%%"
+  docker-compose down
+  echo "%%%END FOLD%%%"
+}
 
-# Compress it and copy it to the directory for the CI to upload it
-gzip $tarball
-mkdir -p "$BUILD_ARTIFACT_DIR"/gh-ost
-cp ${tarball}.gz "$BUILD_ARTIFACT_DIR"/gh-ost/
+trap cleanup EXIT
 
-### HACK HACK HACK ###
-# Blame @carlosmn. In the good way.
-# We don't have any jessie machines for building, but a pure-Go binary depends
-# on a version of libc and ld which are widely available, so we can copy the
-# tarball over with jessie in its name so we can deploy it on jessie machines.
-jessie_tarball_name=$(echo $(basename "${tarball}") | sed s/-precise-/-jessie-/)
-cp ${tarball}.gz "$BUILD_ARTIFACT_DIR/gh-ost/${jessie_tarball_name}.gz"
+export CI_MODE=true
+
+output_fold "Bootstrapping container..." docker-compose build
+output_fold "Running tests..." docker-compose run --rm app
+
+docker-compose run -e BUILD_ARTIFACT_DIR=$BUILD_ARTIFACT_DIR -v $BUILD_ARTIFACT_DIR:$BUILD_ARTIFACT_DIR app script/build-deploy-tarball

@@ -94,7 +94,7 @@ Please see [Coding gh-ost](doc/coding-ghost.md) for a guide to getting started d
 
 [Download latest release here](https://github.com/github/gh-ost/releases/latest)
 
-`gh-ost` is a Go project; it is built with Go `1.9` and above. To build on your own, use either:
+`gh-ost` is a Go project; it is built with Go `1.14` and above. To build on your own, use either:
 - [script/build](https://github.com/github/gh-ost/blob/master/script/build) - this is the same build script used by CI hence the authoritative; artifact is `./bin/gh-ost` binary.
 - [build.sh](https://github.com/github/gh-ost/blob/master/build.sh) for building `tar.gz` artifacts in `/tmp/gh-ost`
 
@@ -109,3 +109,4 @@ Generally speaking, `master` branch is stable, but only [releases](https://githu
 - [@shlomi-noach](https://github.com/shlomi-noach)
 - [@jessbreckenridge](https://github.com/jessbreckenridge)
 - [@gtowey](https://github.com/gtowey)
+- [@timvaillancourt](https://github.com/timvaillancourt)
