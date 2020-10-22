@@ -14,7 +14,6 @@ import (
 
 	gosql "database/sql"
 	"github.com/github/gh-ost/go/mysql"
-	"github.com/outbrain/golib/log"
 )
 
 var (
@@ -87,7 +86,7 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	}
 
 	if connectionConfig.Key.Port == port || (extraPort > 0 && connectionConfig.Key.Port == extraPort) {
-		log.Infof("connection validated on %+v", connectionConfig.Key)
+		migrationContext.Log.Infof("connection validated on %+v", connectionConfig.Key)
 		return version, nil
 	} else if extraPort == 0 {
 		return "", fmt.Errorf("Unexpected database port reported: %+v", port)

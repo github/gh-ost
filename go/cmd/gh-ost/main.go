@@ -14,6 +14,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
+	"github.com/github/gh-ost/go/sql"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/outbrain/golib/log"
 
@@ -31,7 +32,7 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 		for sig := range c {
 			switch sig {
 			case syscall.SIGHUP:
-				log.Infof("Received SIGHUP. Reloading configuration")
+				migrationContext.Log.Infof("Received SIGHUP. Reloading configuration")
 				if err := migrationContext.ReadConfigFile(); err != nil {
 					log.Errore(err)
 				} else {
@@ -48,6 +49,7 @@ func main() {
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unable to determine the master")
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
+	flag.Float64Var(&migrationContext.InspectorConnectionConfig.Timeout, "mysql-timeout", 0.0, "Connect, read and write timeout for MySQL")
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
 	flag.StringVar(&migrationContext.CliMasterUser, "master-user", "", "MySQL user on master, if different from that on replica. Requires --assume-master-host")
@@ -158,69 +160,80 @@ func main() {
 		return
 	}
 
-	log.SetLevel(log.ERROR)
+	migrationContext.Log.SetLevel(log.ERROR)
 	if *verbose {
-		log.SetLevel(log.INFO)
+		migrationContext.Log.SetLevel(log.INFO)
 	}
 	if *debug {
-		log.SetLevel(log.DEBUG)
+		migrationContext.Log.SetLevel(log.DEBUG)
 	}
 	if *stack {
-		log.SetPrintStackTrace(*stack)
+		migrationContext.Log.SetPrintStackTrace(*stack)
 	}
 	if *quiet {
 		// Override!!
-		log.SetLevel(log.ERROR)
+		migrationContext.Log.SetLevel(log.ERROR)
 	}
 
-	if migrationContext.DatabaseName == "" {
-		log.Fatalf("--database must be provided and database name must not be empty")
-	}
-	if migrationContext.OriginalTableName == "" {
-		log.Fatalf("--table must be provided and table name must not be empty")
-	}
 	if migrationContext.AlterStatement == "" {
 		log.Fatalf("--alter must be provided and statement must not be empty")
 	}
+	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
+	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
+
+	if migrationContext.DatabaseName == "" {
+		if parser.HasExplicitSchema() {
+			migrationContext.DatabaseName = parser.GetExplicitSchema()
+		} else {
+			log.Fatalf("--database must be provided and database name must not be empty, or --alter must specify database name")
+		}
+	}
+	if migrationContext.OriginalTableName == "" {
+		if parser.HasExplicitTable() {
+			migrationContext.OriginalTableName = parser.GetExplicitTable()
+		} else {
+			log.Fatalf("--table must be provided and table name must not be empty, or --alter must specify table name")
+		}
+	}
 	migrationContext.Noop = !(*executeFlag)
 	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {
-		log.Fatalf("--allow-on-master and --test-on-replica are mutually exclusive")
+		migrationContext.Log.Fatalf("--allow-on-master and --test-on-replica are mutually exclusive")
 	}
 	if migrationContext.AllowedRunningOnMaster && migrationContext.MigrateOnReplica {
-		log.Fatalf("--allow-on-master and --migrate-on-replica are mutually exclusive")
+		migrationContext.Log.Fatalf("--allow-on-master and --migrate-on-replica are mutually exclusive")
 	}
 	if migrationContext.MigrateOnReplica && migrationContext.TestOnReplica {
-		log.Fatalf("--migrate-on-replica and --test-on-replica are mutually exclusive")
+		migrationContext.Log.Fatalf("--migrate-on-replica and --test-on-replica are mutually exclusive")
 	}
 	if migrationContext.SwitchToRowBinlogFormat && migrationContext.AssumeRBR {
-		log.Fatalf("--switch-to-rbr and --assume-rbr are mutually exclusive")
+		migrationContext.Log.Fatalf("--switch-to-rbr and --assume-rbr are mutually exclusive")
 	}
 	if migrationContext.TestOnReplicaSkipReplicaStop {
 		if !migrationContext.TestOnReplica {
-			log.Fatalf("--test-on-replica-skip-replica-stop requires --test-on-replica to be enabled")
+			migrationContext.Log.Fatalf("--test-on-replica-skip-replica-stop requires --test-on-replica to be enabled")
 		}
-		log.Warning("--test-on-replica-skip-replica-stop enabled. We will not stop replication before cut-over. Ensure you have a plugin that does this.")
+		migrationContext.Log.Warning("--test-on-replica-skip-replica-stop enabled. We will not stop replication before cut-over. Ensure you have a plugin that does this.")
 	}
 	if migrationContext.CliMasterUser != "" && migrationContext.AssumeMasterHostname == "" {
-		log.Fatalf("--master-user requires --assume-master-host")
+		migrationContext.Log.Fatalf("--master-user requires --assume-master-host")
 	}
 	if migrationContext.CliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
-		log.Fatalf("--master-password requires --assume-master-host")
+		migrationContext.Log.Fatalf("--master-password requires --assume-master-host")
 	}
 	if migrationContext.TLSCACertificate != "" && !migrationContext.UseTLS {
-		log.Fatalf("--ssl-ca requires --ssl")
+		migrationContext.Log.Fatalf("--ssl-ca requires --ssl")
 	}
 	if migrationContext.TLSCertificate != "" && !migrationContext.UseTLS {
-		log.Fatalf("--ssl-cert requires --ssl")
+		migrationContext.Log.Fatalf("--ssl-cert requires --ssl")
 	}
 	if migrationContext.TLSKey != "" && !migrationContext.UseTLS {
-		log.Fatalf("--ssl-key requires --ssl")
+		migrationContext.Log.Fatalf("--ssl-key requires --ssl")
 	}
 	if migrationContext.TLSAllowInsecure && !migrationContext.UseTLS {
-		log.Fatalf("--ssl-allow-insecure requires --ssl")
+		migrationContext.Log.Fatalf("--ssl-allow-insecure requires --ssl")
 	}
 	if *replicationLagQuery != "" {
-		log.Warningf("--replication-lag-query is deprecated")
+		migrationContext.Log.Warningf("--replication-lag-query is deprecated")
 	}
 
 	switch *cutOver {
@@ -229,19 +242,19 @@ func main() {
 	case "two-step":
 		migrationContext.CutOverType = base.CutOverTwoStep
 	default:
-		log.Fatalf("Unknown cut-over: %s", *cutOver)
+		migrationContext.Log.Fatalf("Unknown cut-over: %s", *cutOver)
 	}
 	if err := migrationContext.ReadConfigFile(); err != nil {
-		log.Fatale(err)
+		migrationContext.Log.Fatale(err)
 	}
 	if err := migrationContext.ReadThrottleControlReplicaKeys(*throttleControlReplicas); err != nil {
-		log.Fatale(err)
+		migrationContext.Log.Fatale(err)
 	}
 	if err := migrationContext.ReadMaxLoad(*maxLoad); err != nil {
-		log.Fatale(err)
+		migrationContext.Log.Fatale(err)
 	}
 	if err := migrationContext.ReadCriticalLoad(*criticalLoad); err != nil {
-		log.Fatale(err)
+		migrationContext.Log.Fatale(err)
 	}
 	if migrationContext.ServeSocketFile == "" {
 		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
@@ -250,7 +263,7 @@ func main() {
 		fmt.Println("Password:")
 		bytePassword, err := terminal.ReadPassword(int(syscall.Stdin))
 		if err != nil {
-			log.Fatale(err)
+			migrationContext.Log.Fatale(err)
 		}
 		migrationContext.CliPassword = string(bytePassword)
 	}
@@ -265,13 +278,13 @@ func main() {
 	migrationContext.SetDefaultNumRetries(*defaultRetries)
 	migrationContext.ApplyCredentials()
 	if err := migrationContext.SetupTLS(); err != nil {
-		log.Fatale(err)
+		migrationContext.Log.Fatale(err)
 	}
 	if err := migrationContext.SetCutOverLockTimeoutSeconds(*cutOverLockTimeoutSeconds); err != nil {
-		log.Errore(err)
+		migrationContext.Log.Errore(err)
 	}
 	if err := migrationContext.SetExponentialBackoffMaxInterval(*exponentialBackoffMaxInterval); err != nil {
-		log.Errore(err)
+		migrationContext.Log.Errore(err)
 	}
 
 	log.Infof("starting gh-ost %+v", AppVersion)
@@ -281,7 +294,7 @@ func main() {
 	err := migrator.Migrate()
 	if err != nil {
 		migrator.ExecOnFailureHook()
-		log.Fatale(err)
+		migrationContext.Log.Fatale(err)
 	}
 	fmt.Fprintf(os.Stdout, "# Done\n")
 }
