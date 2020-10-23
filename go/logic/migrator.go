@@ -741,7 +741,7 @@ func (this *Migrator) initiateInspector() (err error) {
 		this.migrationContext.Log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	} else {
 		// Forced master host.
-		key, err := mysql.ParseRawInstanceKeyLoose(this.migrationContext.AssumeMasterHostname)
+		key, err := mysql.ParseInstanceKey(this.migrationContext.AssumeMasterHostname)
 		if err != nil {
 			return err
 		}
