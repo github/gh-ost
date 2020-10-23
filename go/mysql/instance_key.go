@@ -7,12 +7,20 @@ package mysql
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
 const (
 	DefaultInstancePort = 3306
+)
+
+var (
+	ipv4HostPortRegexp = regexp.MustCompile("^([^:]+):([0-9]+)$")
+	ipv4HostRegexp     = regexp.MustCompile("^([^:]+)$")
+	ipv6HostPortRegexp = regexp.MustCompile("^\\[([:0-9a-fA-F]+)\\]:([0-9]+)$") // e.g. [2001:db8:1f70::999:de8:7648:6e8]:3308
+	ipv6HostRegexp     = regexp.MustCompile("^([:0-9a-fA-F]+)$")                // e.g. 2001:db8:1f70::999:de8:7648:6e8
 )
 
 // InstanceKey is an instance indicator, identified by hostname and port
@@ -25,25 +33,35 @@ const detachHint = "//"
 
 // ParseInstanceKey will parse an InstanceKey from a string representation such as 127.0.0.1:3306
 func NewRawInstanceKey(hostPort string) (*InstanceKey, error) {
-	tokens := strings.SplitN(hostPort, ":", 2)
-	if len(tokens) != 2 {
-		return nil, fmt.Errorf("Cannot parse InstanceKey from %s. Expected format is host:port", hostPort)
+	hostname := ""
+	port := ""
+	if submatch := ipv4HostPortRegexp.FindStringSubmatch(hostPort); len(submatch) > 0 {
+		hostname = submatch[1]
+		port = submatch[2]
+	} else if submatch := ipv4HostRegexp.FindStringSubmatch(hostPort); len(submatch) > 0 {
+		hostname = submatch[1]
+	} else if submatch := ipv6HostPortRegexp.FindStringSubmatch(hostPort); len(submatch) > 0 {
+		hostname = submatch[1]
+		port = submatch[2]
+	} else if submatch := ipv6HostRegexp.FindStringSubmatch(hostPort); len(submatch) > 0 {
+		hostname = submatch[1]
+	} else {
+		return nil, fmt.Errorf("Cannot parse address: %s", hostPort)
 	}
-	instanceKey := &InstanceKey{Hostname: tokens[0]}
-	var err error
-	if instanceKey.Port, err = strconv.Atoi(tokens[1]); err != nil {
-		return instanceKey, fmt.Errorf("Invalid port: %s", tokens[1])
+	instanceKey := &InstanceKey{Hostname: hostname, Port: DefaultInstancePort}
+	if port != "" {
+		var err error
+		if instanceKey.Port, err = strconv.Atoi(port); err != nil {
+			return instanceKey, fmt.Errorf("Invalid port: %s", port)
+		}
 	}
 
 	return instanceKey, nil
 }
 
-// ParseRawInstanceKeyLoose will parse an InstanceKey from a string representation such as 127.0.0.1:3306.
+// ParseInstanceKey will parse an InstanceKey from a string representation such as 127.0.0.1:3306.
 // The port part is optional; there will be no name resolve
-func ParseRawInstanceKeyLoose(hostPort string) (*InstanceKey, error) {
-	if !strings.Contains(hostPort, ":") {
-		return &InstanceKey{Hostname: hostPort, Port: DefaultInstancePort}, nil
-	}
+func ParseInstanceKey(hostPort string) (*InstanceKey, error) {
 	return NewRawInstanceKey(hostPort)
 }
 
