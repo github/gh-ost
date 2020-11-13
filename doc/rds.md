@@ -5,7 +5,9 @@
 ## Limitations
 
 - No `SUPER` privileges.
+  - Editing `binlog_format` not allowed, see next bullet.
 - `gh-ost` runs should be setup use [`--assume-rbr`][assume_rbr_docs] and use `binlog_format=ROW`.
+  - See [this tip](#binlog_format) on how to change the `binlog_format`.
 - Aurora does not allow editing of the `read_only` parameter. While it is defined as `{TrueIfReplica}`, the parameter is non-modifiable field.
 
 ## Aurora
@@ -28,9 +30,9 @@ This tool requires binlog_format=STATEMENT, but the current binlog_format is set
 
 #### Binlog filtering
 
-In Aurora, the [binlog filtering feature][aws_replication_docs_bin_log_filtering] is enabled by default. This becomes an issue when gh-ost tries to do the cut-over, because gh-ost waits for an entry in the binlog to proceed but this entry will never end up in the binlog because it gets filtered out by the binlog filtering feature.  
-You need to turn this feature off during the migration process.  
-Set the `aurora_enable_repl_bin_log_filtering` parameter to 0 in the Parameter Group for your cluster.  
+In Aurora, the [binlog filtering feature][aws_replication_docs_bin_log_filtering] is enabled by default. This becomes an issue when gh-ost tries to do the cut-over, because gh-ost waits for an entry in the binlog to proceed but this entry will never end up in the binlog because it gets filtered out by the binlog filtering feature.
+You need to turn this feature off during the migration process.
+Set the `aurora_enable_repl_bin_log_filtering` parameter to 0 in the Parameter Group for your cluster.
 When the migration is done, set it back to 1 (default).
 
 
@@ -53,3 +55,10 @@ Before trying to run any `gh-ost` migrations you will want to confirm the follow
 [ghost_hooks]: https://github.com/github/gh-ost/blob/master/doc/hooks.md
 [ghost_rds_issue_tracking]: https://github.com/github/gh-ost/issues/163
 [aws_replication_docs_bin_log_filtering]: https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Replication.html#AuroraMySQL.Replication.Performance
+
+## Other Tips & Tricks
+
+## binlog_format
+
+On a normal RDS instance, if you need to switch to `binlog_format=ROW`, you can do so by creating a [RDS Parameter Group](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.html).
+During the Parameter Group creation process, set `binlog_format` to `ROW`. After creating the Parameter group, you can modify you RDS instance to use it.
