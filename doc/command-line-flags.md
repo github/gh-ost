@@ -16,6 +16,10 @@ By default, `gh-ost` would like you to connect to a replica, from where it figur
 
 If, for some reason, you do not wish `gh-ost` to connect to a replica, you may connect it directly to the master and approve this via `--allow-on-master`.
 
+### alter
+
+This manadatory flag is the `ALTER` statement migrated to the ghost table.
+
 ### approve-renamed-columns
 
 When your migration issues a column rename (`change column old_name new_name ...`) `gh-ost` analyzes the statement to try and associate the old column name with new column name. Otherwise the new structure may also look like some column was dropped and another was added.
