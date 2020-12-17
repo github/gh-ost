@@ -65,6 +65,7 @@ Also see:
 - [the fine print](doc/the-fine-print.md)
 - [Community questions](https://github.com/github/gh-ost/issues?q=label%3Aquestion)
 - [Using `gh-ost` on AWS RDS](doc/rds.md)
+- [Using `gh-ost` on Azure Database for MySQL](doc/azure.md)
 
 ## What's in a name?
 

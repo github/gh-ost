@@ -6,6 +6,10 @@ A more in-depth discussion of various `gh-ost` command line flags: implementatio
 
 Add this flag when executing on Aliyun RDS.
 
+###  azure
+
+Add this flag when executing on Azure Database for MySQL.
+
 ### allow-master-master
 
 See [`--assume-master-host`](#assume-master-host).
