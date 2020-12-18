@@ -52,7 +52,7 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
-	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {

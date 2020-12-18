@@ -97,6 +97,7 @@ type MigrationContext struct {
 	DiscardForeignKeys       bool
 	AliyunRDS                bool
 	GoogleCloudPlatform      bool
+	AzureMySQL               bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
