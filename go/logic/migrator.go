@@ -1114,7 +1114,9 @@ func (this *Migrator) initiateApplier() error {
 func (this *Migrator) iterateChunks() error {
 	terminateRowIteration := func(err error) error {
 		this.rowCopyComplete <- err
-		log.Error(err)
+		if err != nil {
+			log.Error(err)
+		}
 		return (err)
 	}
 	if this.migrationContext.Noop {
