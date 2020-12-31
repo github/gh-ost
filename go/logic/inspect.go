@@ -596,10 +596,10 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 // getAutoIncrementValue get's the original table's AUTO_INCREMENT value, if exists (0 value if not exists)
 func (this *Inspector) getAutoIncrementValue(tableName string) (autoIncrement uint64, err error) {
 	query := `
-    SELECT
+		SELECT
 			AUTO_INCREMENT
-    FROM INFORMATION_SCHEMA.TABLES
-    WHERE
+		FROM INFORMATION_SCHEMA.TABLES
+		WHERE
 			TABLES.TABLE_SCHEMA = ?
 			AND TABLES.TABLE_NAME = ?
 			AND AUTO_INCREMENT IS NOT NULL
