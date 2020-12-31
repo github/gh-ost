@@ -14,4 +14,4 @@ insert into gh_ost_test values (NULL, 23);
 insert into gh_ost_test values (NULL, 29);
 insert into gh_ost_test values (NULL, 31);
 insert into gh_ost_test values (NULL, 37);
-delete from gh_ost_test where id>5;
+delete from gh_ost_test where id>=5;
