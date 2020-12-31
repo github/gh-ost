@@ -12,6 +12,7 @@ test_logfile=/tmp/gh-ost-test.log
 default_ghost_binary=/tmp/gh-ost-test
 ghost_binary=""
 exec_command_file=/tmp/gh-ost-test.bash
+ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
 throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
@@ -203,6 +204,18 @@ test_single() {
     cat $test_logfile
     return 1
   fi
+
+  gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "show create table _gh_ost_test_gho\G" -ss > $ghost_structure_output_file
+
+  # if [ -f $tests_path/$test_name/expect_table_structure ] ; then
+  #   expected_table_structure="$(cat $tests_path/$test_name/expect_table_structure)"
+  #   if grep -q "$expected_table_structure" $test_logfile ; then
+  #       return 0
+  #   fi
+  #   echo
+  #   echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not. cat $test_logfile"
+  #   return 1
+  # fi
 
   echo_dot
   gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss > $orig_content_output_file
