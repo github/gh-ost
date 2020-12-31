@@ -207,15 +207,15 @@ test_single() {
 
   gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "show create table _gh_ost_test_gho\G" -ss > $ghost_structure_output_file
 
-  # if [ -f $tests_path/$test_name/expect_table_structure ] ; then
-  #   expected_table_structure="$(cat $tests_path/$test_name/expect_table_structure)"
-  #   if grep -q "$expected_table_structure" $test_logfile ; then
-  #       return 0
-  #   fi
-  #   echo
-  #   echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not. cat $test_logfile"
-  #   return 1
-  # fi
+  if [ -f $tests_path/$test_name/expect_table_structure ] ; then
+    expected_table_structure="$(cat $tests_path/$test_name/expect_table_structure)"
+    if ! grep -q "$expected_table_structure" $ghost_structure_output_file ; then
+      echo
+      echo "ERROR $test_name: table structure was expected to include ${expected_table_structure} but did not. cat $ghost_structure_output_file:"
+      cat $ghost_structure_output_file
+      return 1
+    fi
+  fi
 
   echo_dot
   gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss > $orig_content_output_file
