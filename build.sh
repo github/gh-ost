@@ -46,6 +46,10 @@ function build {
 }
 
 main() {
+  
+  export GO111MODULE=off
+  export CGO_ENABLED=1
+  
   if [ -z "${RELEASE_VERSION}" ] ; then
     RELEASE_VERSION=$(git describe --abbrev=0 --tags | tr -d 'v')
   fi
