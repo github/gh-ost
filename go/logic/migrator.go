@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -606,9 +607,12 @@ func (this *Migrator) atomicCutOver() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	okToUnlockTable := make(chan bool, 4)
+	var dropCutOverSentryTableOnce sync.Once
 	defer func() {
 		okToUnlockTable <- true
-		this.applier.DropAtomicCutOverSentryTableIfExists()
+		dropCutOverSentryTableOnce.Do(func() {
+			this.applier.DropAtomicCutOverSentryTableIfExists()
+		})
 	}()
 
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
@@ -617,7 +621,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	go func() {
-		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, &dropCutOverSentryTableOnce); err != nil {
 			this.migrationContext.Log.Errore(err)
 		}
 	}()
@@ -737,7 +741,7 @@ func (this *Migrator) initiateInspector() (err error) {
 		this.migrationContext.Log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	} else {
 		// Forced master host.
-		key, err := mysql.ParseRawInstanceKeyLoose(this.migrationContext.AssumeMasterHostname)
+		key, err := mysql.ParseInstanceKey(this.migrationContext.AssumeMasterHostname)
 		if err != nil {
 			return err
 		}
@@ -1068,6 +1072,14 @@ func (this *Migrator) initiateApplier() error {
 		return err
 	}
 
+	if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
+		// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
+		// so we should copy AUTO_INCREMENT value onto our ghost table.
+		if err := this.applier.AlterGhostAutoIncrement(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+			return err
+		}
+	}
 	this.applier.WriteChangelogState(string(GhostTableMigrated))
 	go this.applier.InitiateHeartbeat()
 	return nil

@@ -97,6 +97,7 @@ type MigrationContext struct {
 	DiscardForeignKeys       bool
 	AliyunRDS                bool
 	GoogleCloudPlatform      bool
+	AzureMySQL               bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -203,6 +204,7 @@ type MigrationContext struct {
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableVirtualColumns      *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
+	OriginalTableAutoIncrement       uint64
 	GhostTableColumns                *sql.ColumnList
 	GhostTableVirtualColumns         *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
