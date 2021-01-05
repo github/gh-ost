@@ -17,6 +17,7 @@ import (
 	"github.com/github/gh-ost/go/sql"
 
 	"github.com/outbrain/golib/sqlutils"
+	"sync"
 )
 
 const (
@@ -88,7 +89,7 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
 	}
-	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {
@@ -806,7 +807,7 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 }
 
 // AtomicCutOverMagicLock
-func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
+func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error, dropCutOverSentryTableOnce *sync.Once) error {
 	tx, err := this.db.Begin()
 	if err != nil {
 		tableLocked <- err
@@ -884,10 +885,13 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetOldTableName()),
 	)
-	if _, err := tx.Exec(query); err != nil {
-		this.migrationContext.Log.Errore(err)
-		// We DO NOT return here because we must `UNLOCK TABLES`!
-	}
+
+	dropCutOverSentryTableOnce.Do(func() {
+		if _, err := tx.Exec(query); err != nil {
+			this.migrationContext.Log.Errore(err)
+			// We DO NOT return here because we must `UNLOCK TABLES`!
+		}
+	})
 
 	// Tables still locked
 	this.migrationContext.Log.Infof("Releasing lock from %s.%s, %s.%s",
