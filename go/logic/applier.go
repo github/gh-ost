@@ -399,6 +399,10 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 
 // ReadMigrationRangeValues reads min/max values that will be used for rowcopy
 func (this *Applier) ReadMigrationRangeValues() error {
+	if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+		return nil
+	}
+
 	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
 		return err
 	}

@@ -383,31 +383,41 @@ func (this *Migrator) FinalizeMigration() {
 	// is in the binlogs.
 	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
 	// Validation complete! We're good to execute this migration
 	if err := this.hooksExecutor.onValidated(); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
 
 	if err := this.initiateServer(); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
-	defer this.server.RemoveSocketFile()
+	defer func() {
+		_ = this.server.RemoveSocketFile()
+	}()
 
 	if err := this.countTableRows(); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
 	if err := this.addDMLEventsListener(); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
 	if err := this.initiateThrottler(); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
@@ -419,11 +429,13 @@ func (this *Migrator) FinalizeMigration() {
 	log.Infof("Row copy complete")
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
 	this.printStatus(ForcePrintStatusRule)
 
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
 	var retrier func(func() error, ...bool) error
 	if this.migrationContext.CutOverExponentialBackoff {
@@ -433,15 +445,17 @@ func (this *Migrator) FinalizeMigration() {
 	}
 	if err := retrier(this.cutOver); err != nil {
 		this.migrationContext.PanicAbort <- err
+		return
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 
 	if err := this.finalCleanup(); err != nil {
-		// return nil
 		this.migrationContext.PanicAbort <- nil
+		return
 	}
 	if err := this.hooksExecutor.onSuccess(); err != nil {
 		this.migrationContext.PanicAbort <- nil
+		return
 	}
 	log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 
