@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"bytes"
 )
 
 type ColumnType int
@@ -22,6 +23,7 @@ const (
 	MediumIntColumnType
 	JSONColumnType
 	FloatColumnType
+	BinaryColumnType
 )
 
 const maxMediumintUnsigned int32 = 16777215
@@ -35,6 +37,10 @@ type Column struct {
 	IsUnsigned         bool
 	Charset            string
 	Type               ColumnType
+
+	// add Octet length for binary type, fix bytes with suffix "00" get clipped in mysql binlog.
+	// https://github.com/github/gh-ost/issues/909
+	BinaryOctetLength  uint
 	timezoneConversion *TimezoneConversion
 }
 
@@ -44,6 +50,18 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 		if encoding, ok := charsetEncodingMap[this.Charset]; ok {
 			arg, _ = encoding.NewDecoder().String(s)
 		}
+
+		if this.Type == BinaryColumnType {
+			size := len([]byte(arg.(string)))
+			if uint(size) < this.BinaryOctetLength {
+				buf := bytes.NewBuffer([]byte(arg.(string)))
+				for i := uint(0); i < (this.BinaryOctetLength - uint(size)); i++ {
+					buf.Write([]byte{0})
+				}
+				arg = buf.String()
+			}
+		}
+
 		return arg
 	}
 
