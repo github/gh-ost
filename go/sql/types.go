@@ -6,11 +6,11 @@
 package sql
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
-	"bytes"
 )
 
 type ColumnType int
@@ -33,10 +33,10 @@ type TimezoneConversion struct {
 }
 
 type Column struct {
-	Name               string
-	IsUnsigned         bool
-	Charset            string
-	Type               ColumnType
+	Name       string
+	IsUnsigned bool
+	Charset    string
+	Type       ColumnType
 
 	// add Octet length for binary type, fix bytes with suffix "00" get clipped in mysql binlog.
 	// https://github.com/github/gh-ost/issues/909
