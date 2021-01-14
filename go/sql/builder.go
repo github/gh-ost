@@ -231,11 +231,11 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		transactionalClause = "lock in share mode"
 	}
 	// result = fmt.Sprintf(`
-    //   insert /* gh-ost %s.%s */ ignore into %s.%s (%s)
-    //   (select %s from %s.%s force index (%s)
-    //     where (%s and %s) %s
-    //   )
-    // `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
+	//   insert /* gh-ost %s.%s */ ignore into %s.%s (%s)
+	//   (select %s from %s.%s force index (%s)
+	//     where (%s and %s) %s
+	//   )
+	// `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
 	// 	sharedColumnsListing, databaseName, originalTableName, uniqueKey,
 	// 	rangeStartComparison, rangeEndComparison, transactionalClause)
 
@@ -252,9 +252,9 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		var onJoins []string
 		var nullStmt string
 		for i, column := range uniqueKeyColumns.Names() {
-			onJoins = append(onJoins, fmt.Sprintf("a.%s = b.%s",EscapeName(column), EscapeName(column)))
+			onJoins = append(onJoins, fmt.Sprintf("a.%s = b.%s", EscapeName(column), EscapeName(column)))
 			if i == 0 {
-				nullStmt = fmt.Sprintf(" and b.%s IS NULL",EscapeName(column))
+				nullStmt = fmt.Sprintf(" and b.%s IS NULL", EscapeName(column))
 			}
 		}
 		result = fmt.Sprintf(`
@@ -262,11 +262,10 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		(select %s from %s.%s a force index (%s) left join %s.%s b on %s
 		where (%s and %s) %s %s
 		)
-	`,databaseName,originalTableName,databaseName,ghostTableName,mappedSharedColumnsListing,
-			sharedColumnsListingAlias,databaseName,originalTableName,uniqueKey,databaseName,ghostTableName,
-			strings.Join(onJoins," and "), rangeStartComparison, rangeEndComparison, nullStmt, transactionalClause)
+	`, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
+			sharedColumnsListingAlias, databaseName, originalTableName, uniqueKey, databaseName, ghostTableName,
+			strings.Join(onJoins, " and "), rangeStartComparison, rangeEndComparison, nullStmt, transactionalClause)
 	}
-
 
 	return result, explodedArgs, nil
 }

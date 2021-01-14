@@ -223,7 +223,7 @@ type MigrationContext struct {
 
 	Log Logger
 
-	IsAddUniqueKey	bool
+	IsAddUniqueKey bool
 }
 
 type Logger interface {

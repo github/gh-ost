@@ -974,7 +974,7 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent, seconda
 				dmlEvent.WhereColumnValues = dmlEvent.NewColumnValues
 				results = append(results, this.buildDMLEventQuery(dmlEvent, true)...)
 				dmlEvent.DML = binlog.InsertDML
-				results = append(results, this.buildDMLEventQuery(dmlEvent,true)...)
+				results = append(results, this.buildDMLEventQuery(dmlEvent, true)...)
 				return results
 			}
 			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues(), this.migrationContext.IsAddUniqueKey)
@@ -986,10 +986,10 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent, seconda
 			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
 				dmlEvent.DML = binlog.DeleteDML
 				// results = append(results, this.buildDMLEventQuery(dmlEvent)...)
-				results = append(results, this.buildDMLEventQuery(dmlEvent,true)...)
+				results = append(results, this.buildDMLEventQuery(dmlEvent, true)...)
 				dmlEvent.DML = binlog.InsertDML
 				// results = append(results, this.buildDMLEventQuery(dmlEvent)...)
-				results = append(results, this.buildDMLEventQuery(dmlEvent,true)...)
+				results = append(results, this.buildDMLEventQuery(dmlEvent, true)...)
 				return results
 			}
 			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())

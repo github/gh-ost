@@ -12,9 +12,9 @@ import (
 	"regexp"
 	"strings"
 
+	"fmt"
 	"github.com/outbrain/golib/log"
 	test "github.com/outbrain/golib/tests"
-	"fmt"
 )
 
 var (
@@ -46,11 +46,10 @@ func TestBuildValueComparison(t *testing.T) {
 		value := "@v1"
 		alias := "a"
 		comparisonSign := LessThanComparisonSign
-		rangeComparison, err := BuildValueComparison(column, value,alias, comparisonSign)
+		rangeComparison, err := BuildValueComparison(column, value, alias, comparisonSign)
 		fmt.Println(rangeComparison, err)
 	}
 }
-
 
 func TestBuildEqualsComparison(t *testing.T) {
 	alias := "a"
@@ -187,7 +186,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3}
 		rangeEndArgs := []interface{}{103}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false,false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -504,7 +503,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		// testing signed
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args,false)
+		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -520,7 +519,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		// testing unsigned
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		sharedColumns.SetUnsigned("position")
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args,false)
+		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -536,7 +535,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		// testing unsigned
 		args := []interface{}{3, "testname", "first", int32(-1), 23}
 		sharedColumns.SetUnsigned("position")
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args,false)
+		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
