@@ -52,7 +52,7 @@ func TestBuildValueComparison(t *testing.T) {
 }
 
 func TestBuildEqualsComparison(t *testing.T) {
-	alias := "a"
+	alias := ""
 	{
 		columns := []string{"c1"}
 		values := []string{"@v1"}
