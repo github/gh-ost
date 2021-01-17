@@ -43,6 +43,9 @@ type EventsStreamer struct {
 	listenersMutex           *sync.Mutex
 	eventsChannel            chan *binlog.BinlogEntry
 	binlogReader             *binlog.GoMySQLReader
+
+	// close flag
+	closeChan chan bool
 }
 
 func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer {
@@ -52,6 +55,8 @@ func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer 
 		listeners:        [](*BinlogEventListener){},
 		listenersMutex:   &sync.Mutex{},
 		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
+
+		closeChan: make(chan bool),
 	}
 }
 
@@ -168,11 +173,25 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 // executed by a goroutine
 func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	go func() {
-		for binlogEntry := range this.eventsChannel {
-			if binlogEntry.DmlEvent != nil {
-				this.notifyListeners(binlogEntry.DmlEvent)
+
+	FOR:
+		for {
+			select {
+			case binlogEntry := <-this.eventsChannel:
+				if binlogEntry.DmlEvent != nil {
+					this.notifyListeners(binlogEntry.DmlEvent)
+				}
+			case <-this.closeChan:
+				break FOR
 			}
 		}
+
+		// 不再使用for range channal, 该方式会导致goroutine无法正常关闭
+		// for binlogEntry := range this.eventsChannel {
+		// 	if binlogEntry.DmlEvent != nil {
+		// 		this.notifyListeners(binlogEntry.DmlEvent)
+		// 	}
+		// }
 	}()
 	// The next should block and execute forever, unless there's a serious error
 	var successiveFailures int64
@@ -218,6 +237,7 @@ func (this *EventsStreamer) Close() (err error) {
 }
 
 func (this *EventsStreamer) Teardown() {
+	this.closeChan <- true
+
 	this.db.Close()
-	return
 }

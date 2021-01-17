@@ -86,6 +86,7 @@ type Migrator struct {
 	handledChangelogStates map[string]bool
 
 	finishedMigrating int64
+	// finishChan        chan bool
 
 	// Log *io.Writer
 	Log   *bytes.Buffer
@@ -107,6 +108,7 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
 		handledChangelogStates: make(map[string]bool),
 		finishedMigrating:      0,
+		// finishChan:             make(chan bool),
 	}
 	return migrator
 }
@@ -203,11 +205,35 @@ func (this *Migrator) consumeRowCopyComplete() {
 	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
 	this.migrationContext.MarkRowCopyEndTime()
 	go func() {
-		for err := range this.rowCopyComplete {
-			if err != nil {
-				this.migrationContext.PanicAbort <- err
+		tick := time.NewTicker(1000 * time.Millisecond)
+
+	FOR:
+		for {
+			<-tick.C
+
+			select {
+			case err := <-this.rowCopyComplete:
+				if err != nil {
+					this.migrationContext.PanicAbort <- err
+					break FOR
+				}
+			case <-this.migrationContext.PanicAbort:
+				break FOR
+
+			default:
+				if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+					break FOR
+				}
 			}
 		}
+
+		// 不再使用for range channal, 该方式会导致goroutine无法正常关闭
+		// for err := range this.rowCopyComplete {
+		// 	if err != nil {
+		// 		this.migrationContext.PanicAbort <- err
+		// 		break
+		// 	}
+		// }
 	}()
 }
 
@@ -754,7 +780,8 @@ func (this *Migrator) initiateServer() (err error) {
 		return err
 	}
 
-	go this.server.Serve()
+	// 关闭unix socket交互式命令
+	// go this.server.Serve()
 	return nil
 }
 
@@ -1046,12 +1073,12 @@ func (this *Migrator) initiateStreaming() error {
 	)
 
 	go func() {
-		log.Debugf("Beginning streaming")
+		log.Debug("Beginning streaming")
 		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
 		if err != nil {
 			this.migrationContext.PanicAbort <- err
 		}
-		log.Debugf("Done streaming")
+		log.Debug("Done streaming")
 	}()
 
 	go func() {
@@ -1369,7 +1396,6 @@ func (this *Migrator) teardown() {
 
 		if err := this.eventsStreamer.Close(); err != nil {
 			log.Error(err)
-			// (err)
 		}
 	}
 
