@@ -17,6 +17,7 @@ import (
 	"github.com/github/gh-ost/go/sql"
 
 	"github.com/outbrain/golib/sqlutils"
+	"sync"
 )
 
 const (
@@ -88,7 +89,7 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
 	}
-	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {
@@ -190,7 +191,7 @@ func (this *Applier) AlterGhost() error {
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s %s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		this.migrationContext.AlterStatement,
+		this.migrationContext.AlterStatementOptions,
 	)
 	this.migrationContext.Log.Infof("Altering ghost table %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -370,6 +371,8 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 		}
 	}
 	this.migrationContext.Log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
+
+	err = rows.Err()
 	return err
 }
 
@@ -391,6 +394,8 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 		}
 	}
 	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+
+	err = rows.Err()
 	return err
 }
 
@@ -442,6 +447,9 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 				return hasFurtherRange, err
 			}
 			hasFurtherRange = true
+		}
+		if err = rows.Err(); err != nil {
+			return hasFurtherRange, err
 		}
 		if hasFurtherRange {
 			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
@@ -780,7 +788,7 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 }
 
 // AtomicCutOverMagicLock
-func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
+func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error, dropCutOverSentryTableOnce *sync.Once) error {
 	tx, err := this.db.Begin()
 	if err != nil {
 		tableLocked <- err
@@ -858,10 +866,13 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetOldTableName()),
 	)
-	if _, err := tx.Exec(query); err != nil {
-		this.migrationContext.Log.Errore(err)
-		// We DO NOT return here because we must `UNLOCK TABLES`!
-	}
+
+	dropCutOverSentryTableOnce.Do(func() {
+		if _, err := tx.Exec(query); err != nil {
+			this.migrationContext.Log.Errore(err)
+			// We DO NOT return here because we must `UNLOCK TABLES`!
+		}
+	})
 
 	// Tables still locked
 	this.migrationContext.Log.Infof("Releasing lock from %s.%s, %s.%s",

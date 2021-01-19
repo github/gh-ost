@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"io"
 	"net"
 	"strconv"
@@ -154,7 +155,9 @@ func (mc *mysqlConn) Prepare(query string) (driver.Stmt, error) {
 	// Send command
 	err := mc.writeCommandPacketStr(comStmtPrepare, query)
 	if err != nil {
-		return nil, mc.markBadConn(err)
+		// STMT_PREPARE is safe to retry.  So we can return ErrBadConn here.
+		errLog.Print(err)
+		return nil, driver.ErrBadConn
 	}
 
 	stmt := &mysqlStmt{
@@ -269,6 +272,14 @@ func (mc *mysqlConn) interpolateParams(query string, args []driver.Value) (strin
 				}
 				buf = append(buf, '\'')
 			}
+		case json.RawMessage:
+			buf = append(buf, '\'')
+			if mc.status&statusNoBackslashEscapes == 0 {
+				buf = escapeBytesBackslash(buf, v)
+			} else {
+				buf = escapeBytesQuotes(buf, v)
+			}
+			buf = append(buf, '\'')
 		case []byte:
 			if v == nil {
 				buf = append(buf, "NULL"...)

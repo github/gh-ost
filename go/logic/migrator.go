@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -60,7 +61,7 @@ const (
 
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
-	parser           *sql.Parser
+	parser           *sql.AlterTableParser
 	inspector        *Inspector
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
@@ -88,7 +89,7 @@ type Migrator struct {
 func NewMigrator(context *base.MigrationContext) *Migrator {
 	migrator := &Migrator{
 		migrationContext:           context,
-		parser:                     sql.NewParser(),
+		parser:                     sql.NewAlterTableParser(),
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
@@ -606,9 +607,12 @@ func (this *Migrator) atomicCutOver() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	okToUnlockTable := make(chan bool, 4)
+	var dropCutOverSentryTableOnce sync.Once
 	defer func() {
 		okToUnlockTable <- true
-		this.applier.DropAtomicCutOverSentryTableIfExists()
+		dropCutOverSentryTableOnce.Do(func() {
+			this.applier.DropAtomicCutOverSentryTableIfExists()
+		})
 	}()
 
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
@@ -617,7 +621,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	go func() {
-		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, &dropCutOverSentryTableOnce); err != nil {
 			this.migrationContext.Log.Errore(err)
 		}
 	}()
@@ -737,7 +741,7 @@ func (this *Migrator) initiateInspector() (err error) {
 		this.migrationContext.Log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	} else {
 		// Forced master host.
-		key, err := mysql.ParseRawInstanceKeyLoose(this.migrationContext.AssumeMasterHostname)
+		key, err := mysql.ParseInstanceKey(this.migrationContext.AssumeMasterHostname)
 		if err != nil {
 			return err
 		}

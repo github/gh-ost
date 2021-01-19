@@ -492,6 +492,9 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	}
 
 	setClause, err := BuildSetPreparedClause(mappedSharedColumns)
+	if err != nil {
+		return "", sharedArgs, uniqueKeyArgs, err
+	}
 
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
 	result = fmt.Sprintf(`

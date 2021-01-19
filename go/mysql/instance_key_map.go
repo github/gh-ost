@@ -92,7 +92,7 @@ func (this *InstanceKeyMap) ReadCommaDelimitedList(list string) error {
 	}
 	tokens := strings.Split(list, ",")
 	for _, token := range tokens {
-		key, err := ParseRawInstanceKeyLoose(token)
+		key, err := ParseInstanceKey(token)
 		if err != nil {
 			return err
 		}
