@@ -6,8 +6,8 @@ create table gh_ost_test (
   PRIMARY KEY (`id`,`idb`)
 ) auto_increment=1;
 
-insert into gh_ost_test (id, jsonobj) values (null, ''{"_id":2}'');
-insert into gh_ost_test (id, jsonobj) values (null, ''{"_id":3}'');
+insert into gh_ost_test (id, jsonobj) values (null, '{"_id":2}');
+insert into gh_ost_test (id, jsonobj) values (null, '{"_id":3}');
 
 drop event if exists gh_ost_test;
 delimiter ;;
@@ -19,12 +19,12 @@ create event gh_ost_test
   enable
   do
 begin
-  insert into gh_ost_test (id, jsonobj) values (null, ''{"_id":5}'');
-  insert into gh_ost_test (id, jsonobj) values (null, ''{"_id":7}'');
-  insert into gh_ost_test (id, jsonobj) values (null, ''{"_id":11}'');
-  insert into gh_ost_test (id, jsonobj) values (null, ''{"_id":13}'');
-  insert into gh_ost_test (id, jsonobj) values (null, ''{"_id":17}'');
-  insert into gh_ost_test (id, jsonobj) values (null, ''{"_id":19}'');
-  insert into gh_ost_test (id, jsonobj) values (null, ''{"_id":23}'');
-  insert into gh_ost_test (id, jsonobj) values (null, ''{"_id":27}'');
+  insert into gh_ost_test (id, jsonobj) values (null, '{"_id":5}');
+  insert into gh_ost_test (id, jsonobj) values (null, '{"_id":7}');
+  insert into gh_ost_test (id, jsonobj) values (null, '{"_id":11}');
+  insert into gh_ost_test (id, jsonobj) values (null, '{"_id":13}');
+  insert into gh_ost_test (id, jsonobj) values (null, '{"_id":17}');
+  insert into gh_ost_test (id, jsonobj) values (null, '{"_id":19}');
+  insert into gh_ost_test (id, jsonobj) values (null, '{"_id":23}');
+  insert into gh_ost_test (id, jsonobj) values (null, '{"_id":27}');
 end ;;
