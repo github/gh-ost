@@ -66,6 +66,7 @@ The following variables are available on all hooks:
 - `GH_OST_ESTIMATED_ROWS` - estimated total rows in table
 - `GH_OST_COPIED_ROWS` - number of rows copied by `gh-ost`
 - `GH_OST_INSPECTED_LAG` - lag in seconds (floating point) of inspected server
+- `GH_OST_HEARTBEAT_LAG` - lag in seconds (floating point) of heartbeat
 - `GH_OST_PROGRESS` - progress pct ([0..100], floating point) of migration
 - `GH_OST_MIGRATED_HOST`
 - `GH_OST_INSPECTED_HOST`

@@ -454,6 +454,10 @@ func (this *MigrationContext) MarkRowCopyEndTime() {
 	this.RowCopyEndTime = time.Now()
 }
 
+func (this *MigrationContext) GetCurrentHeartbeatLagDuration() time.Duration {
+	return time.Duration(atomic.LoadInt64(&this.CurrentHeartbeatLag))
+}
+
 func (this *MigrationContext) GetCurrentLagDuration() time.Duration {
 	return time.Duration(atomic.LoadInt64(&this.CurrentLag))
 }
