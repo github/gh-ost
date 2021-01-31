@@ -212,6 +212,8 @@ func (this *Migrator) onChangelogEvent(dmlEvent *binlog.BinlogDMLEvent) (err err
 	switch hint := dmlEvent.NewColumnValues.StringColumn(2); hint {
 	case "state":
 		return this.onChangelogStateEvent(dmlEvent)
+	case "heartbeat":
+		return this.onChangelogHeartbeatEvent(dmlEvent)
 	default:
 		return nil
 	}
@@ -248,6 +250,16 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	}
 	this.migrationContext.Log.Infof("Handled changelog state %s", changelogState)
 	return nil
+}
+
+func (this *Migrator) onChangelogHeartbeatEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+	changelogHeartbeatString := dmlEvent.NewColumnValues.StringColumn(3)
+	if lag, err := parseChangelogHeartbeat(changelogHeartbeatString); err != nil {
+		return this.migrationContext.Log.Errore(err)
+	} else {
+		atomic.StoreInt64(&this.migrationContext.CurrentHeartbeatLag, int64(lag))
+		return nil
+	}
 }
 
 // listenOnPanicAbort aborts on abort request
