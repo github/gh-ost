@@ -206,12 +206,18 @@ func (this *Migrator) canStopStreaming() bool {
 	return atomic.LoadInt64(&this.migrationContext.CutOverCompleteFlag) != 0
 }
 
-// onChangelogStateEvent is called when a binlog event operation on the changelog table is intercepted.
-func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+// onChangelogEvent is called when a binlog event operation on the changelog table is intercepted.
+func (this *Migrator) onChangelogEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
 	// Hey, I created the changelog table, I know the type of columns it has!
-	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
+	switch hint := dmlEvent.NewColumnValues.StringColumn(2); hint {
+	case "state":
+		return this.onChangelogStateEvent(dmlEvent)
+	default:
 		return nil
 	}
+}
+
+func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
 	changelogStateString := dmlEvent.NewColumnValues.StringColumn(3)
 	changelogState := ReadChangelogState(changelogStateString)
 	this.migrationContext.Log.Infof("Intercepted changelog state %s", changelogState)
@@ -991,7 +997,7 @@ func (this *Migrator) initiateStreaming() error {
 		this.migrationContext.DatabaseName,
 		this.migrationContext.GetChangelogTableName(),
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			return this.onChangelogStateEvent(dmlEvent)
+			return this.onChangelogEvent(dmlEvent)
 		},
 	)
 
