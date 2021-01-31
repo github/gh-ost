@@ -178,6 +178,7 @@ type MigrationContext struct {
 	RenameTablesEndTime                    time.Time
 	pointOfInterestTime                    time.Time
 	pointOfInterestTimeMutex               *sync.Mutex
+	CurrentHeartbeatLag                    int64
 	CurrentLag                             int64
 	currentProgress                        uint64
 	ThrottleHTTPStatusCode                 int64
