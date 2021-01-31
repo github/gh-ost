@@ -518,6 +518,22 @@ func (this *Migrator) cutOver() (err error) {
 	this.migrationContext.MarkPointOfInterest()
 	this.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
 
+	this.migrationContext.Log.Infof("Waiting for heartbeat lag to be low enough to proceed")
+	this.sleepWhileTrue(
+		func() (bool, error) {
+			currentHeartbeatLag := atomic.LoadInt64(&this.migrationContext.CurrentHeartbeatLag)
+			maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
+			if time.Duration(currentHeartbeatLag) > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
+				this.migrationContext.Log.Infof("current HeartbeatLag (%.2fs) is too high, it needs to be less than --max-lag-millis (%.2fs) to continue", time.Duration(currentHeartbeatLag).Seconds(), (time.Duration(maxLagMillisecondsThrottleThreshold) * time.Millisecond).Seconds())
+				return true, nil
+			} else {
+				return false, nil
+			}
+		},
+	)
+	this.migrationContext.MarkPointOfInterest()
+	this.migrationContext.Log.Infof("Heartbeat lag is low enough, proceeding")
+
 	if this.migrationContext.TestOnReplica {
 		// With `--test-on-replica` we stop replication thread, and then proceed to use
 		// the same cut-over phase as the master would use. That means we take locks
