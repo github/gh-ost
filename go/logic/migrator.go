@@ -254,10 +254,12 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 
 func (this *Migrator) onChangelogHeartbeatEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
 	changelogHeartbeatString := dmlEvent.NewColumnValues.StringColumn(3)
-	if lag, err := parseChangelogHeartbeat(changelogHeartbeatString); err != nil {
+
+	heartbeatTime, err := time.Parse(time.RFC3339Nano, changelogHeartbeatString)
+	if err != nil {
 		return this.migrationContext.Log.Errore(err)
 	} else {
-		atomic.StoreInt64(&this.migrationContext.CurrentHeartbeatLag, int64(lag))
+		this.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
 		return nil
 	}
 }
@@ -520,10 +522,10 @@ func (this *Migrator) cutOver() (err error) {
 	this.migrationContext.Log.Infof("Waiting for heartbeat lag to be low enough to proceed")
 	this.sleepWhileTrue(
 		func() (bool, error) {
-			currentHeartbeatLag := atomic.LoadInt64(&this.migrationContext.CurrentHeartbeatLag)
+			heartbeatLag := this.migrationContext.TimeSinceLastHeartbeatOnChangelog()
 			maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
-			if time.Duration(currentHeartbeatLag) > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
-				this.migrationContext.Log.Debugf("current HeartbeatLag (%.2fs) is too high, it needs to be less than --max-lag-millis (%.2fs) to continue", time.Duration(currentHeartbeatLag).Seconds(), (time.Duration(maxLagMillisecondsThrottleThreshold) * time.Millisecond).Seconds())
+			if heartbeatLag > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
+				this.migrationContext.Log.Infof("current HeartbeatLag (%.2fs) is too high, it needs to be less than --max-lag-millis (%.2fs) to continue", heartbeatLag.Seconds(), (time.Duration(maxLagMillisecondsThrottleThreshold) * time.Millisecond).Seconds())
 				return true, nil
 			} else {
 				return false, nil
@@ -999,7 +1001,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
 		this.migrationContext.GetCurrentLagDuration().Seconds(),
-		this.migrationContext.GetCurrentHeartbeatLagDuration().Seconds(),
+		this.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds(),
 		state,
 		eta,
 	)
