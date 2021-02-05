@@ -525,7 +525,7 @@ func (this *Migrator) cutOver() (err error) {
 			heartbeatLag := this.migrationContext.TimeSinceLastHeartbeatOnChangelog()
 			maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
 			if heartbeatLag > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
-				this.migrationContext.Log.Infof("current HeartbeatLag (%.2fs) is too high, it needs to be less than --max-lag-millis (%.2fs) to continue", heartbeatLag.Seconds(), (time.Duration(maxLagMillisecondsThrottleThreshold) * time.Millisecond).Seconds())
+				this.migrationContext.Log.Debugf("current HeartbeatLag (%.2fs) is too high, it needs to be less than --max-lag-millis (%.2fs) to continue", heartbeatLag.Seconds(), (time.Duration(maxLagMillisecondsThrottleThreshold) * time.Millisecond).Seconds())
 				return true, nil
 			} else {
 				return false, nil
