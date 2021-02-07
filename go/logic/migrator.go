@@ -496,6 +496,12 @@ func (this *Migrator) cutOver() (err error) {
 	this.migrationContext.Log.Debugf("checking for cut-over postpone")
 	this.sleepWhileTrue(
 		func() (bool, error) {
+			heartbeatLag := this.migrationContext.TimeSinceLastHeartbeatOnChangelog()
+			maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
+			if heartbeatLag > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
+				this.migrationContext.Log.Debugf("current HeartbeatLag (%.2fs) is too high, it needs to be less than --max-lag-millis (%.2fs) to continue", heartbeatLag.Seconds(), (time.Duration(maxLagMillisecondsThrottleThreshold) * time.Millisecond).Seconds())
+				return true, nil
+			}
 			if this.migrationContext.PostponeCutOverFlagFile == "" {
 				return false, nil
 			}
@@ -519,22 +525,6 @@ func (this *Migrator) cutOver() (err error) {
 	atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 0)
 	this.migrationContext.MarkPointOfInterest()
 	this.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
-
-	this.migrationContext.Log.Infof("Waiting for heartbeat lag to be low enough to proceed")
-	this.sleepWhileTrue(
-		func() (bool, error) {
-			heartbeatLag := this.migrationContext.TimeSinceLastHeartbeatOnChangelog()
-			maxLagMillisecondsThrottleThreshold := atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)
-			if heartbeatLag > time.Duration(maxLagMillisecondsThrottleThreshold)*time.Millisecond {
-				this.migrationContext.Log.Debugf("current HeartbeatLag (%.2fs) is too high, it needs to be less than --max-lag-millis (%.2fs) to continue", heartbeatLag.Seconds(), (time.Duration(maxLagMillisecondsThrottleThreshold) * time.Millisecond).Seconds())
-				return true, nil
-			} else {
-				return false, nil
-			}
-		},
-	)
-	this.migrationContext.MarkPointOfInterest()
-	this.migrationContext.Log.Infof("Heartbeat lag is low enough, proceeding")
 
 	if this.migrationContext.TestOnReplica {
 		// With `--test-on-replica` we stop replication thread, and then proceed to use
