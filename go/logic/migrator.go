@@ -207,12 +207,20 @@ func (this *Migrator) canStopStreaming() bool {
 	return atomic.LoadInt64(&this.migrationContext.CutOverCompleteFlag) != 0
 }
 
-// onChangelogStateEvent is called when a binlog event operation on the changelog table is intercepted.
-func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+// onChangelogEvent is called when a binlog event operation on the changelog table is intercepted.
+func (this *Migrator) onChangelogEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
 	// Hey, I created the changelog table, I know the type of columns it has!
-	if hint := dmlEvent.NewColumnValues.StringColumn(2); hint != "state" {
+	switch hint := dmlEvent.NewColumnValues.StringColumn(2); hint {
+	case "state":
+		return this.onChangelogStateEvent(dmlEvent)
+	case "heartbeat":
+		return this.onChangelogHeartbeatEvent(dmlEvent)
+	default:
 		return nil
 	}
+}
+
+func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
 	changelogStateString := dmlEvent.NewColumnValues.StringColumn(3)
 	changelogState := ReadChangelogState(changelogStateString)
 	this.migrationContext.Log.Infof("Intercepted changelog state %s", changelogState)
@@ -243,6 +251,18 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	}
 	this.migrationContext.Log.Infof("Handled changelog state %s", changelogState)
 	return nil
+}
+
+func (this *Migrator) onChangelogHeartbeatEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+	changelogHeartbeatString := dmlEvent.NewColumnValues.StringColumn(3)
+
+	heartbeatTime, err := time.Parse(time.RFC3339Nano, changelogHeartbeatString)
+	if err != nil {
+		return this.migrationContext.Log.Errore(err)
+	} else {
+		this.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
+		return nil
+	}
 }
 
 // listenOnPanicAbort aborts on abort request
@@ -476,6 +496,13 @@ func (this *Migrator) cutOver() (err error) {
 	this.migrationContext.Log.Debugf("checking for cut-over postpone")
 	this.sleepWhileTrue(
 		func() (bool, error) {
+			heartbeatLag := this.migrationContext.TimeSinceLastHeartbeatOnChangelog()
+			maxLagMillisecondsThrottle := time.Duration(atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)) * time.Millisecond
+			cutOverLockTimeout := time.Duration(this.migrationContext.CutOverLockTimeoutSeconds) * time.Second
+			if heartbeatLag > maxLagMillisecondsThrottle || heartbeatLag > cutOverLockTimeout {
+				this.migrationContext.Log.Debugf("current HeartbeatLag (%.2fs) is too high, it needs to be less than both --max-lag-millis (%.2fs) and --cut-over-lock-timeout-seconds (%.2fs) to continue", heartbeatLag.Seconds(), maxLagMillisecondsThrottle.Seconds(), cutOverLockTimeout.Seconds())
+				return true, nil
+			}
 			if this.migrationContext.PostponeCutOverFlagFile == "" {
 				return false, nil
 			}
@@ -962,13 +989,14 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, State: %s; ETA: %s",
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
 		this.migrationContext.GetCurrentLagDuration().Seconds(),
+		this.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds(),
 		state,
 		eta,
 	)
@@ -995,7 +1023,7 @@ func (this *Migrator) initiateStreaming() error {
 		this.migrationContext.DatabaseName,
 		this.migrationContext.GetChangelogTableName(),
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			return this.onChangelogStateEvent(dmlEvent)
+			return this.onChangelogEvent(dmlEvent)
 		},
 	)
 
