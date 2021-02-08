@@ -7,6 +7,7 @@ package base
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -14,8 +15,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/satori/go.uuid"
+
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
+	"github.com/outbrain/golib/log"
 
 	"gopkg.in/gcfg.v1"
 	gcfgscanner "gopkg.in/gcfg.v1/scanner"
@@ -26,23 +30,23 @@ type RowsEstimateMethod string
 
 const (
 	TableStatusRowsEstimate RowsEstimateMethod = "TableStatusRowsEstimate"
-	ExplainRowsEstimate                        = "ExplainRowsEstimate"
-	CountRowsEstimate                          = "CountRowsEstimate"
+	ExplainRowsEstimate     RowsEstimateMethod = "ExplainRowsEstimate"
+	CountRowsEstimate       RowsEstimateMethod = "CountRowsEstimate"
 )
 
 type CutOver int
 
 const (
-	CutOverAtomic  CutOver = iota
-	CutOverTwoStep         = iota
+	CutOverAtomic CutOver = iota
+	CutOverTwoStep
 )
 
 type ThrottleReasonHint string
 
 const (
 	NoThrottleReasonHint                 ThrottleReasonHint = "NoThrottleReasonHint"
-	UserCommandThrottleReasonHint                           = "UserCommandThrottleReasonHint"
-	LeavingHibernationThrottleReasonHint                    = "LeavingHibernationThrottleReasonHint"
+	UserCommandThrottleReasonHint        ThrottleReasonHint = "UserCommandThrottleReasonHint"
+	LeavingHibernationThrottleReasonHint ThrottleReasonHint = "LeavingHibernationThrottleReasonHint"
 )
 
 const (
@@ -71,9 +75,12 @@ func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleRea
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
-	DatabaseName      string
-	OriginalTableName string
-	AlterStatement    string
+	Uuid string
+
+	DatabaseName          string
+	OriginalTableName     string
+	AlterStatement        string
+	AlterStatementOptions string // anything following the 'ALTER TABLE [schema.]table' from AlterStatement
 
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
@@ -82,17 +89,26 @@ type MigrationContext struct {
 	SwitchToRowBinlogFormat  bool
 	AssumeRBR                bool
 	SkipForeignKeyChecks     bool
+	SkipStrictMode           bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
+	AliyunRDS                bool
+	GoogleCloudPlatform      bool
+	AzureMySQL               bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
 	ConfigFile        string
 	CliUser           string
 	CliPassword       string
+	UseTLS            bool
+	TLSAllowInsecure  bool
+	TLSCACertificate  string
+	TLSCertificate    string
+	TLSKey            string
 	CliMasterUser     string
 	CliMasterPassword string
 
@@ -106,6 +122,7 @@ type MigrationContext struct {
 	ThrottleAdditionalFlagFile          string
 	throttleQuery                       string
 	throttleHTTP                        string
+	IgnoreHTTPErrors                    bool
 	ThrottleCommandedByUser             int64
 	HibernateUntil                      int64
 	maxLoad                             LoadMap
@@ -114,10 +131,15 @@ type MigrationContext struct {
 	CriticalLoadHibernateSeconds        int64
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
+	CutOverExponentialBackoff           bool
+	ExponentialBackoffMaxInterval       int64
 	ForceNamedCutOverCommand            bool
+	ForceNamedPanicCommand              bool
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string
+	HooksHintOwner                      string
+	HooksHintToken                      string
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -157,6 +179,7 @@ type MigrationContext struct {
 	pointOfInterestTime                    time.Time
 	pointOfInterestTimeMutex               *sync.Mutex
 	CurrentLag                             int64
+	currentProgress                        uint64
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
@@ -179,8 +202,10 @@ type MigrationContext struct {
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
+	OriginalTableVirtualColumns      *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
 	GhostTableColumns                *sql.ColumnList
+	GhostTableVirtualColumns         *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
 	UniqueKey                        *sql.UniqueKey
 	SharedColumns                    *sql.ColumnList
@@ -196,7 +221,24 @@ type MigrationContext struct {
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
-	CanStopStreaming func() bool
+	Log Logger
+}
+
+type Logger interface {
+	Debug(args ...interface{})
+	Debugf(format string, args ...interface{})
+	Info(args ...interface{})
+	Infof(format string, args ...interface{})
+	Warning(args ...interface{}) error
+	Warningf(format string, args ...interface{}) error
+	Error(args ...interface{}) error
+	Errorf(format string, args ...interface{}) error
+	Errore(err error) error
+	Fatal(args ...interface{}) error
+	Fatalf(format string, args ...interface{}) error
+	Fatale(err error) error
+	SetLevel(level log.LogLevel)
+	SetPrintStackTrace(printStackTraceFlag bool)
 }
 
 type ContextConfig struct {
@@ -212,14 +254,9 @@ type ContextConfig struct {
 	}
 }
 
-var context *MigrationContext
-
-func init() {
-	context = newMigrationContext()
-}
-
-func newMigrationContext() *MigrationContext {
+func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
+		Uuid:                                uuid.NewV4().String(),
 		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
@@ -236,12 +273,8 @@ func newMigrationContext() *MigrationContext {
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
+		Log:                                 NewDefaultLogger(),
 	}
-}
-
-// GetMigrationContext
-func GetMigrationContext() *MigrationContext {
-	return context
 }
 
 func getSafeTableName(baseName string, suffix string) string {
@@ -349,6 +382,14 @@ func (this *MigrationContext) SetCutOverLockTimeoutSeconds(timeoutSeconds int64)
 	return nil
 }
 
+func (this *MigrationContext) SetExponentialBackoffMaxInterval(intervalSeconds int64) error {
+	if intervalSeconds < 2 {
+		return fmt.Errorf("Minimal maximum interval is 2sec. Timeout remains at %d", this.ExponentialBackoffMaxInterval)
+	}
+	this.ExponentialBackoffMaxInterval = intervalSeconds
+	return nil
+}
+
 func (this *MigrationContext) SetDefaultNumRetries(retries int64) {
 	this.throttleMutex.Lock()
 	defer this.throttleMutex.Unlock()
@@ -412,6 +453,20 @@ func (this *MigrationContext) MarkRowCopyEndTime() {
 	defer this.throttleMutex.Unlock()
 	this.RowCopyEndTime = time.Now()
 }
+
+func (this *MigrationContext) GetCurrentLagDuration() time.Duration {
+	return time.Duration(atomic.LoadInt64(&this.CurrentLag))
+}
+
+func (this *MigrationContext) GetProgressPct() float64 {
+	return math.Float64frombits(atomic.LoadUint64(&this.currentProgress))
+}
+
+func (this *MigrationContext) SetProgressPct(progressPct float64) {
+	atomic.StoreUint64(&this.currentProgress, math.Float64bits(progressPct))
+}
+
+// math.Float64bits([f=0..100])
 
 // GetTotalRowsCopied returns the accurate number of rows being copied (affected)
 // This is not exactly the same as the rows being iterated via chunks, but potentially close enough
@@ -541,6 +596,13 @@ func (this *MigrationContext) SetThrottleHTTP(throttleHTTP string) {
 	defer this.throttleHTTPMutex.Unlock()
 
 	this.throttleHTTP = throttleHTTP
+}
+
+func (this *MigrationContext) SetIgnoreHTTPErrors(ignoreHTTPErrors bool) {
+	this.throttleHTTPMutex.Lock()
+	defer this.throttleHTTPMutex.Unlock()
+
+	this.IgnoreHTTPErrors = ignoreHTTPErrors
 }
 
 func (this *MigrationContext) GetMaxLoad() LoadMap {
@@ -687,6 +749,13 @@ func (this *MigrationContext) ApplyCredentials() {
 		// Override
 		this.InspectorConnectionConfig.Password = this.CliPassword
 	}
+}
+
+func (this *MigrationContext) SetupTLS() error {
+	if this.UseTLS {
+		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate, this.TLSCertificate, this.TLSKey, this.TLSAllowInsecure)
+	}
+	return nil
 }
 
 // ReadConfigFile attempts to read the config file, if it exists

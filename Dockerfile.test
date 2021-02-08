@@ -1,0 +1,11 @@
+FROM golang:1.15.6
+LABEL maintainer="github@github.com"
+
+RUN apt-get update
+RUN apt-get install -y lsb-release
+RUN rm -rf /var/lib/apt/lists/*
+
+COPY . /go/src/github.com/github/gh-ost
+WORKDIR /go/src/github.com/github/gh-ost
+
+CMD ["script/test"]
