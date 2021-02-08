@@ -29,14 +29,14 @@ type Inspector struct {
 	db                  *gosql.DB
 	informationSchemaDb *gosql.DB
 	migrationContext    *base.MigrationContext
-  name                string
+	name                string
 }
 
 func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 	return &Inspector{
 		connectionConfig: migrationContext.InspectorConnectionConfig,
 		migrationContext: migrationContext,
-    name:             "inspector",
+		name:             "inspector",
 	}
 }
 
