@@ -57,7 +57,7 @@ type Applier struct {
 	singletonDB       *gosql.DB
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
-  name              string
+	name              string
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -65,7 +65,7 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 		connectionConfig:  migrationContext.ApplierConnectionConfig,
 		migrationContext:  migrationContext,
 		finishedMigrating: 0,
-    name:              "applier",
+		name:              "applier",
 	}
 }
 
