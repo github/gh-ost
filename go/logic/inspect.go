@@ -681,8 +681,31 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 	return uniqueKeys, nil
 }
 
+// rebuild columnRenameMap
+// handle the issue of data loss in the rename column scenario:
+// original column which need rename in the --alter not match the case in the metadata.
+// e.g.
+// original column `name`, the alter script is change `Name` `aliasName`,
+// after gh-ost finished, the value of original column `name` would be lost.
+func (this *Inspector) rebuildColumnRenameMap(originalColumns *sql.ColumnList, columnRenameMap map[string]string) map[string]string {
+	rebuiltColumnRenameMap := make(map[string]string)
+	for originalColumnk, ghostColumnv := range columnRenameMap {
+		for i, originalColumn := range originalColumns.Names() {
+			if strings.EqualFold(originalColumnk, originalColumn) {
+				rebuiltColumnRenameMap[originalColumn] = ghostColumnv
+				break
+			}
+			if i == originalColumns.Len()-1 {
+				rebuiltColumnRenameMap[originalColumnk] = ghostColumnv
+			}
+		}
+	}
+	return rebuiltColumnRenameMap
+}
+
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
 func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, originalVirtualColumns, ghostVirtualColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
+	columnRenameMap = this.rebuildColumnRenameMap(originalColumns, columnRenameMap)
 	sharedColumnNames := []string{}
 	for _, originalColumn := range originalColumns.Names() {
 		isSharedColumn := false
