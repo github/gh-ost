@@ -29,12 +29,14 @@ type Inspector struct {
 	db                  *gosql.DB
 	informationSchemaDb *gosql.DB
 	migrationContext    *base.MigrationContext
+	name                string
 }
 
 func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 	return &Inspector{
 		connectionConfig: migrationContext.InspectorConnectionConfig,
 		migrationContext: migrationContext,
+		name:             "inspector",
 	}
 }
 
@@ -206,7 +208,7 @@ func (this *Inspector) validateConnection() error {
 		return fmt.Errorf("MySQL replication length limited to 32 characters. See https://dev.mysql.com/doc/refman/5.7/en/assigning-passwords.html")
 	}
 
-	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext)
+	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
 	this.migrationContext.InspectorMySQLVersion = version
 	return err
 }
