@@ -1,5 +1,9 @@
 package client
 
+import (
+	"github.com/siddontang/go-mysql/utils"
+)
+
 func (c *Conn) writeCommand(command byte) error {
 	c.ResetSequence()
 
@@ -16,28 +20,20 @@ func (c *Conn) writeCommandBuf(command byte, arg []byte) error {
 	c.ResetSequence()
 
 	length := len(arg) + 1
-
-	data := make([]byte, length+4)
-
+	data := utils.ByteSliceGet(length + 4)
 	data[4] = command
 
 	copy(data[5:], arg)
 
-	return c.WritePacket(data)
+	err := c.WritePacket(data)
+
+	utils.ByteSlicePut(data)
+
+	return err
 }
 
 func (c *Conn) writeCommandStr(command byte, arg string) error {
-	c.ResetSequence()
-
-	length := len(arg) + 1
-
-	data := make([]byte, length+4)
-
-	data[4] = command
-
-	copy(data[5:], arg)
-
-	return c.WritePacket(data)
+	return c.writeCommandBuf(command, utils.StringToByteSlice(arg))
 }
 
 func (c *Conn) writeCommandUint32(command byte, arg uint32) error {

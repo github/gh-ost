@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juju/errors"
+	"github.com/pingcap/errors"
 	. "github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/packet"
 )
@@ -54,7 +54,12 @@ func Connect(addr string, user string, password string, dbName string, options .
 		return nil, errors.Trace(err)
 	}
 
-	c.Conn = packet.NewConn(conn)
+	if c.tlsConfig != nil {
+		c.Conn = packet.NewTLSConn(conn)
+	} else {
+		c.Conn = packet.NewConn(conn)
+	}
+
 	c.user = user
 	c.password = password
 	c.db = dbName
@@ -112,13 +117,13 @@ func (c *Conn) Ping() error {
 	return nil
 }
 
-// use default SSL
+// UseSSL: use default SSL
 // pass to options when connect
 func (c *Conn) UseSSL(insecureSkipVerify bool) {
 	c.tlsConfig = &tls.Config{InsecureSkipVerify: insecureSkipVerify}
 }
 
-// use user-specified TLS config
+// SetTLSConfig: use user-specified TLS config
 // pass to options when connect
 func (c *Conn) SetTLSConfig(config *tls.Config) {
 	c.tlsConfig = config
