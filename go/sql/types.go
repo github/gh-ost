@@ -52,9 +52,10 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 		}
 
 		if this.Type == BinaryColumnType {
-			size := len([]byte(arg.(string)))
+			arg2Bytes := []byte(arg.(string))
+			size := len(arg2Bytes)
 			if uint(size) < this.BinaryOctetLength {
-				buf := bytes.NewBuffer([]byte(arg.(string)))
+				buf := bytes.NewBuffer(arg2Bytes)
 				for i := uint(0); i < (this.BinaryOctetLength - uint(size)); i++ {
 					buf.Write([]byte{0})
 				}
