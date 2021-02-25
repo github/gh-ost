@@ -21,8 +21,7 @@ import (
 	"github.com/github/gh-ost/go/sql"
 	"github.com/outbrain/golib/log"
 
-	"gopkg.in/gcfg.v1"
-	gcfgscanner "gopkg.in/gcfg.v1/scanner"
+	"github.com/go-ini/ini"
 )
 
 // RowsEstimateMethod is the type of row number estimation
@@ -766,10 +765,25 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if this.ConfigFile == "" {
 		return nil
 	}
-	gcfg.RelaxedParserMode = true
-	gcfgscanner.RelaxedScannerMode = true
-	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
-		return fmt.Errorf("Error reading config file %s. Details: %s", this.ConfigFile, err.Error())
+	cfg, err := ini.Load(this.ConfigFile)
+	if err != nil {
+		return err
+	}
+
+	this.config.Client.User = cfg.Section("client").Key("user").String()
+	this.config.Client.Password = cfg.Section("client").Key("password").String()
+
+	this.config.Osc.Chunk_Size, err = cfg.Section("osc").Key("chunk_size").Int64()
+	if err != nil {
+		return fmt.Errorf("Unable to read osc chunk size: %s", err.Error())
+	}
+
+	this.config.Osc.Max_Load = cfg.Section("osc").Key("max_load").String()
+	this.config.Osc.Replication_Lag_Query = cfg.Section("osc").Key("replication_lag_query").String()
+
+	this.config.Osc.Max_Lag_Millis, err = cfg.Section("osc").Key("max_lag_millis").Int64()
+	if err != nil {
+		return fmt.Errorf("Unable to read max lag millis: %s", err.Error())
 	}
 
 	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull

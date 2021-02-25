@@ -1,3 +1,6 @@
+# github.com/go-ini/ini v1.62.0
+## explicit
+github.com/go-ini/ini
 # github.com/go-sql-driver/mysql v1.5.0
 ## explicit
 github.com/go-sql-driver/mysql
@@ -27,6 +30,8 @@ github.com/siddontang/go-mysql/mysql
 github.com/siddontang/go-mysql/packet
 github.com/siddontang/go-mysql/replication
 github.com/siddontang/go-mysql/utils
+# github.com/smartystreets/goconvey v1.6.4
+## explicit
 # golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83
 ## explicit
 golang.org/x/crypto/ssh/terminal
@@ -50,12 +55,5 @@ golang.org/x/text/encoding/simplifiedchinese
 golang.org/x/text/transform
 # gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 ## explicit
-# gopkg.in/gcfg.v1 v1.2.3
+# gopkg.in/ini.v1 v1.62.0
 ## explicit
-gopkg.in/gcfg.v1
-gopkg.in/gcfg.v1/scanner
-gopkg.in/gcfg.v1/token
-gopkg.in/gcfg.v1/types
-# gopkg.in/warnings.v0 v0.1.2
-## explicit
-gopkg.in/warnings.v0
