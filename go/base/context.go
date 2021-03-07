@@ -52,6 +52,7 @@ const (
 const (
 	HTTPStatusOK       = 200
 	MaxEventsBatchSize = 1000
+	ETAUnknown         = math.MinInt64
 )
 
 var (
@@ -268,6 +269,7 @@ func NewMigrationContext() *MigrationContext {
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
 		DMLBatchSize:                        10,
+		etaNanoseonds:                       ETAUnknown,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
@@ -485,6 +487,9 @@ func (this *MigrationContext) SetETADuration(etaDuration time.Duration) {
 
 func (this *MigrationContext) GetETASeconds() int64 {
 	nano := atomic.LoadInt64(&this.etaNanoseonds)
+	if nano < 0 {
+		return ETAUnknown
+	}
 	return nano / int64(time.Second)
 }
 
