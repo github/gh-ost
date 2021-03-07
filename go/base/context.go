@@ -182,6 +182,7 @@ type MigrationContext struct {
 	lastHeartbeatOnChangelogMutex          *sync.Mutex
 	CurrentLag                             int64
 	currentProgress                        uint64
+	etaNanoseonds                          int64
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
@@ -472,6 +473,14 @@ func (this *MigrationContext) GetProgressPct() float64 {
 
 func (this *MigrationContext) SetProgressPct(progressPct float64) {
 	atomic.StoreUint64(&this.currentProgress, math.Float64bits(progressPct))
+}
+
+func (this *MigrationContext) GetETADuration() time.Duration {
+	return time.Duration(atomic.LoadInt64(&this.etaNanoseonds))
+}
+
+func (this *MigrationContext) SetETADuration(etaDuration time.Duration) {
+	atomic.StoreInt64(&this.etaNanoseonds, etaDuration.Nanoseconds())
 }
 
 // math.Float64bits([f=0..100])
