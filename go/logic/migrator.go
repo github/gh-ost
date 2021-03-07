@@ -939,7 +939,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	}
 
 	var etaSeconds float64 = math.MaxFloat64
-	var etaDuration = time.Duration(math.MaxInt64)
+	var etaDuration = time.Duration(math.MinInt64)
 	if progressPct >= 100.0 {
 		etaDuration = 0
 	} else if progressPct >= 0.1 {
@@ -957,7 +957,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	switch etaDuration {
 	case 0:
 		eta = "due"
-	case time.Duration(math.MaxInt64):
+	case time.Duration(math.MinInt64):
 		eta = "N/A"
 	default:
 		eta = base.PrettifyDurationOutput(etaDuration)

@@ -483,6 +483,11 @@ func (this *MigrationContext) SetETADuration(etaDuration time.Duration) {
 	atomic.StoreInt64(&this.etaNanoseonds, etaDuration.Nanoseconds())
 }
 
+func (this *MigrationContext) GetETASeconds() int64 {
+	nano := atomic.LoadInt64(&this.etaNanoseonds)
+	return nano / int64(time.Second)
+}
+
 // math.Float64bits([f=0..100])
 
 // GetTotalRowsCopied returns the accurate number of rows being copied (affected)
