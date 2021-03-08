@@ -396,7 +396,7 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	}
 	for _, column := range uniqueKeyColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal])
+		arg := column.convertArg(args[tableOrdinal], true)
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 	databaseName = EscapeName(databaseName)
@@ -433,7 +433,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 
 	for _, column := range sharedColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal])
+		arg := column.convertArg(args[tableOrdinal], false)
 		sharedArgs = append(sharedArgs, arg)
 	}
 
@@ -481,13 +481,13 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 
 	for _, column := range sharedColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(valueArgs[tableOrdinal])
+		arg := column.convertArg(valueArgs[tableOrdinal], false)
 		sharedArgs = append(sharedArgs, arg)
 	}
 
 	for _, column := range uniqueKeyColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(whereArgs[tableOrdinal])
+		arg := column.convertArg(whereArgs[tableOrdinal], true)
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 
