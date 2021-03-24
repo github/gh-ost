@@ -212,9 +212,11 @@ type MigrationContext struct {
 	ColumnRenameMap                  map[string]string
 	DroppedColumnsMap                map[string]bool
 	MappedSharedColumns              *sql.ColumnList
+	MigrationDatabases               []string
 	MigrationRangeMinValues          *sql.ColumnValues
 	MigrationRangeMaxValues          *sql.ColumnValues
 	Iteration                        int64
+	MigrationIterationDatabaseIdx    int
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 	ForceTmpTableName                string
@@ -323,6 +325,12 @@ func (this *MigrationContext) GetChangelogTableName() string {
 	} else {
 		return getSafeTableName(this.OriginalTableName, "ghc")
 	}
+}
+
+// GetChangelogTableName generates the name of changelog table, based on original table name
+// or a given table name.
+func (this *MigrationContext) GetMigrationIterationDatabase() string {
+	return this.MigrationDatabases[this.MigrationIterationDatabaseIdx]
 }
 
 // GetVoluntaryLockName returns a name of a voluntary lock to be used throughout

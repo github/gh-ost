@@ -8,6 +8,8 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"github.com/ngaut/log"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +28,11 @@ type BinlogEventListener struct {
 	onDmlEvent   func(event *binlog.BinlogDMLEvent) error
 }
 
+type BinlogTreeEventListener struct {
+	async      bool
+	onDmlEvent func(event *binlog.BinlogDMLEvent) error
+}
+
 const (
 	EventsChannelBufferSize       = 1
 	ReconnectStreamerSleepSeconds = 5
@@ -38,7 +45,7 @@ type EventsStreamer struct {
 	db                       *gosql.DB
 	migrationContext         *base.MigrationContext
 	initialBinlogCoordinates *mysql.BinlogCoordinates
-	listeners                [](*BinlogEventListener)
+	listeners                [](interface{})
 	listenersMutex           *sync.Mutex
 	eventsChannel            chan *binlog.BinlogEntry
 	binlogReader             *binlog.GoMySQLReader
@@ -49,7 +56,7 @@ func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer 
 	return &EventsStreamer{
 		connectionConfig: migrationContext.InspectorConnectionConfig,
 		migrationContext: migrationContext,
-		listeners:        [](*BinlogEventListener){},
+		listeners:        [](interface{}){},
 		listenersMutex:   &sync.Mutex{},
 		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
 		name:             "streamer",
@@ -79,6 +86,21 @@ func (this *EventsStreamer) AddListener(
 	return nil
 }
 
+// AddListener registers a new tree listener
+func (this *EventsStreamer) AddTreeListener(
+	async bool, onDmlEvent func(event *binlog.BinlogDMLEvent) error) (err error) {
+
+	this.listenersMutex.Lock()
+	defer this.listenersMutex.Unlock()
+
+	listener := &BinlogTreeEventListener{
+		async:      async,
+		onDmlEvent: onDmlEvent,
+	}
+	this.listeners = append(this.listeners, listener)
+	return nil
+}
+
 // notifyListeners will notify relevant listeners with given DML event. Only
 // listeners registered for changes on the table on which the DML operates are notified.
 func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) {
@@ -86,19 +108,38 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 	defer this.listenersMutex.Unlock()
 
 	for _, listener := range this.listeners {
-		listener := listener
-		if strings.ToLower(listener.databaseName) != strings.ToLower(binlogEvent.DatabaseName) {
-			continue
-		}
-		if strings.ToLower(listener.tableName) != strings.ToLower(binlogEvent.TableName) {
-			continue
-		}
-		if listener.async {
-			go func() {
-				listener.onDmlEvent(binlogEvent)
-			}()
-		} else {
-			listener.onDmlEvent(binlogEvent)
+		switch l := listener.(type) {
+		case *BinlogEventListener:
+			if strings.ToLower(l.databaseName) != strings.ToLower(binlogEvent.DatabaseName) {
+				continue
+			}
+			if strings.ToLower(l.tableName) != strings.ToLower(binlogEvent.TableName) {
+				continue
+			}
+			if l.async {
+				go func() {
+					l.onDmlEvent(binlogEvent)
+				}()
+			} else {
+				l.onDmlEvent(binlogEvent)
+			}
+		case *BinlogTreeEventListener:
+			if matched, _ := regexp.MatchString(`^webapp_\d+$`, binlogEvent.DatabaseName); !matched {
+				continue
+			}
+			if "tree" != strings.ToLower(binlogEvent.TableName) {
+				continue
+			}
+			if l.async {
+				go func() {
+					l.onDmlEvent(binlogEvent)
+				}()
+			} else {
+				l.onDmlEvent(binlogEvent)
+			}
+			log.Info(fmt.Sprintf("Detected event for %s %s", binlogEvent.DatabaseName, binlogEvent.TableName))
+		default:
+			log.Error("Did not expect this listener")
 		}
 	}
 }

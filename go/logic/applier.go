@@ -8,6 +8,8 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"github.com/ngaut/log"
+	"regexp"
 	"sync/atomic"
 	"time"
 
@@ -372,6 +374,7 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 			return err
 		}
 	}
+	this.migrationContext.MigrationRangeMinValues = sql.ToColumnValues([]interface{}{0})
 	this.migrationContext.Log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
 
 	err = rows.Err()
@@ -395,7 +398,32 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 			return err
 		}
 	}
+	this.migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{1000000})
 	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+
+	err = rows.Err()
+	return err
+}
+
+// ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
+func (this *Applier) FindDatabases() error {
+	this.migrationContext.Log.Debugf("Finding DBS to copy")
+	query := "show databases"
+	rows, err := this.db.Query(query)
+	if err != nil {
+		return err
+	}
+	this.migrationContext.MigrationDatabases = []string{}
+	for rows.Next() {
+		var db string
+		if err = rows.Scan(&db); err != nil {
+			return err
+		}
+		if matched, _ := regexp.MatchString(`webapp_\d+`, db); matched {
+			this.migrationContext.Log.Debugf("Found table %s", db)
+			this.migrationContext.MigrationDatabases = append(this.migrationContext.MigrationDatabases, db)
+		}
+	}
 
 	err = rows.Err()
 	return err
@@ -407,6 +435,9 @@ func (this *Applier) ReadMigrationRangeValues() error {
 		return err
 	}
 	if err := this.ReadMigrationMaxValues(this.migrationContext.UniqueKey); err != nil {
+		return err
+	}
+	if err := this.FindDatabases(); err != nil {
 		return err
 	}
 	return nil
@@ -426,10 +457,11 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		if i == 1 {
 			buildFunc = sql.BuildUniqueKeyRangeEndPreparedQueryViaTemptable
 		}
+		withoutOrgId := sql.RemoveOrgIdFromUniqueKeyColumns(this.migrationContext.UniqueKey.Columns)
 		query, explodedArgs, err := buildFunc(
-			this.migrationContext.DatabaseName,
+			this.migrationContext.GetMigrationIterationDatabase(),
 			this.migrationContext.OriginalTableName,
-			&this.migrationContext.UniqueKey.Columns,
+			&withoutOrgId,
 			this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 			this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
 			atomic.LoadInt64(&this.migrationContext.ChunkSize),
@@ -441,12 +473,13 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		}
 		rows, err := this.db.Query(query, explodedArgs...)
 		if err != nil {
-			return hasFurtherRange, err
+			log.Debugf("Error in CalculateNextIterationRangeEndValues. Query is %s", query)
+			return hasFurtherRange, sql.Wrap(err)
 		}
-		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
+		iterationRangeMaxValues := sql.NewColumnValues(withoutOrgId.Len())
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
-				return hasFurtherRange, err
+				return hasFurtherRange, sql.Wrap(err)
 			}
 			hasFurtherRange = true
 		}
@@ -454,9 +487,15 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			return hasFurtherRange, err
 		}
 		if hasFurtherRange {
+			this.migrationContext.Log.Debugf("We are still iterating (%d %d) %d", this.migrationContext.MigrationIterationRangeMinValues.AbstractValues()[0], iterationRangeMaxValues.AbstractValues()[0], this.migrationContext.GetIteration())
 			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
 			return hasFurtherRange, nil
 		}
+	}
+	if this.migrationContext.MigrationIterationDatabaseIdx < len(this.migrationContext.MigrationDatabases)-1 {
+		this.migrationContext.MigrationIterationDatabaseIdx += 1
+		this.migrationContext.MigrationIterationRangeMinValues = nil
+		return this.CalculateNextIterationRangeEndValues()
 	}
 	this.migrationContext.Log.Debugf("Iteration complete: no further range to iterate")
 	return hasFurtherRange, nil
@@ -468,14 +507,15 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&this.migrationContext.ChunkSize)
 
+	withoutOrgId := sql.RemoveOrgIdFromUniqueKeyColumns(this.migrationContext.UniqueKey.Columns)
 	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
-		this.migrationContext.DatabaseName,
+		this.migrationContext.GetMigrationIterationDatabase(),
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.GetGhostTableName(),
 		this.migrationContext.SharedColumns.Names(),
 		this.migrationContext.MappedSharedColumns.Names(),
 		this.migrationContext.UniqueKey.Name,
-		&this.migrationContext.UniqueKey.Columns,
+		&withoutOrgId,
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
 		this.migrationContext.GetIteration() == 0,

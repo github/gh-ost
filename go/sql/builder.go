@@ -7,6 +7,8 @@ package sql
 
 import (
 	"fmt"
+	"github.com/ngaut/log"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -78,6 +80,7 @@ func BuildEqualsComparison(columns []string, values []string) (result string, er
 		return "", fmt.Errorf("Got 0 columns in GetEqualsComparison")
 	}
 	if len(columns) != len(values) {
+		fmt.Println(GetStackTrace())
 		return "", fmt.Errorf("Got %d columns but %d values in GetEqualsComparison", len(columns), len(values))
 	}
 	comparisons := []string{}
@@ -115,6 +118,7 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 		}
 		setTokens = append(setTokens, setToken)
 	}
+	setTokens = append([]string{"orgId=?"}, setTokens...)
 	return strings.Join(setTokens, ", "), nil
 }
 
@@ -123,10 +127,10 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in GetRangeComparison")
 	}
 	if len(columns) != len(values) {
-		return "", explodedArgs, fmt.Errorf("Got %d columns but %d values in GetEqualsComparison", len(columns), len(values))
+		return "", explodedArgs, Wrap(fmt.Errorf("Got %d columns but %d values in GetEqualsComparison", len(columns), len(values)))
 	}
 	if len(columns) != len(args) {
-		return "", explodedArgs, fmt.Errorf("Got %d columns but %d args in GetEqualsComparison", len(columns), len(args))
+		return "", explodedArgs, Wrap(fmt.Errorf("Got %d columns but %d args in GetEqualsComparison", len(columns), len(args)))
 	}
 	includeEquals := false
 	if comparisonSign == LessThanOrEqualsComparisonSign {
@@ -190,12 +194,15 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	for i := range mappedSharedColumns {
 		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
 	}
+	mappedSharedColumns = append([]string{"orgId"}, mappedSharedColumns...)
 	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
 
 	sharedColumns = duplicateNames(sharedColumns)
 	for i := range sharedColumns {
 		sharedColumns[i] = EscapeName(sharedColumns[i])
 	}
+	orgId := applyOrgIdR(databaseName)
+	sharedColumns = append([]string{fmt.Sprintf("\"%s\"", orgId)}, sharedColumns...)
 	sharedColumnsListing := strings.Join(sharedColumns, ", ")
 
 	uniqueKey = EscapeName(uniqueKey)
@@ -222,7 +229,7 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
       (select %s from %s.%s force index (%s)
         where (%s and %s) %s
       )
-    `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
+    `, "webapp", originalTableName, "webapp", ghostTableName, mappedSharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
 		rangeStartComparison, rangeEndComparison, transactionalClause)
 	return result, explodedArgs, nil
@@ -232,6 +239,25 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
 	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
+}
+
+func filter(ss []Column, test func(Column) bool) (ret []Column) {
+	for _, s := range ss {
+		if test(s) {
+			ret = append(ret, s)
+		}
+	}
+	return
+}
+
+func RemoveOrgIdFromUniqueKeyColumns(uniqueKeyColumns ColumnList) ColumnList {
+	newCol := filter(uniqueKeyColumns.columns, func(c Column) bool { return c.Name != "orgId" })
+	newOrd := uniqueKeyColumns.Ordinals
+	delete(newOrd, "orgId")
+	return ColumnList{
+		columns:  newCol,
+		Ordinals: newOrd,
+	}
 }
 
 func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
@@ -245,12 +271,13 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 	if includeRangeStartValues {
 		startRangeComparisonSign = GreaterThanOrEqualsComparisonSign
 	}
-	rangeStartComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeStartArgs, startRangeComparisonSign)
+	withoutOrgId := RemoveOrgIdFromUniqueKeyColumns(*uniqueKeyColumns)
+	rangeStartComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(&withoutOrgId, rangeStartArgs, startRangeComparisonSign)
 	if err != nil {
 		return "", explodedArgs, err
 	}
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
-	rangeEndComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeEndArgs, LessThanOrEqualsComparisonSign)
+	rangeEndComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(&withoutOrgId, rangeEndArgs, LessThanOrEqualsComparisonSign)
 	if err != nil {
 		return "", explodedArgs, err
 	}
@@ -364,13 +391,16 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 	tableName = EscapeName(tableName)
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
-	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
+	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumnNames)-1, len(uniqueKeyColumnNames)-1)
 	for i, column := range uniqueKeyColumns.Columns() {
+		if column.Name == "orgId" {
+			continue
+		}
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
-			uniqueKeyColumnOrder[i] = fmt.Sprintf("concat(%s) %s", uniqueKeyColumnNames[i], order)
+			uniqueKeyColumnOrder[0] = fmt.Sprintf("concat(%s) %s", uniqueKeyColumnNames[i], order)
 		} else {
-			uniqueKeyColumnOrder[i] = fmt.Sprintf("%s %s", uniqueKeyColumnNames[i], order)
+			uniqueKeyColumnOrder[0] = fmt.Sprintf("%s %s", uniqueKeyColumnNames[i], order)
 		}
 	}
 	query := fmt.Sprintf(`
@@ -380,10 +410,11 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 				order by
 					%s
 				limit 1
-    `, databaseName, tableName, strings.Join(uniqueKeyColumnNames, ", "),
+    `, databaseName, tableName, strings.Join(uniqueKeyColumnNames[1:], ", "),
 		databaseName, tableName,
 		strings.Join(uniqueKeyColumnOrder, ", "),
 	)
+	log.Warn("Query is ", query)
 	return query, nil
 }
 
@@ -395,9 +426,13 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 		return result, uniqueKeyArgs, fmt.Errorf("No unique key columns found in BuildDMLDeleteQuery")
 	}
 	for _, column := range uniqueKeyColumns.Columns() {
-		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal], true)
-		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+		if column.Name == "orgId" {
+			uniqueKeyArgs = append(uniqueKeyArgs, applyOrgIdR(databaseName))
+		} else {
+			tableOrdinal := tableColumns.Ordinals[column.Name]
+			arg := column.convertArg(args[tableOrdinal], true)
+			uniqueKeyArgs = append(uniqueKeyArgs, arg)
+		}
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
@@ -406,16 +441,26 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 		return result, uniqueKeyArgs, err
 	}
 	result = fmt.Sprintf(`
-			delete /* gh-ost %s.%s */
+			delete /* gh-ost webapp.%s */
 				from
-					%s.%s
+					webapp.%s
 				where
 					%s
-		`, databaseName, tableName,
-		databaseName, tableName,
+		`, tableName,
+		tableName,
 		equalsComparison,
 	)
 	return result, uniqueKeyArgs, nil
+}
+
+var orgIdR, _ = regexp.Compile(`webapp_(?P<orgId>\d+)`)
+
+func applyOrgIdR(s string) string {
+	matches := orgIdR.FindStringSubmatch(s)
+	if len(matches) != 2 {
+		log.Error(fmt.Sprint("Tried to get orgId from database %s", s))
+	}
+	return matches[1]
 }
 
 func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
@@ -437,20 +482,20 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 		sharedArgs = append(sharedArgs, arg)
 	}
 
-	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names())
+	mappedSharedColumnNames := append([]string{"orgId"}, duplicateNames(mappedSharedColumns.Names())...)
 	for i := range mappedSharedColumnNames {
 		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
 	}
-	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
+	preparedValues := append([]string{applyOrgIdR(databaseName)}, buildColumnsPreparedValues(mappedSharedColumns)...)
 
 	result = fmt.Sprintf(`
-			replace /* gh-ost %s.%s */ into
-				%s.%s
+			replace /* gh-ost webapp.%s */ into
+				webapp.%s
 					(%s)
 				values
 					(%s)
-		`, databaseName, tableName,
-		databaseName, tableName,
+		`, tableName,
+		tableName,
 		strings.Join(mappedSharedColumnNames, ", "),
 		strings.Join(preparedValues, ", "),
 	)
@@ -467,9 +512,10 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	if !sharedColumns.IsSubsetOf(tableColumns) {
 		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("shared columns is not a subset of table columns in BuildDMLUpdateQuery")
 	}
-	if !uniqueKeyColumns.IsSubsetOf(sharedColumns) {
-		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("unique key columns is not a subset of shared columns in BuildDMLUpdateQuery")
-	}
+	/*
+		if !uniqueKeyColumns.IsSubsetOf(sharedColumns) {
+			return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("unique key columns is not a subset of shared columns in BuildDMLUpdateQuery")
+		}*/
 	if sharedColumns.Len() == 0 {
 		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("No shared columns found in BuildDMLUpdateQuery")
 	}
@@ -484,11 +530,16 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 		arg := column.convertArg(valueArgs[tableOrdinal], false)
 		sharedArgs = append(sharedArgs, arg)
 	}
+	sharedArgs = append([]interface{}{applyOrgIdR(databaseName)}, sharedArgs...)
 
 	for _, column := range uniqueKeyColumns.Columns() {
-		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(whereArgs[tableOrdinal], true)
-		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+		if column.Name == "orgId" {
+			uniqueKeyArgs = append(uniqueKeyArgs, applyOrgIdR(databaseName))
+		} else {
+			tableOrdinal := tableColumns.Ordinals[column.Name]
+			arg := column.convertArg(whereArgs[tableOrdinal], true)
+			uniqueKeyArgs = append(uniqueKeyArgs, arg)
+		}
 	}
 
 	setClause, err := BuildSetPreparedClause(mappedSharedColumns)
@@ -498,14 +549,14 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
 	result = fmt.Sprintf(`
- 			update /* gh-ost %s.%s */
- 					%s.%s
+ 			update /* gh-ost webapp.%s */
+ 					webapp.%s
 				set
 					%s
 				where
  					%s
- 		`, databaseName, tableName,
-		databaseName, tableName,
+ 		`, tableName,
+		tableName,
 		setClause,
 		equalsComparison,
 	)

@@ -41,6 +41,7 @@ func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 }
 
 func (this *Inspector) InitDBConnections() (err error) {
+	this.migrationContext.Log.Debugf("Begin InitDBConnections")
 	inspectorUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, inspectorUri); err != nil {
 		return err
@@ -50,6 +51,7 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if this.informationSchemaDb, _, err = mysql.GetDB(this.migrationContext.Uuid, informationSchemaUri); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("Validating connection")
 
 	if err := this.validateConnection(); err != nil {
 		return err
@@ -61,12 +63,16 @@ func (this *Inspector) InitDBConnections() (err error) {
 			this.connectionConfig.ImpliedKey = impliedKey
 		}
 	}
+	this.migrationContext.Log.Debugf("Validating grants")
 	if err := this.validateGrants(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("Validated grants")
+
 	if err := this.validateBinlogs(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("Apply binlog format")
 	if err := this.applyBinlogFormat(); err != nil {
 		return err
 	}
@@ -186,6 +192,9 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	}
 
 	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
+		if column.Name == "orgId" {
+			continue
+		}
 		if this.migrationContext.MappedSharedColumns.HasTimezoneConversion(column.Name) {
 			return fmt.Errorf("No support at this time for converting a column from DATETIME to TIMESTAMP that is also part of the chosen unique key. Column: %s, key: %s", column.Name, this.migrationContext.UniqueKey.Name)
 		}
@@ -680,6 +689,13 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 	// the ALTER is on the name itself...
 	for _, originalUniqueKey := range originalUniqueKeys {
 		for _, ghostUniqueKey := range ghostUniqueKeys {
+			// HACK from andrew use ghostUniqueKey
+			this.migrationContext.Log.Debug("Original unique key", originalUniqueKey)
+			this.migrationContext.Log.Debug("Original c0", originalUniqueKey.Columns.Columns()[0])
+			this.migrationContext.Log.Debug("Ghost unique key", ghostUniqueKey)
+			this.migrationContext.Log.Debug("Ghost c0", ghostUniqueKey.Columns.Columns()[0])
+			// this.migrationContext.Log.Debug("Ghost c1", ghostUniqueKey.Columns.Columns()[1])
+			uniqueKeys = append(uniqueKeys, ghostUniqueKey)
 			if originalUniqueKey.Columns.EqualsByNames(&ghostUniqueKey.Columns) {
 				uniqueKeys = append(uniqueKeys, originalUniqueKey)
 			}

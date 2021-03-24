@@ -7,6 +7,7 @@ package logic
 
 import (
 	"fmt"
+	"github.com/ngaut/log"
 	"io"
 	"math"
 	"os"
@@ -314,6 +315,8 @@ func (this *Migrator) createFlagFiles() (err error) {
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
 	this.migrationContext.Log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	this.migrationContext.Log.Infof("HERE")
+	this.migrationContext.Log.Debugf("DEBUG")
 	this.migrationContext.StartTime = time.Now()
 	if this.migrationContext.Hostname, err = os.Hostname(); err != nil {
 		return err
@@ -333,6 +336,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.validateStatement(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("338")
 
 	// After this point, we'll need to teardown anything that's been started
 	//   so we don't leave things hanging around
@@ -341,6 +345,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("346")
 	if err := this.initiateStreaming(); err != nil {
 		return err
 	}
@@ -351,6 +356,7 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
+	this.migrationContext.Log.Infof("finished creating flag files")
 	initialLag, _ := this.inspector.getReplicationLag()
 	this.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
 	<-this.ghostTableMigrated
@@ -375,15 +381,19 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.countTableRows(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("Adding DML")
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("Reading range")
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("initiating throttler")
 	if err := this.initiateThrottler(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("on before row")
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
@@ -721,16 +731,19 @@ func (this *Migrator) initiateServer() (err error) {
 // - heartbeat
 // When `--allow-on-master` is supplied, the inspector is actually the master.
 func (this *Migrator) initiateInspector() (err error) {
+	this.migrationContext.Log.Debugf("729")
 	this.inspector = NewInspector(this.migrationContext)
 	if err := this.inspector.InitDBConnections(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("733")
 	if err := this.inspector.ValidateOriginalTable(); err != nil {
 		return err
 	}
 	if err := this.inspector.InspectOriginalTable(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Debugf("739")
 	// So far so good, table is accessible and valid.
 	// Let's get master connection config
 	if this.migrationContext.AssumeMasterHostname == "" {
@@ -769,6 +782,7 @@ func (this *Migrator) initiateInspector() (err error) {
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
 		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", this.migrationContext.InspectorConnectionConfig, this.migrationContext.ApplierConnectionConfig)
 	}
+	this.migrationContext.Log.Debugf("777")
 	if err := this.inspector.validateLogSlaveUpdates(); err != nil {
 		return err
 	}
@@ -1023,10 +1037,8 @@ func (this *Migrator) initiateStreaming() error {
 // addDMLEventsListener begins listening for binlog events on the original table,
 // and creates & enqueues a write task per such event.
 func (this *Migrator) addDMLEventsListener() error {
-	err := this.eventsStreamer.AddListener(
+	err := this.eventsStreamer.AddTreeListener(
 		false,
-		this.migrationContext.DatabaseName,
-		this.migrationContext.OriginalTableName,
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
 			this.applyEventsQueue <- newApplyEventStructByDML(dmlEvent)
 			return nil
@@ -1113,6 +1125,10 @@ func (this *Migrator) iterateChunks() error {
 			hasFurtherRange := false
 			if err := this.retryOperation(func() (e error) {
 				hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
+				//this.migrationContext.Log.Debugf("We are still iterating (%d %d) %d", this.migrationContext.MigrationIterationRangeMinValues.AbstractValues()[0], this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues()[0], this.migrationContext.GetIteration())
+				if e != nil {
+					log.Debug("We have error trying to calculate next iteration", e)
+				}
 				return e
 			}); err != nil {
 				return terminateRowIteration(err)
@@ -1136,6 +1152,7 @@ func (this *Migrator) iterateChunks() error {
 				}
 				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
+					log.Debug("We have error trying to applying this iteration", err)
 					return err // wrapping call will retry
 				}
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
