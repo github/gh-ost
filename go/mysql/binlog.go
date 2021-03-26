@@ -1,5 +1,5 @@
 /*
-   Copyright 2015 Shlomi Noach, courtesy Booking.com
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -28,12 +28,12 @@ const (
 	RelayLog
 )
 
-// BinlogCoordinates described binary log coordinates in the form of log file & log position or GTID set.
+// BinlogCoordinates described binary log coordinates in the form of a GTID set and/or log file & log position.
 type BinlogCoordinates struct {
-	ExecutedGTIDSet gomysql.GTIDSet
-	LogFile         string
-	LogPos          int64
-	Type            BinlogType
+	GTIDSet gomysql.GTIDSet
+	LogFile string
+	LogPos  int64
+	Type    BinlogType
 }
 
 // ParseInstanceKey will parse an InstanceKey from a string representation such as 127.0.0.1:3306
@@ -52,6 +52,10 @@ func ParseBinlogCoordinates(logFileLogPos string) (*BinlogCoordinates, error) {
 
 // DisplayString returns a user-friendly string representation of these coordinates
 func (this *BinlogCoordinates) DisplayString() string {
+	if this.GTIDSet != nil {
+		return this.GTIDSet.String()
+
+	}
 	return fmt.Sprintf("%s:%d", this.LogFile, this.LogPos)
 }
 

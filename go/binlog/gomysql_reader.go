@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -65,7 +65,7 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 	this.migrationContext.Log.Infof("Connecting binlog streamer at %+v", this.currentCoordinates)
 	// Start sync with specified GTID set or binlog file and position
 	if this.migrationContext.UseGTID {
-		this.binlogStreamer, err = this.binlogSyncer.StartSyncGTID(this.currentCoordinates.ExecutedGTIDSet)
+		this.binlogStreamer, err = this.binlogSyncer.StartSyncGTID(this.currentCoordinates.GTIDSet)
 	} else {
 		this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{this.currentCoordinates.LogFile, uint32(this.currentCoordinates.LogPos)})
 	}

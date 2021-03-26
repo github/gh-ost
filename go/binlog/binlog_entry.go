@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -22,7 +22,7 @@ type BinlogEntry struct {
 // NewBinlogEntry creates an empty, ready to go BinlogEntry object
 func NewBinlogEntry(logFile string, logPos uint64, gtidSet gomysql.GTIDSet) *BinlogEntry {
 	binlogEntry := &BinlogEntry{
-		Coordinates: mysql.BinlogCoordinates{LogFile: logFile, LogPos: int64(logPos), ExecutedGTIDSet: gtidSet},
+		Coordinates: mysql.BinlogCoordinates{LogFile: logFile, LogPos: int64(logPos), GTIDSet: gtidSet},
 	}
 	return binlogEntry
 }
@@ -37,7 +37,7 @@ func NewBinlogEntryAt(coordinates mysql.BinlogCoordinates) *BinlogEntry {
 
 // Duplicate creates and returns a new binlog entry, with some of the attributes pre-assigned
 func (this *BinlogEntry) Duplicate() *BinlogEntry {
-	return NewBinlogEntry(this.Coordinates.LogFile, uint64(this.Coordinates.LogPos), this.Coordinates.ExecutedGTIDSet)
+	return NewBinlogEntry(this.Coordinates.LogFile, uint64(this.Coordinates.LogPos), this.Coordinates.GTIDSet)
 }
 
 // String() returns a string representation of this binlog entry
