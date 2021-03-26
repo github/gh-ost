@@ -14,7 +14,7 @@ import (
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
-// BinlogCoordinates described binary log coordinates in the form of log file & log position.
+// BinlogCoordinates described binary log coordinates in the form of log file & log position or GTID set.
 type BinlogCoordinates struct {
 	ExecutedGTIDSet gomysql.GTIDSet
 	LogFile         string
