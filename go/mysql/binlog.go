@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	gomysql "github.com/siddontang/go-mysql/mysql"
 )
 
 var detachPattern *regexp.Regexp
@@ -28,9 +30,10 @@ const (
 
 // BinlogCoordinates described binary log coordinates in the form of log file & log position.
 type BinlogCoordinates struct {
-	LogFile string
-	LogPos  int64
-	Type    BinlogType
+	ExecutedGTIDSet gomysql.GTIDSet
+	LogFile         string
+	LogPos          int64
+	Type            BinlogType
 }
 
 // ParseInstanceKey will parse an InstanceKey from a string representation such as 127.0.0.1:3306

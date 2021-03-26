@@ -17,6 +17,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 
 	"github.com/outbrain/golib/sqlutils"
+	gomysql "github.com/siddontang/go-mysql/mysql"
 )
 
 type BinlogEventListener struct {
@@ -148,6 +149,13 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 		this.initialBinlogCoordinates = &mysql.BinlogCoordinates{
 			LogFile: m.GetString("File"),
 			LogPos:  m.GetInt64("Position"),
+		}
+		if execGtidSet := m.GetString("Executed_Gtid_Set"); execGtidSet != "" {
+			var err error
+			this.initialBinlogCoordinates.ExecutedGTIDSet, err = gomysql.ParseMysqlGTIDSet(execGtidSet)
+			if err != nil {
+				return err
+			}
 		}
 		foundMasterStatus = true
 

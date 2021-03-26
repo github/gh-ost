@@ -98,6 +98,7 @@ type MigrationContext struct {
 	AliyunRDS                bool
 	GoogleCloudPlatform      bool
 	AzureMySQL               bool
+	UseGTID                  bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
