@@ -14,12 +14,12 @@ import (
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
-// BinlogCoordinates described binary log coordinates in the form of log file & log position or GTID set.
+// BinlogCoordinates described binary log coordinates in the form of a GTID set and/or log file & log position.
 type BinlogCoordinates struct {
-	ExecutedGTIDSet gomysql.GTIDSet
-	LogFile         string
-	LogPos          int64
-	EventSize       int64
+	GTIDSet   gomysql.GTIDSet
+	LogFile   string
+	LogPos    int64
+	EventSize int64
 }
 
 // ParseBinlogCoordinates will parse an InstanceKey from a string representation such as 127.0.0.1:3306
@@ -38,6 +38,10 @@ func ParseBinlogCoordinates(logFileLogPos string) (*BinlogCoordinates, error) {
 
 // DisplayString returns a user-friendly string representation of these coordinates
 func (this *BinlogCoordinates) DisplayString() string {
+	if this.GTIDSet != nil {
+		return this.GTIDSet.String()
+
+	}
 	return fmt.Sprintf("%s:%d", this.LogFile, this.LogPos)
 }
 

@@ -63,7 +63,7 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 
 	// Start sync with specified GTID set or binlog file and position
 	if this.migrationContext.UseGTID {
-		this.binlogStreamer, err = this.binlogSyncer.StartSyncGTID(this.currentCoordinates.ExecutedGTIDSet)
+		this.binlogStreamer, err = this.binlogSyncer.StartSyncGTID(this.currentCoordinates.GTIDSet)
 	} else {
 		this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{
 			Name: this.currentCoordinates.LogFile,

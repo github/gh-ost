@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -184,7 +184,7 @@ func GetSelfBinlogCoordinates(dbVersion string, db *gosql.DB) (selfBinlogCoordin
 			LogPos:  m.GetInt64("Position"),
 		}
 		if execGtidSet := m.GetString("Executed_Gtid_Set"); execGtidSet != "" {
-			selfBinlogCoordinates.ExecutedGTIDSet, err = gomysql.ParseMysqlGTIDSet(execGtidSet)
+			selfBinlogCoordinates.GTIDSet, err = gomysql.ParseMysqlGTIDSet(execGtidSet)
 			if err != nil {
 				return err
 			}
