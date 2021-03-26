@@ -25,7 +25,6 @@ type GoMySQLReader struct {
 	binlogStreamer           *replication.BinlogStreamer
 	currentCoordinates       mysql.BinlogCoordinates
 	currentCoordinatesMutex  *sync.Mutex
-	useGTID                  bool
 	LastAppliedRowsEventHint mysql.BinlogCoordinates
 }
 
