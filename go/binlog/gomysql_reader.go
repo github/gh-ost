@@ -163,14 +163,18 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			if err != nil {
 				return err
 			}
-			gtidSet, err := gomysql.ParseMysqlGTIDSet(fmt.Sprintf("%s:%d", sid, event.GNO))
+			uuidSet, err := gomysql.ParseUUIDSet(fmt.Sprintf("%s:%d", sid, event.GNO))
 			if err != nil {
 				return err
 			}
 			func() {
 				this.currentCoordinatesMutex.Lock()
 				defer this.currentCoordinatesMutex.Unlock()
-				this.currentCoordinates.GTIDSet = gtidSet
+				this.currentCoordinates.GTIDSet = &gomysql.MysqlGTIDSet{
+					Sets: map[string]*gomysql.UUIDSet{
+						sid.String(): uuidSet,
+					},
+				}
 			}()
 		case *replication.RotateEvent:
 			if this.migrationContext.UseGTIDs {
