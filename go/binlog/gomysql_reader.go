@@ -168,7 +168,7 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 				defer this.currentCoordinatesMutex.Unlock()
 				this.currentCoordinates.GTIDSet = &gomysql.MysqlGTIDSet{
 					Sets: map[string]*gomysql.UUIDSet{
-						sid.String(): gomysql.NewUUIDSet(sid, gomysql.Interval{event.GNO, 0}),
+						sid.String(): gomysql.NewUUIDSet(sid, gomysql.Interval{event.GNO, event.GNO + 1}),
 					},
 				}
 			}()
