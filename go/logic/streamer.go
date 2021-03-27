@@ -153,11 +153,11 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 			LogPos:  m.GetInt64("Position"),
 		}
 		if execGtidSet := m.GetString("Executed_Gtid_Set"); execGtidSet != "" && this.migrationContext.UseGTIDs {
-			var err error
-			this.initialBinlogCoordinates.GTIDSet, err = gomysql.ParseMysqlGTIDSet(execGtidSet)
+			gtidSet, err := gomysql.ParseMysqlGTIDSet(execGtidSet)
 			if err != nil {
 				return err
 			}
+			this.initialBinlogCoordinates.GTIDSet = gtidSet
 		}
 		foundMasterStatus = true
 
