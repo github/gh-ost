@@ -381,13 +381,16 @@ func (this *Inspector) applyBinlogFormat() error {
 func (this *Inspector) validateBinlogs() error {
 	var hasBinaryLogs bool
 	if this.migrationContext.UseGTIDs {
-		var gtidMode string
-		query := `select @@global.log_bin, @@global.binlog_format, @@global.gtid_mode`
-		if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat, &gtidMode); err != nil {
+		var gtidMode, enforceGtidConsistency string
+		query := `select @@global.log_bin, @@global.binlog_format, @@global.gtid_mode, @@global.enforce_gtid_consistency`
+		if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat, &gtidMode, &enforceGtidConsistency); err != nil {
 			return err
 		}
 		if gtidMode != "ON" {
 			return fmt.Errorf("%s:%d must have gtid_mode=ON to use GTID support", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		}
+		if enforceGtidConsistency != "ON" {
+			return fmt.Errorf("%s:%d must have enforce_gtid_consistency=ON to use GTID support", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
 		}
 	} else {
 		query := `select @@global.log_bin, @@global.binlog_format`
