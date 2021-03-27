@@ -162,7 +162,7 @@ Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
 
 ### gtid
 
-Add this flag to enable support for [MySQL GTIDs](https://dev.mysql.com/doc/refman/5.7/en/replication-gtids-concepts.html) for replication binlog positioning.
+Add this flag to enable support for [MySQL GTIDs](https://dev.mysql.com/doc/refman/5.7/en/replication-gtids-concepts.html) for replication binlog positioning. This requires `gtid_mode` to be set to `ON`.
 
 ### heartbeat-interval-millis
 
