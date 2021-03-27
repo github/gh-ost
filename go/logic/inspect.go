@@ -62,7 +62,7 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateGrants(); err != nil {
 		return err
 	}
-	if err := this.validateBinlogs(); err != nil {
+	if err := this.validateBinlogsAndGTID(); err != nil {
 		return err
 	}
 	if err := this.applyBinlogFormat(); err != nil {
@@ -320,8 +320,8 @@ func (this *Inspector) applyBinlogFormat() error {
 	return nil
 }
 
-// validateBinlogs checks that binary log configuration is good to go
-func (this *Inspector) validateBinlogs() error {
+// validateBinlogsAndGTID checks that binary log and optional GTID configuration is good to go
+func (this *Inspector) validateBinlogsAndGTID() error {
 	var hasBinaryLogs bool
 	if this.migrationContext.UseGTIDs {
 		var gtidMode, enforceGtidConsistency string
