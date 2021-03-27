@@ -163,10 +163,11 @@ func GetSelfBinlogCoordinates(db *gosql.DB) (selfBinlogCoordinates *BinlogCoordi
 			LogPos:  m.GetInt64("Position"),
 		}
 		if execGtidSet := m.GetString("Executed_Gtid_Set"); execGtidSet != "" {
-			selfBinlogCoordinates.GTIDSet, err = gomysql.ParseMysqlGTIDSet(execGtidSet)
+			gtidSet, err := gomysql.ParseMysqlGTIDSet(execGtidSet)
 			if err != nil {
 				return err
 			}
+			selfBinlogCoordinates.GTIDSet = gtidSet
 		}
 		return nil
 	})
