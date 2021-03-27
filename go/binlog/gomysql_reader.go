@@ -17,6 +17,7 @@ import (
 
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
+	uuid "github.com/satori/go.uuid"
 	"golang.org/x/net/context"
 )
 
@@ -62,7 +63,7 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 	this.migrationContext.Log.Infof("Connecting binlog streamer at %+v", this.currentCoordinates)
 
 	// Start sync with specified GTID set or binlog file and position
-	if this.migrationContext.UseGTID {
+	if this.migrationContext.UseGTIDs {
 		this.binlogStreamer, err = this.binlogSyncer.StartSyncGTID(this.currentCoordinates.GTIDSet)
 	} else {
 		this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{
@@ -155,11 +156,26 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 
 		switch event := ev.Event.(type) {
 		case *replication.GTIDEvent:
-			// TODO: convert *replication.GTIDEvent -> mysql.GTIDSet
-			if this.migrationContext.UseGTID {
-				this.migrationContext.Log.Info("TODO: handle GTID event in binlog stream!")
+			if !this.migrationContext.UseGTIDs {
+				continue
 			}
+			sid, err := uuid.FromBytes(event.SID)
+			if err != nil {
+				return err
+			}
+			gtidSet, err := gomysql.ParseMysqlGTIDSet(fmt.Sprintf("%s:%d", sid, event.GNO))
+			if err != nil {
+				return err
+			}
+			func() {
+				this.currentCoordinatesMutex.Lock()
+				defer this.currentCoordinatesMutex.Unlock()
+				this.currentCoordinates.GTIDSet = gtidSet
+			}()
 		case *replication.RotateEvent:
+			if this.migrationContext.UseGTIDs {
+				continue
+			}
 			func() {
 				this.currentCoordinatesMutex.Lock()
 				defer this.currentCoordinatesMutex.Unlock()

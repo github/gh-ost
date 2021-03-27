@@ -380,9 +380,21 @@ func (this *Inspector) applyBinlogFormat() error {
 // validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
 	query := `select /* gh-ost */ @@global.log_bin, @@global.binlog_format`
+	var gtidMode string
 	var hasBinaryLogs bool
-	if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat); err != nil {
-		return err
+	if this.migrationContext.UseGTIDs {
+		query := `select @@global.log_bin, @@global.binlog_format, @@global.gtid_mode`
+		if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat, &gtidMode); err != nil {
+			return err
+		}
+		if gtidMode != "ON" {
+			return fmt.Errorf("%s:%d must have gtid_mode=ON to use GTID support", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		}
+	} else {
+		query := `select @@global.log_bin, @@global.binlog_format`
+		if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat); err != nil {
+			return err
+		}
 	}
 	if !hasBinaryLogs {
 		return fmt.Errorf("%s must have binary logs enabled", this.connectionConfig.Key.String())

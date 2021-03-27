@@ -108,7 +108,7 @@ type MigrationContext struct {
 	// This is useful when connecting to a MySQL instance where the external port
 	// may not match the internal port.
 	SkipPortValidation bool
-	UseGTID            bool
+	UseGTIDs           bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex

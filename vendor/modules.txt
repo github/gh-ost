@@ -203,6 +203,9 @@ github.com/pmezard/go-difflib/difflib
 # github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c
 ## explicit; go 1.14
 github.com/power-devops/perfstat
+# github.com/satori/go.uuid v1.2.0
+## explicit
+github.com/satori/go.uuid
 # github.com/shirou/gopsutil/v4 v4.25.1
 ## explicit; go 1.18
 github.com/shirou/gopsutil/v4/common
