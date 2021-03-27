@@ -150,7 +150,7 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 			LogFile: m.GetString("File"),
 			LogPos:  m.GetInt64("Position"),
 		}
-		if execGtidSet := m.GetString("Executed_Gtid_Set"); execGtidSet != "" && this.migrationContext.UseGTID {
+		if execGtidSet := m.GetString("Executed_Gtid_Set"); execGtidSet != "" && this.migrationContext.UseGTIDs {
 			var err error
 			this.initialBinlogCoordinates.GTIDSet, err = gomysql.ParseMysqlGTIDSet(execGtidSet)
 			if err != nil {

@@ -322,10 +322,21 @@ func (this *Inspector) applyBinlogFormat() error {
 
 // validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
-	query := `select @@global.log_bin, @@global.binlog_format`
+	var gtidMode string
 	var hasBinaryLogs bool
-	if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat); err != nil {
-		return err
+	if this.migrationContext.UseGTIDs {
+		query := `select @@global.log_bin, @@global.binlog_format, @@global.gtid_mode`
+		if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat, &gtidMode); err != nil {
+			return err
+		}
+		if gtidMode != "ON" {
+			return fmt.Errorf("%s:%d must have gtid_mode=ON to use GTID support", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		}
+	} else {
+		query := `select @@global.log_bin, @@global.binlog_format`
+		if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat); err != nil {
+			return err
+		}
 	}
 	if !hasBinaryLogs {
 		return fmt.Errorf("%s:%d must have binary logs enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
@@ -348,7 +359,7 @@ func (this *Inspector) validateBinlogs() error {
 		}
 		this.migrationContext.Log.Infof("%s:%d has %s binlog_format. I will change it to ROW, and will NOT change it back, even in the event of failure.", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
 	}
-	query = `select @@global.binlog_row_image`
+	query := `select @@global.binlog_row_image`
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.OriginalBinlogRowImage); err != nil {
 		// Only as of 5.6. We wish to support 5.5 as well
 		this.migrationContext.OriginalBinlogRowImage = "FULL"
