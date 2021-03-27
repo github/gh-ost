@@ -40,7 +40,6 @@ func ParseBinlogCoordinates(logFileLogPos string) (*BinlogCoordinates, error) {
 func (this *BinlogCoordinates) DisplayString() string {
 	if this.GTIDSet != nil {
 		return this.GTIDSet.String()
-
 	}
 	return fmt.Sprintf("%s:%d", this.LogFile, this.LogPos)
 }

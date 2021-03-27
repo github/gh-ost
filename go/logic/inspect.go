@@ -379,10 +379,9 @@ func (this *Inspector) applyBinlogFormat() error {
 
 // validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
-	query := `select /* gh-ost */ @@global.log_bin, @@global.binlog_format`
-	var gtidMode string
 	var hasBinaryLogs bool
 	if this.migrationContext.UseGTIDs {
+		var gtidMode string
 		query := `select @@global.log_bin, @@global.binlog_format, @@global.gtid_mode`
 		if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat, &gtidMode); err != nil {
 			return err
@@ -417,7 +416,7 @@ func (this *Inspector) validateBinlogs() error {
 		}
 		this.migrationContext.Log.Infof("%s has %s binlog_format. I will change it to ROW, and will NOT change it back, even in the event of failure.", this.connectionConfig.Key.String(), this.migrationContext.OriginalBinlogFormat)
 	}
-	query = `select /* gh-ost */ @@global.binlog_row_image`
+	query := `select /* gh-ost */ @@global.binlog_row_image`
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.OriginalBinlogRowImage); err != nil {
 		return err
 	}
