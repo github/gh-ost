@@ -322,9 +322,9 @@ func (this *Inspector) applyBinlogFormat() error {
 
 // validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
-	var gtidMode string
 	var hasBinaryLogs bool
 	if this.migrationContext.UseGTIDs {
+		var gtidMode string
 		query := `select @@global.log_bin, @@global.binlog_format, @@global.gtid_mode`
 		if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat, &gtidMode); err != nil {
 			return err
