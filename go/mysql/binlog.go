@@ -22,18 +22,24 @@ type BinlogCoordinates struct {
 	EventSize int64
 }
 
-// ParseBinlogCoordinates will parse an InstanceKey from a string representation such as 127.0.0.1:3306
-func ParseBinlogCoordinates(logFileLogPos string) (*BinlogCoordinates, error) {
+// ParseFileBinlogCoordinates parses a log file/position string into a *BinlogCoordinates struct.
+func ParseFileBinlogCoordinates(logFileLogPos string) (*BinlogCoordinates, error) {
 	tokens := strings.SplitN(logFileLogPos, ":", 2)
 	if len(tokens) != 2 {
-		return nil, fmt.Errorf("ParseBinlogCoordinates: Cannot parse BinlogCoordinates from %s. Expected format is file:pos", logFileLogPos)
+		return nil, fmt.Errorf("ParseFileBinlogCoordinates: Cannot parse BinlogCoordinates from %s. Expected format is file:pos", logFileLogPos)
 	}
 
 	if logPos, err := strconv.ParseInt(tokens[1], 10, 0); err != nil {
-		return nil, fmt.Errorf("ParseBinlogCoordinates: invalid pos: %s", tokens[1])
+		return nil, fmt.Errorf("ParseFileBinlogCoordinates: invalid pos: %s", tokens[1])
 	} else {
 		return &BinlogCoordinates{LogFile: tokens[0], LogPos: logPos}, nil
 	}
+}
+
+// ParseGTIDBinlogCoordinates parses a MySQL GTID into a *BinlogCoordinates struct.
+func ParseGTIDBinlogCoordinates(gtidSet string) (*BinlogCoordinates, error) {
+	set, err := gomysql.ParseMysqlGTIDSet(gtidSet)
+	return &BinlogCoordinates{GTIDSet: set}, err
 }
 
 // DisplayString returns a user-friendly string representation of these coordinates
