@@ -50,8 +50,8 @@ func ParseFileBinlogCoordinates(logFileLogPos string) (*BinlogCoordinates, error
 	}
 }
 
-// ParseGTIDBinlogCoordinates parses a MySQL GTID into a *BinlogCoordinates struct.
-func ParseGTIDBinlogCoordinates(gtidSet string) (*BinlogCoordinates, error) {
+// ParseGTIDSetBinlogCoordinates parses a MySQL GTID set into a *BinlogCoordinates struct.
+func ParseGTIDSetBinlogCoordinates(gtidSet string) (*BinlogCoordinates, error) {
 	set, err := gomysql.ParseMysqlGTIDSet(gtidSet)
 	return &BinlogCoordinates{GTIDSet: set}, err
 }
@@ -74,12 +74,15 @@ func (this *BinlogCoordinates) Equals(other *BinlogCoordinates) bool {
 	if other == nil {
 		return false
 	}
+	if this.GTIDSet != nil && !this.GTIDSet.Equal(other.GTIDSet) {
+		return false
+	}
 	return this.LogFile == other.LogFile && this.LogPos == other.LogPos && this.Type == other.Type
 }
 
-// IsEmpty returns true if the log file is empty, unnamed
+// IsEmpty returns true if the log file and GTID set is empty, unnamed
 func (this *BinlogCoordinates) IsEmpty() bool {
-	return this.LogFile == ""
+	return this.LogFile == "" && this.GTIDSet == nil
 }
 
 // SmallerThan returns true if this coordinate is strictly smaller than the other.
@@ -98,6 +101,11 @@ func (this *BinlogCoordinates) SmallerThan(other *BinlogCoordinates) bool {
 func (this *BinlogCoordinates) SmallerThanOrEquals(other *BinlogCoordinates) bool {
 	if this.SmallerThan(other) {
 		return true
+	}
+	if this.GTIDSet != nil && !this.GTIDSet.Equal(other.GTIDSet) {
+		return false
+	} else if other.GTIDSet != nil {
+		return false
 	}
 	return this.LogFile == other.LogFile && this.LogPos == other.LogPos // No Type comparison
 }
