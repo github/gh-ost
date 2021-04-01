@@ -159,7 +159,7 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 				return err
 			}
 			if this.lastGtidSID != "" && sid.String() != this.lastGtidSID {
-				return errors.New("GTID SID change is currently unsupported")
+				return fmt.Errorf("Got unexpected GTID SID %q. SID change is currently unsupported", sid.String())
 			}
 			func() {
 				this.currentCoordinatesMutex.Lock()
