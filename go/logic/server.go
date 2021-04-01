@@ -180,8 +180,8 @@ help                                 # This message
 		}
 	case "hosts":
 		fmt.Fprintf(writer, "Hostname: %s, Applier: %s, Inspector: %s\n",
-			this.migrationContext.GetApplierHostname(),
 			this.migrationContext.Hostname,
+			this.migrationContext.GetApplierHostname(),
 			this.migrationContext.GetInspectorHostname(),
 		)
 		return NoPrintStatusRule, nil
