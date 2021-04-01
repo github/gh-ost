@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -146,7 +146,8 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 			fmt.Fprint(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
-coordinates													 # Print the currently inspected coordinates
+coordinates                          # Print the currently inspected coordinates
+hosts                                # Print the list of hosts used to perform the migration (hostname, applier and migrator)
 chunk-size=<newsize>                 # Set a new chunk-size
 dml-batch-size=<newsize>             # Set a new dml-batch-size
 nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
@@ -177,6 +178,16 @@ help                                 # This message
 			}
 			return NoPrintStatusRule, fmt.Errorf("coordinates are read-only")
 		}
+	case "hosts":
+		fields := map[string]interface{}{
+			"Applier":   this.migrationContext.GetApplierHostname(),
+			"Hostname":  this.migrationContext.Hostname,
+			"Inspector": this.migrationContext.GetInspectorHostname(),
+		}
+		for key, val := range fields {
+			fmt.Fprintf(writer, "%s: %v", key, val)
+		}
+		return NoPrintStatusRule, nil
 	case "chunk-size":
 		{
 			if argIsQuestion {
