@@ -62,6 +62,8 @@ func (this *BinlogCoordinates) Equals(other *BinlogCoordinates) bool {
 	}
 	if this.GTIDSet != nil && !this.GTIDSet.Equal(other.GTIDSet) {
 		return false
+	} else if other.GTIDSet != nil {
+		return false
 	}
 	return this.LogFile == other.LogFile && this.LogPos == other.LogPos
 }
