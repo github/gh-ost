@@ -179,14 +179,11 @@ help                                 # This message
 			return NoPrintStatusRule, fmt.Errorf("coordinates are read-only")
 		}
 	case "hosts":
-		fields := map[string]interface{}{
-			"Applier":   this.migrationContext.GetApplierHostname(),
-			"Hostname":  this.migrationContext.Hostname,
-			"Inspector": this.migrationContext.GetInspectorHostname(),
-		}
-		for key, val := range fields {
-			fmt.Fprintf(writer, "%s: %v", key, val)
-		}
+		fmt.Fprintf(writer, "Hostname: %s, Applier: %s, Inspector: %s\n",
+			this.migrationContext.GetApplierHostname(),
+			this.migrationContext.Hostname,
+			this.migrationContext.GetInspectorHostname(),
+		)
 		return NoPrintStatusRule, nil
 	case "chunk-size":
 		{
