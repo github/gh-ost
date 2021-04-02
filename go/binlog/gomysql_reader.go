@@ -28,7 +28,7 @@ type GoMySQLReader struct {
 	binlogStreamer           *replication.BinlogStreamer
 	currentCoordinates       mysql.BinlogCoordinates
 	currentCoordinatesMutex  *sync.Mutex
-	lastGtidSID              string
+	lastGtidSID              *uuid.UUID
 	LastAppliedRowsEventHint mysql.BinlogCoordinates
 }
 
@@ -164,7 +164,7 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			if err != nil {
 				return err
 			}
-			if this.lastGtidSID != "" && sid.String() != this.lastGtidSID {
+			if this.lastGtidSID != nil && sid.String() != this.lastGtidSID.String() {
 				return fmt.Errorf("Got unexpected GTID SID %q. SID change is currently unsupported", sid.String())
 			}
 			func() {
@@ -178,7 +178,7 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 						}),
 					},
 				}
-				this.lastGtidSID = sid.String()
+				this.lastGtidSID = &sid
 			}()
 		case *replication.RotateEvent:
 			if this.migrationContext.UseGTIDs {

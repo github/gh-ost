@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -25,10 +25,12 @@ func TestBinlogCoordinates(t *testing.T) {
 	c4 := BinlogCoordinates{LogFile: "mysql-bin.00112", LogPos: 104}
 
 	gtidSet1, _ := gomysql.ParseMysqlGTIDSet("3E11FA47-71CA-11E1-9E33-C80AA9429562:23")
-	//gtidSet2, _ := gomysql.ParseMysqlGTIDSet("3E11FA47-71CA-11E1-9E33-C80AA9429562:100")
-	c5 := BinlogCoordinates{GTIDSet: gtidSet1}
-	c6 := BinlogCoordinates{GTIDSet: gtidSet1}
-	//c7 := BinlogCoordinates{GTIDSet: gtidSet2}
+	gtidSet2, _ := gomysql.ParseMysqlGTIDSet("3E11FA47-71CA-11E1-9E33-C80AA9429562:100")
+	gtidSet3, _ := gomysql.ParseMysqlGTIDSet("7F80FA47-FF33-71A1-AE01-B80CC7823548:100")
+	c5 := BinlogCoordinates{GTIDSet: gtidSet1.(*gomysql.MysqlGTIDSet)}
+	c6 := BinlogCoordinates{GTIDSet: gtidSet1.(*gomysql.MysqlGTIDSet)}
+	c7 := BinlogCoordinates{GTIDSet: gtidSet2.(*gomysql.MysqlGTIDSet)}
+	c8 := BinlogCoordinates{GTIDSet: gtidSet3.(*gomysql.MysqlGTIDSet)}
 
 	require.True(t, c5.Equals(&c6))
 	require.True(t, c1.Equals(&c2))
@@ -46,6 +48,7 @@ func TestBinlogCoordinates(t *testing.T) {
 	require.True(t, c1.SmallerThanOrEquals(&c2))
 	require.True(t, c1.SmallerThanOrEquals(&c3))
 	require.True(t, c6.SmallerThanOrEquals(&c7))
+	require.True(t, c7.SmallerThanOrEquals(&c8))
 }
 
 func TestBinlogNext(t *testing.T) {
