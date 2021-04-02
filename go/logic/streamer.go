@@ -157,7 +157,7 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 			if err != nil {
 				return err
 			}
-			this.initialBinlogCoordinates.GTIDSet = gtidSet
+			this.initialBinlogCoordinates.GTIDSet = gtidSet.(*gomysql.MysqlGTIDSet)
 		}
 		foundMasterStatus = true
 

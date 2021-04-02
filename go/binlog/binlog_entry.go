@@ -20,7 +20,7 @@ type BinlogEntry struct {
 }
 
 // NewBinlogEntry creates an empty, ready to go BinlogEntry object
-func NewBinlogEntry(logFile string, logPos uint64, gtidSet gomysql.GTIDSet) *BinlogEntry {
+func NewBinlogEntry(logFile string, logPos uint64, gtidSet *gomysql.MysqlGTIDSet) *BinlogEntry {
 	binlogEntry := &BinlogEntry{
 		Coordinates: mysql.BinlogCoordinates{LogFile: logFile, LogPos: int64(logPos), GTIDSet: gtidSet},
 	}
