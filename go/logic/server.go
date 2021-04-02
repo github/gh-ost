@@ -147,7 +147,8 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 status                               # Print a detailed status message
 sup                                  # Print a short status message
 coordinates                          # Print the currently inspected coordinates
-hosts                                # Print the list of hosts used to perform the migration (hostname, applier and inspector)
+applier                              # Print the hostname of the applier
+inspector                            # Print the hostname of the inspector
 chunk-size=<newsize>                 # Set a new chunk-size
 dml-batch-size=<newsize>             # Set a new dml-batch-size
 nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
@@ -178,12 +179,11 @@ help                                 # This message
 			}
 			return NoPrintStatusRule, fmt.Errorf("coordinates are read-only")
 		}
-	case "hosts":
-		fmt.Fprintf(writer, "Hostname: %s, Applier: %s, Inspector: %s\n",
-			this.migrationContext.Hostname,
-			this.migrationContext.GetApplierHostname(),
-			this.migrationContext.GetInspectorHostname(),
-		)
+	case "applier":
+		fmt.Fprintln(writer, this.migrationContext.GetApplierHostname())
+		return NoPrintStatusRule, nil
+	case "inspector":
+		fmt.Fprintln(writer, this.migrationContext.GetInspectorHostname())
 		return NoPrintStatusRule, nil
 	case "chunk-size":
 		{
