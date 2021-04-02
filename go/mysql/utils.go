@@ -167,7 +167,7 @@ func GetSelfBinlogCoordinates(db *gosql.DB) (selfBinlogCoordinates *BinlogCoordi
 			if err != nil {
 				return err
 			}
-			selfBinlogCoordinates.GTIDSet = gtidSet
+			selfBinlogCoordinates.GTIDSet = gtidSet.(*gomysql.MysqlGTIDSet)
 		}
 		return nil
 	})

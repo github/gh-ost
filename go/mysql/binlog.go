@@ -31,7 +31,7 @@ const (
 
 // BinlogCoordinates described binary log coordinates in the form of a GTID set and/or log file & log position.
 type BinlogCoordinates struct {
-	GTIDSet gomysql.GTIDSet
+	GTIDSet *gomysql.MysqlGTIDSet
 	LogFile string
 	LogPos  int64
 	Type    BinlogType
@@ -54,7 +54,7 @@ func ParseFileBinlogCoordinates(logFileLogPos string) (*BinlogCoordinates, error
 // ParseGTIDSetBinlogCoordinates parses a MySQL GTID set into a *BinlogCoordinates struct.
 func ParseGTIDSetBinlogCoordinates(gtidSet string) (*BinlogCoordinates, error) {
 	set, err := gomysql.ParseMysqlGTIDSet(gtidSet)
-	return &BinlogCoordinates{GTIDSet: set}, err
+	return &BinlogCoordinates{GTIDSet: set.(*gomysql.MysqlGTIDSet)}, err
 }
 
 // DisplayString returns a user-friendly string representation of these coordinates
@@ -75,10 +75,8 @@ func (this *BinlogCoordinates) Equals(other *BinlogCoordinates) bool {
 	if other == nil {
 		return false
 	}
-	if this.GTIDSet != nil && !this.GTIDSet.Equal(other.GTIDSet) {
-		return false
-	} else if other.GTIDSet != nil {
-		return false
+	if this.GTIDSet != nil {
+		return this.GTIDSet.Equal(other.GTIDSet)
 	}
 	return this.LogFile == other.LogFile && this.LogPos == other.LogPos && this.Type == other.Type
 }
@@ -90,6 +88,29 @@ func (this *BinlogCoordinates) IsEmpty() bool {
 
 // SmallerThan returns true if this coordinate is strictly smaller than the other.
 func (this *BinlogCoordinates) SmallerThan(other *BinlogCoordinates) bool {
+	// if GTID SIDs are equal we compare the interval stop points
+	// if GTID SIDs differ we have to assume there is a new/larger event
+	if this.GTIDSet != nil {
+		for sid, otherSet := range other.GTIDSet.Sets {
+			thisSet, ok := this.GTIDSet.Sets[sid]
+			if !ok {
+				return true // 'this' is missing a set
+			}
+			if len(thisSet.Intervals) < len(otherSet.Intervals) {
+				return true // 'this' has fewer intervals
+			}
+			for i, otherInterval := range otherSet.Intervals {
+				thisInterval := thisSet.Intervals[i]
+				if thisInterval.Start < otherInterval.Start {
+					return true
+				}
+				if thisInterval.Stop < otherInterval.Stop {
+					return true
+				}
+			}
+		}
+	}
+
 	if this.LogFile < other.LogFile {
 		return true
 	}
@@ -105,10 +126,8 @@ func (this *BinlogCoordinates) SmallerThanOrEquals(other *BinlogCoordinates) boo
 	if this.SmallerThan(other) {
 		return true
 	}
-	if this.GTIDSet != nil && !this.GTIDSet.Equal(other.GTIDSet) {
-		return false
-	} else if other.GTIDSet != nil {
-		return false
+	if this.GTIDSet != nil {
+		return this.GTIDSet.Equal(other.GTIDSet)
 	}
 	return this.LogFile == other.LogFile && this.LogPos == other.LogPos // No Type comparison
 }
