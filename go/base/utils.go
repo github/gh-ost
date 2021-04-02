@@ -13,6 +13,7 @@ import (
 	"time"
 
 	gosql "database/sql"
+
 	"github.com/github/gh-ost/go/mysql"
 )
 
@@ -62,7 +63,7 @@ func StringContainsAll(s string, substrings ...string) bool {
 	return nonEmptyStringsFound
 }
 
-func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext) (string, error) {
+func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext, name string) (string, error) {
 	versionQuery := `select @@global.version`
 	var port, extraPort int
 	var version string
@@ -86,7 +87,7 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	}
 
 	if connectionConfig.Key.Port == port || (extraPort > 0 && connectionConfig.Key.Port == extraPort) {
-		migrationContext.Log.Infof("connection validated on %+v", connectionConfig.Key)
+		migrationContext.Log.Infof("%s connection validated on %+v", name, connectionConfig.Key)
 		return version, nil
 	} else if extraPort == 0 {
 		return "", fmt.Errorf("Unexpected database port reported: %+v", port)
