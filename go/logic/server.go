@@ -180,10 +180,10 @@ help                                 # This message
 			return NoPrintStatusRule, fmt.Errorf("coordinates are read-only")
 		}
 	case "applier":
-		fmt.Fprintln(writer, this.migrationContext.GetApplierHostname())
+		fmt.Fprintf(writer, "Hostname: %s\n", this.migrationContext.GetApplierHostname())
 		return NoPrintStatusRule, nil
 	case "inspector":
-		fmt.Fprintln(writer, this.migrationContext.GetInspectorHostname())
+		fmt.Fprintf(writer, "Hostname: %s\n", this.migrationContext.GetInspectorHostname())
 		return NoPrintStatusRule, nil
 	case "chunk-size":
 		{
