@@ -118,10 +118,7 @@ func (this *BinlogCoordinates) SmallerThanOrEquals(other *BinlogCoordinates) boo
 		return true
 	}
 	if this.GTIDSet != nil {
-		if other.GTIDSet == nil {
-			return false
-		}
-		return this.GTIDSet.Equal(other.GTIDSet)
+		return other.GTIDSet != nil && this.GTIDSet.Equal(other.GTIDSet)
 	}
 	return this.LogFile == other.LogFile && this.LogPos == other.LogPos // No Type comparison
 }
