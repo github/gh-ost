@@ -90,35 +90,38 @@ func (this *BinlogCoordinates) IsEmpty() bool {
 func (this *BinlogCoordinates) SmallerThan(other *BinlogCoordinates) bool {
 	// if GTID SIDs are equal we compare the interval stop points
 	// if GTID SIDs differ we have to assume there is a new/larger event
-	if this.GTIDSet != nil {
+	if this.GTIDSet != nil && this.GTIDSet.Sets != nil {
 		if other.GTIDSet == nil || other.GTIDSet.Sets == nil {
 			return false
+		}
+		if len(this.GTIDSet.Sets) < len(other.GTIDSet.Sets) {
+			return true
 		}
 		for sid, otherSet := range other.GTIDSet.Sets {
 			thisSet, ok := this.GTIDSet.Sets[sid]
 			if !ok {
-				return true // 'this' is missing a set
+				return true // 'this' is missing an SID
 			}
 			if len(thisSet.Intervals) < len(otherSet.Intervals) {
 				return true // 'this' has fewer intervals
 			}
 			for i, otherInterval := range otherSet.Intervals {
-				thisInterval := thisSet.Intervals[i]
-				if thisInterval.Start < otherInterval.Start {
+				if len(thisSet.Intervals)-1 > i {
 					return true
 				}
-				if thisInterval.Stop < otherInterval.Stop {
+				thisInterval := thisSet.Intervals[i]
+				if thisInterval.Start < otherInterval.Start || thisInterval.Stop < otherInterval.Stop {
 					return true
 				}
 			}
 		}
-	}
-
-	if this.LogFile < other.LogFile {
-		return true
-	}
-	if this.LogFile == other.LogFile && this.LogPos < other.LogPos {
-		return true
+	} else {
+		if this.LogFile < other.LogFile {
+			return true
+		}
+		if this.LogFile == other.LogFile && this.LogPos < other.LogPos {
+			return true
+		}
 	}
 	return false
 }
