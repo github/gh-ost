@@ -76,6 +76,9 @@ func (this *BinlogCoordinates) SmallerThan(other *BinlogCoordinates) bool {
 	// if GTID SIDs are equal we compare the interval stop points
 	// if GTID SIDs differ we have to assume there is a new/larger event
 	if this.GTIDSet != nil {
+		if other.GTIDSet == nil || other.GTIDSet.Sets == nil {
+			return false
+		}
 		for sid, otherSet := range other.GTIDSet.Sets {
 			thisSet, ok := this.GTIDSet.Sets[sid]
 			if !ok {
@@ -112,6 +115,9 @@ func (this *BinlogCoordinates) SmallerThanOrEquals(other *BinlogCoordinates) boo
 		return true
 	}
 	if this.GTIDSet != nil {
+		if other.GTIDSet == nil {
+			return false
+		}
 		return this.GTIDSet.Equal(other.GTIDSet)
 	}
 	return this.LogFile == other.LogFile && this.LogPos == other.LogPos // No Type comparison
