@@ -180,10 +180,20 @@ help                                 # This message
 			return NoPrintStatusRule, fmt.Errorf("coordinates are read-only")
 		}
 	case "applier":
-		fmt.Fprintf(writer, "Hostname: %s\n", this.migrationContext.GetApplierHostname())
+		if this.migrationContext.ApplierConnectionConfig != nil && this.migrationContext.ApplierConnectionConfig.ImpliedKey != nil {
+			fmt.Fprintf(writer, "Host: %s, Version: %s\n",
+				this.migrationContext.ApplierConnectionConfig.ImpliedKey.String(),
+				this.migrationContext.ApplierMySQLVersion,
+			)
+		}
 		return NoPrintStatusRule, nil
 	case "inspector":
-		fmt.Fprintf(writer, "Hostname: %s\n", this.migrationContext.GetInspectorHostname())
+		if this.migrationContext.InspectorConnectionConfig != nil && this.migrationContext.InspectorConnectionConfig.ImpliedKey != nil {
+			fmt.Fprintf(writer, "Host: %s, Version: %s\n",
+				this.migrationContext.InspectorConnectionConfig.ImpliedKey.String(),
+				this.migrationContext.InspectorMySQLVersion,
+			)
+		}
 		return NoPrintStatusRule, nil
 	case "chunk-size":
 		{
