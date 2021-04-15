@@ -582,6 +582,7 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			}
 			if strings.HasPrefix(columnType, "enum") {
 				column.Type = sql.EnumColumnType
+				column.OrderedEnumValues = strings.Split(strings.ReplaceAll(strings.TrimSuffix(strings.TrimPrefix(columnType, "enum("), ")"), "'", ""), " ")
 			}
 			if strings.HasPrefix(columnType, "binary") {
 				column.Type = sql.BinaryColumnType

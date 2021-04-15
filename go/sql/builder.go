@@ -40,6 +40,8 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 			token = fmt.Sprintf("convert_tz(?, '%s', '%s')", column.timezoneConversion.ToTimezone, "+00:00")
 		} else if column.Type == JSONColumnType {
 			token = "convert(? using utf8mb4)"
+		} else if column.Type == EnumColumnType {
+			token = "cast(? AS CHAR)"
 		} else {
 			token = "?"
 		}
@@ -110,6 +112,8 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 			setToken = fmt.Sprintf("%s=convert_tz(?, '%s', '%s')", EscapeName(column.Name), column.timezoneConversion.ToTimezone, "+00:00")
 		} else if column.Type == JSONColumnType {
 			setToken = fmt.Sprintf("%s=convert(? using utf8mb4)", EscapeName(column.Name))
+		} else if column.Type == EnumColumnType {
+			setToken = fmt.Sprintf("%s=cast(? AS CHAR)", EscapeName(column.Name))
 		} else {
 			setToken = fmt.Sprintf("%s=?", EscapeName(column.Name))
 		}

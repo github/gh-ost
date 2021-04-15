@@ -41,6 +41,7 @@ type Column struct {
 	// add Octet length for binary type, fix bytes with suffix "00" get clipped in mysql binlog.
 	// https://github.com/github/gh-ost/issues/909
 	BinaryOctetLength  uint
+	OrderedEnumValues  []string
 	timezoneConversion *TimezoneConversion
 }
 
@@ -61,6 +62,12 @@ func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interfac
 				}
 				arg = buf.String()
 			}
+		}
+		return arg
+	} else if n, ok := arg.(int); ok {
+		if this.Type == EnumColumnType {
+			println("Enum as int encountered, converting to string")
+			arg = this.OrderedEnumValues[n-1]
 		}
 
 		return arg
