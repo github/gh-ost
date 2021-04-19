@@ -8,7 +8,7 @@ package sql
 import (
 	"bytes"
 	"fmt"
-	"github.com/github/gh-ost/go/base"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -44,7 +44,6 @@ type Column struct {
 	BinaryOctetLength  uint
 	OrderedEnumValues  []string
 	timezoneConversion *TimezoneConversion
-	context            *base.MigrationContext
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
@@ -65,10 +64,11 @@ func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interfac
 				arg = buf.String()
 			}
 		} else if this.Type == EnumColumnType {
-			this.context.Log.Info("Analysing Enum column type for conversion with value: %s", arg)
+			w := os.Stdout
+			fmt.Fprintln(w, fmt.Sprintf("Analysing Enum column type for conversion with value: %s", arg))
 			n, err := strconv.ParseInt(arg.(string), 10, 64)
 			if err != nil {
-				this.context.Log.Warning("Enum Value: %s is an integer, replacing with string value: %s", arg, this.OrderedEnumValues[n-1])
+				fmt.Fprintln(w, fmt.Sprintf("Enum Value: %s is an integer, replacing with string value: %s", arg, this.OrderedEnumValues[n-1]))
 				arg = this.OrderedEnumValues[n-1]
 			}
 
