@@ -582,7 +582,8 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			}
 			if strings.HasPrefix(columnType, "enum") {
 				column.Type = sql.EnumColumnType
-				column.OrderedEnumValues = strings.Split(strings.ReplaceAll(strings.TrimSuffix(strings.TrimPrefix(columnType, "enum("), ")"), "'", ""), ",")
+				values := trimAndSplit(strings.ReplaceAll(columnType, "'", ""), "enum(", ")", ",")
+				column.OrderedEnumValues = values
 			}
 			if strings.HasPrefix(columnType, "binary") {
 				column.Type = sql.BinaryColumnType
@@ -595,6 +596,12 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		return nil
 	}, databaseName, tableName)
 	return err
+}
+
+func trimAndSplit(s string, prefix string, suffix string, separator string) []string {
+	s = strings.TrimSuffix(s, suffix)
+	s = strings.TrimPrefix(s, prefix)
+	return strings.Split(s, separator)
 }
 
 // getCandidateUniqueKeys investigates a table and returns the list of unique keys
