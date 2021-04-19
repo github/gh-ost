@@ -47,6 +47,17 @@ type Column struct {
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
+
+	if this.Type == EnumColumnType {
+		w := os.Stdout
+		fmt.Fprintln(w, fmt.Sprintf("Analysing Enum column type for conversion with value: %s", arg))
+		n, err := strconv.ParseInt(arg.(string), 10, 64)
+		if err != nil {
+			fmt.Fprintln(w, fmt.Sprintf("Enum Value: %s is an integer, replacing with string value: %s", arg, this.OrderedEnumValues[n-1]))
+			arg = this.OrderedEnumValues[n-1]
+		}
+	}
+
 	if s, ok := arg.(string); ok {
 		// string, charset conversion
 		if encoding, ok := charsetEncodingMap[this.Charset]; ok {
@@ -63,18 +74,7 @@ func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interfac
 				}
 				arg = buf.String()
 			}
-		} else if this.Type == EnumColumnType {
-			w := os.Stdout
-			fmt.Fprintln(w, fmt.Sprintf("Analysing Enum column type for conversion with value: %s", arg))
-			n, err := strconv.ParseInt(arg.(string), 10, 64)
-			if err != nil {
-				fmt.Fprintln(w, fmt.Sprintf("Enum Value: %s is an integer, replacing with string value: %s", arg, this.OrderedEnumValues[n-1]))
-				arg = this.OrderedEnumValues[n-1]
-			}
-
-			return arg
 		}
-		return arg
 	}
 
 	if this.IsUnsigned {
