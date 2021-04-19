@@ -48,14 +48,10 @@ type Column struct {
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
 
-	if this.Type == EnumColumnType {
+	if n, ok := arg.(int64); ok && this.Type == EnumColumnType {
 		w := os.Stdout
-		fmt.Fprintln(w, fmt.Sprintf("Analysing Enum column type for conversion with value: %s", arg))
-		n, err := strconv.ParseInt(arg.(string), 10, 64)
-		if err != nil {
-			fmt.Fprintln(w, fmt.Sprintf("Enum Value: %s is an integer, replacing with string value: %s", arg, this.OrderedEnumValues[n-1]))
-			arg = this.OrderedEnumValues[n-1]
-		}
+		fmt.Fprintln(w, fmt.Sprintf("Enum Value: %d is an integer, replacing with string value: %s", arg, this.OrderedEnumValues[n-1]))
+		arg = this.OrderedEnumValues[n-1]
 	}
 
 	if s, ok := arg.(string); ok {
