@@ -23,7 +23,4 @@ begin
   insert into gh_ost_test values (null, 17, 'blue');
   set @last_insert_id := last_insert_id();
   update gh_ost_test set e='orange' where id = @last_insert_id;
-  insert into gh_ost_test values (null, 23, null);
-  set @last_insert_id := last_insert_id();
-  update gh_ost_test set i=i+1, e=null where id = @last_insert_id;
 end ;;
