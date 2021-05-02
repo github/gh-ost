@@ -189,6 +189,10 @@ func (this *ColumnList) IsEnumToTextConversion(columnName string) bool {
 	return this.GetColumn(columnName).enumToTextConversion
 }
 
+func (this *ColumnList) SetEnumValues(columnName string, enumValues string) {
+	this.GetColumn(columnName).EnumValues = enumValues
+
+
 func (this *ColumnList) String() string {
 	return strings.Join(this.Names(), ",")
 }

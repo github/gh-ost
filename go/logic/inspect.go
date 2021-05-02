@@ -189,6 +189,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		}
 		if column.Name == mappedColumn.Name && column.Type == sql.EnumColumnType && mappedColumn.Charset != "" {
 			this.migrationContext.MappedSharedColumns.SetEnumToTextConversion(column.Name)
+			this.migrationContext.MappedSharedColumns.SetEnumValues(column.Name, column.EnumValues)
 		}
 	}
 
