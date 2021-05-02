@@ -592,6 +592,7 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			}
 			if strings.HasPrefix(columnType, "enum") {
 				column.Type = sql.EnumColumnType
+				column.EnumValues = sql.ParseEnumValues(m.GetString("COLUMN_TYPE"))
 			}
 			if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
 				column.Charset = charset

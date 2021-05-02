@@ -35,6 +35,7 @@ type Column struct {
 	IsUnsigned           bool
 	Charset              string
 	Type                 ColumnType
+	EnumValues           string
 	timezoneConversion   *TimezoneConversion
 	enumToTextConversion bool
 }
