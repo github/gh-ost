@@ -1,6 +1,6 @@
 #
 
-FROM golang:1.15.6
+FROM golang:1.16
 
 RUN apt-get update
 RUN apt-get install -y ruby ruby-dev rubygems build-essential
