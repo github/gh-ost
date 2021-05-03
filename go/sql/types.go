@@ -31,11 +31,13 @@ type TimezoneConversion struct {
 }
 
 type Column struct {
-	Name               string
-	IsUnsigned         bool
-	Charset            string
-	Type               ColumnType
-	timezoneConversion *TimezoneConversion
+	Name                 string
+	IsUnsigned           bool
+	Charset              string
+	Type                 ColumnType
+	EnumValues           string
+	timezoneConversion   *TimezoneConversion
+	enumToTextConversion bool
 }
 
 func (this *Column) convertArg(arg interface{}) interface{} {
@@ -177,6 +179,18 @@ func (this *ColumnList) SetConvertDatetimeToTimestamp(columnName string, toTimez
 
 func (this *ColumnList) HasTimezoneConversion(columnName string) bool {
 	return this.GetColumn(columnName).timezoneConversion != nil
+}
+
+func (this *ColumnList) SetEnumToTextConversion(columnName string) {
+	this.GetColumn(columnName).enumToTextConversion = true
+}
+
+func (this *ColumnList) IsEnumToTextConversion(columnName string) bool {
+	return this.GetColumn(columnName).enumToTextConversion
+}
+
+func (this *ColumnList) SetEnumValues(columnName string, enumValues string) {
+	this.GetColumn(columnName).EnumValues = enumValues
 }
 
 func (this *ColumnList) String() string {
