@@ -18,6 +18,8 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `status`: returns a detailed status summary of migration progress and configuration
 - `sup`: returns a brief status summary of migration progress
 - `coordinates`: returns recent (though not exactly up to date) binary log coordinates of the inspected server
+- `applier`: returns the hostname of the applier
+- `inspector`: returns the hostname of the inspector
 - `chunk-size=<newsize>`: modify the `chunk-size`; applies on next running copy-iteration
 - `dml-batch-size=<newsize>`: modify the `dml-batch-size`; applies on next applying of binary log events
 - `max-lag-millis=<max-lag>`: modify the maximum replication lag threshold (milliseconds, minimum value is `100`, i.e. `0.1` second)
