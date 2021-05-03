@@ -229,7 +229,10 @@ build_binary() {
     echo "Using binary: $ghost_binary"
     return 0
   fi
-  go build -o $ghost_binary go/cmd/gh-ost/main.go
+
+  # TODO: remove GO111MODULE once gh-ost uses Go modules
+  GO111MODULE=off go build -o $ghost_binary go/cmd/gh-ost/main.go
+
   if [ $? -ne 0 ] ; then
     echo "Build failure"
     exit 1
