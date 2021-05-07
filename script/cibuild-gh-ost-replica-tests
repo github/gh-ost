@@ -7,7 +7,7 @@ whoami
 fetch_ci_env() {
   # Clone gh-ost-ci-env
   # Only clone if not already running locally at latest commit
-  remote_commit=$(git ls-remote https://github.com/github/gh-ost-ci-env.git tar-xz-binaries | cut -f1)
+  remote_commit=$(git ls-remote https://github.com/github/gh-ost-ci-env.git HEAD | cut -f1)
   local_commit="unknown"
   [ -d "gh-ost-ci-env" ] && local_commit=$(cd gh-ost-ci-env && git log --format="%H" -n 1)
 
@@ -17,11 +17,6 @@ fetch_ci_env() {
   if [ "$remote_commit" != "$local_commit" ] ; then
     rm -rf ./gh-ost-ci-env
     git clone https://github.com/github/gh-ost-ci-env.git
-    (
-      cd gh-ost-ci-env
-      git fetch origin tar-xz-binaries
-      git checkout tar-xz-binaries
-    )
   fi
 }
 
@@ -46,12 +41,13 @@ test_mysql_version() {
   mkdir -p sandboxes
   rm -rf sandboxes/*
 
-  if echo "$mysql_version" | egrep "5[.]5[.]" ; then
+  local mysql_version_num=${mysql_version#*-}
+  if echo "$mysql_version_num" | egrep "5[.]5[.]" ; then
     gtid=""
   else
     gtid="--gtid"
   fi
-  gh-ost-ci-env/bin/linux/dbdeployer deploy replication "$mysql_version" --nodes 2 --sandbox-binary ${PWD}/sandbox/binary --sandbox-home ${PWD}/sandboxes ${gtid} --my-cnf-options log_slave_updates --my-cnf-options log_bin --my-cnf-options binlog_format=ROW --sandbox-directory rsandbox
+  gh-ost-ci-env/bin/linux/dbdeployer deploy replication "$mysql_version_num" --nodes 2 --sandbox-binary ${PWD}/sandbox/binary --sandbox-home ${PWD}/sandboxes ${gtid} --my-cnf-options log_slave_updates --my-cnf-options log_bin --my-cnf-options binlog_format=ROW --sandbox-directory rsandbox
 
   sed '/sandboxes/d' -i gh-ost-ci-env/bin/gh-ost-test-mysql-master
   echo 'sandboxes/rsandbox/m "$@"' >> gh-ost-ci-env/bin/gh-ost-test-mysql-master

@@ -178,6 +178,8 @@ type MigrationContext struct {
 	RenameTablesEndTime                    time.Time
 	pointOfInterestTime                    time.Time
 	pointOfInterestTimeMutex               *sync.Mutex
+	lastHeartbeatOnChangelogTime           time.Time
+	lastHeartbeatOnChangelogMutex          *sync.Mutex
 	CurrentLag                             int64
 	currentProgress                        uint64
 	ThrottleHTTPStatusCode                 int64
@@ -271,6 +273,7 @@ func NewMigrationContext() *MigrationContext {
 		throttleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
+		lastHeartbeatOnChangelogMutex:       &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
 		Log:                                 NewDefaultLogger(),
@@ -454,6 +457,10 @@ func (this *MigrationContext) MarkRowCopyEndTime() {
 	this.RowCopyEndTime = time.Now()
 }
 
+func (this *MigrationContext) TimeSinceLastHeartbeatOnChangelog() time.Duration {
+	return time.Since(this.GetLastHeartbeatOnChangelogTime())
+}
+
 func (this *MigrationContext) GetCurrentLagDuration() time.Duration {
 	return time.Duration(atomic.LoadInt64(&this.CurrentLag))
 }
@@ -491,6 +498,20 @@ func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
 	defer this.pointOfInterestTimeMutex.Unlock()
 
 	return time.Since(this.pointOfInterestTime)
+}
+
+func (this *MigrationContext) SetLastHeartbeatOnChangelogTime(t time.Time) {
+	this.lastHeartbeatOnChangelogMutex.Lock()
+	defer this.lastHeartbeatOnChangelogMutex.Unlock()
+
+	this.lastHeartbeatOnChangelogTime = t
+}
+
+func (this *MigrationContext) GetLastHeartbeatOnChangelogTime() time.Time {
+	this.lastHeartbeatOnChangelogMutex.Lock()
+	defer this.lastHeartbeatOnChangelogMutex.Unlock()
+
+	return this.lastHeartbeatOnChangelogTime
 }
 
 func (this *MigrationContext) SetHeartbeatIntervalMilliseconds(heartbeatIntervalMilliseconds int64) {
