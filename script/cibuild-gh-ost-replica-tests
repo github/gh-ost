@@ -4,19 +4,30 @@ set -e
 
 whoami
 
-# Clone gh-ost-ci-env
-# Only clone if not already running locally at latest commit
-remote_commit=$(git ls-remote https://github.com/github/gh-ost-ci-env.git HEAD | cut -f1)
-local_commit="unknown"
-[ -d "gh-ost-ci-env" ] && local_commit=$(cd gh-ost-ci-env && git log --format="%H" -n 1)
+fetch_ci_env() {
+  # Clone gh-ost-ci-env
+  # Only clone if not already running locally at latest commit
+  remote_commit=$(git ls-remote https://github.com/github/gh-ost-ci-env.git tar-xz-binaries | cut -f1)
+  local_commit="unknown"
+  [ -d "gh-ost-ci-env" ] && local_commit=$(cd gh-ost-ci-env && git log --format="%H" -n 1)
 
-echo "remote commit is: $remote_commit"
-echo "local commit is:  $local_commit"
+  echo "remote commit is: $remote_commit"
+  echo "local commit is:  $local_commit"
 
-if [ "$remote_commit" != "$local_commit" ] ; then
-  rm -rf ./gh-ost-ci-env
-  git clone https://github.com/github/gh-ost-ci-env.git
-fi
+  if [ "$remote_commit" != "$local_commit" ] ; then
+    rm -rf ./gh-ost-ci-env
+    git clone https://github.com/github/gh-ost-ci-env.git
+    (
+      cd gh-ost-ci-env
+      git fetch origin tar-xz-binaries
+      git checkout tar-xz-binaries
+    )
+  fi
+}
+
+test_dbdeployer() {
+  gh-ost-ci-env/bin/linux/dbdeployer --version
+}
 
 test_mysql_version() {
   local mysql_version
@@ -30,7 +41,7 @@ test_mysql_version() {
 
   mkdir -p sandbox/binary
   rm -rf sandbox/binary/*
-  gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/"$mysql_version".tar.gz --unpack-version="$mysql_version" --sandbox-binary ${PWD}/sandbox/binary
+  gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/"$mysql_version".tar.xz --sandbox-binary ${PWD}/sandbox/binary
 
   mkdir -p sandboxes
   rm -rf sandboxes/*
@@ -59,16 +70,26 @@ test_mysql_version() {
   find sandboxes -name "stop_all" | bash
 }
 
-# TEST_MYSQL_VERSION is set by the replica-tests CI job
-if [ -z "$TEST_MYSQL_VERSION" ]; then
-  # Test all versions:
-  find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.gz" | while read f ; do basename $f ".tar.gz" ; done | sort -r | while read mysql_version ; do
-    echo "found MySQL version: $mysql_version"
-  done
-  find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.gz" | while read f ; do basename $f ".tar.gz" ; done | sort -r | while read mysql_version ; do
-    test_mysql_version "$mysql_version"
-  done
-else
-  echo "found MySQL version: $TEST_MYSQL_VERSION"
-  test_mysql_version "$TEST_MYSQL_VERSION"
-fi
+main() {
+  fetch_ci_env
+  test_dbdeployer
+
+  echo "Building..."
+  . script/build
+
+  # TEST_MYSQL_VERSION is set by the replica-tests CI job
+  if [ -z "$TEST_MYSQL_VERSION" ]; then
+    # Test all versions:
+    find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.xz" | while read f ; do basename $f ".tar.xz" ; done | sort -r | while read mysql_version ; do
+      echo "found MySQL version: $mysql_version"
+    done
+    find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.xz" | while read f ; do basename $f ".tar.xz" ; done | sort -r | while read mysql_version ; do
+      test_mysql_version "$mysql_version"
+    done
+  else
+    echo "found MySQL version: $TEST_MYSQL_VERSION"
+    test_mysql_version "$TEST_MYSQL_VERSION"
+  fi
+}
+
+main
