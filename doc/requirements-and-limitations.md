@@ -41,6 +41,7 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 - Amazon RDS works, but has its own [limitations](rds.md).
 - Google Cloud SQL works, `--gcp` flag required.
 - Aliyun RDS works, `--aliyun-rds` flag required.
+- Azure Database for MySQL works, `--azure` flag required, and have detailed document about it. (azure.md)
 
 - Multisource is not supported when migrating via replica. It _should_ work (but never tested) when connecting directly to master (`--allow-on-master`)
 
@@ -50,4 +51,5 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 - Migrating a `FEDERATED` table is unsupported and is irrelevant to the problem `gh-ost` tackles.
 
+- [Encrypted binary logs](https://www.percona.com/blog/2018/03/08/binlog-encryption-percona-server-mysql/) are not supported.
 - `ALTER TABLE ... RENAME TO some_other_name` is not supported (and you shouldn't use `gh-ost` for such a trivial operation).

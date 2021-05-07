@@ -1,0 +1,22 @@
+#
+
+FROM golang:1.15.6
+
+RUN apt-get update
+RUN apt-get install -y ruby ruby-dev rubygems build-essential
+RUN gem install --no-ri --no-rdoc fpm
+ENV GOPATH=/tmp/go
+
+RUN apt-get install -y curl
+RUN apt-get install -y rsync
+RUN apt-get install -y gcc
+RUN apt-get install -y g++
+RUN apt-get install -y bash
+RUN apt-get install -y git
+RUN apt-get install -y tar
+RUN apt-get install -y rpm
+
+RUN mkdir -p $GOPATH/src/github.com/github/gh-ost
+WORKDIR $GOPATH/src/github.com/github/gh-ost
+COPY . .
+RUN bash build.sh

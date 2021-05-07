@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Usage:
+# dock <test|packages> [arg]
+#   dock test:                build gh-ost & run unit and integration tests
+#   docker pkg [target-path]: build gh-ost release packages and copy to target path (default path: /tmp/gh-ost-release)
+
+command="$1"
+
+case "$command" in
+  "test")
+    docker_target="gh-ost-test"
+    docker build . -f Dockerfile.test -t "${docker_target}" && docker run --rm -it "${docker_target}:latest"
+    ;;
+  "pkg")
+    packages_path="${2:-/tmp/gh-ost-release}"
+    docker_target="gh-ost-packaging"
+    docker build . -f Dockerfile.packaging -t "${docker_target}" && docker run --rm -it -v "${packages_path}:/tmp/pkg" "${docker_target}:latest" bash -c 'find /tmp/gh-ost-release/ -maxdepth 1 -type f | xargs cp -t /tmp/pkg'
+    echo "packages generated on ${packages_path}:"
+    ls -l "${packages_path}"
+    ;;
+  *)
+    >&2 echo "Usage: dock dock <test|alpine|packages> [arg]"
+    exit 1
+esac

@@ -19,6 +19,7 @@ import (
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
+	"github.com/outbrain/golib/log"
 
 	"gopkg.in/gcfg.v1"
 	gcfgscanner "gopkg.in/gcfg.v1/scanner"
@@ -76,9 +77,10 @@ func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleRea
 type MigrationContext struct {
 	Uuid string
 
-	DatabaseName      string
-	OriginalTableName string
-	AlterStatement    string
+	DatabaseName          string
+	OriginalTableName     string
+	AlterStatement        string
+	AlterStatementOptions string // anything following the 'ALTER TABLE [schema.]table' from AlterStatement
 
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
@@ -95,6 +97,7 @@ type MigrationContext struct {
 	DiscardForeignKeys       bool
 	AliyunRDS                bool
 	GoogleCloudPlatform      bool
+	AzureMySQL               bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -119,6 +122,7 @@ type MigrationContext struct {
 	ThrottleAdditionalFlagFile          string
 	throttleQuery                       string
 	throttleHTTP                        string
+	IgnoreHTTPErrors                    bool
 	ThrottleCommandedByUser             int64
 	HibernateUntil                      int64
 	maxLoad                             LoadMap
@@ -174,6 +178,8 @@ type MigrationContext struct {
 	RenameTablesEndTime                    time.Time
 	pointOfInterestTime                    time.Time
 	pointOfInterestTimeMutex               *sync.Mutex
+	lastHeartbeatOnChangelogTime           time.Time
+	lastHeartbeatOnChangelogMutex          *sync.Mutex
 	CurrentLag                             int64
 	currentProgress                        uint64
 	ThrottleHTTPStatusCode                 int64
@@ -216,6 +222,25 @@ type MigrationContext struct {
 	ForceTmpTableName                string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
+
+	Log Logger
+}
+
+type Logger interface {
+	Debug(args ...interface{})
+	Debugf(format string, args ...interface{})
+	Info(args ...interface{})
+	Infof(format string, args ...interface{})
+	Warning(args ...interface{}) error
+	Warningf(format string, args ...interface{}) error
+	Error(args ...interface{}) error
+	Errorf(format string, args ...interface{}) error
+	Errore(err error) error
+	Fatal(args ...interface{}) error
+	Fatalf(format string, args ...interface{}) error
+	Fatale(err error) error
+	SetLevel(level log.LogLevel)
+	SetPrintStackTrace(printStackTraceFlag bool)
 }
 
 type ContextConfig struct {
@@ -248,8 +273,10 @@ func NewMigrationContext() *MigrationContext {
 		throttleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
+		lastHeartbeatOnChangelogMutex:       &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
+		Log:                                 NewDefaultLogger(),
 	}
 }
 
@@ -430,6 +457,10 @@ func (this *MigrationContext) MarkRowCopyEndTime() {
 	this.RowCopyEndTime = time.Now()
 }
 
+func (this *MigrationContext) TimeSinceLastHeartbeatOnChangelog() time.Duration {
+	return time.Since(this.GetLastHeartbeatOnChangelogTime())
+}
+
 func (this *MigrationContext) GetCurrentLagDuration() time.Duration {
 	return time.Duration(atomic.LoadInt64(&this.CurrentLag))
 }
@@ -467,6 +498,20 @@ func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
 	defer this.pointOfInterestTimeMutex.Unlock()
 
 	return time.Since(this.pointOfInterestTime)
+}
+
+func (this *MigrationContext) SetLastHeartbeatOnChangelogTime(t time.Time) {
+	this.lastHeartbeatOnChangelogMutex.Lock()
+	defer this.lastHeartbeatOnChangelogMutex.Unlock()
+
+	this.lastHeartbeatOnChangelogTime = t
+}
+
+func (this *MigrationContext) GetLastHeartbeatOnChangelogTime() time.Time {
+	this.lastHeartbeatOnChangelogMutex.Lock()
+	defer this.lastHeartbeatOnChangelogMutex.Unlock()
+
+	return this.lastHeartbeatOnChangelogTime
 }
 
 func (this *MigrationContext) SetHeartbeatIntervalMilliseconds(heartbeatIntervalMilliseconds int64) {
@@ -572,6 +617,13 @@ func (this *MigrationContext) SetThrottleHTTP(throttleHTTP string) {
 	defer this.throttleHTTPMutex.Unlock()
 
 	this.throttleHTTP = throttleHTTP
+}
+
+func (this *MigrationContext) SetIgnoreHTTPErrors(ignoreHTTPErrors bool) {
+	this.throttleHTTPMutex.Lock()
+	defer this.throttleHTTPMutex.Unlock()
+
+	this.IgnoreHTTPErrors = ignoreHTTPErrors
 }
 
 func (this *MigrationContext) GetMaxLoad() LoadMap {

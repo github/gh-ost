@@ -18,8 +18,8 @@ function build {
   GOOS=$3
   GOARCH=$4
 
-  if ! go version | egrep -q 'go(1\.1[234])' ; then
-    echo "go version must be 1.12 or above"
+  if ! go version | egrep -q 'go(1\.1[456])' ; then
+    echo "go version must be 1.14 or above"
     exit 1
   fi
 
@@ -40,7 +40,7 @@ function build {
     builddir=$(setuptree)
     cp $buildpath/$target $builddir/gh-ost/usr/bin
     cd $buildpath
-    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'shlomi-noach <shlomi-noach+gh-ost-deb@github.com>' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t rpm .
+    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'shlomi-noach <shlomi-noach+gh-ost-deb@github.com>' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t rpm --rpm-rpmbuild-define "_build_id_links none" .
     fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'shlomi-noach <shlomi-noach+gh-ost-deb@github.com>' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t deb --deb-no-default-config-files .
   fi
 }
@@ -61,11 +61,11 @@ main() {
 
   mkdir -p ${buildpath}
   rm -rf ${buildpath:?}/*
-  build macOS osx darwin amd64
   build GNU/Linux linux linux amd64
+  # build macOS osx darwin amd64
 
   echo "Binaries found in:"
-  ls -1 $buildpath/gh-ost-binary*${timestamp}.tar.gz
+  find $buildpath/gh-ost* -type f -maxdepth 1
 }
 
 main "$@"
