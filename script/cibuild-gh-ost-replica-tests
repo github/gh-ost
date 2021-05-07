@@ -72,13 +72,20 @@ main() {
 
   echo "Building..."
   . script/build
-  # Test all versions:
-  find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.xz" | while read f ; do basename $f ".tar.xz" ; done | sort -r | while read mysql_version ; do
-    echo "found MySQL version: $mysql_version"
-  done
-  find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.xz" | while read f ; do basename $f ".tar.xz" ; done | sort -r | while read mysql_version ; do
-    test_mysql_version "$mysql_version"
-  done
+
+  # TEST_MYSQL_VERSION is set by the replica-tests CI job
+  if [ -z "$TEST_MYSQL_VERSION" ]; then
+    # Test all versions:
+    find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.xz" | while read f ; do basename $f ".tar.xz" ; done | sort -r | while read mysql_version ; do
+      echo "found MySQL version: $mysql_version"
+    done
+    find gh-ost-ci-env/mysql-tarballs/ -name "*.tar.xz" | while read f ; do basename $f ".tar.xz" ; done | sort -r | while read mysql_version ; do
+      test_mysql_version "$mysql_version"
+    done
+  else
+    echo "found MySQL version: $TEST_MYSQL_VERSION"
+    test_mysql_version "$TEST_MYSQL_VERSION"
+  fi
 }
 
 main
