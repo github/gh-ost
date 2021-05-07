@@ -19,8 +19,8 @@ fetch_ci_env() {
     git clone https://github.com/github/gh-ost-ci-env.git
     (
       cd gh-ost-ci-env
-      git fetch origin tar-xz-binaries
-      git checkout tar-xz-binaries
+      git fetch origin fix-8016-tarball
+      git checkout fix-8016-tarball
     )
   fi
 }
