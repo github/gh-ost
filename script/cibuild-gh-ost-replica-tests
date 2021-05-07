@@ -69,6 +69,6 @@ if [ -z "$TEST_MYSQL_VERSION" ]; then
     test_mysql_version "$mysql_version"
   done
 else
-  echo "found MySQL version: $MYSQL_VERSION"
-  test_mysql_version "$MYSQL_VERSION"
+  echo "found MySQL version: $TEST_MYSQL_VERSION"
+  test_mysql_version "$TEST_MYSQL_VERSION"
 fi
