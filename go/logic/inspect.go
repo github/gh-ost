@@ -29,12 +29,14 @@ type Inspector struct {
 	db                  *gosql.DB
 	informationSchemaDb *gosql.DB
 	migrationContext    *base.MigrationContext
+	name                string
 }
 
 func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 	return &Inspector{
 		connectionConfig: migrationContext.InspectorConnectionConfig,
 		migrationContext: migrationContext,
+		name:             "inspector",
 	}
 }
 
@@ -202,7 +204,7 @@ func (this *Inspector) validateConnection() error {
 		return fmt.Errorf("MySQL replication length limited to 32 characters. See https://dev.mysql.com/doc/refman/5.7/en/assigning-passwords.html")
 	}
 
-	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext)
+	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
 	this.migrationContext.InspectorMySQLVersion = version
 	return err
 }
@@ -530,7 +532,7 @@ func (this *Inspector) CountTableRows() error {
 
 	this.migrationContext.Log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 
-	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	var rowsEstimate int64
 	if err := this.db.QueryRow(query).Scan(&rowsEstimate); err != nil {
 		return err
@@ -557,6 +559,7 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		columnName := m.GetString("COLUMN_NAME")
 		columnType := m.GetString("COLUMN_TYPE")
+		columnOctetLength := m.GetUint("CHARACTER_OCTET_LENGTH")
 		for _, columnsList := range columnsLists {
 			column := columnsList.GetColumn(columnName)
 			if column == nil {
@@ -583,6 +586,10 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			}
 			if strings.HasPrefix(columnType, "enum") {
 				column.Type = sql.EnumColumnType
+			}
+			if strings.HasPrefix(columnType, "binary") {
+				column.Type = sql.BinaryColumnType
+				column.BinaryOctetLength = columnOctetLength
 			}
 			if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
 				column.Charset = charset
