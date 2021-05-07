@@ -17,11 +17,6 @@ fetch_ci_env() {
   if [ "$remote_commit" != "$local_commit" ] ; then
     rm -rf ./gh-ost-ci-env
     git clone https://github.com/github/gh-ost-ci-env.git
-    (
-      cd gh-ost-ci-env
-      git fetch origin master
-      git checkout master
-    )
   fi
 }
 
