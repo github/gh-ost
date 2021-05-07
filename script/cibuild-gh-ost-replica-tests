@@ -46,7 +46,7 @@ test_mysql_version() {
   mkdir -p sandboxes
   rm -rf sandboxes/*
 
-  local mysql_version_num=${version#*-}
+  local mysql_version_num=${mysql_version#*-}
   if echo "$mysql_version_num" | egrep "5[.]5[.]" ; then
     gtid=""
   else
