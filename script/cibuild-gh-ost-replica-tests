@@ -7,7 +7,7 @@ whoami
 fetch_ci_env() {
   # Clone gh-ost-ci-env
   # Only clone if not already running locally at latest commit
-  remote_commit=$(git ls-remote https://github.com/github/gh-ost-ci-env.git fix-8016-tarball | cut -f1)
+  remote_commit=$(git ls-remote https://github.com/github/gh-ost-ci-env.git HEAD | cut -f1)
   local_commit="unknown"
   [ -d "gh-ost-ci-env" ] && local_commit=$(cd gh-ost-ci-env && git log --format="%H" -n 1)
 
@@ -19,8 +19,8 @@ fetch_ci_env() {
     git clone https://github.com/github/gh-ost-ci-env.git
     (
       cd gh-ost-ci-env
-      git fetch origin fix-8016-tarball
-      git checkout fix-8016-tarball
+      git fetch origin master
+      git checkout master
     )
   fi
 }
