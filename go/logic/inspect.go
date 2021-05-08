@@ -183,7 +183,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		if column.Name == mappedColumn.Name && column.Type == sql.DateTimeColumnType && mappedColumn.Type == sql.TimestampColumnType {
 			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.migrationContext.ApplierTimeZone, "+00:00")
 		} else if column.Name == mappedColumn.Name && column.Type == sql.TimestampColumnType && mappedColumn.Type == sql.DateTimeColumnType {
-			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, "+00:00", this.migrationContext.ApplierTimeZone)
+			this.migrationContext.MappedSharedColumns.SetConvertTimestampToDatetime(column.Name, "+00:00", this.migrationContext.ApplierTimeZone)
 		}
 	}
 
