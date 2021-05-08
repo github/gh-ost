@@ -6,6 +6,9 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        version: [mysql-5.5.62,mysql-5.6.43,mysql-5.7.25,mysql-8.0.16]
 
     steps:
     - uses: actions/checkout@v2
@@ -16,4 +19,6 @@ jobs:
         go-version: 1.14
 
     - name: migration tests
+      env:
+        TEST_MYSQL_VERSION: ${{ matrix.version }}
       run:  script/cibuild-gh-ost-replica-tests
