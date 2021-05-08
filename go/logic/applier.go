@@ -480,6 +480,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
 		this.migrationContext.GetIteration() == 0,
 		this.migrationContext.IsTransactionalTable(),
+		this.migrationContext.IsAddUniqueKey,
 	)
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
@@ -961,7 +962,7 @@ func (this *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEv
 
 // buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
 // event entry on the original table.
-func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (results [](*dmlBuildResult)) {
+func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent, secondary bool) (results [](*dmlBuildResult)) {
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
 		{
@@ -970,16 +971,27 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 		}
 	case binlog.InsertDML:
 		{
-			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
+			if this.migrationContext.IsAddUniqueKey && !secondary {
+				dmlEvent.DML = binlog.DeleteDML
+				dmlEvent.WhereColumnValues = dmlEvent.NewColumnValues
+				results = append(results, this.buildDMLEventQuery(dmlEvent, true)...)
+				dmlEvent.DML = binlog.InsertDML
+				results = append(results, this.buildDMLEventQuery(dmlEvent, true)...)
+				return results
+			}
+			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues(), this.migrationContext.IsAddUniqueKey)
+			// query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
 			return append(results, newDmlBuildResult(query, sharedArgs, 1, err))
 		}
 	case binlog.UpdateDML:
 		{
 			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
 				dmlEvent.DML = binlog.DeleteDML
-				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
+				// results = append(results, this.buildDMLEventQuery(dmlEvent)...)
+				results = append(results, this.buildDMLEventQuery(dmlEvent, true)...)
 				dmlEvent.DML = binlog.InsertDML
-				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
+				// results = append(results, this.buildDMLEventQuery(dmlEvent)...)
+				results = append(results, this.buildDMLEventQuery(dmlEvent, true)...)
 				return results
 			}
 			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
@@ -1020,7 +1032,8 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 			return rollback(err)
 		}
 		for _, dmlEvent := range dmlEvents {
-			for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
+			// for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
+			for _, buildResult := range this.buildDMLEventQuery(dmlEvent, false) {
 				if buildResult.err != nil {
 					return rollback(buildResult.err)
 				}

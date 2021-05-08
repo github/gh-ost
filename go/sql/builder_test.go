@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"fmt"
 	"github.com/outbrain/golib/log"
 	test "github.com/outbrain/golib/tests"
 )
@@ -39,31 +40,43 @@ func TestEscapeName(t *testing.T) {
 	}
 }
 
+func TestBuildValueComparison(t *testing.T) {
+	{
+		column := "c1"
+		value := "@v1"
+		alias := "a"
+		comparisonSign := LessThanComparisonSign
+		rangeComparison, err := BuildValueComparison(column, value, alias, comparisonSign)
+		fmt.Println(rangeComparison, err)
+	}
+}
+
 func TestBuildEqualsComparison(t *testing.T) {
+	alias := ""
 	{
 		columns := []string{"c1"}
 		values := []string{"@v1"}
-		comparison, err := BuildEqualsComparison(columns, values)
+		comparison, err := BuildEqualsComparison(columns, values, alias)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` = @v1))")
 	}
 	{
 		columns := []string{"c1", "c2"}
 		values := []string{"@v1", "@v2"}
-		comparison, err := BuildEqualsComparison(columns, values)
+		comparison, err := BuildEqualsComparison(columns, values, alias)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` = @v1) and (`c2` = @v2))")
 	}
 	{
 		columns := []string{"c1"}
 		values := []string{"@v1", "@v2"}
-		_, err := BuildEqualsComparison(columns, values)
+		_, err := BuildEqualsComparison(columns, values, alias)
 		test.S(t).ExpectNotNil(err)
 	}
 	{
 		columns := []string{}
 		values := []string{}
-		_, err := BuildEqualsComparison(columns, values)
+		_, err := BuildEqualsComparison(columns, values, alias)
 		test.S(t).ExpectNotNil(err)
 	}
 }
@@ -98,11 +111,12 @@ func TestBuildSetPreparedClause(t *testing.T) {
 }
 
 func TestBuildRangeComparison(t *testing.T) {
+	alias := ""
 	{
 		columns := []string{"c1"}
 		values := []string{"@v1"}
 		args := []interface{}{3}
-		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanComparisonSign)
+		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanComparisonSign, alias)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` < @v1))")
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3}))
@@ -111,7 +125,7 @@ func TestBuildRangeComparison(t *testing.T) {
 		columns := []string{"c1"}
 		values := []string{"@v1"}
 		args := []interface{}{3}
-		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
+		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign, alias)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or ((`c1` = @v1)))")
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3}))
@@ -120,7 +134,7 @@ func TestBuildRangeComparison(t *testing.T) {
 		columns := []string{"c1", "c2"}
 		values := []string{"@v1", "@v2"}
 		args := []interface{}{3, 17}
-		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanComparisonSign)
+		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanComparisonSign, alias)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)))")
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17}))
@@ -129,7 +143,7 @@ func TestBuildRangeComparison(t *testing.T) {
 		columns := []string{"c1", "c2"}
 		values := []string{"@v1", "@v2"}
 		args := []interface{}{3, 17}
-		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
+		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign, alias)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)) or ((`c1` = @v1) and (`c2` = @v2)))")
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17}))
@@ -138,7 +152,7 @@ func TestBuildRangeComparison(t *testing.T) {
 		columns := []string{"c1", "c2", "c3"}
 		values := []string{"@v1", "@v2", "@v3"}
 		args := []interface{}{3, 17, 22}
-		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
+		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign, alias)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)) or (((`c1` = @v1) and (`c2` = @v2)) AND (`c3` < @v3)) or ((`c1` = @v1) and (`c2` = @v2) and (`c3` = @v3)))")
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 22, 3, 17, 22}))
@@ -147,14 +161,14 @@ func TestBuildRangeComparison(t *testing.T) {
 		columns := []string{"c1"}
 		values := []string{"@v1", "@v2"}
 		args := []interface{}{3, 17}
-		_, _, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
+		_, _, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign, alias)
 		test.S(t).ExpectNotNil(err)
 	}
 	{
 		columns := []string{}
 		values := []string{}
 		args := []interface{}{}
-		_, _, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
+		_, _, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign, alias)
 		test.S(t).ExpectNotNil(err)
 	}
 }
@@ -172,7 +186,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3}
 		rangeEndArgs := []interface{}{103}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -191,7 +205,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -218,7 +232,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeStartArgs := []interface{}{3}
 		rangeEndArgs := []interface{}{103}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, location)
@@ -237,7 +251,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, location)
@@ -261,7 +275,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true, true)
+		query, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -442,7 +456,7 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 	args := []interface{}{3, "testname", "first", 17, 23}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -456,7 +470,7 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 	}
 	{
 		sharedColumns := NewColumnList([]string{"position", "name", "age", "id"})
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -470,12 +484,12 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 	}
 	{
 		sharedColumns := NewColumnList([]string{"position", "name", "surprise", "id"})
-		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args, false)
 		test.S(t).ExpectNotNil(err)
 	}
 	{
 		sharedColumns := NewColumnList([]string{})
-		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args, false)
 		test.S(t).ExpectNotNil(err)
 	}
 }
@@ -489,7 +503,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		// testing signed
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -505,7 +519,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		// testing unsigned
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		sharedColumns.SetUnsigned("position")
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -521,7 +535,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		// testing unsigned
 		args := []interface{}{3, "testname", "first", int32(-1), 23}
 		sharedColumns.SetUnsigned("position")
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
