@@ -30,7 +30,7 @@ const maxMediumintUnsigned int32 = 16777215
 
 type TimezoneConversion struct {
 	FromTimezone string
-	ToTimezone string
+	ToTimezone   string
 }
 
 type Column struct {
