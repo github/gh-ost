@@ -206,6 +206,7 @@ type MigrationContext struct {
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableVirtualColumns      *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
+	OriginalTableAutoIncrement       uint64
 	GhostTableColumns                *sql.ColumnList
 	GhostTableVirtualColumns         *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
