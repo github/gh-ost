@@ -190,6 +190,10 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	}
 
 	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
+		if this.migrationContext.GhostTableVirtualColumns.GetColumn(column.Name) != nil {
+			// this is a virtual column
+			continue
+		}
 		if this.migrationContext.MappedSharedColumns.HasTimezoneConversion(column.Name) {
 			return fmt.Errorf("No support at this time for converting a column from DATETIME to TIMESTAMP that is also part of the chosen unique key. Column: %s, key: %s", column.Name, this.migrationContext.UniqueKey.Name)
 		}
