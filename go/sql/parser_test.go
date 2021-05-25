@@ -24,6 +24,7 @@ func TestParseAlterStatement(t *testing.T) {
 	test.S(t).ExpectNil(err)
 	test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
 	test.S(t).ExpectFalse(parser.HasNonTrivialRenames())
+	test.S(t).ExpectFalse(parser.IsAutoIncrementDefined())
 }
 
 func TestParseAlterStatementTrivialRename(t *testing.T) {
@@ -33,8 +34,29 @@ func TestParseAlterStatementTrivialRename(t *testing.T) {
 	test.S(t).ExpectNil(err)
 	test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
 	test.S(t).ExpectFalse(parser.HasNonTrivialRenames())
+	test.S(t).ExpectFalse(parser.IsAutoIncrementDefined())
 	test.S(t).ExpectEquals(len(parser.columnRenameMap), 1)
 	test.S(t).ExpectEquals(parser.columnRenameMap["ts"], "ts")
+}
+
+func TestParseAlterStatementWithAutoIncrement(t *testing.T) {
+
+	statements := []string{
+		"auto_increment=7",
+		"auto_increment = 7",
+		"AUTO_INCREMENT = 71",
+		"add column t int, change ts ts timestamp, auto_increment=7 engine=innodb",
+		"add column t int, change ts ts timestamp, auto_increment =7 engine=innodb",
+		"add column t int, change ts ts timestamp, AUTO_INCREMENT = 7 engine=innodb",
+		"add column t int, change ts ts timestamp, engine=innodb auto_increment=73425",
+	}
+	for _, statement := range statements {
+		parser := NewAlterTableParser()
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
+		test.S(t).ExpectTrue(parser.IsAutoIncrementDefined())
+	}
 }
 
 func TestParseAlterStatementTrivialRenames(t *testing.T) {
@@ -44,6 +66,7 @@ func TestParseAlterStatementTrivialRenames(t *testing.T) {
 	test.S(t).ExpectNil(err)
 	test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
 	test.S(t).ExpectFalse(parser.HasNonTrivialRenames())
+	test.S(t).ExpectFalse(parser.IsAutoIncrementDefined())
 	test.S(t).ExpectEquals(len(parser.columnRenameMap), 2)
 	test.S(t).ExpectEquals(parser.columnRenameMap["ts"], "ts")
 	test.S(t).ExpectEquals(parser.columnRenameMap["f"], "f")
@@ -64,6 +87,7 @@ func TestParseAlterStatementNonTrivial(t *testing.T) {
 		parser := NewAlterTableParser()
 		err := parser.ParseAlterStatement(statement)
 		test.S(t).ExpectNil(err)
+		test.S(t).ExpectFalse(parser.IsAutoIncrementDefined())
 		test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
 		renames := parser.GetNonTrivialRenames()
 		test.S(t).ExpectEquals(len(renames), 2)

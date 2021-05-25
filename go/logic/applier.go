@@ -207,6 +207,25 @@ func (this *Applier) AlterGhost() error {
 	return nil
 }
 
+// AlterGhost applies `alter` statement on ghost table
+func (this *Applier) AlterGhostAutoIncrement() error {
+	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s AUTO_INCREMENT=%d`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		this.migrationContext.OriginalTableAutoIncrement,
+	)
+	this.migrationContext.Log.Infof("Altering ghost table AUTO_INCREMENT value %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	)
+	this.migrationContext.Log.Debugf("AUTO_INCREMENT ALTER statement: %s", query)
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	this.migrationContext.Log.Infof("Ghost table AUTO_INCREMENT altered")
+	return nil
+}
+
 // CreateChangelogTable creates the changelog table on the applier host
 func (this *Applier) CreateChangelogTable() error {
 	if err := this.DropChangelogTable(); err != nil {
