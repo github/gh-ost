@@ -18,15 +18,16 @@ function build {
   GOOS=$3
   GOARCH=$4
 
-  if ! go version | egrep -q 'go(1\.1[456])' ; then
-    echo "go version must be 1.14 or above"
+  if ! go version | egrep -q 'go(1\.1[56])' ; then
+    echo "go version must be 1.15 or above"
     exit 1
   fi
 
+  # TODO: remove GO111MODULE once gh-ost uses Go modules
   echo "Building ${osname} binary"
   export GOOS
   export GOARCH
-  go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
+  GO111MODULE=off go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
 
   if [ $? -ne 0 ]; then
       echo "Build failed for ${osname}"
