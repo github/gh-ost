@@ -1,6 +1,7 @@
 # Interactive commands
 
-`gh-ost` is designed to be operations friendly. To that effect, it allows the user to control its behavior even while it is running.
+`gh-ost` is designed to be operations friendly
+. To that effect, it allows the user to control its behavior even while it is running.
 
 ### Interactive interfaces
 
