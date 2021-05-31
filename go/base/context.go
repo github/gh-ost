@@ -51,6 +51,7 @@ const (
 const (
 	HTTPStatusOK       = 200
 	MaxEventsBatchSize = 1000
+	ETAUnknown         = math.MinInt64
 )
 
 var (
@@ -181,6 +182,7 @@ type MigrationContext struct {
 	lastHeartbeatOnChangelogMutex          *sync.Mutex
 	CurrentLag                             int64
 	currentProgress                        uint64
+	etaNanoseonds                          int64
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
@@ -266,6 +268,7 @@ func NewMigrationContext() *MigrationContext {
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
 		DMLBatchSize:                        10,
+		etaNanoseonds:                       ETAUnknown,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
@@ -471,6 +474,22 @@ func (this *MigrationContext) GetProgressPct() float64 {
 
 func (this *MigrationContext) SetProgressPct(progressPct float64) {
 	atomic.StoreUint64(&this.currentProgress, math.Float64bits(progressPct))
+}
+
+func (this *MigrationContext) GetETADuration() time.Duration {
+	return time.Duration(atomic.LoadInt64(&this.etaNanoseonds))
+}
+
+func (this *MigrationContext) SetETADuration(etaDuration time.Duration) {
+	atomic.StoreInt64(&this.etaNanoseonds, etaDuration.Nanoseconds())
+}
+
+func (this *MigrationContext) GetETASeconds() int64 {
+	nano := atomic.LoadInt64(&this.etaNanoseonds)
+	if nano < 0 {
+		return ETAUnknown
+	}
+	return nano / int64(time.Second)
 }
 
 // math.Float64bits([f=0..100])
