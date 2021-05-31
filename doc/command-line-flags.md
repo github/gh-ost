@@ -181,6 +181,9 @@ Optionally involve the process ID, for example: `--replica-server-id=$((10000000
 It's on you to choose a number that does not collide with another `gh-ost` or another running replica.
 See also: [`concurrent-migrations`](cheatsheet.md#concurrent-migrations) on the cheatsheet.
 
+### serve-socket-file
+
+Defaults to an auto-determined and advertised upon startup file. Defines Unix socket file to serve on.
 ### skip-foreign-key-checks
 
 By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not reference other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
