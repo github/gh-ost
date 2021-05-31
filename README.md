@@ -1,6 +1,6 @@
 # gh-ost
 
-[![build status](https://travis-ci.org/github/gh-ost.svg)](https://travis-ci.org/github/gh-ost) [![downloads](https://img.shields.io/github/downloads/github/gh-ost/total.svg)](https://github.com/github/gh-ost/releases) [![release](https://img.shields.io/github/release/github/gh-ost.svg)](https://github.com/github/gh-ost/releases)
+[![ci](https://github.com/github/gh-ost/actions/workflows/ci.yml/badge.svg)](https://github.com/github/gh-ost/actions/workflows/ci.yml) [![replica-tests](https://github.com/github/gh-ost/actions/workflows/replica-tests.yml/badge.svg)](https://github.com/github/gh-ost/actions/workflows/replica-tests.yml) [![downloads](https://img.shields.io/github/downloads/github/gh-ost/total.svg)](https://github.com/github/gh-ost/releases) [![release](https://img.shields.io/github/release/github/gh-ost.svg)](https://github.com/github/gh-ost/releases)
 
 #### GitHub's online schema migration for MySQL <img src="doc/images/gh-ost-logo-light-160.png" align="right">
 
@@ -95,7 +95,7 @@ Please see [Coding gh-ost](doc/coding-ghost.md) for a guide to getting started d
 
 [Download latest release here](https://github.com/github/gh-ost/releases/latest)
 
-`gh-ost` is a Go project; it is built with Go `1.14` and above. To build on your own, use either:
+`gh-ost` is a Go project; it is built with Go `1.15` and above. To build on your own, use either:
 - [script/build](https://github.com/github/gh-ost/blob/master/script/build) - this is the same build script used by CI hence the authoritative; artifact is `./bin/gh-ost` binary.
 - [build.sh](https://github.com/github/gh-ost/blob/master/build.sh) for building `tar.gz` artifacts in `/tmp/gh-ost`
 

@@ -6,6 +6,7 @@
 package sql
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -22,6 +23,7 @@ const (
 	MediumIntColumnType
 	JSONColumnType
 	FloatColumnType
+	BinaryColumnType
 )
 
 const maxMediumintUnsigned int32 = 16777215
@@ -38,14 +40,31 @@ type Column struct {
 	EnumValues           string
 	timezoneConversion   *TimezoneConversion
 	enumToTextConversion bool
+
+	// add Octet length for binary type, fix bytes with suffix "00" get clipped in mysql binlog.
+	// https://github.com/github/gh-ost/issues/909
+	BinaryOctetLength uint
 }
 
-func (this *Column) convertArg(arg interface{}) interface{} {
+func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
 	if s, ok := arg.(string); ok {
 		// string, charset conversion
 		if encoding, ok := charsetEncodingMap[this.Charset]; ok {
 			arg, _ = encoding.NewDecoder().String(s)
 		}
+
+		if this.Type == BinaryColumnType && isUniqueKeyColumn {
+			arg2Bytes := []byte(arg.(string))
+			size := len(arg2Bytes)
+			if uint(size) < this.BinaryOctetLength {
+				buf := bytes.NewBuffer(arg2Bytes)
+				for i := uint(0); i < (this.BinaryOctetLength - uint(size)); i++ {
+					buf.Write([]byte{0})
+				}
+				arg = buf.String()
+			}
+		}
+
 		return arg
 	}
 

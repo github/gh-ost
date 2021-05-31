@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -146,7 +146,9 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 			fmt.Fprint(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
-coordinates													 # Print the currently inspected coordinates
+coordinates                          # Print the currently inspected coordinates
+applier                              # Print the hostname of the applier
+inspector                            # Print the hostname of the inspector
 chunk-size=<newsize>                 # Set a new chunk-size
 dml-batch-size=<newsize>             # Set a new dml-batch-size
 nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
@@ -177,6 +179,22 @@ help                                 # This message
 			}
 			return NoPrintStatusRule, fmt.Errorf("coordinates are read-only")
 		}
+	case "applier":
+		if this.migrationContext.ApplierConnectionConfig != nil && this.migrationContext.ApplierConnectionConfig.ImpliedKey != nil {
+			fmt.Fprintf(writer, "Host: %s, Version: %s\n",
+				this.migrationContext.ApplierConnectionConfig.ImpliedKey.String(),
+				this.migrationContext.ApplierMySQLVersion,
+			)
+		}
+		return NoPrintStatusRule, nil
+	case "inspector":
+		if this.migrationContext.InspectorConnectionConfig != nil && this.migrationContext.InspectorConnectionConfig.ImpliedKey != nil {
+			fmt.Fprintf(writer, "Host: %s, Version: %s\n",
+				this.migrationContext.InspectorConnectionConfig.ImpliedKey.String(),
+				this.migrationContext.InspectorMySQLVersion,
+			)
+		}
+		return NoPrintStatusRule, nil
 	case "chunk-size":
 		{
 			if argIsQuestion {
