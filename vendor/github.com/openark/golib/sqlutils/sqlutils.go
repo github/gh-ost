@@ -21,12 +21,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/outbrain/golib/log"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/openark/golib/log"
 )
+
+const DateTimeFormat = "2006-01-02 15:04:05.999999"
 
 // RowMap represents one row in a result set. Its objective is to allow
 // for easy, typed getters by column name.
@@ -41,6 +44,18 @@ func (this *CellData) MarshalJSON() ([]byte, error) {
 	} else {
 		return json.Marshal(nil)
 	}
+}
+
+// UnmarshalJSON reds this object from JSON
+func (this *CellData) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	(*this).String = s
+	(*this).Valid = true
+
+	return nil
 }
 
 func (this *CellData) NullString() *sql.NullString {
@@ -60,8 +75,20 @@ func (this *RowData) MarshalJSON() ([]byte, error) {
 	return json.Marshal(cells)
 }
 
+func (this *RowData) Args() []interface{} {
+	result := make([]interface{}, len(*this))
+	for i := range *this {
+		result[i] = (*(*this)[i].NullString())
+	}
+	return result
+}
+
 // ResultData is an ordered row set of RowData
 type ResultData []RowData
+type NamedResultData struct {
+	Columns []string
+	Data    ResultData
+}
 
 var EmptyResultData = ResultData{}
 
@@ -105,7 +132,7 @@ func (this *RowMap) GetIntD(key string, def int) int {
 }
 
 func (this *RowMap) GetUint(key string) uint {
-	res, _ := strconv.Atoi(this.GetString(key))
+	res, _ := strconv.ParseUint(this.GetString(key), 10, 0)
 	return uint(res)
 }
 
@@ -117,8 +144,28 @@ func (this *RowMap) GetUintD(key string, def uint) uint {
 	return uint(res)
 }
 
+func (this *RowMap) GetUint64(key string) uint64 {
+	res, _ := strconv.ParseUint(this.GetString(key), 10, 0)
+	return res
+}
+
+func (this *RowMap) GetUint64D(key string, def uint64) uint64 {
+	res, err := strconv.ParseUint(this.GetString(key), 10, 0)
+	if err != nil {
+		return def
+	}
+	return uint64(res)
+}
+
 func (this *RowMap) GetBool(key string) bool {
 	return this.GetInt(key) != 0
+}
+
+func (this *RowMap) GetTime(key string) time.Time {
+	if t, err := time.Parse(DateTimeFormat, this.GetString(key)); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 // knownDBs is a DB cache by uri
@@ -127,21 +174,33 @@ var knownDBsMutex = &sync.Mutex{}
 
 // GetDB returns a DB instance based on uri.
 // bool result indicates whether the DB was returned from cache; err
-func GetDB(mysql_uri string) (*sql.DB, bool, error) {
+func GetGenericDB(driverName, dataSourceName string) (*sql.DB, bool, error) {
 	knownDBsMutex.Lock()
 	defer func() {
 		knownDBsMutex.Unlock()
 	}()
 
 	var exists bool
-	if _, exists = knownDBs[mysql_uri]; !exists {
-		if db, err := sql.Open("mysql", mysql_uri); err == nil {
-			knownDBs[mysql_uri] = db
+	if _, exists = knownDBs[dataSourceName]; !exists {
+		if db, err := sql.Open(driverName, dataSourceName); err == nil {
+			knownDBs[dataSourceName] = db
 		} else {
 			return db, exists, err
 		}
 	}
-	return knownDBs[mysql_uri], exists, nil
+	return knownDBs[dataSourceName], exists, nil
+}
+
+// GetDB returns a MySQL DB instance based on uri.
+// bool result indicates whether the DB was returned from cache; err
+func GetDB(mysql_uri string) (*sql.DB, bool, error) {
+	return GetGenericDB("mysql", mysql_uri)
+}
+
+// GetDB returns a SQLite DB instance based on DB file name.
+// bool result indicates whether the DB was returned from cache; err
+func GetSQLiteDB(dbFile string) (*sql.DB, bool, error) {
+	return GetGenericDB("sqlite3", dbFile)
 }
 
 // RowToArray is a convenience function, typically not called directly, which maps a
@@ -195,43 +254,44 @@ func ScanRowsToMaps(rows *sql.Rows, on_row func(RowMap) error) error {
 
 // QueryRowsMap is a convenience function allowing querying a result set while poviding a callback
 // function activated per read row.
-func QueryRowsMap(db *sql.DB, query string, on_row func(RowMap) error, args ...interface{}) error {
-	var err error
+func QueryRowsMap(db *sql.DB, query string, on_row func(RowMap) error, args ...interface{}) (err error) {
 	defer func() {
 		if derr := recover(); derr != nil {
-			err = errors.New(fmt.Sprintf("QueryRowsMap unexpected error: %+v", derr))
+			err = fmt.Errorf("QueryRowsMap unexpected error: %+v", derr)
 		}
 	}()
 
-	rows, err := db.Query(query, args...)
-	defer rows.Close()
+	var rows *sql.Rows
+	rows, err = db.Query(query, args...)
+	if rows != nil {
+		defer rows.Close()
+	}
 	if err != nil && err != sql.ErrNoRows {
 		return log.Errore(err)
 	}
 	err = ScanRowsToMaps(rows, on_row)
-	return err
+	return
 }
 
 // queryResultData returns a raw array of rows for a given query, optionally reading and returning column names
-func queryResultData(db *sql.DB, query string, retrieveColumns bool, args ...interface{}) (ResultData, []string, error) {
-	var err error
+func queryResultData(db *sql.DB, query string, retrieveColumns bool, args ...interface{}) (resultData ResultData, columns []string, err error) {
 	defer func() {
 		if derr := recover(); derr != nil {
 			err = errors.New(fmt.Sprintf("QueryRowsMap unexpected error: %+v", derr))
 		}
 	}()
 
-	columns := []string{}
-	rows, err := db.Query(query, args...)
+	var rows *sql.Rows
+	rows, err = db.Query(query, args...)
 	defer rows.Close()
 	if err != nil && err != sql.ErrNoRows {
-		return EmptyResultData, columns, log.Errore(err)
+		return EmptyResultData, columns, err
 	}
 	if retrieveColumns {
 		// Don't pay if you don't want to
 		columns, _ = rows.Columns()
 	}
-	resultData := ResultData{}
+	resultData = ResultData{}
 	err = ScanRowsToArrays(rows, func(rowData []CellData) error {
 		resultData = append(resultData, rowData)
 		return nil
@@ -246,8 +306,9 @@ func QueryResultData(db *sql.DB, query string, args ...interface{}) (ResultData,
 }
 
 // QueryResultDataNamed returns a raw array of rows, with column names
-func QueryResultDataNamed(db *sql.DB, query string, args ...interface{}) (ResultData, []string, error) {
-	return queryResultData(db, query, true, args...)
+func QueryNamedResultData(db *sql.DB, query string, args ...interface{}) (NamedResultData, error) {
+	resultData, columns, err := queryResultData(db, query, true, args...)
+	return NamedResultData{Columns: columns, Data: resultData}, err
 }
 
 // QueryRowsMapBuffered reads data from the database into a buffer, and only then applies the given function per row.
@@ -269,15 +330,13 @@ func QueryRowsMapBuffered(db *sql.DB, query string, on_row func(RowMap) error, a
 }
 
 // ExecNoPrepare executes given query using given args on given DB, without using prepared statements.
-func ExecNoPrepare(db *sql.DB, query string, args ...interface{}) (sql.Result, error) {
-	var err error
+func ExecNoPrepare(db *sql.DB, query string, args ...interface{}) (res sql.Result, err error) {
 	defer func() {
 		if derr := recover(); derr != nil {
 			err = errors.New(fmt.Sprintf("ExecNoPrepare unexpected error: %+v", derr))
 		}
 	}()
 
-	var res sql.Result
 	res, err = db.Exec(query, args...)
 	if err != nil {
 		log.Errore(err)
@@ -287,20 +346,18 @@ func ExecNoPrepare(db *sql.DB, query string, args ...interface{}) (sql.Result, e
 
 // ExecQuery executes given query using given args on given DB. It will safele prepare, execute and close
 // the statement.
-func execInternal(silent bool, db *sql.DB, query string, args ...interface{}) (sql.Result, error) {
-	var err error
+func execInternal(silent bool, db *sql.DB, query string, args ...interface{}) (res sql.Result, err error) {
 	defer func() {
 		if derr := recover(); derr != nil {
 			err = errors.New(fmt.Sprintf("execInternal unexpected error: %+v", derr))
 		}
 	}()
-
-	stmt, err := db.Prepare(query)
+	var stmt *sql.Stmt
+	stmt, err = db.Prepare(query)
 	if err != nil {
 		return nil, err
 	}
 	defer stmt.Close()
-	var res sql.Result
 	res, err = stmt.Exec(args...)
 	if err != nil && !silent {
 		log.Errore(err)
@@ -330,4 +387,41 @@ func InClauseStringValues(terms []string) string {
 // Convert variable length arguments into arguments array
 func Args(args ...interface{}) []interface{} {
 	return args
+}
+
+func NilIfZero(i int64) interface{} {
+	if i == 0 {
+		return nil
+	}
+	return i
+}
+
+func ScanTable(db *sql.DB, tableName string) (NamedResultData, error) {
+	query := fmt.Sprintf("select * from %s", tableName)
+	return QueryNamedResultData(db, query)
+}
+
+func WriteTable(db *sql.DB, tableName string, data NamedResultData) (err error) {
+	if len(data.Data) == 0 {
+		return nil
+	}
+	if len(data.Columns) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(data.Columns))
+	for i := range placeholders {
+		placeholders[i] = "?"
+	}
+	query := fmt.Sprintf(
+		`replace into %s (%s) values (%s)`,
+		tableName,
+		strings.Join(data.Columns, ","),
+		strings.Join(placeholders, ","),
+	)
+	for _, rowData := range data.Data {
+		if _, execErr := db.Exec(query, rowData.Args()...); execErr != nil {
+			err = execErr
+		}
+	}
+	return err
 }

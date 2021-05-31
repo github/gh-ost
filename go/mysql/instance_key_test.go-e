@@ -8,8 +8,8 @@ package mysql
 import (
 	"testing"
 
-	"github.com/openark/golib/log"
-	test "github.com/openark/golib/tests"
+	"github.com/outbrain/golib/log"
+	test "github.com/outbrain/golib/tests"
 )
 
 func init() {

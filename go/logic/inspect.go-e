@@ -17,7 +17,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/openark/golib/sqlutils"
+	"github.com/outbrain/golib/sqlutils"
 )
 
 const startSlavePostWaitMilliseconds = 500 * time.Millisecond

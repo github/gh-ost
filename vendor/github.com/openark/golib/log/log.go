@@ -126,8 +126,18 @@ func logFormattedEntry(logLevel LogLevel, message string, args ...interface{}) s
 	if logLevel > globalLogLevel {
 		return ""
 	}
+	// if TZ env variable is set, update the timestamp timezone
+	localizedTime := time.Now()
+	tzLocation := os.Getenv("TZ")
+	if tzLocation != "" {
+		location, err := time.LoadLocation(tzLocation)
+		if err == nil { // if invalid tz location was provided, just leave it as the default
+			localizedTime = time.Now().In(location)
+		}
+	}
+
 	msgArgs := fmt.Sprintf(message, args...)
-	entryString := fmt.Sprintf("%s %s %s", time.Now().Format(TimeFormat), logLevel, msgArgs)
+	entryString := fmt.Sprintf("%s %s %s", localizedTime.Format(TimeFormat), logLevel, msgArgs)
 	fmt.Fprintln(os.Stderr, entryString)
 
 	if syslogWriter != nil {

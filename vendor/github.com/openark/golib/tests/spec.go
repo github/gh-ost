@@ -35,7 +35,7 @@ func (spec *Spec) ExpectEquals(actual, value interface{}) {
 	if actual == value {
 		return
 	}
-	spec.t.Errorf("Expected %+v, got %+v", value, actual)
+	spec.t.Errorf("Expected:\n[[[%+v]]]\n- got:\n[[[%+v]]]", value, actual)
 }
 
 // ExpectNotEquals expects given values to be nonequal (comparison via `==`), or errors

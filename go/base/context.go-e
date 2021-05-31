@@ -19,7 +19,7 @@ import (
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/openark/golib/log"
+	"github.com/outbrain/golib/log"
 
 	"github.com/go-ini/ini"
 )

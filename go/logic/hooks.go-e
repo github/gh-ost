@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/github/gh-ost/go/base"
-	"github.com/openark/golib/log"
+	"github.com/outbrain/golib/log"
 )
 
 const (

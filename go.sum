@@ -16,8 +16,8 @@ github.com/kr/pretty v0.2.1/go.mod h1:ipq/a2n7PKx3OHsz4KJII5eveXtPO4qwEXGdVfWzfn
 github.com/kr/pty v1.1.1/go.mod h1:pFQYn66WHrOpPYNljwOMqo10TkYh1fy3cYio2l3bCsQ=
 github.com/kr/text v0.1.0 h1:45sCR5RtlFHMR4UwH9sdQ5TC8v0qDQCHnXt+kaKSTVE=
 github.com/kr/text v0.1.0/go.mod h1:4Jbv+DJW3UT/LiOwJeYQe1efqtUx/iVham/4vfdArNI=
-github.com/outbrain/golib v0.0.0-20200503083229-2531e5dbcc71 h1:5FSwz/q8DhpkUsq8cqRN7gRVWWnfXfjeOeB8Bhj5ARc=
-github.com/outbrain/golib v0.0.0-20200503083229-2531e5dbcc71/go.mod h1:JDhu//MMvcPVPH889Xr7DyamEbTLumgDBALGUyXrz1g=
+github.com/openark/golib v0.0.0-20210531070646-355f37940af8 h1:9ciIHNuyFqRWi9NpMNw9sVLB6z1ItpP5ZhTY9Q1xVu4=
+github.com/openark/golib v0.0.0-20210531070646-355f37940af8/go.mod h1:1jj8x1eDVZxgc/Z4VyamX4qTbAdHPUQA6NeVtCd8Sl8=
 github.com/pingcap/check v0.0.0-20190102082844-67f458068fc8 h1:USx2/E1bX46VG32FIw034Au6seQ2fY9NEILmNh/UlQg=
 github.com/pingcap/check v0.0.0-20190102082844-67f458068fc8/go.mod h1:B1+S9LNcuMyLH/4HMTViQOJevkGiik3wW2AN9zb2fNQ=
 github.com/pingcap/errors v0.11.0 h1:DCJQB8jrHbQ1VVlMFIrbj2ApScNNotVmkSNplu2yUt4=
