@@ -17,4 +17,5 @@ export GOPATH="$PWD/.gopath"
 cd .gopath/src/github.com/github/gh-ost
 
 # We put the binaries directly into the bindir, because we have no need for shim wrappers
-go build -o "$bindir/gh-ost" -ldflags "-X main.AppVersion=${version} -X main.BuildDescribe=${describe}" ./go/cmd/gh-ost/main.go
+# TODO: remove GO111MODULE once gh-ost uses Go modules
+GO111MODULE=off go build -o "$bindir/gh-ost" -ldflags "-X main.AppVersion=${version} -X main.BuildDescribe=${describe}" ./go/cmd/gh-ost/main.go
