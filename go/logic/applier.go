@@ -311,6 +311,7 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
 	_, err := sqlutils.ExecNoPrepare(this.db, query, explicitId, hint, value)
+	this.migrationContext.PanicAbortIfTableError(err)
 	return hint, err
 }
 
@@ -947,6 +948,8 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 	)
 	this.migrationContext.Log.Infof("Issuing and expecting this to block: %s", query)
 	if _, err := tx.Exec(query); err != nil {
+		this.migrationContext.PanicAbortIfTableError(err)
+
 		tablesRenamed <- err
 		return this.migrationContext.Log.Errore(err)
 	}

@@ -824,3 +824,20 @@ func (this *MigrationContext) ReadConfigFile() error {
 
 	return nil
 }
+
+func (this *MigrationContext) PanicAbortIfTableError(err error) {
+	if err == nil {
+		return
+	}
+	if strings.Contains(err.Error(), mysql.Error1146TableDoesntExist) || strings.Contains(err.Error(), mysql.Error1017CantFindFile) {
+		this.PanicAbortOnError(err)
+	}
+	// otherwise irrelevant error and we do not panic
+}
+
+func (this *MigrationContext) PanicAbortOnError(err error) {
+	if err == nil {
+		return
+	}
+	this.PanicAbort <- err
+}

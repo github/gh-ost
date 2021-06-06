@@ -359,7 +359,7 @@ help                                 # This message
 				return NoPrintStatusRule, err
 			}
 			err := fmt.Errorf("User commanded 'panic'. The migration will be aborted without cleanup. Please drop the gh-ost tables before trying again.")
-			this.migrationContext.PanicAbort <- err
+			this.migrationContext.PanicAbortOnError(err)
 			return NoPrintStatusRule, err
 		}
 	default:
