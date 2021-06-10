@@ -187,6 +187,10 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		if column.Name == mappedColumn.Name && column.Type == sql.DateTimeColumnType && mappedColumn.Type == sql.TimestampColumnType {
 			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.migrationContext.ApplierTimeZone)
 		}
+		if column.Name == mappedColumn.Name && column.Type == sql.EnumColumnType && mappedColumn.Charset != "" {
+			this.migrationContext.MappedSharedColumns.SetEnumToTextConversion(column.Name)
+			this.migrationContext.MappedSharedColumns.SetEnumValues(column.Name, column.EnumValues)
+		}
 	}
 
 	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
@@ -590,6 +594,7 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			}
 			if strings.HasPrefix(columnType, "enum") {
 				column.Type = sql.EnumColumnType
+				column.EnumValues = sql.ParseEnumValues(m.GetString("COLUMN_TYPE"))
 			}
 			if strings.HasPrefix(columnType, "binary") {
 				column.Type = sql.BinaryColumnType
