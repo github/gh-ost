@@ -6,12 +6,15 @@
 package binlog
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
+	"github.com/ngaut/log"
 
 	gomysql "github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/replication"
@@ -137,6 +140,11 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 		if err != nil {
 			return err
 		}
+		// check binlog format .if it's not row return error
+		err = this.BinlogFormatChecker(ev)
+		if err != nil {
+			return err
+		}
 		func() {
 			this.currentCoordinatesMutex.Lock()
 			defer this.currentCoordinatesMutex.Unlock()
@@ -162,5 +170,22 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 
 func (this *GoMySQLReader) Close() error {
 	this.binlogSyncer.Close()
+	return nil
+}
+
+// BinlogFormatChecker add for binlog format checking .if it is not row format gh-ost will exit.
+func (this *GoMySQLReader) BinlogFormatChecker(ev *replication.BinlogEvent) error {
+	if ev.Header.EventType.String() == "QueryEvent" {
+		if queryEvent, ok := ev.Event.(*replication.QueryEvent); ok {
+			query := strings.TrimSpace(string(queryEvent.Query))
+			query = strings.ToUpper(query)
+			if strings.HasPrefix(query, "INSERT") || strings.HasPrefix(query, "UPDATE") ||
+				strings.HasPrefix(query, "DELETE") || strings.HasPrefix(query, "REPLACE") {
+				log.Errorf("Found DML in binlog stream %s:%d,[query]:%s\n", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), query)
+				log.Errorf("Gh-ost should exited , byte ... ")
+				return errors.New("ERROR_FOUND_DML_SQL_IN_BINLOG_STREAM")
+			}
+		}
+	}
 	return nil
 }
