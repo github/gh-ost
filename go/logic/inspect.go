@@ -29,12 +29,14 @@ type Inspector struct {
 	db                  *gosql.DB
 	informationSchemaDb *gosql.DB
 	migrationContext    *base.MigrationContext
+	name                string
 }
 
 func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 	return &Inspector{
 		connectionConfig: migrationContext.InspectorConnectionConfig,
 		migrationContext: migrationContext,
+		name:             "inspector",
 	}
 }
 
@@ -52,7 +54,7 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
-	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {
@@ -106,6 +108,10 @@ func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (colum
 
 func (this *Inspector) InspectOriginalTable() (err error) {
 	this.migrationContext.OriginalTableColumns, this.migrationContext.OriginalTableVirtualColumns, this.migrationContext.OriginalTableUniqueKeys, err = this.InspectTableColumnsAndUniqueKeys(this.migrationContext.OriginalTableName)
+	if err != nil {
+		return err
+	}
+	this.migrationContext.OriginalTableAutoIncrement, err = this.getAutoIncrementValue(this.migrationContext.OriginalTableName)
 	if err != nil {
 		return err
 	}
@@ -181,9 +187,17 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		if column.Name == mappedColumn.Name && column.Type == sql.DateTimeColumnType && mappedColumn.Type == sql.TimestampColumnType {
 			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.migrationContext.ApplierTimeZone)
 		}
+		if column.Name == mappedColumn.Name && column.Type == sql.EnumColumnType && mappedColumn.Charset != "" {
+			this.migrationContext.MappedSharedColumns.SetEnumToTextConversion(column.Name)
+			this.migrationContext.MappedSharedColumns.SetEnumValues(column.Name, column.EnumValues)
+		}
 	}
 
 	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
+		if this.migrationContext.GhostTableVirtualColumns.GetColumn(column.Name) != nil {
+			// this is a virtual column
+			continue
+		}
 		if this.migrationContext.MappedSharedColumns.HasTimezoneConversion(column.Name) {
 			return fmt.Errorf("No support at this time for converting a column from DATETIME to TIMESTAMP that is also part of the chosen unique key. Column: %s, key: %s", column.Name, this.migrationContext.UniqueKey.Name)
 		}
@@ -198,7 +212,7 @@ func (this *Inspector) validateConnection() error {
 		return fmt.Errorf("MySQL replication length limited to 32 characters. See https://dev.mysql.com/doc/refman/5.7/en/assigning-passwords.html")
 	}
 
-	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext)
+	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
 	this.migrationContext.InspectorMySQLVersion = version
 	return err
 }
@@ -526,7 +540,7 @@ func (this *Inspector) CountTableRows() error {
 
 	this.migrationContext.Log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 
-	query := fmt.Sprintf(`select /* gh-ost */ count(*) as rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	var rowsEstimate int64
 	if err := this.db.QueryRow(query).Scan(&rowsEstimate); err != nil {
 		return err
@@ -553,6 +567,7 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		columnName := m.GetString("COLUMN_NAME")
 		columnType := m.GetString("COLUMN_TYPE")
+		columnOctetLength := m.GetUint("CHARACTER_OCTET_LENGTH")
 		for _, columnsList := range columnsLists {
 			column := columnsList.GetColumn(columnName)
 			if column == nil {
@@ -579,6 +594,11 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			}
 			if strings.HasPrefix(columnType, "enum") {
 				column.Type = sql.EnumColumnType
+				column.EnumValues = sql.ParseEnumValues(m.GetString("COLUMN_TYPE"))
+			}
+			if strings.HasPrefix(columnType, "binary") {
+				column.Type = sql.BinaryColumnType
+				column.BinaryOctetLength = columnOctetLength
 			}
 			if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
 				column.Charset = charset
@@ -587,6 +607,24 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		return nil
 	}, databaseName, tableName)
 	return err
+}
+
+// getAutoIncrementValue get's the original table's AUTO_INCREMENT value, if exists (0 value if not exists)
+func (this *Inspector) getAutoIncrementValue(tableName string) (autoIncrement uint64, err error) {
+	query := `
+		SELECT
+			AUTO_INCREMENT
+		FROM INFORMATION_SCHEMA.TABLES
+		WHERE
+			TABLES.TABLE_SCHEMA = ?
+			AND TABLES.TABLE_NAME = ?
+			AND AUTO_INCREMENT IS NOT NULL
+  `
+	err = sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		autoIncrement = m.GetUint64("AUTO_INCREMENT")
+		return nil
+	}, this.migrationContext.DatabaseName, tableName)
+	return autoIncrement, err
 }
 
 // getCandidateUniqueKeys investigates a table and returns the list of unique keys
