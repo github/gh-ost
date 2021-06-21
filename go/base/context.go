@@ -811,20 +811,34 @@ func (this *MigrationContext) ReadConfigFile() error {
 		return err
 	}
 
-	this.config.Client.User = cfg.Section("client").Key("user").String()
-	this.config.Client.Password = cfg.Section("client").Key("password").String()
-
-	this.config.Osc.Chunk_Size, err = cfg.Section("osc").Key("chunk_size").Int64()
-	if err != nil {
-		return fmt.Errorf("Unable to read osc chunk size: %s", err.Error())
+	if cfg.Section("client").Haskey("user") {
+		this.config.Client.User = cfg.Section("client").Key("user").String()
 	}
 
-	this.config.Osc.Max_Load = cfg.Section("osc").Key("max_load").String()
-	this.config.Osc.Replication_Lag_Query = cfg.Section("osc").Key("replication_lag_query").String()
+	if cfg.Section("client").Haskey("password") {
+		this.config.Client.Password = cfg.Section("client").Key("password").String()
+	}
 
-	this.config.Osc.Max_Lag_Millis, err = cfg.Section("osc").Key("max_lag_millis").Int64()
-	if err != nil {
-		return fmt.Errorf("Unable to read max lag millis: %s", err.Error())
+	if cfg.Section("osc").Haskey("chunk_size") {
+		this.config.Osc.Chunk_Size, err = cfg.Section("osc").Key("chunk_size").Int64()
+		if err != nil {
+			return fmt.Errorf("Unable to read osc chunk size: %s", err.Error())
+		}
+	}
+
+	if cfg.Section("osc").Haskey("max_load") {
+		this.config.Osc.Max_Load = cfg.Section("osc").Key("max_load").String()
+	}
+
+	if cfg.Section("osc").Haskey("replication_lag_query") {
+		this.config.Osc.Replication_Lag_Query = cfg.Section("osc").Key("replication_lag_query").String()
+	}
+
+	if cfg.Section("osc").Haskey("max_lag_millis") {
+		this.config.Osc.Max_Lag_Millis, err = cfg.Section("osc").Key("max_lag_millis").Int64()
+		if err != nil {
+			return fmt.Errorf("Unable to read max lag millis: %s", err.Error())
+		}
 	}
 
 	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull

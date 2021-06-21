@@ -1,11 +1,14 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package base
 
 import (
+	"fmt"
+	"io/ioutil"
+	"os"
 	"testing"
 	"time"
 
@@ -54,5 +57,49 @@ func TestGetTableNames(t *testing.T) {
 		test.S(t).ExpectEquals(context.GetOldTableName(), "_tmp_del")
 		test.S(t).ExpectEquals(context.GetGhostTableName(), "_tmp_gho")
 		test.S(t).ExpectEquals(context.GetChangelogTableName(), "_tmp_ghc")
+	}
+}
+
+func TestReadConfigFile(t *testing.T) {
+	{
+		context := NewMigrationContext()
+		context.ConfigFile = "/does/not/exist"
+		if err := context.ReadConfigFile(); err == nil {
+			t.Fatal("Expected .ReadConfigFile() to return an error, got nil")
+		}
+	}
+	{
+		f, err := ioutil.TempFile("", t.Name())
+		if err != nil {
+			t.Fatalf("Failed to create tmp file: %v", err)
+		}
+		defer os.Remove(f.Name())
+
+		f.Write([]byte("[client]"))
+		context := NewMigrationContext()
+		context.ConfigFile = f.Name()
+		if err := context.ReadConfigFile(); err != nil {
+			t.Fatalf(".ReadConfigFile() failed: %v", err)
+		}
+	}
+	{
+		f, err := ioutil.TempFile("", t.Name())
+		if err != nil {
+			t.Fatalf("Failed to create tmp file: %v", err)
+		}
+		defer os.Remove(f.Name())
+
+		f.Write([]byte(fmt.Sprintf("[client]\nuser=test\npassword=123456")))
+		context := NewMigrationContext()
+		context.ConfigFile = f.Name()
+		if err := context.ReadConfigFile(); err != nil {
+			t.Fatalf(".ReadConfigFile() failed: %v", err)
+		}
+
+		if context.config.Client.User != "test" {
+			t.Fatalf("Expected client user %q, got %q", "test", context.config.Client.User)
+		} else if context.config.Client.Password != "123456" {
+			t.Fatalf("Expected client password %q, got %q", "123456", context.config.Client.Password)
+		}
 	}
 }
