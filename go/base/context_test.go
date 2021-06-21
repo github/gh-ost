@@ -102,4 +102,22 @@ func TestReadConfigFile(t *testing.T) {
 			t.Fatalf("Expected client password %q, got %q", "123456", context.config.Client.Password)
 		}
 	}
+	{
+		f, err := ioutil.TempFile("", t.Name())
+		if err != nil {
+			t.Fatalf("Failed to create tmp file: %v", err)
+		}
+		defer os.Remove(f.Name())
+
+		f.Write([]byte(fmt.Sprintf("[osc]\nmax_load=10")))
+		context := NewMigrationContext()
+		context.ConfigFile = f.Name()
+		if err := context.ReadConfigFile(); err != nil {
+			t.Fatalf(".ReadConfigFile() failed: %v", err)
+		}
+
+		if context.config.Osc.Max_Load != "10" {
+			t.Fatalf("Expected osc 'max_load' %q, got %q", "10", context.config.Osc.Max_Load)
+		}
+	}
 }
