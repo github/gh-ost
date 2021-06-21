@@ -322,3 +322,21 @@ func TestParseAlterStatementExplicitTable(t *testing.T) {
 		test.S(t).ExpectTrue(reflect.DeepEqual(parser.alterTokens, []string{"drop column b", "add index idx(i)"}))
 	}
 }
+
+func TestParseEnumValues(t *testing.T) {
+	{
+		s := "enum('red','green','blue','orange')"
+		values := ParseEnumValues(s)
+		test.S(t).ExpectEquals(values, "'red','green','blue','orange'")
+	}
+	{
+		s := "('red','green','blue','orange')"
+		values := ParseEnumValues(s)
+		test.S(t).ExpectEquals(values, "('red','green','blue','orange')")
+	}
+	{
+		s := "zzz"
+		values := ParseEnumValues(s)
+		test.S(t).ExpectEquals(values, "zzz")
+	}
+}
