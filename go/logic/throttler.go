@@ -15,7 +15,6 @@ import (
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/outbrain/golib/log"
 )
 
 var (
@@ -123,7 +122,7 @@ func parseChangelogHeartbeat(heartbeatValue string) (lag time.Duration, err erro
 // parseChangelogHeartbeat parses a string timestamp and deduces replication lag
 func (this *Throttler) parseChangelogHeartbeat(heartbeatValue string) (err error) {
 	if lag, err := parseChangelogHeartbeat(heartbeatValue); err != nil {
-		return log.Errore(err)
+		return this.migrationContext.Log.Errore(err)
 	} else {
 		atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
 		return nil
@@ -145,13 +144,13 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 			// This means we will always get a good heartbeat value.
 			// When running on replica, we should instead check the `SHOW SLAVE STATUS` output.
 			if lag, err := mysql.GetReplicationLagFromSlaveStatus(this.inspector.informationSchemaDb); err != nil {
-				return log.Errore(err)
+				return this.migrationContext.Log.Errore(err)
 			} else {
 				atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
 			}
 		} else {
 			if heartbeatValue, err := this.inspector.readChangelogState("heartbeat"); err != nil {
-				return log.Errore(err)
+				return this.migrationContext.Log.Errore(err)
 			} else {
 				this.parseChangelogHeartbeat(heartbeatValue)
 			}
@@ -189,9 +188,12 @@ func (this *Throttler) collectControlReplicasLag() {
 		dbUri := connectionConfig.GetDBUri("information_schema")
 
 		var heartbeatValue string
-		if db, _, err := mysql.GetDB(this.migrationContext.Uuid, dbUri); err != nil {
+		db, _, err := mysql.GetDB(this.migrationContext.Uuid, dbUri)
+		if err != nil {
 			return lag, err
-		} else if err = db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
+		}
+
+		if err := db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
 			return lag, err
 		}
 
@@ -348,7 +350,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 		hibernateDuration := time.Duration(this.migrationContext.CriticalLoadHibernateSeconds) * time.Second
 		hibernateUntilTime := time.Now().Add(hibernateDuration)
 		atomic.StoreInt64(&this.migrationContext.HibernateUntil, hibernateUntilTime.UnixNano())
-		log.Errorf("critical-load met: %s=%d, >=%d. Will hibernate for the duration of %+v, until %+v", variableName, value, threshold, hibernateDuration, hibernateUntilTime)
+		this.migrationContext.Log.Errorf("critical-load met: %s=%d, >=%d. Will hibernate for the duration of %+v, until %+v", variableName, value, threshold, hibernateDuration, hibernateUntilTime)
 		go func() {
 			time.Sleep(hibernateDuration)
 			this.migrationContext.SetThrottleGeneralCheckResult(base.NewThrottleCheckResult(true, "leaving hibernation", base.LeavingHibernationThrottleReasonHint))
@@ -361,7 +363,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 		this.migrationContext.PanicAbort <- fmt.Errorf("critical-load met: %s=%d, >=%d", variableName, value, threshold)
 	}
 	if criticalLoadMet && this.migrationContext.CriticalLoadIntervalMilliseconds > 0 {
-		log.Errorf("critical-load met once: %s=%d, >=%d. Will check again in %d millis", variableName, value, threshold, this.migrationContext.CriticalLoadIntervalMilliseconds)
+		this.migrationContext.Log.Errorf("critical-load met once: %s=%d, >=%d. Will check again in %d millis", variableName, value, threshold, this.migrationContext.CriticalLoadIntervalMilliseconds)
 		go func() {
 			timer := time.NewTimer(time.Millisecond * time.Duration(this.migrationContext.CriticalLoadIntervalMilliseconds))
 			<-timer.C
@@ -479,6 +481,6 @@ func (this *Throttler) throttle(onThrottled func()) {
 }
 
 func (this *Throttler) Teardown() {
-	log.Debugf("Tearing down...")
+	this.migrationContext.Log.Debugf("Tearing down...")
 	atomic.StoreInt64(&this.finishedMigrating, 1)
 }

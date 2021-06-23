@@ -38,6 +38,8 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 		var token string
 		if column.timezoneConversion != nil {
 			token = fmt.Sprintf("convert_tz(?, '%s', '%s')", column.timezoneConversion.ToTimezone, "+00:00")
+		} else if column.enumToTextConversion {
+			token = fmt.Sprintf("ELT(?, %s)", column.EnumValues)
 		} else if column.Type == JSONColumnType {
 			token = "convert(? using utf8mb4)"
 		} else {
@@ -108,6 +110,8 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 		var setToken string
 		if column.timezoneConversion != nil {
 			setToken = fmt.Sprintf("%s=convert_tz(?, '%s', '%s')", EscapeName(column.Name), column.timezoneConversion.ToTimezone, "+00:00")
+		} else if column.enumToTextConversion {
+			setToken = fmt.Sprintf("%s=ELT(?, %s)", EscapeName(column.Name), column.EnumValues)
 		} else if column.Type == JSONColumnType {
 			setToken = fmt.Sprintf("%s=convert(? using utf8mb4)", EscapeName(column.Name))
 		} else {
@@ -396,7 +400,7 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	}
 	for _, column := range uniqueKeyColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal])
+		arg := column.convertArg(args[tableOrdinal], true)
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 	databaseName = EscapeName(databaseName)
@@ -433,7 +437,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 
 	for _, column := range sharedColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal])
+		arg := column.convertArg(args[tableOrdinal], false)
 		sharedArgs = append(sharedArgs, arg)
 	}
 
@@ -481,17 +485,20 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 
 	for _, column := range sharedColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(valueArgs[tableOrdinal])
+		arg := column.convertArg(valueArgs[tableOrdinal], false)
 		sharedArgs = append(sharedArgs, arg)
 	}
 
 	for _, column := range uniqueKeyColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(whereArgs[tableOrdinal])
+		arg := column.convertArg(whereArgs[tableOrdinal], true)
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 
 	setClause, err := BuildSetPreparedClause(mappedSharedColumns)
+	if err != nil {
+		return "", sharedArgs, uniqueKeyArgs, err
+	}
 
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
 	result = fmt.Sprintf(`
