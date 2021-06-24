@@ -8,8 +8,8 @@ package base
 import (
 	"testing"
 
-	"github.com/outbrain/golib/log"
-	test "github.com/outbrain/golib/tests"
+	"github.com/openark/golib/log"
+	test "github.com/openark/golib/tests"
 )
 
 func init() {

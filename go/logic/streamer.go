@@ -16,7 +16,7 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 
-	"github.com/outbrain/golib/sqlutils"
+	"github.com/openark/golib/sqlutils"
 )
 
 type BinlogEventListener struct {

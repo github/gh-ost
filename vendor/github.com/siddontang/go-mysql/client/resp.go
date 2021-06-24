@@ -1,16 +1,15 @@
 package client
 
-import "C"
 import (
-	"encoding/binary"
-
 	"bytes"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/pem"
 
-	"github.com/juju/errors"
+	"github.com/pingcap/errors"
 	. "github.com/siddontang/go-mysql/mysql"
+	"github.com/siddontang/go-mysql/utils"
 	"github.com/siddontang/go/hack"
 )
 
@@ -213,31 +212,25 @@ func (c *Conn) readOK() (*Result, error) {
 }
 
 func (c *Conn) readResult(binary bool) (*Result, error) {
-	data, err := c.ReadPacket()
+	firstPkgBuf, err := c.ReadPacketReuseMem(utils.ByteSliceGet(16)[:0])
+	defer utils.ByteSlicePut(firstPkgBuf)
+
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	if data[0] == OK_HEADER {
-		return c.handleOKPacket(data)
-	} else if data[0] == ERR_HEADER {
-		return nil, c.handleErrorPacket(data)
-	} else if data[0] == LocalInFile_HEADER {
+	if firstPkgBuf[0] == OK_HEADER {
+		return c.handleOKPacket(firstPkgBuf)
+	} else if firstPkgBuf[0] == ERR_HEADER {
+		return nil, c.handleErrorPacket(append([]byte{}, firstPkgBuf...))
+	} else if firstPkgBuf[0] == LocalInFile_HEADER {
 		return nil, ErrMalformPacket
 	}
 
-	return c.readResultset(data, binary)
+	return c.readResultset(firstPkgBuf, binary)
 }
 
 func (c *Conn) readResultset(data []byte, binary bool) (*Result, error) {
-	result := &Result{
-		Status:       0,
-		InsertId:     0,
-		AffectedRows: 0,
-
-		Resultset: &Resultset{},
-	}
-
 	// column count
 	count, _, n := LengthEncodedInt(data)
 
@@ -245,8 +238,9 @@ func (c *Conn) readResultset(data []byte, binary bool) (*Result, error) {
 		return nil, ErrMalformPacket
 	}
 
-	result.Fields = make([]*Field, count)
-	result.FieldNames = make(map[string]int, count)
+	result := &Result{
+		Resultset: NewResultset(int(count)),
+	}
 
 	if err := c.readResultColumns(result); err != nil {
 		return nil, errors.Trace(err)
@@ -264,10 +258,12 @@ func (c *Conn) readResultColumns(result *Result) (err error) {
 	var data []byte
 
 	for {
-		data, err = c.ReadPacket()
+		rawPkgLen := len(result.RawPkg)
+		result.RawPkg, err = c.ReadPacketReuseMem(result.RawPkg)
 		if err != nil {
 			return
 		}
+		data = result.RawPkg[rawPkgLen:]
 
 		// EOF Packet
 		if c.isEOFPacket(data) {
@@ -285,7 +281,10 @@ func (c *Conn) readResultColumns(result *Result) (err error) {
 			return
 		}
 
-		result.Fields[i], err = FieldData(data).Parse()
+		if result.Fields[i] == nil {
+			result.Fields[i] = &Field{}
+		}
+		err = result.Fields[i].Parse(data)
 		if err != nil {
 			return
 		}
@@ -300,11 +299,12 @@ func (c *Conn) readResultRows(result *Result, isBinary bool) (err error) {
 	var data []byte
 
 	for {
-		data, err = c.ReadPacket()
-
+		rawPkgLen := len(result.RawPkg)
+		result.RawPkg, err = c.ReadPacketReuseMem(result.RawPkg)
 		if err != nil {
 			return
 		}
+		data = result.RawPkg[rawPkgLen:]
 
 		// EOF Packet
 		if c.isEOFPacket(data) {
@@ -318,13 +318,21 @@ func (c *Conn) readResultRows(result *Result, isBinary bool) (err error) {
 			break
 		}
 
+		if data[0] == ERR_HEADER {
+			return c.handleErrorPacket(data)
+		}
+
 		result.RowDatas = append(result.RowDatas, data)
 	}
 
-	result.Values = make([][]interface{}, len(result.RowDatas))
+	if cap(result.Values) < len(result.RowDatas) {
+		result.Values = make([][]FieldValue, len(result.RowDatas))
+	} else {
+		result.Values = result.Values[:len(result.RowDatas)]
+	}
 
 	for i := range result.Values {
-		result.Values[i], err = result.RowDatas[i].Parse(result.Fields, isBinary)
+		result.Values[i], err = result.RowDatas[i].Parse(result.Fields, isBinary, result.Values[i])
 
 		if err != nil {
 			return errors.Trace(err)

@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/juju/errors"
+	"github.com/pingcap/errors"
 )
 
 var (
@@ -19,6 +19,9 @@ var (
 )
 
 type BinlogParser struct {
+	// "mysql" or "mariadb", if not set, use "mysql" by default
+	flavor string
+
 	format *FormatDescriptionEvent
 
 	tables map[uint64]*TableMapEvent
@@ -32,8 +35,9 @@ type BinlogParser struct {
 	// used to start/stop processing
 	stopProcessing uint32
 
-	useDecimal     bool
-	verifyChecksum bool
+	useDecimal          bool
+	ignoreJSONDecodeErr bool
+	verifyChecksum      bool
 }
 
 func NewBinlogParser() *BinlogParser {
@@ -119,7 +123,7 @@ func (p *BinlogParser) parseSingleEvent(r io.Reader, onEvent OnEventFunc) (bool,
 		return false, errors.Trace(err)
 	}
 
-	if h.EventSize <= uint32(EventHeaderSize) {
+	if h.EventSize < uint32(EventHeaderSize) {
 		return false, errors.Errorf("invalid event header, event size is %d, too small", h.EventSize)
 	}
 	if n, err = io.CopyN(&buf, r, int64(h.EventSize-EventHeaderSize)); err != nil {
@@ -191,8 +195,16 @@ func (p *BinlogParser) SetUseDecimal(useDecimal bool) {
 	p.useDecimal = useDecimal
 }
 
+func (p *BinlogParser) SetIgnoreJSONDecodeError(ignoreJSONDecodeErr bool) {
+	p.ignoreJSONDecodeErr = ignoreJSONDecodeErr
+}
+
 func (p *BinlogParser) SetVerifyChecksum(verify bool) {
 	p.verifyChecksum = verify
+}
+
+func (p *BinlogParser) SetFlavor(flavor string) {
+	p.flavor = flavor
 }
 
 func (p *BinlogParser) parseHeader(data []byte) (*EventHeader, error) {
@@ -229,7 +241,9 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 			case XID_EVENT:
 				e = &XIDEvent{}
 			case TABLE_MAP_EVENT:
-				te := &TableMapEvent{}
+				te := &TableMapEvent{
+					flavor: p.flavor,
+				}
 				if p.format.EventTypeHeaderLengths[TABLE_MAP_EVENT-1] == 6 {
 					te.tableIDSize = 4
 				} else {
@@ -251,7 +265,7 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 			case GTID_EVENT:
 				e = &GTIDEvent{}
 			case ANONYMOUS_GTID_EVENT:
-				e = &GTIDEvent{}	
+				e = &GTIDEvent{}
 			case BEGIN_LOAD_QUERY_EVENT:
 				e = &BeginLoadQueryEvent{}
 			case EXECUTE_LOAD_QUERY_EVENT:
@@ -266,6 +280,8 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 				ee := &MariadbGTIDEvent{}
 				ee.GTID.ServerID = h.ServerID
 				e = ee
+			case PREVIOUS_GTIDS_EVENT:
+				e = &PreviousGTIDsEvent{}
 			default:
 				e = &GenericEvent{}
 			}
@@ -292,7 +308,7 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 	return e, nil
 }
 
-// Given the bytes for a a binary log event: return the decoded event.
+// Parse: Given the bytes for a a binary log event: return the decoded event.
 // With the exception of the FORMAT_DESCRIPTION_EVENT event type
 // there must have previously been passed a FORMAT_DESCRIPTION_EVENT
 // into the parser for this to work properly on any given event.
@@ -355,6 +371,7 @@ func (p *BinlogParser) newRowsEvent(h *EventHeader) *RowsEvent {
 	e.parseTime = p.parseTime
 	e.timestampStringLocation = p.timestampStringLocation
 	e.useDecimal = p.useDecimal
+	e.ignoreJSONDecodeErr = p.ignoreJSONDecodeErr
 
 	switch h.EventType {
 	case WRITE_ROWS_EVENTv0:

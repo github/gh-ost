@@ -1,4 +1,4 @@
-// Copyright (C) 2013-2014 by Maxim Bublis <b@codemonkey.ru>
+// Copyright (C) 2013-2018 by Maxim Bublis <b@codemonkey.ru>
 //
 // Permission is hereby granted, free of charge, to any person obtaining
 // a copy of this software and associated documentation files (the
@@ -26,22 +26,29 @@ package uuid
 
 import (
 	"bytes"
-	"crypto/md5"
-	"crypto/rand"
-	"crypto/sha1"
-	"encoding/binary"
 	"encoding/hex"
-	"fmt"
-	"hash"
-	"net"
-	"os"
-	"sync"
-	"time"
+)
+
+// Size of a UUID in bytes.
+const Size = 16
+
+// UUID representation compliant with specification
+// described in RFC 4122.
+type UUID [Size]byte
+
+// UUID versions
+const (
+	_ byte = iota
+	V1
+	V2
+	V3
+	V4
+	V5
 )
 
 // UUID layout variants.
 const (
-	VariantNCS = iota
+	VariantNCS byte = iota
 	VariantRFC4122
 	VariantMicrosoft
 	VariantFuture
@@ -54,90 +61,23 @@ const (
 	DomainOrg
 )
 
-// Difference in 100-nanosecond intervals between
-// UUID epoch (October 15, 1582) and Unix epoch (January 1, 1970).
-const epochStart = 122192928000000000
-
-// UUID v1/v2 storage.
-var (
-	storageMutex  sync.Mutex
-	clockSequence uint16
-	lastTime      uint64
-	hardwareAddr  [6]byte
-	posixUID      = uint32(os.Getuid())
-	posixGID      = uint32(os.Getgid())
-)
-
 // String parse helpers.
 var (
 	urnPrefix  = []byte("urn:uuid:")
 	byteGroups = []int{8, 4, 4, 4, 12}
 )
 
-// Epoch calculation function
-var epochFunc func() uint64
-
-// Initialize storage
-func init() {
-	buf := make([]byte, 2)
-	rand.Read(buf)
-	clockSequence = binary.BigEndian.Uint16(buf)
-
-	// Initialize hardwareAddr randomly in case
-	// of real network interfaces absence
-	rand.Read(hardwareAddr[:])
-
-	// Set multicast bit as recommended in RFC 4122
-	hardwareAddr[0] |= 0x01
-
-	interfaces, err := net.Interfaces()
-	if err == nil {
-		for _, iface := range interfaces {
-			if len(iface.HardwareAddr) >= 6 {
-				copy(hardwareAddr[:], iface.HardwareAddr)
-				break
-			}
-		}
-	}
-	epochFunc = unixTimeFunc
-}
-
-// Returns difference in 100-nanosecond intervals between
-// UUID epoch (October 15, 1582) and current time.
-// This is default epoch calculation function.
-func unixTimeFunc() uint64 {
-	return epochStart + uint64(time.Now().UnixNano()/100)
-}
-
-// UUID representation compliant with specification
-// described in RFC 4122.
-type UUID [16]byte
+// Nil is special form of UUID that is specified to have all
+// 128 bits set to zero.
+var Nil = UUID{}
 
 // Predefined namespace UUIDs.
 var (
-	NamespaceDNS, _  = FromString("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-	NamespaceURL, _  = FromString("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
-	NamespaceOID, _  = FromString("6ba7b812-9dad-11d1-80b4-00c04fd430c8")
-	NamespaceX500, _ = FromString("6ba7b814-9dad-11d1-80b4-00c04fd430c8")
+	NamespaceDNS  = Must(FromString("6ba7b810-9dad-11d1-80b4-00c04fd430c8"))
+	NamespaceURL  = Must(FromString("6ba7b811-9dad-11d1-80b4-00c04fd430c8"))
+	NamespaceOID  = Must(FromString("6ba7b812-9dad-11d1-80b4-00c04fd430c8"))
+	NamespaceX500 = Must(FromString("6ba7b814-9dad-11d1-80b4-00c04fd430c8"))
 )
-
-// And returns result of binary AND of two UUIDs.
-func And(u1 UUID, u2 UUID) UUID {
-	u := UUID{}
-	for i := 0; i < 16; i++ {
-		u[i] = u1[i] & u2[i]
-	}
-	return u
-}
-
-// Or returns result of binary OR of two UUIDs.
-func Or(u1 UUID, u2 UUID) UUID {
-	u := UUID{}
-	for i := 0; i < 16; i++ {
-		u[i] = u1[i] | u2[i]
-	}
-	return u
-}
 
 // Equal returns true if u1 and u2 equals, otherwise returns false.
 func Equal(u1 UUID, u2 UUID) bool {
@@ -145,21 +85,24 @@ func Equal(u1 UUID, u2 UUID) bool {
 }
 
 // Version returns algorithm version used to generate UUID.
-func (u UUID) Version() uint {
-	return uint(u[6] >> 4)
+func (u UUID) Version() byte {
+	return u[6] >> 4
 }
 
 // Variant returns UUID layout variant.
-func (u UUID) Variant() uint {
+func (u UUID) Variant() byte {
 	switch {
-	case (u[8] & 0x80) == 0x00:
+	case (u[8] >> 7) == 0x00:
 		return VariantNCS
-	case (u[8]&0xc0)|0x80 == 0x80:
+	case (u[8] >> 6) == 0x02:
 		return VariantRFC4122
-	case (u[8]&0xe0)|0xc0 == 0xc0:
+	case (u[8] >> 5) == 0x06:
 		return VariantMicrosoft
+	case (u[8] >> 5) == 0x07:
+		fallthrough
+	default:
+		return VariantFuture
 	}
-	return VariantFuture
 }
 
 // Bytes returns bytes slice representation of UUID.
@@ -170,8 +113,19 @@ func (u UUID) Bytes() []byte {
 // Returns canonical string representation of UUID:
 // xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.
 func (u UUID) String() string {
-	return fmt.Sprintf("%x-%x-%x-%x-%x",
-		u[:4], u[4:6], u[6:8], u[8:10], u[10:])
+	buf := make([]byte, 36)
+
+	hex.Encode(buf[0:8], u[0:4])
+	buf[8] = '-'
+	hex.Encode(buf[9:13], u[4:6])
+	buf[13] = '-'
+	hex.Encode(buf[14:18], u[6:8])
+	buf[18] = '-'
+	hex.Encode(buf[19:23], u[8:10])
+	buf[23] = '-'
+	hex.Encode(buf[24:], u[10:])
+
+	return string(buf)
 }
 
 // SetVersion sets version bits.
@@ -179,183 +133,29 @@ func (u *UUID) SetVersion(v byte) {
 	u[6] = (u[6] & 0x0f) | (v << 4)
 }
 
-// SetVariant sets variant bits as described in RFC 4122.
-func (u *UUID) SetVariant() {
-	u[8] = (u[8] & 0xbf) | 0x80
-}
-
-// MarshalText implements the encoding.TextMarshaler interface.
-// The encoding is the same as returned by String.
-func (u UUID) MarshalText() (text []byte, err error) {
-	text = []byte(u.String())
-	return
-}
-
-// UnmarshalText implements the encoding.TextUnmarshaler interface.
-// Following formats are supported:
-// "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-// "{6ba7b810-9dad-11d1-80b4-00c04fd430c8}",
-// "urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8"
-func (u *UUID) UnmarshalText(text []byte) (err error) {
-	if len(text) < 32 {
-		err = fmt.Errorf("uuid: invalid UUID string: %s", text)
-		return
+// SetVariant sets variant bits.
+func (u *UUID) SetVariant(v byte) {
+	switch v {
+	case VariantNCS:
+		u[8] = (u[8]&(0xff>>1) | (0x00 << 7))
+	case VariantRFC4122:
+		u[8] = (u[8]&(0xff>>2) | (0x02 << 6))
+	case VariantMicrosoft:
+		u[8] = (u[8]&(0xff>>3) | (0x06 << 5))
+	case VariantFuture:
+		fallthrough
+	default:
+		u[8] = (u[8]&(0xff>>3) | (0x07 << 5))
 	}
+}
 
-	if bytes.Equal(text[:9], urnPrefix) {
-		text = text[9:]
-	} else if text[0] == '{' {
-		text = text[1:]
+// Must is a helper that wraps a call to a function returning (UUID, error)
+// and panics if the error is non-nil. It is intended for use in variable
+// initializations such as
+//	var packageUUID = uuid.Must(uuid.FromString("123e4567-e89b-12d3-a456-426655440000"));
+func Must(u UUID, err error) UUID {
+	if err != nil {
+		panic(err)
 	}
-
-	b := u[:]
-
-	for _, byteGroup := range byteGroups {
-		if text[0] == '-' {
-			text = text[1:]
-		}
-
-		_, err = hex.Decode(b[:byteGroup/2], text[:byteGroup])
-
-		if err != nil {
-			return
-		}
-
-		text = text[byteGroup:]
-		b = b[byteGroup/2:]
-	}
-
-	return
-}
-
-// MarshalBinary implements the encoding.BinaryMarshaler interface.
-func (u UUID) MarshalBinary() (data []byte, err error) {
-	data = u.Bytes()
-	return
-}
-
-// UnmarshalBinary implements the encoding.BinaryUnmarshaler interface.
-// It will return error if the slice isn't 16 bytes long.
-func (u *UUID) UnmarshalBinary(data []byte) (err error) {
-	if len(data) != 16 {
-		err = fmt.Errorf("uuid: UUID must be exactly 16 bytes long, got %d bytes", len(data))
-		return
-	}
-	copy(u[:], data)
-
-	return
-}
-
-// FromBytes returns UUID converted from raw byte slice input.
-// It will return error if the slice isn't 16 bytes long.
-func FromBytes(input []byte) (u UUID, err error) {
-	err = u.UnmarshalBinary(input)
-	return
-}
-
-// FromString returns UUID parsed from string input.
-// Input is expected in a form accepted by UnmarshalText.
-func FromString(input string) (u UUID, err error) {
-	err = u.UnmarshalText([]byte(input))
-	return
-}
-
-// Returns UUID v1/v2 storage state.
-// Returns epoch timestamp and clock sequence.
-func getStorage() (uint64, uint16) {
-	storageMutex.Lock()
-	defer storageMutex.Unlock()
-
-	timeNow := epochFunc()
-	// Clock changed backwards since last UUID generation.
-	// Should increase clock sequence.
-	if timeNow <= lastTime {
-		clockSequence++
-	}
-	lastTime = timeNow
-
-	return timeNow, clockSequence
-}
-
-// NewV1 returns UUID based on current timestamp and MAC address.
-func NewV1() UUID {
-	u := UUID{}
-
-	timeNow, clockSeq := getStorage()
-
-	binary.BigEndian.PutUint32(u[0:], uint32(timeNow))
-	binary.BigEndian.PutUint16(u[4:], uint16(timeNow>>32))
-	binary.BigEndian.PutUint16(u[6:], uint16(timeNow>>48))
-	binary.BigEndian.PutUint16(u[8:], clockSeq)
-
-	copy(u[10:], hardwareAddr[:])
-
-	u.SetVersion(1)
-	u.SetVariant()
-
-	return u
-}
-
-// NewV2 returns DCE Security UUID based on POSIX UID/GID.
-func NewV2(domain byte) UUID {
-	u := UUID{}
-
-	switch domain {
-	case DomainPerson:
-		binary.BigEndian.PutUint32(u[0:], posixUID)
-	case DomainGroup:
-		binary.BigEndian.PutUint32(u[0:], posixGID)
-	}
-
-	timeNow, clockSeq := getStorage()
-
-	binary.BigEndian.PutUint16(u[4:], uint16(timeNow>>32))
-	binary.BigEndian.PutUint16(u[6:], uint16(timeNow>>48))
-	binary.BigEndian.PutUint16(u[8:], clockSeq)
-	u[9] = domain
-
-	copy(u[10:], hardwareAddr[:])
-
-	u.SetVersion(2)
-	u.SetVariant()
-
-	return u
-}
-
-// NewV3 returns UUID based on MD5 hash of namespace UUID and name.
-func NewV3(ns UUID, name string) UUID {
-	u := newFromHash(md5.New(), ns, name)
-	u.SetVersion(3)
-	u.SetVariant()
-
-	return u
-}
-
-// NewV4 returns random generated UUID.
-func NewV4() UUID {
-	u := UUID{}
-	rand.Read(u[:])
-	u.SetVersion(4)
-	u.SetVariant()
-
-	return u
-}
-
-// NewV5 returns UUID based on SHA-1 hash of namespace UUID and name.
-func NewV5(ns UUID, name string) UUID {
-	u := newFromHash(sha1.New(), ns, name)
-	u.SetVersion(5)
-	u.SetVariant()
-
-	return u
-}
-
-// Returns UUID based on hashing of namespace UUID and name.
-func newFromHash(h hash.Hash, ns UUID, name string) UUID {
-	u := UUID{}
-	h.Write(ns[:])
-	h.Write([]byte(name))
-	copy(u[:], h.Sum(nil))
-
 	return u
 }

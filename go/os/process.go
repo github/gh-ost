@@ -17,7 +17,7 @@
 package os
 
 import (
-	"github.com/outbrain/golib/log"
+	"github.com/openark/golib/log"
 	"io/ioutil"
 	"os"
 	"os/exec"
