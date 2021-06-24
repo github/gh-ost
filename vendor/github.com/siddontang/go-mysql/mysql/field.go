@@ -2,6 +2,8 @@ package mysql
 
 import (
 	"encoding/binary"
+
+	"github.com/siddontang/go-mysql/utils"
 )
 
 type FieldData []byte
@@ -23,9 +25,23 @@ type Field struct {
 	DefaultValue       []byte
 }
 
-func (p FieldData) Parse() (f *Field, err error) {
-	f = new(Field)
+type FieldValueType uint8
 
+type FieldValue struct {
+	Type  FieldValueType
+	value uint64 // Also for int64 and float64
+	str   []byte
+}
+
+const (
+	FieldValueTypeNull = iota
+	FieldValueTypeUnsigned
+	FieldValueTypeSigned
+	FieldValueTypeFloat
+	FieldValueTypeString
+)
+
+func (f *Field) Parse(p FieldData) (err error) {
 	f.Data = p
 
 	var n int
@@ -117,6 +133,14 @@ func (p FieldData) Parse() (f *Field, err error) {
 	return
 }
 
+func (p FieldData) Parse() (f *Field, err error) {
+	f = new(Field)
+	if err = f.Parse(p); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
 func (f *Field) Dump() []byte {
 	if f == nil {
 		f = &Field{}
@@ -154,4 +178,35 @@ func (f *Field) Dump() []byte {
 	}
 
 	return data
+}
+
+func (fv *FieldValue) AsUint64() uint64 {
+	return fv.value
+}
+
+func (fv *FieldValue) AsInt64() int64 {
+	return utils.Uint64ToInt64(fv.value)
+}
+
+func (fv *FieldValue) AsFloat64() float64 {
+	return utils.Uint64ToFloat64(fv.value)
+}
+
+func (fv *FieldValue) AsString() []byte {
+	return fv.str
+}
+
+func (fv *FieldValue) Value() interface{} {
+	switch fv.Type {
+	case FieldValueTypeUnsigned:
+		return fv.AsUint64()
+	case FieldValueTypeSigned:
+		return fv.AsInt64()
+	case FieldValueTypeFloat:
+		return fv.AsFloat64()
+	case FieldValueTypeString:
+		return fv.AsString()
+	default: // FieldValueTypeNull
+		return nil
+	}
 }

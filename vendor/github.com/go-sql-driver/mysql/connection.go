@@ -12,7 +12,6 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"encoding/json"
 	"io"
 	"net"
 	"strconv"
@@ -272,14 +271,6 @@ func (mc *mysqlConn) interpolateParams(query string, args []driver.Value) (strin
 				}
 				buf = append(buf, '\'')
 			}
-		case json.RawMessage:
-			buf = append(buf, '\'')
-			if mc.status&statusNoBackslashEscapes == 0 {
-				buf = escapeBytesBackslash(buf, v)
-			} else {
-				buf = escapeBytesQuotes(buf, v)
-			}
-			buf = append(buf, '\'')
 		case []byte:
 			if v == nil {
 				buf = append(buf, "NULL"...)

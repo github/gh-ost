@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/juju/errors"
-	"github.com/satori/go.uuid"
+	"github.com/pingcap/errors"
+	uuid "github.com/satori/go.uuid"
 	"github.com/siddontang/go/hack"
 )
 
@@ -108,7 +108,7 @@ func (s IntervalSlice) Normalize() IntervalSlice {
 	return n
 }
 
-// Return true if sub in s
+// Contain returns true if sub in s
 func (s IntervalSlice) Contain(sub IntervalSlice) bool {
 	j := 0
 	for i := 0; i < len(sub); i++ {
@@ -398,6 +398,10 @@ func (s *MysqlGTIDSet) Equal(o GTIDSet) bool {
 		return false
 	}
 
+	if len(sub.Sets) != len(s.Sets) {
+		return false
+	}
+
 	for key, set := range sub.Sets {
 		o, ok := s.Sets[key]
 		if !ok {
@@ -430,7 +434,7 @@ func (s *MysqlGTIDSet) Encode() []byte {
 
 	binary.Write(&buf, binary.LittleEndian, uint64(len(s.Sets)))
 
-	for i, _ := range s.Sets {
+	for i := range s.Sets {
 		s.Sets[i].encode(&buf)
 	}
 

@@ -2,6 +2,7 @@ package replication
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"strconv"
@@ -9,7 +10,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/juju/errors"
+	"github.com/pingcap/errors"
 	"github.com/satori/go.uuid"
 	. "github.com/siddontang/go-mysql/mysql"
 )
@@ -20,6 +21,7 @@ const (
 	LogicalTimestampTypeCode   = 2
 	PartLogicalTimestampLength = 8
 	BinlogChecksumLength       = 4
+	UndefinedServerVer         = 999999 // UNDEFINED_SERVER_VERSION
 )
 
 type BinlogEvent struct {
@@ -217,6 +219,55 @@ func (e *RotateEvent) Dump(w io.Writer) {
 	fmt.Fprintln(w)
 }
 
+type PreviousGTIDsEvent struct {
+	GTIDSets string
+}
+
+func (e *PreviousGTIDsEvent) Decode(data []byte) error {
+	var previousGTIDSets []string
+	pos := 0
+	uuidCount := binary.LittleEndian.Uint16(data[pos : pos+8])
+	pos += 8
+
+	for i := uint16(0); i < uuidCount; i++ {
+		uuid := e.decodeUuid(data[pos : pos+16])
+		pos += 16
+		sliceCount := binary.LittleEndian.Uint16(data[pos : pos+8])
+		pos += 8
+		var intervals []string
+		for i := uint16(0); i < sliceCount; i++ {
+			start := e.decodeInterval(data[pos : pos+8])
+			pos += 8
+			stop := e.decodeInterval(data[pos : pos+8])
+			pos += 8
+			interval := ""
+			if stop == start+1 {
+				interval = fmt.Sprintf("%d", start)
+			} else {
+				interval = fmt.Sprintf("%d-%d", start, stop-1)
+			}
+			intervals = append(intervals, interval)
+		}
+		previousGTIDSets = append(previousGTIDSets, fmt.Sprintf("%s:%s", uuid, strings.Join(intervals, ":")))
+	}
+	e.GTIDSets = fmt.Sprintf("%s", strings.Join(previousGTIDSets, ","))
+	return nil
+}
+
+func (e *PreviousGTIDsEvent) Dump(w io.Writer) {
+	fmt.Fprintf(w, "Previous GTID Event: %s\n", e.GTIDSets)
+	fmt.Fprintln(w)
+}
+
+func (e *PreviousGTIDsEvent) decodeUuid(data []byte) string {
+	return fmt.Sprintf("%s-%s-%s-%s-%s", hex.EncodeToString(data[0:4]), hex.EncodeToString(data[4:6]),
+		hex.EncodeToString(data[6:8]), hex.EncodeToString(data[8:10]), hex.EncodeToString(data[10:]))
+}
+
+func (e *PreviousGTIDsEvent) decodeInterval(data []byte) uint64 {
+	return binary.LittleEndian.Uint64(data)
+}
+
 type XIDEvent struct {
 	XID uint64
 
@@ -299,6 +350,20 @@ type GTIDEvent struct {
 	GNO            int64
 	LastCommitted  int64
 	SequenceNumber int64
+
+	// ImmediateCommitTimestamp/OriginalCommitTimestamp are introduced in MySQL-8.0.1, see:
+	// https://mysqlhighavailability.com/replication-features-in-mysql-8-0-1/
+	ImmediateCommitTimestamp uint64
+	OriginalCommitTimestamp  uint64
+
+	// Total transaction length (including this GTIDEvent), introduced in MySQL-8.0.2, see:
+	// https://mysqlhighavailability.com/taking-advantage-of-new-transaction-length-metadata/
+	TransactionLength uint64
+
+	// ImmediateServerVersion/OriginalServerVersion are introduced in MySQL-8.0.14, see
+	// https://dev.mysql.com/doc/refman/8.0/en/replication-compatibility.html
+	ImmediateServerVersion uint32
+	OriginalServerVersion  uint32
 }
 
 func (e *GTIDEvent) Decode(data []byte) error {
@@ -309,24 +374,97 @@ func (e *GTIDEvent) Decode(data []byte) error {
 	pos += SidLength
 	e.GNO = int64(binary.LittleEndian.Uint64(data[pos:]))
 	pos += 8
+
 	if len(data) >= 42 {
 		if uint8(data[pos]) == LogicalTimestampTypeCode {
 			pos++
 			e.LastCommitted = int64(binary.LittleEndian.Uint64(data[pos:]))
 			pos += PartLogicalTimestampLength
 			e.SequenceNumber = int64(binary.LittleEndian.Uint64(data[pos:]))
+			pos += 8
+
+			// IMMEDIATE_COMMIT_TIMESTAMP_LENGTH = 7
+			if len(data)-pos < 7 {
+				return nil
+			}
+			e.ImmediateCommitTimestamp = FixedLengthInt(data[pos : pos+7])
+			pos += 7
+			if (e.ImmediateCommitTimestamp & (uint64(1) << 55)) != 0 {
+				// If the most significant bit set, another 7 byte follows representing OriginalCommitTimestamp
+				e.ImmediateCommitTimestamp &= ^(uint64(1) << 55)
+				e.OriginalCommitTimestamp = FixedLengthInt(data[pos : pos+7])
+				pos += 7
+
+			} else {
+				// Otherwise OriginalCommitTimestamp == ImmediateCommitTimestamp
+				e.OriginalCommitTimestamp = e.ImmediateCommitTimestamp
+
+			}
+
+			// TRANSACTION_LENGTH_MIN_LENGTH = 1
+			if len(data)-pos < 1 {
+				return nil
+			}
+			var n int
+			e.TransactionLength, _, n = LengthEncodedInt(data[pos:])
+			pos += n
+
+			// IMMEDIATE_SERVER_VERSION_LENGTH = 4
+			e.ImmediateServerVersion = UndefinedServerVer
+			e.OriginalServerVersion = UndefinedServerVer
+			if len(data)-pos < 4 {
+				return nil
+			}
+			e.ImmediateServerVersion = binary.LittleEndian.Uint32(data[pos:])
+			pos += 4
+			if (e.ImmediateServerVersion & (uint32(1) << 31)) != 0 {
+				// If the most significant bit set, another 4 byte follows representing OriginalServerVersion
+				e.ImmediateServerVersion &= ^(uint32(1) << 31)
+				e.OriginalServerVersion = binary.LittleEndian.Uint32(data[pos:])
+				pos += 4
+
+			} else {
+				// Otherwise OriginalServerVersion == ImmediateServerVersion
+				e.OriginalServerVersion = e.ImmediateServerVersion
+
+			}
+
 		}
 	}
 	return nil
 }
 
 func (e *GTIDEvent) Dump(w io.Writer) {
+	fmtTime := func(t time.Time) string {
+		if t.IsZero() {
+			return "<n/a>"
+		}
+		return t.Format(time.RFC3339Nano)
+	}
+
 	fmt.Fprintf(w, "Commit flag: %d\n", e.CommitFlag)
 	u, _ := uuid.FromBytes(e.SID)
 	fmt.Fprintf(w, "GTID_NEXT: %s:%d\n", u.String(), e.GNO)
 	fmt.Fprintf(w, "LAST_COMMITTED: %d\n", e.LastCommitted)
 	fmt.Fprintf(w, "SEQUENCE_NUMBER: %d\n", e.SequenceNumber)
+	fmt.Fprintf(w, "Immediate commmit timestamp: %d (%s)\n", e.ImmediateCommitTimestamp, fmtTime(e.ImmediateCommitTime()))
+	fmt.Fprintf(w, "Orignal commmit timestamp: %d (%s)\n", e.OriginalCommitTimestamp, fmtTime(e.OriginalCommitTime()))
+	fmt.Fprintf(w, "Transaction length: %d\n", e.TransactionLength)
+	fmt.Fprintf(w, "Immediate server version: %d\n", e.ImmediateServerVersion)
+	fmt.Fprintf(w, "Orignal server version: %d\n", e.OriginalServerVersion)
 	fmt.Fprintln(w)
+}
+
+// ImmediateCommitTime returns the commit time of this trx on the immediate server
+// or zero time if not available.
+func (e *GTIDEvent) ImmediateCommitTime() time.Time {
+	return microSecTimestampToTime(e.ImmediateCommitTimestamp)
+}
+
+// OriginalCommitTime returns the commit time of this trx on the original server
+// or zero time if not available.
+func (e *GTIDEvent) OriginalCommitTime() time.Time {
+	return microSecTimestampToTime(e.OriginalCommitTimestamp)
 }
 
 type BeginLoadQueryEvent struct {
@@ -440,20 +578,43 @@ func (e *MariadbBinlogCheckPointEvent) Dump(w io.Writer) {
 }
 
 type MariadbGTIDEvent struct {
-	GTID MariadbGTID
+	GTID     MariadbGTID
+	Flags    byte
+	CommitID uint64
+}
+
+func (e *MariadbGTIDEvent) IsDDL() bool {
+	return (e.Flags & BINLOG_MARIADB_FL_DDL) != 0
+}
+
+func (e *MariadbGTIDEvent) IsStandalone() bool {
+	return (e.Flags & BINLOG_MARIADB_FL_STANDALONE) != 0
+}
+
+func (e *MariadbGTIDEvent) IsGroupCommit() bool {
+	return (e.Flags & BINLOG_MARIADB_FL_GROUP_COMMIT_ID) != 0
 }
 
 func (e *MariadbGTIDEvent) Decode(data []byte) error {
+	pos := 0
 	e.GTID.SequenceNumber = binary.LittleEndian.Uint64(data)
-	e.GTID.DomainID = binary.LittleEndian.Uint32(data[8:])
+	pos += 8
+	e.GTID.DomainID = binary.LittleEndian.Uint32(data[pos:])
+	pos += 4
+	e.Flags = uint8(data[pos])
+	pos += 1
 
-	// we don't care commit id now, maybe later
+	if (e.Flags & BINLOG_MARIADB_FL_GROUP_COMMIT_ID) > 0 {
+		e.CommitID = binary.LittleEndian.Uint64(data[pos:])
+	}
 
 	return nil
 }
 
 func (e *MariadbGTIDEvent) Dump(w io.Writer) {
 	fmt.Fprintf(w, "GTID: %v\n", e.GTID)
+	fmt.Fprintf(w, "Flags: %v\n", e.Flags)
+	fmt.Fprintf(w, "CommitID: %v\n", e.CommitID)
 	fmt.Fprintln(w)
 }
 
@@ -476,6 +637,7 @@ func (e *MariadbGTIDListEvent) Decode(data []byte) error {
 		e.GTIDs[i].ServerID = binary.LittleEndian.Uint32(data[pos:])
 		pos += 4
 		e.GTIDs[i].SequenceNumber = binary.LittleEndian.Uint64(data[pos:])
+		pos += 8
 	}
 
 	return nil
