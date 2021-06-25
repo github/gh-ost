@@ -45,6 +45,9 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 
 // main is the application's entry point. It will either spawn a CLI or HTTP interfaces.
 func main() {
+	httpConfig := base.HttpConfig{}
+	flag.StringVar(&httpConfig.ListenAddr, "http-addr", "", "http server listen address (default: http server disabled)")
+
 	migrationContext := base.NewMigrationContext()
 	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
 	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unable to determine the master")
@@ -289,6 +292,10 @@ func main() {
 
 	log.Infof("starting gh-ost %+v", AppVersion)
 	acceptSignals(migrationContext)
+	if httpConfig.ListenAddr != "" {
+		log.Infof("starting http server at %+v", httpConfig.ListenAddr)
+		go base.NewHttpServer(httpConfig)
+	}
 
 	migrator := logic.NewMigrator(migrationContext)
 	err := migrator.Migrate()
