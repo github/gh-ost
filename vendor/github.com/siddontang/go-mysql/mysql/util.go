@@ -2,17 +2,17 @@ package mysql
 
 import (
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"runtime"
 	"strings"
 
-	"github.com/juju/errors"
+	"github.com/pingcap/errors"
 	"github.com/siddontang/go/hack"
-	"crypto/sha256"
-	"crypto/rsa"
 )
 
 func Pstack() string {
@@ -50,7 +50,7 @@ func CalcPassword(scramble, password []byte) []byte {
 	return scramble
 }
 
-// Hash password using MySQL 8+ method (SHA256)
+// CalcCachingSha2Password: Hash password using MySQL 8+ method (SHA256)
 func CalcCachingSha2Password(scramble []byte, password string) []byte {
 	if len(password) == 0 {
 		return nil
@@ -78,7 +78,6 @@ func CalcCachingSha2Password(scramble []byte, password string) []byte {
 	return message1
 }
 
-
 func EncryptPassword(password string, seed []byte, pub *rsa.PublicKey) ([]byte, error) {
 	plain := make([]byte, len(password)+1)
 	copy(plain, password)
@@ -90,7 +89,7 @@ func EncryptPassword(password string, seed []byte, pub *rsa.PublicKey) ([]byte, 
 	return rsa.EncryptOAEP(sha1v, rand.Reader, pub, plain, nil)
 }
 
-// encodes a uint64 value and appends it to the given bytes slice
+// AppendLengthEncodedInteger: encodes a uint64 value and appends it to the given bytes slice
 func AppendLengthEncodedInteger(b []byte, n uint64) []byte {
 	switch {
 	case n <= 250:
@@ -123,7 +122,7 @@ func RandomBuf(size int) ([]byte, error) {
 	return buf, nil
 }
 
-// little endian
+// FixedLengthInt: little endian
 func FixedLengthInt(buf []byte) uint64 {
 	var num uint64 = 0
 	for i, b := range buf {
@@ -132,7 +131,7 @@ func FixedLengthInt(buf []byte) uint64 {
 	return num
 }
 
-// big endian
+// BFixedLengthInt: big endian
 func BFixedLengthInt(buf []byte) uint64 {
 	var num uint64 = 0
 	for i, b := range buf {
@@ -162,8 +161,8 @@ func LengthEncodedInt(b []byte) (num uint64, isNull bool, n int) {
 		// 254: value of following 8
 	case 0xfe:
 		return uint64(b[1]) | uint64(b[2])<<8 | uint64(b[3])<<16 |
-			uint64(b[4])<<24 | uint64(b[5])<<32 | uint64(b[6])<<40 |
-			uint64(b[7])<<48 | uint64(b[8])<<56,
+				uint64(b[4])<<24 | uint64(b[5])<<32 | uint64(b[6])<<40 |
+				uint64(b[7])<<48 | uint64(b[8])<<56,
 			false, 9
 	}
 
@@ -189,7 +188,7 @@ func PutLengthEncodedInt(n uint64) []byte {
 	return nil
 }
 
-// returns the string read as a bytes slice, whether the value is NULL,
+// LengthEncodedString returns the string read as a bytes slice, whether the value is NULL,
 // the number of bytes read and an error, in case the string is longer than
 // the input slice
 func LengthEncodedString(b []byte) ([]byte, bool, int, error) {
@@ -346,7 +345,7 @@ var (
 	EncodeMap [256]byte
 )
 
-// only support utf-8
+// Escape: only support utf-8
 func Escape(sql string) string {
 	dest := make([]byte, 0, 2*len(sql))
 

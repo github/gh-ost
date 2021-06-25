@@ -939,19 +939,28 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	}
 
 	var etaSeconds float64 = math.MaxFloat64
-	eta := "N/A"
+	var etaDuration = time.Duration(base.ETAUnknown)
 	if progressPct >= 100.0 {
-		eta = "due"
+		etaDuration = 0
 	} else if progressPct >= 0.1 {
 		elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
 		totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
 		etaSeconds = totalExpectedSeconds - elapsedRowCopySeconds
 		if etaSeconds >= 0 {
-			etaDuration := time.Duration(etaSeconds) * time.Second
-			eta = base.PrettifyDurationOutput(etaDuration)
+			etaDuration = time.Duration(etaSeconds) * time.Second
 		} else {
-			eta = "due"
+			etaDuration = 0
 		}
+	}
+	this.migrationContext.SetETADuration(etaDuration)
+	var eta string
+	switch etaDuration {
+	case 0:
+		eta = "due"
+	case time.Duration(base.ETAUnknown):
+		eta = "N/A"
+	default:
+		eta = base.PrettifyDurationOutput(etaDuration)
 	}
 
 	state := "migrating"
@@ -1100,6 +1109,14 @@ func (this *Migrator) initiateApplier() error {
 		return err
 	}
 
+	if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
+		// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
+		// so we should copy AUTO_INCREMENT value onto our ghost table.
+		if err := this.applier.AlterGhostAutoIncrement(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+			return err
+		}
+	}
 	this.applier.WriteChangelogState(string(GhostTableMigrated))
 	go this.applier.InitiateHeartbeat()
 	return nil

@@ -17,7 +17,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/outbrain/golib/sqlutils"
+	"github.com/openark/golib/sqlutils"
 )
 
 const startSlavePostWaitMilliseconds = 500 * time.Millisecond
@@ -111,6 +111,10 @@ func (this *Inspector) InspectOriginalTable() (err error) {
 	if err != nil {
 		return err
 	}
+	this.migrationContext.OriginalTableAutoIncrement, err = this.getAutoIncrementValue(this.migrationContext.OriginalTableName)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -183,9 +187,17 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		if column.Name == mappedColumn.Name && column.Type == sql.DateTimeColumnType && mappedColumn.Type == sql.TimestampColumnType {
 			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.migrationContext.ApplierTimeZone)
 		}
+		if column.Name == mappedColumn.Name && column.Type == sql.EnumColumnType && mappedColumn.Charset != "" {
+			this.migrationContext.MappedSharedColumns.SetEnumToTextConversion(column.Name)
+			this.migrationContext.MappedSharedColumns.SetEnumValues(column.Name, column.EnumValues)
+		}
 	}
 
 	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
+		if this.migrationContext.GhostTableVirtualColumns.GetColumn(column.Name) != nil {
+			// this is a virtual column
+			continue
+		}
 		if this.migrationContext.MappedSharedColumns.HasTimezoneConversion(column.Name) {
 			return fmt.Errorf("No support at this time for converting a column from DATETIME to TIMESTAMP that is also part of the chosen unique key. Column: %s, key: %s", column.Name, this.migrationContext.UniqueKey.Name)
 		}
@@ -593,6 +605,7 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			}
 			if strings.HasPrefix(columnType, "enum") {
 				column.Type = sql.EnumColumnType
+				column.EnumValues = sql.ParseEnumValues(m.GetString("COLUMN_TYPE"))
 			}
 			if strings.HasPrefix(columnType, "binary") {
 				column.Type = sql.BinaryColumnType
@@ -605,6 +618,24 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		return nil
 	}, databaseName, tableName)
 	return err
+}
+
+// getAutoIncrementValue get's the original table's AUTO_INCREMENT value, if exists (0 value if not exists)
+func (this *Inspector) getAutoIncrementValue(tableName string) (autoIncrement uint64, err error) {
+	query := `
+		SELECT
+			AUTO_INCREMENT
+		FROM INFORMATION_SCHEMA.TABLES
+		WHERE
+			TABLES.TABLE_SCHEMA = ?
+			AND TABLES.TABLE_NAME = ?
+			AND AUTO_INCREMENT IS NOT NULL
+  `
+	err = sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		autoIncrement = m.GetUint64("AUTO_INCREMENT")
+		return nil
+	}, this.migrationContext.DatabaseName, tableName)
+	return autoIncrement, err
 }
 
 // getCandidateUniqueKeys investigates a table and returns the list of unique keys

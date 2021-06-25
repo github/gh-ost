@@ -7,11 +7,11 @@ import (
 	"path"
 	"time"
 
-	"github.com/juju/errors"
+	"github.com/pingcap/errors"
 	. "github.com/siddontang/go-mysql/mysql"
 )
 
-// Like mysqlbinlog remote raw backup
+// StartBackup: Like mysqlbinlog remote raw backup
 // Backup remote binlog from position (filename, offset) and write in backupDir
 func (b *BinlogSyncer) StartBackup(backupDir string, p Position, timeout time.Duration) error {
 	if timeout == 0 {

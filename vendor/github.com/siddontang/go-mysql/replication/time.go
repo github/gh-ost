@@ -39,6 +39,24 @@ func formatZeroTime(frac int, dec int) string {
 	return s[0 : len(s)-(6-dec)]
 }
 
+func formatBeforeUnixZeroTime(year, month, day, hour, minute, second, frac, dec int) string {
+	if dec == 0 {
+		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second)
+	}
+
+	s := fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%06d", year, month, day, hour, minute, second, frac)
+
+	// dec must < 6, if frac is 924000, but dec is 3, we must output 924 here.
+	return s[0 : len(s)-(6-dec)]
+}
+
+func microSecTimestampToTime(ts uint64) time.Time {
+	if ts == 0 {
+		return time.Time{}
+	}
+	return time.Unix(int64(ts/1000000), int64(ts%1000000)*1000)
+}
+
 func init() {
 	fracTimeFormat = make([]string, 7)
 	fracTimeFormat[0] = "2006-01-02 15:04:05"

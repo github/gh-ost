@@ -14,13 +14,16 @@ import (
 
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/outbrain/golib/log"
-	"github.com/outbrain/golib/sqlutils"
+	"github.com/openark/golib/log"
+	"github.com/openark/golib/sqlutils"
 	gomysql "github.com/siddontang/go-mysql/mysql"
 )
 
-const MaxTableNameLength = 64
-const MaxReplicationPasswordLength = 32
+const (
+	MaxTableNameLength           = 64
+	MaxReplicationPasswordLength = 32
+	MaxDBPoolConnections         = 3
+)
 
 type ReplicationLagResult struct {
 	Key InstanceKey
@@ -40,23 +43,22 @@ func (this *ReplicationLagResult) HasLag() bool {
 var knownDBs map[string]*gosql.DB = make(map[string]*gosql.DB)
 var knownDBsMutex = &sync.Mutex{}
 
-func GetDB(migrationUuid string, mysql_uri string) (*gosql.DB, bool, error) {
+func GetDB(migrationUuid string, mysql_uri string) (db *gosql.DB, exists bool, err error) {
 	cacheKey := migrationUuid + ":" + mysql_uri
 
 	knownDBsMutex.Lock()
-	defer func() {
-		knownDBsMutex.Unlock()
-	}()
+	defer knownDBsMutex.Unlock()
 
-	var exists bool
-	if _, exists = knownDBs[cacheKey]; !exists {
-		if db, err := gosql.Open("mysql", mysql_uri); err == nil {
-			knownDBs[cacheKey] = db
-		} else {
-			return db, exists, err
+	if db, exists = knownDBs[cacheKey]; !exists {
+		db, err = gosql.Open("mysql", mysql_uri)
+		if err != nil {
+			return nil, false, err
 		}
+		db.SetMaxOpenConns(MaxDBPoolConnections)
+		db.SetMaxIdleConns(MaxDBPoolConnections)
+		knownDBs[cacheKey] = db
 	}
-	return knownDBs[cacheKey], exists, nil
+	return db, exists, nil
 }
 
 // GetReplicationLagFromSlaveStatus returns replication lag for a given db; via SHOW SLAVE STATUS
