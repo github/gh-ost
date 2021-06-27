@@ -26,16 +26,26 @@ const (
 )
 
 const (
-	BINLOG_DUMP_NEVER_STOP  uint16 = 0x00
-	BINLOG_DUMP_NON_BLOCK   uint16 = 0x01
-	BINLOG_THROUGH_POSITION uint16 = 0x02
-	BINLOG_THROUGH_GTID     uint16 = 0x04
+	BINLOG_DUMP_NEVER_STOP          uint16 = 0x00
+	BINLOG_DUMP_NON_BLOCK           uint16 = 0x01
+	BINLOG_SEND_ANNOTATE_ROWS_EVENT uint16 = 0x02
+	BINLOG_THROUGH_POSITION         uint16 = 0x02
+	BINLOG_THROUGH_GTID             uint16 = 0x04
 )
 
 const (
 	BINLOG_ROW_IMAGE_FULL    = "FULL"
 	BINLOG_ROW_IAMGE_MINIMAL = "MINIMAL"
 	BINLOG_ROW_IMAGE_NOBLOB  = "NOBLOB"
+)
+
+const (
+	BINLOG_MARIADB_FL_STANDALONE      = 1 << iota /*1  - FL_STANDALONE is set when there is no terminating COMMIT event*/
+	BINLOG_MARIADB_FL_GROUP_COMMIT_ID             /*2  - FL_GROUP_COMMIT_ID is set when event group is part of a group commit on the master. Groups with same commit_id are part of the same group commit.*/
+	BINLOG_MARIADB_FL_TRANSACTIONAL               /*4  - FL_TRANSACTIONAL is set for an event group that can be safely rolled back (no MyISAM, eg.).*/
+	BINLOG_MARIADB_FL_ALLOW_PARALLEL              /*8  - FL_ALLOW_PARALLEL reflects the (negation of the) value of @@SESSION.skip_parallel_replication at the time of commit*/
+	BINLOG_MARIADB_FL_WAITED                      /*16 = FL_WAITED is set if a row lock wait (or other wait) is detected during the execution of the transaction*/
+	BINLOG_MARIADB_FL_DDL                         /*32 - FL_DDL is set for event group containing DDL*/
 )
 
 type EventType byte
@@ -77,6 +87,9 @@ const (
 	GTID_EVENT
 	ANONYMOUS_GTID_EVENT
 	PREVIOUS_GTIDS_EVENT
+	TRANSACTION_CONTEXT_EVENT
+	VIEW_CHANGE_EVENT
+	XA_PREPARE_LOG_EVENT
 )
 
 const (
@@ -169,6 +182,12 @@ func (e EventType) String() string {
 		return "MariadbGTIDEvent"
 	case MARIADB_GTID_LIST_EVENT:
 		return "MariadbGTIDListEvent"
+	case TRANSACTION_CONTEXT_EVENT:
+		return "TransactionContextEvent"
+	case VIEW_CHANGE_EVENT:
+		return "ViewChangeEvent"
+	case XA_PREPARE_LOG_EVENT:
+		return "XAPrepareLogEvent"
 
 	default:
 		return "UnknownEvent"
@@ -182,4 +201,19 @@ const (
 	//  BINLOG_CHECKSUM_ALG_ENUM_END,  // the cut line: valid alg range is [1, 0x7f].
 	BINLOG_CHECKSUM_ALG_UNDEF byte = 255 // special value to tag undetermined yet checksum
 	// or events from checksum-unaware servers
+)
+
+// These are TABLE_MAP_EVENT's optional metadata field type, from: libbinlogevents/include/rows_event.h
+const (
+	TABLE_MAP_OPT_META_SIGNEDNESS byte = iota + 1
+	TABLE_MAP_OPT_META_DEFAULT_CHARSET
+	TABLE_MAP_OPT_META_COLUMN_CHARSET
+	TABLE_MAP_OPT_META_COLUMN_NAME
+	TABLE_MAP_OPT_META_SET_STR_VALUE
+	TABLE_MAP_OPT_META_ENUM_STR_VALUE
+	TABLE_MAP_OPT_META_GEOMETRY_TYPE
+	TABLE_MAP_OPT_META_SIMPLE_PRIMARY_KEY
+	TABLE_MAP_OPT_META_PRIMARY_KEY_WITH_PREFIX
+	TABLE_MAP_OPT_META_ENUM_AND_SET_DEFAULT_CHARSET
+	TABLE_MAP_OPT_META_ENUM_AND_SET_COLUMN_CHARSET
 )

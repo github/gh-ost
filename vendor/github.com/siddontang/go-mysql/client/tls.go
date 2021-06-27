@@ -5,7 +5,7 @@ import (
 	"crypto/x509"
 )
 
-// generate TLS config for client side
+// NewClientTLSConfig: generate TLS config for client side
 // if insecureSkipVerify is set to true, serverName will not be validated
 func NewClientTLSConfig(caPem, certPem, keyPem []byte, insecureSkipVerify bool, serverName string) *tls.Config {
 	pool := x509.NewCertPool()

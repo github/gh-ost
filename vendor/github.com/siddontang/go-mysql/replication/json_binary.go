@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/juju/errors"
+	"github.com/pingcap/errors"
 	. "github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go/hack"
 )
@@ -76,7 +76,10 @@ func (e *RowsEvent) decodeJsonBinary(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return []byte{}, nil
 	}
-	d := jsonBinaryDecoder{useDecimal: e.useDecimal}
+	d := jsonBinaryDecoder{
+		useDecimal:      e.useDecimal,
+		ignoreDecodeErr: e.ignoreJSONDecodeErr,
+	}
 
 	if d.isDataShort(data, 1) {
 		return nil, d.err
@@ -91,8 +94,9 @@ func (e *RowsEvent) decodeJsonBinary(data []byte) ([]byte, error) {
 }
 
 type jsonBinaryDecoder struct {
-	useDecimal bool
-	err        error
+	useDecimal      bool
+	ignoreDecodeErr bool
+	err             error
 }
 
 func (d *jsonBinaryDecoder) decodeValue(tp byte, data []byte) interface{} {
@@ -146,6 +150,13 @@ func (d *jsonBinaryDecoder) decodeObjectOrArray(data []byte, isSmall bool, isObj
 	size := d.decodeCount(data[offsetSize:], isSmall)
 
 	if d.isDataShort(data, int(size)) {
+		// Before MySQL 5.7.22, json type generated column may have invalid value,
+		// bug ref: https://bugs.mysql.com/bug.php?id=88791
+		// As generated column value is not used in replication, we can just ignore
+		// this error and return a dummy value for this column.
+		if d.ignoreDecodeErr {
+			d.err = nil
+		}
 		return nil
 	}
 
