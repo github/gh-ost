@@ -23,11 +23,10 @@ function build {
     exit 1
   fi
 
-  # TODO: remove GO111MODULE once gh-ost uses Go modules
   echo "Building ${osname} binary"
   export GOOS
   export GOARCH
-  GO111MODULE=off go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
+  go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
 
   if [ $? -ne 0 ]; then
       echo "Build failed for ${osname}"

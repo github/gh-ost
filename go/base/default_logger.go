@@ -1,7 +1,7 @@
 package base
 
 import (
-	"github.com/outbrain/golib/log"
+	"github.com/openark/golib/log"
 )
 
 type simpleLogger struct{}
