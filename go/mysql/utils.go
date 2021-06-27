@@ -14,8 +14,8 @@ import (
 
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/outbrain/golib/log"
-	"github.com/outbrain/golib/sqlutils"
+	"github.com/openark/golib/log"
+	"github.com/openark/golib/sqlutils"
 )
 
 const (

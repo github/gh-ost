@@ -40,7 +40,6 @@ type Column struct {
 	EnumValues           string
 	timezoneConversion   *TimezoneConversion
 	enumToTextConversion bool
-
 	// add Octet length for binary type, fix bytes with suffix "00" get clipped in mysql binlog.
 	// https://github.com/github/gh-ost/issues/909
 	BinaryOctetLength uint

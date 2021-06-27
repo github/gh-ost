@@ -92,6 +92,7 @@ func (this *ConnectionConfig) UseTLS(caCertificatePath, clientCertificate, clien
 	}
 
 	this.tlsConfig = &tls.Config{
+		ServerName:         this.Key.Hostname,
 		Certificates:       certs,
 		RootCAs:            rootCertPool,
 		InsecureSkipVerify: allowInsecure,

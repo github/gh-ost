@@ -34,10 +34,10 @@ package identifier
 // - http://www.iana.org/assignments/character-sets/character-sets.xhtml
 // - http://www.iana.org/assignments/ianacharset-mib/ianacharset-mib
 // - http://www.ietf.org/rfc/rfc2978.txt
-// - http://www.unicode.org/reports/tr22/
+// - https://www.unicode.org/reports/tr22/
 // - http://www.w3.org/TR/encoding/
-// - http://www.w3.org/TR/encoding/indexes/encodings.json
 // - https://encoding.spec.whatwg.org/
+// - https://encoding.spec.whatwg.org/encodings.json
 // - https://tools.ietf.org/html/rfc6657#section-5
 
 // Interface can be implemented by Encodings to define the CCS or CES for which

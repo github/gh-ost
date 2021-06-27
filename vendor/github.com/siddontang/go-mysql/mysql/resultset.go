@@ -3,235 +3,64 @@ package mysql
 import (
 	"fmt"
 	"strconv"
+	"sync"
 
-	"github.com/juju/errors"
+	"github.com/pingcap/errors"
 	"github.com/siddontang/go/hack"
 )
-
-type RowData []byte
-
-func (p RowData) Parse(f []*Field, binary bool) ([]interface{}, error) {
-	if binary {
-		return p.ParseBinary(f)
-	} else {
-		return p.ParseText(f)
-	}
-}
-
-func (p RowData) ParseText(f []*Field) ([]interface{}, error) {
-	data := make([]interface{}, len(f))
-
-	var err error
-	var v []byte
-	var isNull bool
-	var pos int = 0
-	var n int = 0
-
-	for i := range f {
-		v, isNull, n, err = LengthEncodedString(p[pos:])
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-
-		pos += n
-
-		if isNull {
-			data[i] = nil
-		} else {
-			isUnsigned := f[i].Flag&UNSIGNED_FLAG != 0
-
-			switch f[i].Type {
-			case MYSQL_TYPE_TINY, MYSQL_TYPE_SHORT, MYSQL_TYPE_INT24,
-				MYSQL_TYPE_LONGLONG, MYSQL_TYPE_YEAR:
-				if isUnsigned {
-					data[i], err = strconv.ParseUint(string(v), 10, 64)
-				} else {
-					data[i], err = strconv.ParseInt(string(v), 10, 64)
-				}
-			case MYSQL_TYPE_FLOAT, MYSQL_TYPE_DOUBLE:
-				data[i], err = strconv.ParseFloat(string(v), 64)
-			default:
-				data[i] = v
-			}
-
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
-		}
-	}
-
-	return data, nil
-}
-
-func (p RowData) ParseBinary(f []*Field) ([]interface{}, error) {
-	data := make([]interface{}, len(f))
-
-	if p[0] != OK_HEADER {
-		return nil, ErrMalformPacket
-	}
-
-	pos := 1 + ((len(f) + 7 + 2) >> 3)
-
-	nullBitmap := p[1:pos]
-
-	var isNull bool
-	var n int
-	var err error
-	var v []byte
-	for i := range data {
-		if nullBitmap[(i+2)/8]&(1<<(uint(i+2)%8)) > 0 {
-			data[i] = nil
-			continue
-		}
-
-		isUnsigned := f[i].Flag&UNSIGNED_FLAG != 0
-
-		switch f[i].Type {
-		case MYSQL_TYPE_NULL:
-			data[i] = nil
-			continue
-
-		case MYSQL_TYPE_TINY:
-			if isUnsigned {
-				data[i] = ParseBinaryUint8(p[pos : pos+1])
-			} else {
-				data[i] = ParseBinaryInt8(p[pos : pos+1])
-			}
-			pos++
-			continue
-
-		case MYSQL_TYPE_SHORT, MYSQL_TYPE_YEAR:
-			if isUnsigned {
-				data[i] = ParseBinaryUint16(p[pos : pos+2])
-			} else {
-				data[i] = ParseBinaryInt16(p[pos : pos+2])
-			}
-			pos += 2
-			continue
-
-		case MYSQL_TYPE_INT24:
-			if isUnsigned {
-				data[i] = ParseBinaryUint24(p[pos : pos+3])
-			} else {
-				data[i] = ParseBinaryInt24(p[pos : pos+3])
-			}
-			//3 byte
-			pos += 3
-			continue
-
-		case MYSQL_TYPE_LONG:
-			if isUnsigned {
-				data[i] = ParseBinaryUint32(p[pos : pos+4])
-			} else {
-				data[i] = ParseBinaryInt32(p[pos : pos+4])
-			}
-			pos += 4
-			continue
-
-		case MYSQL_TYPE_LONGLONG:
-			if isUnsigned {
-				data[i] = ParseBinaryUint64(p[pos : pos+8])
-			} else {
-				data[i] = ParseBinaryInt64(p[pos : pos+8])
-			}
-			pos += 8
-			continue
-
-		case MYSQL_TYPE_FLOAT:
-			data[i] = ParseBinaryFloat32(p[pos : pos+4])
-			pos += 4
-			continue
-
-		case MYSQL_TYPE_DOUBLE:
-			data[i] = ParseBinaryFloat64(p[pos : pos+8])
-			pos += 8
-			continue
-
-		case MYSQL_TYPE_DECIMAL, MYSQL_TYPE_NEWDECIMAL, MYSQL_TYPE_VARCHAR,
-			MYSQL_TYPE_BIT, MYSQL_TYPE_ENUM, MYSQL_TYPE_SET, MYSQL_TYPE_TINY_BLOB,
-			MYSQL_TYPE_MEDIUM_BLOB, MYSQL_TYPE_LONG_BLOB, MYSQL_TYPE_BLOB,
-			MYSQL_TYPE_VAR_STRING, MYSQL_TYPE_STRING, MYSQL_TYPE_GEOMETRY:
-			v, isNull, n, err = LengthEncodedString(p[pos:])
-			pos += n
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
-
-			if !isNull {
-				data[i] = v
-				continue
-			} else {
-				data[i] = nil
-				continue
-			}
-		case MYSQL_TYPE_DATE, MYSQL_TYPE_NEWDATE:
-			var num uint64
-			num, isNull, n = LengthEncodedInt(p[pos:])
-
-			pos += n
-
-			if isNull {
-				data[i] = nil
-				continue
-			}
-
-			data[i], err = FormatBinaryDate(int(num), p[pos:])
-			pos += int(num)
-
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
-
-		case MYSQL_TYPE_TIMESTAMP, MYSQL_TYPE_DATETIME:
-			var num uint64
-			num, isNull, n = LengthEncodedInt(p[pos:])
-
-			pos += n
-
-			if isNull {
-				data[i] = nil
-				continue
-			}
-
-			data[i], err = FormatBinaryDateTime(int(num), p[pos:])
-			pos += int(num)
-
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
-
-		case MYSQL_TYPE_TIME:
-			var num uint64
-			num, isNull, n = LengthEncodedInt(p[pos:])
-
-			pos += n
-
-			if isNull {
-				data[i] = nil
-				continue
-			}
-
-			data[i], err = FormatBinaryTime(int(num), p[pos:])
-			pos += int(num)
-
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
-
-		default:
-			return nil, errors.Errorf("Stmt Unknown FieldType %d %s", f[i].Type, f[i].Name)
-		}
-	}
-
-	return data, nil
-}
 
 type Resultset struct {
 	Fields     []*Field
 	FieldNames map[string]int
-	Values     [][]interface{}
+	Values     [][]FieldValue
+
+	RawPkg []byte
 
 	RowDatas []RowData
+}
+
+var (
+	resultsetPool = sync.Pool{
+		New: func() interface{} {
+			return &Resultset{}
+		},
+	}
+)
+
+func NewResultset(resultsetCount int) *Resultset {
+	r := resultsetPool.Get().(*Resultset)
+	r.reset(resultsetCount)
+	return r
+}
+
+func (r *Resultset) returnToPool() {
+	resultsetPool.Put(r)
+}
+
+func (r *Resultset) reset(count int) {
+	r.RawPkg = r.RawPkg[:0]
+
+	r.Fields = r.Fields[:0]
+	r.Values = r.Values[:0]
+	r.RowDatas = r.RowDatas[:0]
+
+	if r.FieldNames != nil {
+		for k := range r.FieldNames {
+			delete(r.FieldNames, k)
+		}
+	} else {
+		r.FieldNames = make(map[string]int)
+	}
+
+	if count == 0 {
+		return
+	}
+
+	if cap(r.Fields) < count {
+		r.Fields = make([]*Field, count)
+	} else {
+		r.Fields = r.Fields[:count]
+	}
 }
 
 func (r *Resultset) RowNumber() int {
@@ -251,7 +80,7 @@ func (r *Resultset) GetValue(row, column int) (interface{}, error) {
 		return nil, errors.Errorf("invalid column index %d", column)
 	}
 
-	return r.Values[row][column], nil
+	return r.Values[row][column].Value(), nil
 }
 
 func (r *Resultset) NameIndex(name string) (int, error) {
