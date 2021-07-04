@@ -13,8 +13,8 @@ import (
 	"time"
 
 	gosql "database/sql"
+
 	"github.com/github/gh-ost/go/mysql"
-	"github.com/outbrain/golib/log"
 )
 
 var (
@@ -63,7 +63,7 @@ func StringContainsAll(s string, substrings ...string) bool {
 	return nonEmptyStringsFound
 }
 
-func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext) (string, error) {
+func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext, name string) (string, error) {
 	versionQuery := `select @@global.version`
 	var port, extraPort int
 	var version string
@@ -76,7 +76,8 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	}
 	// AliyunRDS set users port to "NULL", replace it by gh-ost param
 	// GCP set users port to "NULL", replace it by gh-ost param
-	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform {
+	// Azure MySQL set users port to a different value by design, replace it by gh-ost para
+	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform || migrationContext.AzureMySQL {
 		port = connectionConfig.Key.Port
 	} else {
 		portQuery := `select @@global.port`
@@ -86,7 +87,7 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	}
 
 	if connectionConfig.Key.Port == port || (extraPort > 0 && connectionConfig.Key.Port == extraPort) {
-		log.Infof("connection validated on %+v", connectionConfig.Key)
+		migrationContext.Log.Infof("%s connection validated on %+v", name, connectionConfig.Key)
 		return version, nil
 	} else if extraPort == 0 {
 		return "", fmt.Errorf("Unexpected database port reported: %+v", port)

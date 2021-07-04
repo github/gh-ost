@@ -16,8 +16,7 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 
-	"github.com/outbrain/golib/log"
-	"github.com/outbrain/golib/sqlutils"
+	"github.com/openark/golib/sqlutils"
 )
 
 type BinlogEventListener struct {
@@ -43,6 +42,7 @@ type EventsStreamer struct {
 	listenersMutex           *sync.Mutex
 	eventsChannel            chan *binlog.BinlogEntry
 	binlogReader             *binlog.GoMySQLReader
+	name                     string
 }
 
 func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer {
@@ -52,6 +52,7 @@ func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer 
 		listeners:        [](*BinlogEventListener){},
 		listenersMutex:   &sync.Mutex{},
 		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
+		name:             "streamer",
 	}
 }
 
@@ -107,7 +108,7 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, EventsStreamerUri); err != nil {
 		return err
 	}
-	if _, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext); err != nil {
+	if _, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name); err != nil {
 		return err
 	}
 	if err := this.readCurrentBinlogCoordinates(); err != nil {
@@ -160,7 +161,7 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	if !foundMasterStatus {
 		return fmt.Errorf("Got no results from SHOW MASTER STATUS. Bailing out")
 	}
-	log.Debugf("Streamer binlog coordinates: %+v", *this.initialBinlogCoordinates)
+	this.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", *this.initialBinlogCoordinates)
 	return nil
 }
 
@@ -186,7 +187,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 				return nil
 			}
 
-			log.Infof("StreamEvents encountered unexpected error: %+v", err)
+			this.migrationContext.Log.Infof("StreamEvents encountered unexpected error: %+v", err)
 			this.migrationContext.MarkPointOfInterest()
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
 
@@ -202,7 +203,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 
 			// Reposition at same binlog file.
 			lastAppliedRowsEventHint = this.binlogReader.LastAppliedRowsEventHint
-			log.Infof("Reconnecting... Will resume at %+v", lastAppliedRowsEventHint)
+			this.migrationContext.Log.Infof("Reconnecting... Will resume at %+v", lastAppliedRowsEventHint)
 			if err := this.initBinlogReader(this.GetReconnectBinlogCoordinates()); err != nil {
 				return err
 			}
@@ -213,7 +214,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 
 func (this *EventsStreamer) Close() (err error) {
 	err = this.binlogReader.Close()
-	log.Infof("Closed streamer connection. err=%+v", err)
+	this.migrationContext.Log.Infof("Closed streamer connection. err=%+v", err)
 	return err
 }
 

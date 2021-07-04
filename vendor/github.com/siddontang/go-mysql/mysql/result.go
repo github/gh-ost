@@ -12,3 +12,10 @@ type Result struct {
 type Executer interface {
 	Execute(query string, args ...interface{}) (*Result, error)
 }
+
+func (r *Result) Close() {
+	if r.Resultset != nil {
+		r.Resultset.returnToPool()
+		r.Resultset = nil
+	}
+}
