@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,8 +17,8 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
+	"github.com/openark/golib/log"
 	"github.com/openark/golib/sqlutils"
-	"sync"
 )
 
 const (
