@@ -27,6 +27,6 @@ begin
   insert into gh_ost_test (id, jsonobj) values (null, '{"_id":19}');
   insert into gh_ost_test (id, jsonobj) values (null, '{"_id":23}');
   insert into gh_ost_test (id, jsonobj) values (null, '{"_id":27}');
-
-  update gh_ost_test set jsonobj=JSON_OBJECT('_id', 27, 'name', 'carrot') where id>0 and idb=27;
+  set @last_insert_id := last_insert_id();
+  update gh_ost_test set jsonobj=JSON_OBJECT('_id', 27, 'name', 'carrot') where id=@last_insert_id and idb=27;
 end ;;
