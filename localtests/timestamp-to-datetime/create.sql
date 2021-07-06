@@ -21,11 +21,11 @@ create event gh_ost_test
   enable
   do
 begin
-  insert into gh_ost_test values (null, 7, now(), now(), now(), '2010-10-20 10:20:30', 0);
+  insert into gh_ost_test values (null, 7, null, now(), now(), '2010-10-20 10:20:30', 0);
 
-  insert into gh_ost_test values (null, 11, now(), now(), now(), '2010-10-20 10:20:30', 0);
+  insert into gh_ost_test values (null, 11, null, now(), now(), '2010-10-20 10:20:30', 0);
   update gh_ost_test set ts2=now() + interval 1 minute, updated = 1 where i = 11 order by id desc limit 1;
 
-  insert into gh_ost_test values (null, 13, now(), now(), now(), '2010-10-20 10:20:30', 0);
+  insert into gh_ost_test values (null, 13, null, now(), now(), '2010-10-20 10:20:30', 0);
   update gh_ost_test set ts2=now() + interval 1 minute, updated = 1 where i = 13 order by id desc limit 1;
 end ;;
