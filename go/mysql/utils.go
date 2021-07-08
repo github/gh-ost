@@ -188,7 +188,7 @@ func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnL
 	err := sqlutils.QueryRowsMap(db, query, func(rowMap sqlutils.RowMap) error {
 		columnName := rowMap.GetString("Field")
 		columnNames = append(columnNames, columnName)
-		if strings.Contains(rowMap.GetString("Extra"), "GENERATED") || strings.Contains(rowMap.GetString("Extra"), "VIRTUAL") {
+		if strings.Contains(rowMap.GetString("Extra"), " GENERATED") {
 			log.Debugf("%s is a generated column", columnName)
 			virtualColumnNames = append(virtualColumnNames, columnName)
 		}
