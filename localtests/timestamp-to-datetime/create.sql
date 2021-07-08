@@ -11,6 +11,7 @@ create table gh_ost_test (
   key i_idx(i)
 ) auto_increment=1;
 
+
 drop event if exists gh_ost_test;
 delimiter ;;
 create event gh_ost_test
