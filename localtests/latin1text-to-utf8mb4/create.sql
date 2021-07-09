@@ -5,7 +5,7 @@ create table gh_ost_test (
   primary key(id)
 ) auto_increment=1 charset latin1 collate latin1_swedish_ci;
 
-insert into gh_ost_test values (null, char(128));
+insert into gh_ost_test values (null, char(189));
 
 drop event if exists gh_ost_test;
 delimiter ;;
@@ -18,7 +18,7 @@ create event gh_ost_test
   do
 begin
   insert into gh_ost_test values (null, md5(rand()));
-  insert into gh_ost_test values (null, char(128));
-  update gh_ost_test set t=char(230) order by id desc limit 1;
-  delete from gh_ost_test where t=char(230);
+  insert into gh_ost_test values (null, char(189));
+  update gh_ost_test set t=char(190) order by id desc limit 1;
+  delete from gh_ost_test where t=char(190);
 end ;;

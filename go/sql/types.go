@@ -221,6 +221,14 @@ func (this *ColumnList) SetEnumValues(columnName string, enumValues string) {
 	this.GetColumn(columnName).EnumValues = enumValues
 }
 
+func (this *ColumnList) SetCharsetConversion(columnName string, fromCharset string, toCharset string) {
+	this.GetColumn(columnName).charsetConversion = &CharacterSetConversion{FromCharset: fromCharset, ToCharset: toCharset}
+}
+
+func (this *ColumnList) IsCharsetConversion(columnName string) bool {
+	return this.GetColumn(columnName).charsetConversion != nil
+}
+
 func (this *ColumnList) String() string {
 	return strings.Join(this.Names(), ",")
 }
@@ -246,10 +254,6 @@ func (this *ColumnList) IsSubsetOf(other *ColumnList) bool {
 
 func (this *ColumnList) Len() int {
 	return len(this.columns)
-}
-
-func (this *ColumnList) SetCharsetConversion(columnName string, fromCharset string, toCharset string) {
-	this.GetColumn(columnName).charsetConversion = &CharacterSetConversion{FromCharset: fromCharset, ToCharset: toCharset}
 }
 
 // UniqueKey is the combination of a key's name and columns

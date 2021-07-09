@@ -191,6 +191,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		}
 		if column.Name == mappedColumn.Name && column.Charset != mappedColumn.Charset {
 			this.migrationContext.SharedColumns.SetCharsetConversion(column.Name, column.Charset, mappedColumn.Charset)
+			this.migrationContext.MappedSharedColumns.SetCharsetConversion(column.Name, column.Charset, mappedColumn.Charset)
 		}
 	}
 
