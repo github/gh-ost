@@ -191,6 +191,9 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 			this.migrationContext.MappedSharedColumns.SetEnumToTextConversion(column.Name)
 			this.migrationContext.MappedSharedColumns.SetEnumValues(column.Name, column.EnumValues)
 		}
+		if column.Name == mappedColumn.Name && column.Charset != mappedColumn.Charset {
+			this.migrationContext.MappedSharedColumns.SetCharsetConversion(column.Name, column.Charset, mappedColumn.Charset)
+		}
 	}
 
 	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
