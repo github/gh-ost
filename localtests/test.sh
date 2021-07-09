@@ -111,33 +111,13 @@ test_single() {
   start_replication
   echo_dot
 
-  current_gtid_mode=$(gh-ost-test-mysql-master -s -s -e "select @@global.gtid_mode" 2>/dev/null)
-  target_gtid_mode=OFF
   if [ -f $tests_path/$test_name/gtid_mode ] ; then
+    current_gtid_mode=$(gh-ost-test-mysql-master -s -s -e "select @@global.gtid_mode")
     target_gtid_mode=$(cat $tests_path/$test_name/gtid_mode)
-    if [ "$current_gtid_mode" == "OFF" ] && [ "$target_gtid_mode" == "ON" ] ; then
-      gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.enforce_gtid_consistency=ON"
-      gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.enforce_gtid_consistency=ON"
-      for mode in "OFF_PERMISSIVE" "ON_PERMISSIVE" "ON"; do
-        gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.gtid_mode=${mode}"
-      done
-    else
-      echo "gtid_mode transition from ${current_gtid_mode} to ${target_gtid_mode} is unsupported!"
+    if [ "$current_gtid_mode" != "$target_gtid_mode" ] ; then
+      echo "gtid_mode is ${current_gtid_mode}, expected ${target_gtid_mode}"
       exit 1
     fi
-  elif [ "$current_gtid_mode" == "ON" ] ; then
-    for mode in "ON_PERMISSIVE" "OFF_PERMISSIVE" "OFF"; do
-      gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.gtid_mode=${mode}"
-      gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.gtid_mode=${mode}"
-    done
-    gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.enforce_gtid_consistency=OFF"
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.enforce_gtid_consistency=OFF"
-  fi
-
-  current_gtid_mode=$(gh-ost-test-mysql-master -s -s -e "select @@global.gtid_mode" 2>/dev/null)
-  if [ ! -z "$current_gtid_mode" ] && [ "$current_gtid_mode" != "$target_gtid_mode" ] ; then
-    echo "gtid_transition from ${current_gtid_mode} to ${target_gtid_mode} failed!"
-    exit 1
   fi
 
   if [ -f $tests_path/$test_name/sql_mode ] ; then
