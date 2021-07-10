@@ -140,7 +140,11 @@ func (this *EventsStreamer) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinat
 }
 
 func (this *EventsStreamer) GetReconnectBinlogCoordinates() *mysql.BinlogCoordinates {
-	return &mysql.BinlogCoordinates{LogFile: this.GetCurrentBinlogCoordinates().LogFile, LogPos: 4}
+	current := this.GetCurrentBinlogCoordinates()
+	if current.GTIDSet != nil {
+		return &mysql.BinlogCoordinates{GTIDSet: current.GTIDSet}
+	}
+	return &mysql.BinlogCoordinates{LogFile: current.LogFile, LogPos: 4}
 }
 
 // readCurrentBinlogCoordinates reads master status from hooked server

@@ -54,7 +54,10 @@ verify_master_and_replica() {
 
   current_gtid_mode=$(gh-ost-test-mysql-master -s -s -e "select @@global.gtid_mode" 2>/dev/null || echo unsupported)
   current_enforce_gtid_consistency=$(gh-ost-test-mysql-master -s -s -e "select @@global.enforce_gtid_consistency" 2>/dev/null || echo unsupported)
+  current_master_server_uuid=$(gh-ost-test-mysql-master -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
+  current_replica_server_uuid=$(gh-ost-test-mysql-replica -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
   echo "gtid_mode on master is ${current_gtid_mode} with enforce_gtid_consistency=${current_enforce_gtid_consistency}"
+  echo "server_uuid on master is ${current_master_server_uuid}, replica is ${current_replica_server_uuid}"
 
   echo "Gracefully sleeping for 3 seconds while replica is setting up..."
   sleep 3
