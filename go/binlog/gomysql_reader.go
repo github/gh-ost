@@ -28,7 +28,7 @@ type GoMySQLReader struct {
 	binlogStreamer           *replication.BinlogStreamer
 	currentCoordinates       mysql.BinlogCoordinates
 	currentCoordinatesMutex  *sync.Mutex
-	lastGtidSID              *uuid.UUID
+	nextCoordinates          mysql.BinlogCoordinates
 	LastAppliedRowsEventHint mysql.BinlogCoordinates
 }
 
@@ -85,13 +85,14 @@ func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinate
 
 // StreamEvents
 func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
-	if this.currentCoordinates.IsLogPosOverflowBeyond4Bytes(&this.LastAppliedRowsEventHint) {
-		return fmt.Errorf("Unexpected rows event at %+v, the binlog end_log_pos is overflow 4 bytes", this.currentCoordinates)
-	}
-
-	if this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
-		this.migrationContext.Log.Debugf("Skipping handled query at %+v", this.currentCoordinates)
-		return nil
+	if !this.migrationContext.UseGTIDs {
+		if this.currentCoordinates.IsLogPosOverflowBeyond4Bytes(&this.LastAppliedRowsEventHint) {
+			return fmt.Errorf("Unexpected rows event at %+v, the binlog end_log_pos is overflow 4 bytes", this.currentCoordinates)
+		}
+		if this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
+			this.migrationContext.Log.Debugf("Skipping handled query at %+v", this.currentCoordinates)
+			return nil
+		}
 	}
 
 	dml := ToEventDML(ev.Header.EventType.String())
@@ -131,6 +132,11 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 		// In reality, reads will be synchronous
 		entriesChannel <- binlogEntry
 	}
+	if this.migrationContext.UseGTIDs {
+		this.currentCoordinatesMutex.Lock()
+		defer this.currentCoordinatesMutex.Unlock()
+		this.currentCoordinates = this.nextCoordinates
+	}
 	this.LastAppliedRowsEventHint = this.currentCoordinates
 	return nil
 }
@@ -164,19 +170,12 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			if err != nil {
 				return err
 			}
-			if this.lastGtidSID != nil && sid.String() != this.lastGtidSID.String() {
-				return fmt.Errorf("Got unexpected GTID SID %q. SID change is currently unsupported", sid.String())
-			}
 			func() {
 				this.currentCoordinatesMutex.Lock()
 				defer this.currentCoordinatesMutex.Unlock()
-				gtidSet := gomysql.MysqlGTIDSet{Sets: map[string]*gomysql.UUIDSet{}}
-				gtidSet.AddSet(gomysql.NewUUIDSet(sid, gomysql.Interval{
-					Start: event.GNO,
-					Stop:  event.GNO + 1,
-				}))
-				this.currentCoordinates.GTIDSet = &gtidSet
-				this.lastGtidSID = &sid
+				this.nextCoordinates = this.currentCoordinates
+				interval := gomysql.Interval{Start: event.GNO, Stop: event.GNO + 1}
+				this.nextCoordinates.GTIDSet.AddSet(gomysql.NewUUIDSet(sid, interval))
 			}()
 		case *replication.RotateEvent:
 			if this.migrationContext.UseGTIDs {
