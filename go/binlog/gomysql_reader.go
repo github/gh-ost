@@ -162,6 +162,17 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 		}()
 
 		switch event := ev.Event.(type) {
+		case *replication.PreviousGTIDsEvent:
+			if !this.migrationContext.UseGTIDs {
+				continue
+			}
+			func() {
+				this.currentCoordinatesMutex.Lock()
+				defer this.currentCoordinatesMutex.Unlock()
+				if err := this.currentCoordinates.GTIDSet.Update(event.GTIDSets); err != nil {
+					this.migrationContext.Log.Errorf("Failed to parse GTID set: %v", err)
+				}
+			}()
 		case *replication.GTIDEvent:
 			if !this.migrationContext.UseGTIDs {
 				continue
