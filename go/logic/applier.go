@@ -1052,7 +1052,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 
 				rowsAffected, err := result.RowsAffected()
 				if err != nil {
-					log.Warningf("error getting rows affected from DML event query: %s. this might not be supported by go-sql-driver. i'm going to assume that the DML affected a row, but this may result in inaccurate statistics", err)
+					log.Warningf("error getting rows affected from DML event query: %s. i'm going to assume that the DML affected a single row, but this may result in inaccurate statistics", err)
 					rowsAffected = 1
 				}
 				// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
