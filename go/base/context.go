@@ -213,6 +213,7 @@ type MigrationContext struct {
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
 	UniqueKey                        *sql.UniqueKey
 	SharedColumns                    *sql.ColumnList
+	SharedVirtualColumns             *sql.ColumnList
 	ColumnRenameMap                  map[string]string
 	DroppedColumnsMap                map[string]bool
 	MappedSharedColumns              *sql.ColumnList

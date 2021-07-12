@@ -234,6 +234,19 @@ func (this *ColumnList) IsSubsetOf(other *ColumnList) bool {
 	return true
 }
 
+// ConcatenateColumnList concatenates two column lists. It does not check for duplicates.
+func ConcatenateColumnList(columns1, columns2 *ColumnList) *ColumnList {
+	result := &ColumnList{}
+	for _, col := range columns1.Columns() {
+		result.columns = append(result.columns, col)
+	}
+	for _, col := range columns2.Columns() {
+		result.columns = append(result.columns, col)
+	}
+	result.Ordinals = NewColumnsMap(result.columns)
+	return result
+}
+
 func (this *ColumnList) Len() int {
 	return len(this.columns)
 }

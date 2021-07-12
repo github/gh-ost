@@ -171,7 +171,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		}
 	}
 
-	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.OriginalTableVirtualColumns, this.migrationContext.GhostTableVirtualColumns, this.migrationContext.ColumnRenameMap)
+	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, this.migrationContext.SharedVirtualColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.OriginalTableVirtualColumns, this.migrationContext.GhostTableVirtualColumns, this.migrationContext.ColumnRenameMap)
 	this.migrationContext.Log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
 	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
 
@@ -720,8 +720,9 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 }
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
-func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, originalVirtualColumns, ghostVirtualColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
+func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, originalVirtualColumns, ghostVirtualColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList, *sql.ColumnList) {
 	sharedColumnNames := []string{}
+	sharedVirtualColumnNames := []string{}
 	for _, originalColumn := range originalColumns.Names() {
 		isSharedColumn := false
 		for _, ghostColumn := range ghostColumns.Names() {
@@ -754,6 +755,29 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 			sharedColumnNames = append(sharedColumnNames, originalColumn)
 		}
 	}
+	// Virtual columns
+	for _, originalColumn := range originalVirtualColumns.Names() {
+		isSharedColumn := false
+		for _, ghostColumn := range ghostVirtualColumns.Names() {
+			if strings.EqualFold(originalColumn, ghostColumn) {
+				isSharedColumn = true
+				break
+			}
+			if strings.EqualFold(columnRenameMap[originalColumn], ghostColumn) {
+				isSharedColumn = true
+				break
+			}
+		}
+		for droppedColumn := range this.migrationContext.DroppedColumnsMap {
+			if strings.EqualFold(originalColumn, droppedColumn) {
+				isSharedColumn = false
+				break
+			}
+		}
+		if isSharedColumn {
+			sharedVirtualColumnNames = append(sharedVirtualColumnNames, originalColumn)
+		}
+	}
 	mappedSharedColumnNames := []string{}
 	for _, columnName := range sharedColumnNames {
 		if mapped, ok := columnRenameMap[columnName]; ok {
@@ -762,7 +786,7 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 			mappedSharedColumnNames = append(mappedSharedColumnNames, columnName)
 		}
 	}
-	return sql.NewColumnList(sharedColumnNames), sql.NewColumnList(mappedSharedColumnNames)
+	return sql.NewColumnList(sharedColumnNames), sql.NewColumnList(mappedSharedColumnNames), sql.NewColumnList(sharedVirtualColumnNames)
 }
 
 // showCreateTable returns the `show create table` statement for given table
