@@ -1,6 +1,13 @@
 # github.com/go-ini/ini v1.62.0
 ## explicit
 github.com/go-ini/ini
+# github.com/go-mysql-org/go-mysql v1.3.0
+## explicit
+github.com/go-mysql-org/go-mysql/client
+github.com/go-mysql-org/go-mysql/mysql
+github.com/go-mysql-org/go-mysql/packet
+github.com/go-mysql-org/go-mysql/replication
+github.com/go-mysql-org/go-mysql/utils
 # github.com/go-sql-driver/mysql v1.5.0
 ## explicit
 github.com/go-sql-driver/mysql
@@ -9,10 +16,8 @@ github.com/go-sql-driver/mysql
 github.com/openark/golib/log
 github.com/openark/golib/sqlutils
 github.com/openark/golib/tests
-# github.com/pingcap/errors v0.11.0
+# github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3
 github.com/pingcap/errors
-# github.com/pkg/errors v0.9.1
-## explicit
 # github.com/satori/go.uuid v1.2.0
 ## explicit
 github.com/satori/go.uuid
@@ -23,15 +28,10 @@ github.com/siddontang/go/hack
 # github.com/siddontang/go-log v0.0.0-20180807004314-8d05993dda07
 github.com/siddontang/go-log/log
 github.com/siddontang/go-log/loggers
-# github.com/siddontang/go-mysql v1.1.0
-## explicit
-github.com/siddontang/go-mysql/client
-github.com/siddontang/go-mysql/mysql
-github.com/siddontang/go-mysql/packet
-github.com/siddontang/go-mysql/replication
-github.com/siddontang/go-mysql/utils
 # github.com/smartystreets/goconvey v1.6.4
 ## explicit
+# go.uber.org/atomic v1.7.0
+go.uber.org/atomic
 # golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83
 ## explicit
 golang.org/x/crypto/ssh/terminal
@@ -45,7 +45,7 @@ golang.org/x/sys/unix
 golang.org/x/sys/windows
 # golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1
 golang.org/x/term
-# golang.org/x/text v0.3.5
+# golang.org/x/text v0.3.6
 ## explicit
 golang.org/x/text/encoding
 golang.org/x/text/encoding/charmap
