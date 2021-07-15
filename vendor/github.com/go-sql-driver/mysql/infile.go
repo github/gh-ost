@@ -23,7 +23,7 @@ var (
 	readerRegisterLock sync.RWMutex
 )
 
-// RegisterLocalFile adds the given file to the file allowlist,
+// RegisterLocalFile adds the given file to the file whitelist,
 // so that it can be used by "LOAD DATA LOCAL INFILE <filepath>".
 // Alternatively you can allow the use of all local files with
 // the DSN parameter 'allowAllFiles=true'
@@ -45,7 +45,7 @@ func RegisterLocalFile(filePath string) {
 	fileRegisterLock.Unlock()
 }
 
-// DeregisterLocalFile removes the given filepath from the allowlist.
+// DeregisterLocalFile removes the given filepath from the whitelist.
 func DeregisterLocalFile(filePath string) {
 	fileRegisterLock.Lock()
 	delete(fileRegister, strings.Trim(filePath, `"`))
