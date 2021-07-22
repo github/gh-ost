@@ -20,6 +20,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/openark/golib/log"
+	"github.com/openark/golib/sqlutils"
 
 	"github.com/go-ini/ini"
 )
@@ -153,9 +154,10 @@ type MigrationContext struct {
 	InitiallyDropOldTable        bool
 	InitiallyDropGhostTable      bool
 	TimestampOldTable            bool // Should old table name include a timestamp
+	IncludeTriggers              bool
 	CutOverType                  CutOver
 	ReplicaServerId              uint
-
+	
 	Hostname                               string
 	AssumeMasterHostname                   string
 	ApplierTimeZone                        string
@@ -219,6 +221,7 @@ type MigrationContext struct {
 	MappedSharedColumns              *sql.ColumnList
 	MigrationRangeMinValues          *sql.ColumnValues
 	MigrationRangeMaxValues          *sql.ColumnValues
+	Triggers                         []*sqlutils.RowMap
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues

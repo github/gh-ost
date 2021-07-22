@@ -205,3 +205,19 @@ func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnL
 	}
 	return sql.NewColumnList(columnNames), sql.NewColumnList(virtualColumnNames), nil
 }
+
+// GetTriggers reads trigger list from given table
+func GetTriggers(db *gosql.DB, databaseName, tableName string) (triggers []*sqlutils.RowMap, err error) {
+	query := fmt.Sprintf(`select trigger_name as name, event_manipulation as event, action_statement as statement, action_timing as timing
+	from information_schema.triggers 
+	where trigger_schema = '%s' and event_object_table = '%s'`, databaseName, tableName)
+	
+	err = sqlutils.QueryRowsMap(db, query, func(rowMap sqlutils.RowMap) error {
+		triggers = append(triggers, &rowMap)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return triggers, nil
+}

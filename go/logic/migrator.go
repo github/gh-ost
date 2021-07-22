@@ -663,6 +663,19 @@ func (this *Migrator) atomicCutOver() (err error) {
 		return this.migrationContext.Log.Errore(err)
 	}
 
+	// If we need to create triggers we need to do it here (only create part)
+	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
+		triggersCreated := make(chan error, 2)
+		go func() {
+			if err := this.applier.CreateTriggersOnGhost(triggersCreated); err != nil {
+				this.migrationContext.Log.Errore(err)
+			}
+		}()
+		if err := <-triggersCreated; err != nil {
+			return this.migrationContext.Log.Errore(err)
+		}
+	}
+
 	// Step 2
 	// We now attempt an atomic RENAME on original & ghost tables, and expect it to block.
 	this.migrationContext.RenameTablesStartTime = time.Now()
@@ -720,6 +733,19 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// ooh nice! We're actually truly and thankfully done
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
 	this.migrationContext.Log.Infof("Lock & rename duration: %s. During this time, queries on %s were blocked", lockAndRenameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+
+	// if we completly migrate triggers
+	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
+		triggersMigrated := make(chan error, 2)
+		go func() {
+			if err := this.applier.CreateTriggersOnSource(triggersMigrated); err != nil {
+				this.migrationContext.Log.Errore(err)
+			}
+		}()
+		if err := <-triggersMigrated; err == nil {
+			return this.migrationContext.Log.Errore(err)
+		}
+	}
 	return nil
 }
 

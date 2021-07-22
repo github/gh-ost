@@ -505,7 +505,16 @@ func (this *Inspector) validateTableTriggers() error {
 		return err
 	}
 	if numTriggers > 0 {
-		return this.migrationContext.Log.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		if this.migrationContext.IncludeTriggers {
+			this.migrationContext.Log.Infof("Found %d triggers on %s.%s.", numTriggers, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+			this.migrationContext.Triggers, err = mysql.GetTriggers(this.db, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+		return this.migrationContext.Log.Errorf("Found triggers on %s.%s. Tables with triggers are supported only when using \"include-triggers\" flag. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+
 	}
 	this.migrationContext.Log.Debugf("Validated no triggers exist on table")
 	return nil
