@@ -10,7 +10,6 @@ set -e
 # Since we want to be able to build this outside of GOPATH, we set it
 # up so it points back to us and go is none the wiser
 
-set -x
 rm -rf .gopath
 mkdir -p .gopath/src/github.com/github
 ln -s "$PWD" .gopath/src/github.com/github/gh-ost
