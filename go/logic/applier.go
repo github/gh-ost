@@ -273,27 +273,29 @@ func (this *Applier) dropTable(tableName string) error {
 }
 
 // dropTriggers drop the triggers on the applied host
-func (this *Applier) dropTriggers() error {
+func (this *Applier) DropTriggersFromGhost() error {
 	if len(this.migrationContext.Triggers) > 0 {
 		for _, trigger := range this.migrationContext.Triggers {
-			name := (*trigger).GetString("name")
-			query := fmt.Sprintf("drop trigger if exists %s", sql.EscapeName(name))
-			if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+			triggerName := this.migrationContext.GetGhostTriggerName((*trigger).GetString("name"))
+			query := fmt.Sprintf("drop trigger if exists %s", sql.EscapeName(triggerName))
+			_, err := sqlutils.ExecNoPrepare(this.db, query)
+			if err != nil {
 				return err
 			}
-			this.migrationContext.Log.Infof("Trigger '%s' dropped", name)
+			this.migrationContext.Log.Infof("Trigger '%s' dropped", triggerName)
 		}
 	}
 	return nil
 }
 
 // createTriggers creates the triggers on the applied host
-func (this *Applier) createTriggers(tableName, suffix string) error {
+func (this *Applier) createTriggers(tableName string) error {
 	if len(this.migrationContext.Triggers) > 0 {
 		for _, trigger := range this.migrationContext.Triggers {
+			triggerName := this.migrationContext.GetGhostTriggerName((*trigger).GetString("name"))
 			query := fmt.Sprintf(`create /* gh-ost */ trigger %s %s %s on %s.%s for each row
 		%s`,
-				sql.EscapeName((*trigger).GetString("name")+suffix),
+				sql.EscapeName(triggerName),
 				(*trigger).GetString("timing"),
 				(*trigger).GetString("event"),
 				sql.EscapeName(this.migrationContext.DatabaseName),
@@ -301,93 +303,11 @@ func (this *Applier) createTriggers(tableName, suffix string) error {
 				(*trigger).GetString("statement"),
 			)
 			this.migrationContext.Log.Infof("Createing trigger %s on %s.%s",
-				sql.EscapeName((*trigger).GetString("name")+suffix),
+				sql.EscapeName(triggerName),
 				sql.EscapeName(this.migrationContext.DatabaseName),
 				sql.EscapeName(tableName),
 			)
 			if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
-				// tx.Rollback()
-				return err
-			}
-		}
-		this.migrationContext.Log.Infof("Triggers created on %s", tableName)
-	}
-	return nil
-}
-
-// createTriggersWithLock creates the triggers on the applied host while locking the table
-func (this *Applier) createTriggersWithLock(tableName string) error {
-	if len(this.migrationContext.Triggers) > 0 {
-		for _, trigger := range this.migrationContext.Triggers {
-			triggerName := (*trigger).GetString("name")
-			this.migrationContext.Log.Infof("Createing trigger %s on %s.%s",
-				sql.EscapeName(triggerName),
-				sql.EscapeName(this.migrationContext.DatabaseName),
-				sql.EscapeName(tableName),
-			)
-
-			// if err := this.LockOriginalTable(); err != nil {
-			// 	return err
-			// }
-
-			// tx, err := this.singletonDB.Begin()
-			tx, err := this.db.Begin()
-			if err != nil {
-				return err
-			}
-
-			// if _, err := tx.Exec("DELIMITER ;;"); err != nil {
-			// 	tx.Rollback()
-			// 	return err
-			// }
-			lockQuery := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
-				sql.EscapeName(this.migrationContext.DatabaseName),
-				sql.EscapeName(this.migrationContext.OriginalTableName),
-			)
-			this.migrationContext.Log.Infof("Locking %s.%s",
-				sql.EscapeName(this.migrationContext.DatabaseName),
-				sql.EscapeName(this.migrationContext.OriginalTableName),
-			)
-			if _, err := tx.Exec(lockQuery); err != nil {
-				return err
-			}
-
-			if _, err := tx.Exec(fmt.Sprintf("drop trigger if exists %s", sql.EscapeName(triggerName+"_gho"))); err != nil {
-				return err
-			}
-
-			// if _, err := sqlutils.ExecNoPrepare(this.singletonDB, "DELIMITER ;;"); err != nil {
-			// 	return err
-			// }
-			// if _, err := sqlutils.ExecNoPrepare(this.singletonDB, fmt.Sprintf("drop trigger if exists %s", sql.EscapeName(triggerName+"_gho"))); err != nil {
-			// 	return err
-			// }
-
-			query := fmt.Sprintf(`create /* gh-ost */ trigger %s %s %s on %s for each row
-		%s`,
-				sql.EscapeName(triggerName),
-				(*trigger).GetString("timing"),
-				(*trigger).GetString("event"),
-				sql.EscapeName(tableName),
-				(*trigger).GetString("statement"),
-			)
-			// spew.Dump(query)
-			// if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
-			// 	return err
-			// }
-
-			if _, err := tx.Exec(query); err != nil {
-				tx.Rollback()
-				return err
-			}
-
-			// if _, err := tx.Exec("delimiter ;"); err != nil {
-			// 	tx.Rollback()
-			// 	return err
-			// }
-
-			if err := this.UnlockTables(); err != nil {
-				// tx.Rollback()
 				return err
 			}
 		}
@@ -397,20 +317,15 @@ func (this *Applier) createTriggersWithLock(tableName string) error {
 }
 
 // ReCreateTriggers creates the original triggers on applier host
-func (this *Applier) CreateTriggersOnGhost(tableLocked chan<- error) error {
-	err := this.createTriggers(this.migrationContext.GetGhostTableName(), "_gho")
+func (this *Applier) CreateTriggersOnGhostAtomic(tableLocked chan<- error) error {
+	err := this.createTriggers(this.migrationContext.GetGhostTableName())
 	tableLocked <- err
 	return err
 }
 
 // ReCreateTriggers creates the original triggers on applier host
-func (this *Applier) CreateTriggersOnSource(triggersMigrated chan<- error) error {
-	if err := this.dropTriggers(); err != nil { // first lets drop original triggers
-		triggersMigrated <- err
-		return err
-	}
-	err := this.createTriggersWithLock(this.migrationContext.DatabaseName + "." + this.migrationContext.OriginalTableName)
-	triggersMigrated <- err
+func (this *Applier) CreateTriggersOnGhost() error {
+	err := this.createTriggers(this.migrationContext.GetGhostTableName())
 	return err
 }
 

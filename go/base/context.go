@@ -14,8 +14,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
@@ -154,10 +155,9 @@ type MigrationContext struct {
 	InitiallyDropOldTable        bool
 	InitiallyDropGhostTable      bool
 	TimestampOldTable            bool // Should old table name include a timestamp
-	IncludeTriggers              bool
 	CutOverType                  CutOver
 	ReplicaServerId              uint
-	
+
 	Hostname                               string
 	AssumeMasterHostname                   string
 	ApplierTimeZone                        string
@@ -221,11 +221,15 @@ type MigrationContext struct {
 	MappedSharedColumns              *sql.ColumnList
 	MigrationRangeMinValues          *sql.ColumnValues
 	MigrationRangeMaxValues          *sql.ColumnValues
-	Triggers                         []*sqlutils.RowMap
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 	ForceTmpTableName                string
+
+	IncludeTriggers     bool
+	RemoveTriggerSuffix bool
+	TriggerSuffix       string
+	Triggers            []*sqlutils.RowMap
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
@@ -855,4 +859,27 @@ func (this *MigrationContext) ReadConfigFile() error {
 	}
 
 	return nil
+}
+
+// getGhostTriggerName generates the name of a ghost trigger, based on original trigger name
+// or a given trigger name
+func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
+	// var triggerName string
+	if this.RemoveTriggerSuffix && strings.HasSuffix(triggerName, this.TriggerSuffix) {
+		return strings.TrimSuffix(triggerName, this.TriggerSuffix)
+	}
+
+	return triggerName + this.TriggerSuffix
+}
+
+// validateGhostTriggerLength check if the ghost trigger name length is not more than 64 characters
+func (this *MigrationContext) ValidateGhostTriggerLengthBelow65chars(triggerName string) bool {
+	var ghostTriggerName string
+	if this.RemoveTriggerSuffix && strings.HasSuffix(triggerName, this.TriggerSuffix) {
+		ghostTriggerName = strings.TrimSuffix(triggerName, this.TriggerSuffix)
+	} else {
+		ghostTriggerName = triggerName + this.TriggerSuffix
+	}
+
+	return utf8.RuneCountInString(ghostTriggerName) < 65
 }
