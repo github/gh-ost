@@ -519,7 +519,7 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 func ObtainUniqueKeyValues(tableColumns, uniqueKeyColumns *ColumnList, args []interface{}) (uniqueKeyArgs []interface{}) {
 	for _, column := range uniqueKeyColumns.Columns() {
 		tableOrdinal := tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal])
+		arg := column.convertArg(args[tableOrdinal], true)
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 	return uniqueKeyArgs
