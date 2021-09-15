@@ -12,7 +12,7 @@ lock command, and like the cut-over should take a little time it shouldn't be a 
 
 - A stop writes event is injected in the binlog and gh-ost disable the writes once it receive it.
 - The triggers are created to handle the modifications in the MySQL side.
-- A created triggers event is injected in the binlog and gh-ost wait until receive it.
+- A created triggers event is injected in the binlog and gh-ost waits until it receive it.
 - The affected rows will be in an inconsistent stata during the time between the first and the second event. For this reason, this events are checked and, the values of the fields that are part of the unique key used to do the online alter are saved to sanitize that rows.
 
 `gh-ost` solves this by using an atomic, two-step blocking swap: while one connection holds the lock, another attempts the atomic `RENAME`. The `RENAME` is guaranteed to not be executed prematurely by positioning a sentry table which blocks the `RENAME` operation until `gh-ost` is satisfied all is in order.
