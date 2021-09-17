@@ -114,6 +114,12 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 	return migrator
 }
 
+func (this *Migrator) Write(p []byte) (n int, err error) {
+	s := string(p[:])
+	this.migrationContext.Log.Infof(s)
+	return len(s), nil
+}
+
 // sleepWhileTrue sleeps indefinitely until the given function returns 'false'
 // (or fails with error)
 func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
@@ -408,7 +414,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
 		return err
 	}
-	this.printStatus(ForcePrintStatusRule)
+	this.printStatus(ForcePrintStatusRule, this)
 
 	if this.migrationContext.IsCountingTableRows() {
 		this.migrationContext.Log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
@@ -588,7 +594,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	waitForEventsUpToLockDuration := time.Since(waitForEventsUpToLockStartTime)
 
 	this.migrationContext.Log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
-	this.printStatus(ForcePrintStatusAndHintRule)
+	this.printStatus(ForcePrintStatusAndHintRule, this)
 
 	return nil
 }
@@ -720,7 +726,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 // initiateServer begins listening on unix socket/tcp for incoming interactive commands
 func (this *Migrator) initiateServer() (err error) {
 	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
-		this.printStatus(rule, writer)
+		this.printStatus(rule, writer, this)
 	}
 	this.server = NewServer(this.migrationContext, this.hooksExecutor, f)
 	if err := this.server.BindSocketFile(); err != nil {
@@ -799,14 +805,14 @@ func (this *Migrator) initiateInspector() (err error) {
 
 // initiateStatus sets and activates the printStatus() ticker
 func (this *Migrator) initiateStatus() {
-	this.printStatus(ForcePrintStatusAndHintRule)
+	this.printStatus(ForcePrintStatusAndHintRule, this)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
-		go this.printStatus(HeuristicPrintStatusRule)
+		go this.printStatus(HeuristicPrintStatusRule, this)
 	}
 }
 
