@@ -103,6 +103,12 @@ func NewMigrator(context *base.MigrationContext) *Migrator {
 	return migrator
 }
 
+func (this *Migrator) Write(p []byte) (n int, err error) {
+	s := string(p[:])
+	this.migrationContext.Log.Infof(s)
+	return len(s), nil
+}
+
 // initiateHooksExecutor
 func (this *Migrator) initiateHooksExecutor() (err error) {
 	this.hooksExecutor = NewHooksExecutor(this.migrationContext)
@@ -418,7 +424,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
 		return err
 	}
-	this.printStatus(ForcePrintStatusRule)
+	this.printStatus(ForcePrintStatusRule, this)
 
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
@@ -594,7 +600,7 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	waitForEventsUpToLockDuration := time.Since(waitForEventsUpToLockStartTime)
 
 	this.migrationContext.Log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
-	this.printStatus(ForcePrintStatusAndHintRule)
+	this.printStatus(ForcePrintStatusAndHintRule, this)
 
 	return nil
 }
@@ -726,7 +732,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 // initiateServer begins listening on unix socket/tcp for incoming interactive commands
 func (this *Migrator) initiateServer() (err error) {
 	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
-		this.printStatus(rule, writer)
+		this.printStatus(rule, writer, this)
 	}
 	this.server = NewServer(this.migrationContext, this.hooksExecutor, f)
 	if err := this.server.BindSocketFile(); err != nil {
@@ -805,13 +811,13 @@ func (this *Migrator) initiateInspector() (err error) {
 
 // initiateStatus sets and activates the printStatus() ticker
 func (this *Migrator) initiateStatus() error {
-	this.printStatus(ForcePrintStatusAndHintRule)
+	this.printStatus(ForcePrintStatusAndHintRule, this)
 	statusTick := time.Tick(1 * time.Second)
 	for range statusTick {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return nil
 		}
-		go this.printStatus(HeuristicPrintStatusRule)
+		go this.printStatus(HeuristicPrintStatusRule, this)
 	}
 
 	return nil
