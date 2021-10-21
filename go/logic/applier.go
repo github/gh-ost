@@ -511,12 +511,18 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 			return nil, err
 		}
 		defer tx.Rollback()
+
 		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
 		sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
 		if !this.migrationContext.SkipStrictMode {
 			sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
 		}
-		sessionQuery = fmt.Sprintf("%s, sql_mode = CONCAT(@@session.sql_mode, ',%s')", sessionQuery, sqlModeAddendum)
+		sqlModeQuery := fmt.Sprintf("CONCAT(@@session.sql_mode, ',%s')", sqlModeAddendum)
+		if this.migrationContext.AllowZeroInDate {
+			sqlModeQuery = fmt.Sprintf("REPLACE(REPLACE(%s, 'NO_ZERO_IN_DATE', ''), 'NO_ZERO_DATE', '')", sqlModeQuery)
+		}
+		sqlModeQuery = fmt.Sprintf("sql_mode = %s", sqlModeQuery)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, sqlModeQuery)
 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
@@ -1034,7 +1040,12 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		if !this.migrationContext.SkipStrictMode {
 			sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
 		}
-		sessionQuery = fmt.Sprintf("%s, sql_mode = CONCAT(@@session.sql_mode, ',%s')", sessionQuery, sqlModeAddendum)
+		sqlModeQuery := fmt.Sprintf("CONCAT(@@session.sql_mode, ',%s')", sqlModeAddendum)
+		if this.migrationContext.AllowZeroInDate {
+			sqlModeQuery = fmt.Sprintf("REPLACE(REPLACE(%s, 'NO_ZERO_IN_DATE', ''), 'NO_ZERO_DATE', '')", sqlModeQuery)
+		}
+		sqlModeQuery = fmt.Sprintf("sql_mode = %s", sqlModeQuery)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, sqlModeQuery)
 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return rollback(err)
