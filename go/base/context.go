@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
@@ -90,6 +90,7 @@ type MigrationContext struct {
 	AssumeRBR                bool
 	SkipForeignKeyChecks     bool
 	SkipStrictMode           bool
+	AllowZeroInDate          bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
