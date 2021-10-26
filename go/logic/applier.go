@@ -200,7 +200,33 @@ func (this *Applier) CreateGhostTable() error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
-	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+
+	err := func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
+
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(query); err != nil {
+			return err
+		}
+		this.migrationContext.Log.Infof("Ghost table altered")
+		if err := tx.Commit(); err != nil {
+			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
+			// there's no need to commit; but let's do this the legit way anyway.
+			return err
+		}
+		return nil
+	}()
+
+	if err != nil {
 		return err
 	}
 	this.migrationContext.Log.Infof("Ghost table created")
