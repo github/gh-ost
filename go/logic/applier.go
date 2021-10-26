@@ -217,7 +217,7 @@ func (this *Applier) CreateGhostTable() error {
 		if _, err := tx.Exec(query); err != nil {
 			return err
 		}
-		this.migrationContext.Log.Infof("Ghost table altered")
+		this.migrationContext.Log.Infof("Ghost table created")
 		if err := tx.Commit(); err != nil {
 			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
 			// there's no need to commit; but let's do this the legit way anyway.
@@ -226,11 +226,7 @@ func (this *Applier) CreateGhostTable() error {
 		return nil
 	}()
 
-	if err != nil {
-		return err
-	}
-	this.migrationContext.Log.Infof("Ghost table created")
-	return nil
+	return err
 }
 
 // AlterGhost applies `alter` statement on ghost table
