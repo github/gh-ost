@@ -1,3 +1,4 @@
+set session sql_mode='';
 drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int unsigned auto_increment,
