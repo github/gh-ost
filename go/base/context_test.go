@@ -87,39 +87,39 @@ func TestGetTriggerNames(t *testing.T) {
 	}
 
 }
-func TestValidateGhostTriggerLengthBelow65chars(t *testing.T) {
+func TestValidateGhostTriggerLengthBelowMaxLength(t *testing.T) {
 	{
 		context := NewMigrationContext()
 		context.TriggerSuffix = "_gho"
-		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelow65chars("my_trigger"), true)
+		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelowMaxLength("my_trigger"), true)
 	}
 	{
 		context := NewMigrationContext()
 		context.TriggerSuffix = "_ghost"
-		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelow65chars(strings.Repeat("my_trigger_ghost", 4)), false) // 64 characters + "_ghost"
+		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4)), false) // 64 characters + "_ghost"
 	}
 	{
 		context := NewMigrationContext()
 		context.TriggerSuffix = "_ghost"
-		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelow65chars(strings.Repeat("my_trigger_ghost", 3)), true) // 48 characters + "_ghost"
-	}
-	{
-		context := NewMigrationContext()
-		context.TriggerSuffix = "_ghost"
-		context.RemoveTriggerSuffix = true
-		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelow65chars(strings.Repeat("my_trigger_ghost", 4)), true) // 64 characters + "_ghost" removed
+		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 3)), true) // 48 characters + "_ghost"
 	}
 	{
 		context := NewMigrationContext()
 		context.TriggerSuffix = "_ghost"
 		context.RemoveTriggerSuffix = true
-		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelow65chars(strings.Repeat("my_trigger_ghost", 4)+"X"), false) // 65 characters + "_ghost" not removed
+		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4)), true) // 64 characters + "_ghost" removed
 	}
 	{
 		context := NewMigrationContext()
 		context.TriggerSuffix = "_ghost"
 		context.RemoveTriggerSuffix = true
-		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelow65chars(strings.Repeat("my_trigger_ghost", 4)+"_ghost"), true) // 70 characters + last "_ghost"  removed
+		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4)+"X"), false) // 65 characters + "_ghost" not removed
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		context.RemoveTriggerSuffix = true
+		test.S(t).ExpectEquals(context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4)+"_ghost"), true) // 70 characters + last "_ghost"  removed
 	}
 }
 
