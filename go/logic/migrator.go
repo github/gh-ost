@@ -398,6 +398,12 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.addDMLEventsListener(); err != nil {
 		return err
 	}
+
+	// write a heartbeat data into the ghc table, and avoid lost data due to MySQL two-phase-commit.
+	if _, err := this.applier.WriteChangelog("heartbeat", time.Now().Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
+
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
