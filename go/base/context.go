@@ -21,7 +21,6 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/openark/golib/log"
-	"github.com/openark/golib/sqlutils"
 
 	"github.com/go-ini/ini"
 )
@@ -229,7 +228,7 @@ type MigrationContext struct {
 	IncludeTriggers     bool
 	RemoveTriggerSuffix bool
 	TriggerSuffix       string
-	Triggers            []*sqlutils.RowMap
+	Triggers            []mysql.Trigger
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
@@ -864,8 +863,7 @@ func (this *MigrationContext) ReadConfigFile() error {
 // getGhostTriggerName generates the name of a ghost trigger, based on original trigger name
 // or a given trigger name
 func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
-	// var triggerName string
-	if this.RemoveTriggerSuffix && strings.HasSuffix(triggerName, this.TriggerSuffix) {
+	if this.RemoveTriggerSuffix {
 		return strings.TrimSuffix(triggerName, this.TriggerSuffix)
 	}
 
@@ -873,13 +871,13 @@ func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
 }
 
 // validateGhostTriggerLength check if the ghost trigger name length is not more than 64 characters
-func (this *MigrationContext) ValidateGhostTriggerLengthBelow65chars(triggerName string) bool {
+func (this *MigrationContext) ValidateGhostTriggerLengthBelowMaxLength(triggerName string) bool {
 	var ghostTriggerName string
-	if this.RemoveTriggerSuffix && strings.HasSuffix(triggerName, this.TriggerSuffix) {
+	if this.RemoveTriggerSuffix {
 		ghostTriggerName = strings.TrimSuffix(triggerName, this.TriggerSuffix)
 	} else {
 		ghostTriggerName = triggerName + this.TriggerSuffix
 	}
 
-	return utf8.RuneCountInString(ghostTriggerName) < 65
+	return utf8.RuneCountInString(ghostTriggerName) <= mysql.MaxTableNameLength
 }

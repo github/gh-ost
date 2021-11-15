@@ -276,7 +276,7 @@ func (this *Applier) dropTable(tableName string) error {
 func (this *Applier) DropTriggersFromGhost() error {
 	if len(this.migrationContext.Triggers) > 0 {
 		for _, trigger := range this.migrationContext.Triggers {
-			triggerName := this.migrationContext.GetGhostTriggerName((*trigger).GetString("name"))
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
 			query := fmt.Sprintf("drop trigger if exists %s", sql.EscapeName(triggerName))
 			_, err := sqlutils.ExecNoPrepare(this.db, query)
 			if err != nil {
@@ -292,15 +292,15 @@ func (this *Applier) DropTriggersFromGhost() error {
 func (this *Applier) createTriggers(tableName string) error {
 	if len(this.migrationContext.Triggers) > 0 {
 		for _, trigger := range this.migrationContext.Triggers {
-			triggerName := this.migrationContext.GetGhostTriggerName((*trigger).GetString("name"))
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
 			query := fmt.Sprintf(`create /* gh-ost */ trigger %s %s %s on %s.%s for each row
 		%s`,
 				sql.EscapeName(triggerName),
-				(*trigger).GetString("timing"),
-				(*trigger).GetString("event"),
+				trigger.Timing,
+				trigger.Event,
 				sql.EscapeName(this.migrationContext.DatabaseName),
 				sql.EscapeName(tableName),
-				(*trigger).GetString("statement"),
+				trigger.Statement,
 			)
 			this.migrationContext.Log.Infof("Createing trigger %s on %s.%s",
 				sql.EscapeName(triggerName),
@@ -316,14 +316,7 @@ func (this *Applier) createTriggers(tableName string) error {
 	return nil
 }
 
-// ReCreateTriggers creates the original triggers on applier host
-func (this *Applier) CreateTriggersOnGhostAtomic(tableLocked chan<- error) error {
-	err := this.createTriggers(this.migrationContext.GetGhostTableName())
-	tableLocked <- err
-	return err
-}
-
-// ReCreateTriggers creates the original triggers on applier host
+// CreateTriggers creates the original triggers on applier host
 func (this *Applier) CreateTriggersOnGhost() error {
 	err := this.createTriggers(this.migrationContext.GetGhostTableName())
 	return err

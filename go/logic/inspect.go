@@ -531,7 +531,7 @@ func (this *Inspector) validateGhostTriggersDontExist() error {
 	if len(this.migrationContext.Triggers) > 0 {
 		var foundTriggers []string
 		for _, trigger := range this.migrationContext.Triggers {
-			triggerName := this.migrationContext.GetGhostTriggerName((*trigger).GetString("name"))
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
 			query := "select 1 from information_schema.triggers where trigger_name = ? and trigger_schema = ?"
 			err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 				triggerExists := rowMap.GetInt("1")
@@ -559,14 +559,14 @@ func (this *Inspector) validateGhostTriggersLength() error {
 	if len(this.migrationContext.Triggers) > 0 {
 		var foundTriggers []string
 		for _, trigger := range this.migrationContext.Triggers {
-			triggerName := this.migrationContext.GetGhostTriggerName((*trigger).GetString("name"))
-			if ok := this.migrationContext.ValidateGhostTriggerLengthBelow65chars(triggerName); !ok {
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
+			if ok := this.migrationContext.ValidateGhostTriggerLengthBelowMaxLength(triggerName); !ok {
 				foundTriggers = append(foundTriggers, triggerName)
 			}
 
 		}
 		if len(foundTriggers) > 0 {
-			return this.migrationContext.Log.Errorf("Gh-ost triggers (%s) length > 64 characters. Bailing out", strings.Join(foundTriggers, ","))
+			return this.migrationContext.Log.Errorf("Gh-ost triggers (%s) length > %d characters. Bailing out", strings.Join(foundTriggers, ","),mysql.MaxTableNameLength)
 		}
 	}
 

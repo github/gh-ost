@@ -129,8 +129,8 @@ func main() {
 	flag.UintVar(&migrationContext.ReplicaServerId, "replica-server-id", 99999, "server id used by gh-ost process. Default: 99999")
 
 	flag.BoolVar(&migrationContext.IncludeTriggers, "include-triggers", false, "When true, the triggers (if exist) will be created on the new table")
-	flag.StringVar(&migrationContext.TriggerSuffix, "trigger-suffix", "", "have to be used with '--include-triggers'")
-	flag.BoolVar(&migrationContext.RemoveTriggerSuffix, "remove-trigger-suffix-if-exists", false, "Removal (instead of addition) of trigger suffix if it exists at the end of the original triger name. Have to be used with '--include-triggers' and '--TriggerSuffix'")
+	flag.StringVar(&migrationContext.TriggerSuffix, "trigger-suffix", "", "Add a suffix to the trigger name (i.e '_v2'). Requires '--include-triggers'")
+	flag.BoolVar(&migrationContext.RemoveTriggerSuffix, "remove-trigger-suffix-if-exists", false, "Remove given suffix from name of trigger. Requires '--include-triggers' and '--trigger-suffix'")
 
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")
@@ -247,9 +247,9 @@ func main() {
 		migrationContext.Log.Fatalf("--trigger-suffix cannot be be used without --include-triggers")
 	}
 	if migrationContext.TriggerSuffix != "" {
-		regex, err := regexp.Compile(`^[\da-zA-Z_]+$`)
+		regex := regexp.MustCompile(`^[\da-zA-Z_]+$`)
 
-		if err != nil || !regex.Match([]byte(migrationContext.TriggerSuffix)) {
+		if !regex.Match([]byte(migrationContext.TriggerSuffix)) {
 			migrationContext.Log.Fatalf("--trigger-suffix must contain only alpha numeric characters and underscore (0-9,a-z,A-Z,_)")
 		}
 	}
