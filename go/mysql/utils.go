@@ -31,10 +31,10 @@ type ReplicationLagResult struct {
 }
 
 type Trigger struct {
-	Name string
-	Event string
+	Name      string
+	Event     string
 	Statement string
-	Timing string
+	Timing    string
 }
 
 func NewNoReplicationLagResult() *ReplicationLagResult {
@@ -221,10 +221,10 @@ func GetTriggers(db *gosql.DB, databaseName, tableName string) (triggers []Trigg
 
 	err = sqlutils.QueryRowsMap(db, query, func(rowMap sqlutils.RowMap) error {
 		triggers = append(triggers, Trigger{
-			Name: rowMap.GetString("name"),
-			Event: rowMap.GetString("event"),
+			Name:      rowMap.GetString("name"),
+			Event:     rowMap.GetString("event"),
 			Statement: rowMap.GetString("statement"),
-			Timing: rowMap.GetString("timing"),
+			Timing:    rowMap.GetString("timing"),
 		})
 		return nil
 	})
