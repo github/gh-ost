@@ -19,6 +19,7 @@ import (
 
 	"github.com/openark/golib/log"
 	"github.com/openark/golib/sqlutils"
+	"regexp"
 )
 
 const (
@@ -525,6 +526,34 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err != nil {
 			return nil, err
 		}
+
+		rows, err := tx.Query(`show warnings`)
+		if err != nil {
+			return nil, err
+		}
+
+		defer rows.Close()
+
+		for rows.Next() {
+			var level, message string
+			var code int
+			rows.Scan(&level, &code, &message)
+
+			if code != 1062 {
+				continue
+			}
+
+			if level != `Warning` {
+				continue
+			}
+
+			if submatch := regexp.MustCompile(fmt.Sprintf(`Duplicate entry .* for key '%s'`, this.migrationContext.UniqueKey.Name)).FindStringSubmatch(message); len(submatch) > 0 {
+				continue
+			}
+
+			this.migrationContext.Log.Warningf(`copy into gho table warning: %s %d %s`, level, code, message)
+		}
+
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
