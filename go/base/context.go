@@ -872,12 +872,7 @@ func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
 
 // validateGhostTriggerLength check if the ghost trigger name length is not more than 64 characters
 func (this *MigrationContext) ValidateGhostTriggerLengthBelowMaxLength(triggerName string) bool {
-	var ghostTriggerName string
-	if this.RemoveTriggerSuffix {
-		ghostTriggerName = strings.TrimSuffix(triggerName, this.TriggerSuffix)
-	} else {
-		ghostTriggerName = triggerName + this.TriggerSuffix
-	}
+	ghostTriggerName := this.GetGhostTriggerName(triggerName)
 
 	return utf8.RuneCountInString(ghostTriggerName) <= mysql.MaxTableNameLength
 }
