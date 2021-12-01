@@ -19,7 +19,7 @@ import (
 
 	"github.com/openark/golib/log"
 	"github.com/openark/golib/sqlutils"
-	"regexp"
+	"strings"
 )
 
 const (
@@ -527,31 +527,48 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 			return nil, err
 		}
 
-		rows, err := tx.Query(`show warnings`)
-		if err != nil {
-			return nil, err
+		checkWarnMessageFunc := func() error {
+			rows, err := tx.Query(`show warnings`)
+			if err != nil {
+				return err
+			}
+
+			if rows == nil {
+				return nil
+			}
+
+			defer rows.Close()
+
+			uniqueKeyString := fmt.Sprintf(`'%s'`, this.migrationContext.UniqueKey.Name)
+
+			for rows.Next() {
+				var level, message string
+				var code int
+				rows.Scan(&level, &code, &message)
+				if code != 1062 {
+					continue
+				}
+				if level != `Warning` {
+					continue
+				}
+
+				// if warning message is not start with `Duplicate entry`, we didn't deal it.
+				if !strings.HasPrefix(message, `Duplicate entry`) {
+					continue
+				}
+
+				// if warning message is end with chunk unique key, we didn't deal it.
+				if strings.HasSuffix(message, uniqueKeyString) {
+					continue
+				}
+
+				atomic.AddInt64(&this.migrationContext.ChunkUniqueDuplicatesSize, 1)
+			}
+			return nil
 		}
 
-		defer rows.Close()
-
-		for rows.Next() {
-			var level, message string
-			var code int
-			rows.Scan(&level, &code, &message)
-
-			if code != 1062 {
-				continue
-			}
-
-			if level != `Warning` {
-				continue
-			}
-
-			if submatch := regexp.MustCompile(fmt.Sprintf(`Duplicate entry .* for key '%s'`, this.migrationContext.UniqueKey.Name)).FindStringSubmatch(message); len(submatch) > 0 {
-				continue
-			}
-
-			this.migrationContext.Log.Warningf(`copy into gho table warning: %s %d %s`, level, code, message)
+		if this.migrationContext.IsCheckChunkUniqueDuplicate {
+			checkWarnMessageFunc()
 		}
 
 		if err := tx.Commit(); err != nil {
