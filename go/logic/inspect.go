@@ -566,7 +566,7 @@ func (this *Inspector) validateGhostTriggersLength() error {
 
 		}
 		if len(foundTriggers) > 0 {
-			return this.migrationContext.Log.Errorf("Gh-ost triggers (%s) length > %d characters. Bailing out", strings.Join(foundTriggers, ","),mysql.MaxTableNameLength)
+			return this.migrationContext.Log.Errorf("Gh-ost triggers (%s) length > %d characters. Bailing out", strings.Join(foundTriggers, ","), mysql.MaxTableNameLength)
 		}
 	}
 
