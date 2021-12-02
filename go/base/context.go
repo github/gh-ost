@@ -227,6 +227,7 @@ type MigrationContext struct {
 
 	IsCheckChunkUniqueDuplicate bool
 	ChunkUniqueDuplicatesSize   int64
+	IsAddUniqueIndex            bool
 
 	Log Logger
 }

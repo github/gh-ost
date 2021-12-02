@@ -182,6 +182,7 @@ func main() {
 	}
 	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
 	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
+	migrationContext.IsAddUniqueIndex = parser.IsAddUniqueIndex()
 
 	if migrationContext.DatabaseName == "" {
 		if parser.HasExplicitSchema() {

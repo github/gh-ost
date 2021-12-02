@@ -527,48 +527,44 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 			return nil, err
 		}
 
-		checkWarnMessageFunc := func() error {
-			rows, err := tx.Query(`show warnings`)
-			if err != nil {
-				return err
-			}
+		if this.migrationContext.IsCheckChunkUniqueDuplicate && this.migrationContext.IsAddUniqueIndex {
+			err = func() error {
+				rows, err := tx.Query(`show warnings`)
+				if err != nil {
+					return err
+				}
 
-			if rows == nil {
+				if rows == nil {
+					return nil
+				}
+
+				defer rows.Close()
+
+				uniqueKeyString := fmt.Sprintf(`'%s'`, this.migrationContext.UniqueKey.Name)
+
+				for rows.Next() {
+					var level, message string
+					var code int
+					rows.Scan(&level, &code, &message)
+
+					// if warning message is not start with `Duplicate entry`, we didn't deal it.
+					if !strings.HasPrefix(message, `Duplicate entry`) {
+						continue
+					}
+
+					// if warning message is end with chunk unique key, we didn't deal it.
+					if strings.HasSuffix(message, uniqueKeyString) {
+						continue
+					}
+
+					atomic.AddInt64(&this.migrationContext.ChunkUniqueDuplicatesSize, 1)
+				}
 				return nil
+			}()
+
+			if err != nil {
+				return nil, err
 			}
-
-			defer rows.Close()
-
-			uniqueKeyString := fmt.Sprintf(`'%s'`, this.migrationContext.UniqueKey.Name)
-
-			for rows.Next() {
-				var level, message string
-				var code int
-				rows.Scan(&level, &code, &message)
-				if code != 1062 {
-					continue
-				}
-				if level != `Warning` {
-					continue
-				}
-
-				// if warning message is not start with `Duplicate entry`, we didn't deal it.
-				if !strings.HasPrefix(message, `Duplicate entry`) {
-					continue
-				}
-
-				// if warning message is end with chunk unique key, we didn't deal it.
-				if strings.HasSuffix(message, uniqueKeyString) {
-					continue
-				}
-
-				atomic.AddInt64(&this.migrationContext.ChunkUniqueDuplicatesSize, 1)
-			}
-			return nil
-		}
-
-		if this.migrationContext.IsCheckChunkUniqueDuplicate {
-			checkWarnMessageFunc()
 		}
 
 		if err := tx.Commit(); err != nil {

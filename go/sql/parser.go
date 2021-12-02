@@ -17,6 +17,7 @@ var (
 	dropColumnRegexp                     = regexp.MustCompile(`(?i)\bdrop\s+(column\s+|)([\S]+)$`)
 	renameTableRegexp                    = regexp.MustCompile(`(?i)\brename\s+(to|as)\s+`)
 	autoIncrementRegexp                  = regexp.MustCompile(`(?i)\bauto_increment[\s]*=[\s]*([0-9]+)`)
+	addUniqueIndexRegexp                 = regexp.MustCompile(`(?i)\badd\s+((.|\r|\n)*\s+|)unique\s+(index\s+|key\s+|)`)
 	alterTableExplicitSchemaTableRegexps = []*regexp.Regexp{
 		// ALTER TABLE `scm`.`tbl` something
 		regexp.MustCompile(`(?i)\balter\s+table\s+` + "`" + `([^` + "`" + `]+)` + "`" + `[.]` + "`" + `([^` + "`" + `]+)` + "`" + `\s+(.*$)`),
@@ -41,6 +42,7 @@ type AlterTableParser struct {
 	droppedColumns         map[string]bool
 	isRenameTable          bool
 	isAutoIncrementDefined bool
+	isAddUniqueIndex       bool
 
 	alterStatementOptions string
 	alterTokens           []string
@@ -131,6 +133,12 @@ func (this *AlterTableParser) parseAlterToken(alterToken string) (err error) {
 			this.isAutoIncrementDefined = true
 		}
 	}
+	{
+		// add unique index
+		if addUniqueIndexRegexp.MatchString(alterToken) {
+			this.isAddUniqueIndex = true
+		}
+	}
 	return nil
 }
 
@@ -185,6 +193,10 @@ func (this *AlterTableParser) IsRenameTable() bool {
 
 func (this *AlterTableParser) IsAutoIncrementDefined() bool {
 	return this.isAutoIncrementDefined
+}
+
+func (this *AlterTableParser) IsAddUniqueIndex() bool {
+	return this.isAddUniqueIndex
 }
 
 func (this *AlterTableParser) GetExplicitSchema() string {

@@ -340,3 +340,31 @@ func TestParseEnumValues(t *testing.T) {
 		test.S(t).ExpectEquals(values, "zzz")
 	}
 }
+
+func TestParseAlterStatementAddUniqueIndex(t *testing.T) {
+
+	statements := []string{
+		"ADD column t int,add unique index idx (name)",
+		"add constraint idx unique (name)",
+		"add constraint idx unique (id, name)",
+		"add constraint unique xxx (id, name)",
+		"add constraint unique index  xxx1 (id, name)",
+		"add constraint unique key xxx2 (id, name)",
+		"add constraint xxx3 unique key xxx3 (id, name)",
+		"add unique key xxx4 (id, name)",
+		"add unique index xxx5 (id, name)",
+		"add unique xxx6 (id, name)",
+		"add  unique  xxx7  (id, name)",
+		"drop index xxx, add constraint idx unique (id, name)",
+		`drop index xxx, add 
+			constraint 
+            idx unique (id, name)`,
+	}
+	for _, statement := range statements {
+		parser := NewAlterTableParser()
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
+		test.S(t).ExpectTrue(parser.IsAddUniqueIndex())
+	}
+}
