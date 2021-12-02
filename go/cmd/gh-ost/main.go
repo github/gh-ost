@@ -128,6 +128,7 @@ func main() {
 	flag.UintVar(&migrationContext.ReplicaServerId, "replica-server-id", 99999, "server id used by gh-ost process. Default: 99999")
 
 	flag.BoolVar(&migrationContext.IsCheckChunkUniqueDuplicate, "is-check-chunk-unique-duplicates", false, "check unique index duplicate size of chunk data from src table to gho table when alter add unique index")
+	flag.BoolVar(&migrationContext.IsPanicDue2UniqueDuplicate, "is-panic-due-to-unique-duplicates", false, "panic gh-ost when check unique index duplicate and lost data of chunk data from src table to gho table, exclude copy data used unique key")
 
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")

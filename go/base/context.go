@@ -226,6 +226,7 @@ type MigrationContext struct {
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
 	IsCheckChunkUniqueDuplicate bool
+	IsPanicDue2UniqueDuplicate  bool
 	ChunkUniqueDuplicatesSize   int64
 	IsAddUniqueIndex            bool
 

@@ -557,6 +557,10 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 						continue
 					}
 
+					if this.migrationContext.IsPanicDue2UniqueDuplicate {
+						return fmt.Errorf(message)
+					}
+
 					atomic.AddInt64(&this.migrationContext.ChunkUniqueDuplicatesSize, 1)
 				}
 				return nil
