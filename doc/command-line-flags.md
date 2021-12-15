@@ -63,6 +63,12 @@ Comma delimited status-name=threshold, same format as [`--max-load`](#max-load).
 
 This may sometimes lead to migrations bailing out on a very short spike, that, while in itself is impacting production and is worth investigating, isn't reason enough to kill a 10 hour migration.
 
+### critical-load-hibernate-seconds
+
+When `--critical-load-hibernate-seconds` is non-zero (e.g. `--critical-load-hibernate-seconds=300`), `critical-load` does not panic and bail out; instead, `gh-ost` goes into hibernation for the specified duration. It will not read/write anything from/to any server during this time.  Execution then continues upon waking from hibernation.
+
+If `critical-load` is met again, `gh-ost` will repeat this cycle, and never panic and bail out.
+
 ### critical-load-interval-millis
 
 When `--critical-load-interval-millis` is specified (e.g. `--critical-load-interval-millis=2500`), `gh-ost` gives a second chance: when it meets `critical-load` threshold, it doesn't bail out. Instead, it starts a timer (in this example: `2.5` seconds) and re-checks `critical-load` when the timer expires. If `critical-load` is met again, `gh-ost` panics and bails out. If not, execution continues.
