@@ -22,7 +22,7 @@ If, for some reason, you do not wish `gh-ost` to connect to a replica, you may c
 
 ### approve-renamed-columns
 
-When your migration issues a column rename (`change column old_name new_name ...`) `gh-ost` analyzes the statement to try and associate the old column name with new column name. Otherwise the new structure may also look like some column was dropped and another was added.
+When your migration issues a column rename (`change column old_name new_name ...`) `gh-ost` analyzes the statement to try and associate the old column name with new column name. Otherwise, the new structure may also look like some column was dropped and another was added.
 
 `gh-ost` will print out what it thinks the _rename_ implied, but will not issue the migration unless you provide with `--approve-renamed-columns`.
 
@@ -32,7 +32,7 @@ If you think `gh-ost` is mistaken and that there's actually no _rename_ involved
 
 `gh-ost` infers the identity of the master server by crawling up the replication topology. You may explicitly tell `gh-ost` the identity of the master host via `--assume-master-host=the.master.com`. This is useful in:
 
-- _master-master_ topologies (together with [`--allow-master-master`](#allow-master-master)), where `gh-ost` can arbitrarily pick one of the co-masters and you prefer that it picks a specific one
+- _master-master_ topologies (together with [`--allow-master-master`](#allow-master-master)), where `gh-ost` can arbitrarily pick one of the co-masters, and you prefer that it picks a specific one
 - _tungsten replicator_ topologies (together with [`--tungsten`](#tungsten)), where `gh-ost` is unable to crawl and detect the master
 
 ### assume-rbr
@@ -61,7 +61,7 @@ Comma delimited status-name=threshold, same format as [`--max-load`](#max-load).
 
 `--critical-load` defines a threshold that, when met, `gh-ost` panics and bails out. The default behavior is to bail out immediately when meeting this threshold.
 
-This may sometimes lead to migrations bailing out on a very short spike, that, while in itself is impacting production and is worth investigating, isn't reason enough to kill a 10 hour migration.
+This may sometimes lead to migrations bailing out on a very short spike, that, while in itself is impacting production and is worth investigating, isn't reason enough to kill a 10-hour migration.
 
 ### critical-load-hibernate-seconds
 
@@ -104,7 +104,7 @@ Noteworthy is that setting `--dml-batch-size` to higher value _does not_ mean `g
 
 ### exact-rowcount
 
-A `gh-ost` execution need to copy whatever rows you have in your existing table onto the ghost table. This can, and often be, a large number. Exactly what that number is?
+A `gh-ost` execution need to copy whatever rows you have in your existing table onto the ghost table. This can and often will be, a large number. Exactly what that number is?
 `gh-ost` initially estimates the number of rows in your table by issuing an `explain select * from your_table`. This will use statistics on your table and return with a rough estimate. How rough? It might go as low as half or as high as double the actual number of rows in your table. This is the same method as used in [`pt-online-schema-change`](https://www.percona.com/doc/percona-toolkit/2.2/pt-online-schema-change.html).
 
 `gh-ost` also supports the `--exact-rowcount` flag. When this flag is given, two things happen:
@@ -236,7 +236,7 @@ Provide a command delimited list of replicas; `gh-ost` will throttle when any of
 
 ### throttle-http
 
-Provide a HTTP endpoint; `gh-ost` will issue `HEAD` requests on given URL and throttle whenever response status code is not `200`. The URL can be queried and updated dynamically via [interactive commands](interactive-commands.md). Empty URL disables the HTTP check.
+Provide an HTTP endpoint; `gh-ost` will issue `HEAD` requests on given URL and throttle whenever response status code is not `200`. The URL can be queried and updated dynamically via [interactive commands](interactive-commands.md). Empty URL disables the HTTP check.
 
 ### timestamp-old-table
 
