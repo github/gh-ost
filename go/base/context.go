@@ -863,10 +863,10 @@ func (this *MigrationContext) ReadConfigFile() error {
 // getGhostTriggerName generates the name of a ghost trigger, based on original trigger name
 // or a given trigger name
 func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
-	if this.RemoveTriggerSuffix {
+	if this.RemoveTriggerSuffix && strings.HasSuffix(triggerName, this.TriggerSuffix){
 		return strings.TrimSuffix(triggerName, this.TriggerSuffix)
 	}
-
+	// else 
 	return triggerName + this.TriggerSuffix
 }
 
