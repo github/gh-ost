@@ -19,10 +19,9 @@ import (
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/outbrain/golib/log"
+	"github.com/openark/golib/log"
 
-	"gopkg.in/gcfg.v1"
-	gcfgscanner "gopkg.in/gcfg.v1/scanner"
+	"github.com/go-ini/ini"
 )
 
 // RowsEstimateMethod is the type of row number estimation
@@ -52,6 +51,7 @@ const (
 const (
 	HTTPStatusOK       = 200
 	MaxEventsBatchSize = 1000
+	ETAUnknown         = math.MinInt64
 )
 
 var (
@@ -182,6 +182,7 @@ type MigrationContext struct {
 	lastHeartbeatOnChangelogMutex          *sync.Mutex
 	CurrentLag                             int64
 	currentProgress                        uint64
+	etaNanoseonds                          int64
 	ThrottleHTTPStatusCode                 int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
@@ -206,6 +207,7 @@ type MigrationContext struct {
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableVirtualColumns      *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
+	OriginalTableAutoIncrement       uint64
 	GhostTableColumns                *sql.ColumnList
 	GhostTableVirtualColumns         *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
@@ -266,6 +268,7 @@ func NewMigrationContext() *MigrationContext {
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
 		DMLBatchSize:                        10,
+		etaNanoseonds:                       ETAUnknown,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
@@ -471,6 +474,22 @@ func (this *MigrationContext) GetProgressPct() float64 {
 
 func (this *MigrationContext) SetProgressPct(progressPct float64) {
 	atomic.StoreUint64(&this.currentProgress, math.Float64bits(progressPct))
+}
+
+func (this *MigrationContext) GetETADuration() time.Duration {
+	return time.Duration(atomic.LoadInt64(&this.etaNanoseonds))
+}
+
+func (this *MigrationContext) SetETADuration(etaDuration time.Duration) {
+	atomic.StoreInt64(&this.etaNanoseonds, etaDuration.Nanoseconds())
+}
+
+func (this *MigrationContext) GetETASeconds() int64 {
+	nano := atomic.LoadInt64(&this.etaNanoseonds)
+	if nano < 0 {
+		return ETAUnknown
+	}
+	return nano / int64(time.Second)
 }
 
 // math.Float64bits([f=0..100])
@@ -787,10 +806,39 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if this.ConfigFile == "" {
 		return nil
 	}
-	gcfg.RelaxedParserMode = true
-	gcfgscanner.RelaxedScannerMode = true
-	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
-		return fmt.Errorf("Error reading config file %s. Details: %s", this.ConfigFile, err.Error())
+	cfg, err := ini.Load(this.ConfigFile)
+	if err != nil {
+		return err
+	}
+
+	if cfg.Section("client").Haskey("user") {
+		this.config.Client.User = cfg.Section("client").Key("user").String()
+	}
+
+	if cfg.Section("client").Haskey("password") {
+		this.config.Client.Password = cfg.Section("client").Key("password").String()
+	}
+
+	if cfg.Section("osc").Haskey("chunk_size") {
+		this.config.Osc.Chunk_Size, err = cfg.Section("osc").Key("chunk_size").Int64()
+		if err != nil {
+			return fmt.Errorf("Unable to read osc chunk size: %s", err.Error())
+		}
+	}
+
+	if cfg.Section("osc").Haskey("max_load") {
+		this.config.Osc.Max_Load = cfg.Section("osc").Key("max_load").String()
+	}
+
+	if cfg.Section("osc").Haskey("replication_lag_query") {
+		this.config.Osc.Replication_Lag_Query = cfg.Section("osc").Key("replication_lag_query").String()
+	}
+
+	if cfg.Section("osc").Haskey("max_lag_millis") {
+		this.config.Osc.Max_Lag_Millis, err = cfg.Section("osc").Key("max_lag_millis").Int64()
+		if err != nil {
+			return fmt.Errorf("Unable to read max lag millis: %s", err.Error())
+		}
 	}
 
 	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull

@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,8 +17,8 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/outbrain/golib/sqlutils"
-	"sync"
+	"github.com/openark/golib/log"
+	"github.com/openark/golib/sqlutils"
 )
 
 const (
@@ -204,6 +205,25 @@ func (this *Applier) AlterGhost() error {
 		return err
 	}
 	this.migrationContext.Log.Infof("Ghost table altered")
+	return nil
+}
+
+// AlterGhost applies `alter` statement on ghost table
+func (this *Applier) AlterGhostAutoIncrement() error {
+	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s AUTO_INCREMENT=%d`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		this.migrationContext.OriginalTableAutoIncrement,
+	)
+	this.migrationContext.Log.Infof("Altering ghost table AUTO_INCREMENT value %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	)
+	this.migrationContext.Log.Debugf("AUTO_INCREMENT ALTER statement: %s", query)
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	this.migrationContext.Log.Infof("Ghost table AUTO_INCREMENT altered")
 	return nil
 }
 
@@ -1024,11 +1044,20 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 				if buildResult.err != nil {
 					return rollback(buildResult.err)
 				}
-				if _, err := tx.Exec(buildResult.query, buildResult.args...); err != nil {
+				result, err := tx.Exec(buildResult.query, buildResult.args...)
+				if err != nil {
 					err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), buildResult.query, buildResult.args)
 					return rollback(err)
 				}
-				totalDelta += buildResult.rowsDelta
+
+				rowsAffected, err := result.RowsAffected()
+				if err != nil {
+					log.Warningf("error getting rows affected from DML event query: %s. i'm going to assume that the DML affected a single row, but this may result in inaccurate statistics", err)
+					rowsAffected = 1
+				}
+				// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
+				// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
+				totalDelta += buildResult.rowsDelta * rowsAffected
 			}
 		}
 		if err := tx.Commit(); err != nil {
