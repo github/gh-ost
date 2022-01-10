@@ -615,6 +615,12 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
 		return err
 	}
+	// If we need to create triggers we need to do it here (only create part)
+	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
+		if this.retryOperation(this.applier.CreateTriggersOnGhost); err != nil {
+			return err
+		}
+	}
 	if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
 		return err
 	}
@@ -661,6 +667,13 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// We know any newly incoming DML on original table is blocked.
 	if err := this.waitForEventsUpToLock(); err != nil {
 		return this.migrationContext.Log.Errore(err)
+	}
+
+	// If we need to create triggers we need to do it here (only create part)
+	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
+		if err := this.applier.CreateTriggersOnGhost(); err != nil {
+			this.migrationContext.Log.Errore(err)
+		}
 	}
 
 	// Step 2
@@ -720,6 +733,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// ooh nice! We're actually truly and thankfully done
 	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
 	this.migrationContext.Log.Infof("Lock & rename duration: %s. During this time, queries on %s were blocked", lockAndRenameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+
 	return nil
 }
 
