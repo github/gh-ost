@@ -8,6 +8,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -188,6 +189,11 @@ func main() {
 			log.Fatalf("--database must be provided and database name must not be empty, or --alter must specify database name")
 		}
 	}
+
+	if err := flag.Set("database", url.QueryEscape(migrationContext.DatabaseName)); err != nil {
+		migrationContext.Log.Fatale(err)
+	}
+
 	if migrationContext.OriginalTableName == "" {
 		if parser.HasExplicitTable() {
 			migrationContext.OriginalTableName = parser.GetExplicitTable()
