@@ -1,6 +1,5 @@
 package packet
 
-import "C"
 import (
 	"bytes"
 	"io"
@@ -127,7 +126,7 @@ func (c *Conn) WritePacket(data []byte) error {
 func (c *Conn) WriteClearAuthPacket(password string) error {
 	// Calculate the packet length and add a tailing 0
 	pktLen := len(password) + 1
-	data := make([]byte, 4 + pktLen)
+	data := make([]byte, 4+pktLen)
 
 	// Add the clear password [null terminated string]
 	copy(data[4:], password)
@@ -140,7 +139,7 @@ func (c *Conn) WriteClearAuthPacket(password string) error {
 // http://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::AuthSwitchResponse
 func (c *Conn) WritePublicKeyAuthPacket(password string, cipher []byte) error {
 	// request public key
-	data := make([]byte, 4 + 1)
+	data := make([]byte, 4+1)
 	data[4] = 2 // cachingSha2PasswordRequestPublicKey
 	c.WritePacket(data)
 
@@ -163,7 +162,7 @@ func (c *Conn) WritePublicKeyAuthPacket(password string, cipher []byte) error {
 	}
 	sha1v := sha1.New()
 	enc, _ := rsa.EncryptOAEP(sha1v, rand.Reader, pub.(*rsa.PublicKey), plain, nil)
-	data = make([]byte, 4 + len(enc))
+	data = make([]byte, 4+len(enc))
 	copy(data[4:], enc)
 	return c.WritePacket(data)
 }

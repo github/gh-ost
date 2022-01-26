@@ -73,4 +73,7 @@ main() {
   (cd $buildpath && shasum -a256 gh-ost* 2>/dev/null)
 }
 
+. script/bootstrap
+cd .gopath/src/github.com/github/gh-ost
+
 main "$@"
