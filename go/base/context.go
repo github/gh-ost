@@ -551,8 +551,8 @@ func (this *MigrationContext) SetMaxLagMillisecondsThrottleThreshold(maxLagMilli
 }
 
 func (this *MigrationContext) SetChunkSize(chunkSize int64) {
-	if chunkSize < 100 {
-		chunkSize = 100
+	if chunkSize < 10 {
+		chunkSize = 10
 	}
 	if chunkSize > 100000 {
 		chunkSize = 100000
