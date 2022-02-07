@@ -141,6 +141,10 @@ Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
 
 Default 100. See [`subsecond-lag`](subsecond-lag.md) for details.
 
+### hooks-status-interval
+
+Defaults to 60 seconds. Configures how often the `gh-ost-on-status` hook is called, see [`hooks`](hooks.md) for full details on how to use hooks.
+
 ### initially-drop-ghost-table
 
 `gh-ost` maintains two tables while migrating: the _ghost_ table (which is synced from your original table and finally replaces it) and a changelog table, which is used internally for bookkeeping. By default, it panics and aborts if it sees those tables upon startup. Provide `--initially-drop-ghost-table` and `--initially-drop-old-table` to let `gh-ost` know it's OK to drop them beforehand.
