@@ -13,9 +13,9 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/satori/go.uuid"
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
+	"github.com/satori/go.uuid"
 	"golang.org/x/net/context"
 )
 

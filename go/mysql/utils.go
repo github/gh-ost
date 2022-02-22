@@ -14,9 +14,9 @@ import (
 
 	"github.com/github/gh-ost/go/sql"
 
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/openark/golib/log"
 	"github.com/openark/golib/sqlutils"
-	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
 const (

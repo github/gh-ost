@@ -8,9 +8,9 @@ package mysql
 import (
 	"testing"
 
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/openark/golib/log"
 	test "github.com/openark/golib/tests"
-	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
 func init() {
