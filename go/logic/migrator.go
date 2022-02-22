@@ -1016,7 +1016,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
 
-	if elapsedSeconds%60 == 0 {
+	if elapsedSeconds%this.migrationContext.HooksStatusIntervalSec == 0 {
 		this.hooksExecutor.onStatus(status)
 	}
 }

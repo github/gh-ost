@@ -10,7 +10,7 @@ import (
 
 	"github.com/openark/golib/log"
 	test "github.com/openark/golib/tests"
-	gomysql "github.com/siddontang/go-mysql/mysql"
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
 func init() {

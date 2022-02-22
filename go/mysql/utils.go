@@ -16,7 +16,7 @@ import (
 
 	"github.com/openark/golib/log"
 	"github.com/openark/golib/sqlutils"
-	gomysql "github.com/siddontang/go-mysql/mysql"
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
 const (

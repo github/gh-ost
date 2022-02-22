@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	gomysql "github.com/siddontang/go-mysql/mysql"
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
 var detachPattern *regexp.Regexp

@@ -10,7 +10,7 @@ import (
 
 	"github.com/github/gh-ost/go/mysql"
 
-	gomysql "github.com/siddontang/go-mysql/mysql"
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
 // BinlogEntry describes an entry in the binary log
