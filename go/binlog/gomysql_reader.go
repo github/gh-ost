@@ -18,6 +18,7 @@ import (
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	uuid "github.com/google/uuid"
+
 	"golang.org/x/net/context"
 )
 
