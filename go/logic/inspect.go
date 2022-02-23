@@ -431,10 +431,10 @@ func (this *Inspector) validateGTIDConfig() error {
 		return err
 	}
 	if gtidMode != "ON" || (enforceGtidConsistency != "ON" && enforceGtidConsistency != "1") {
-		return fmt.Errorf("%s:%d must have gtid_mode=ON and enforce_gtid_consistency=ON to use GTID support", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return fmt.Errorf("%s must have gtid_mode=ON and enforce_gtid_consistency=ON to use GTID support", this.connectionConfig.Key.String())
 	}
 
-	this.migrationContext.Log.Infof("gtid config validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	this.migrationContext.Log.Infof("gtid config validated on %s", this.connectionConfig.Key.String())
 	return nil
 }
 
