@@ -425,7 +425,7 @@ func (this *Inspector) validateBinlogs() error {
 
 // validateGTIDConfig checks that the GTID configuration is good to go
 func (this *Inspector) validateGTIDConfig() error {
-	var enforceGtidConsistency, gtidMode string
+	var gtidMode, enforceGtidConsistency string
 	query := `select @@global.gtid_mode, @@global.enforce_gtid_consistency`
 	if err := this.db.QueryRow(query).Scan(&gtidMode, &enforceGtidConsistency); err != nil {
 		return err
