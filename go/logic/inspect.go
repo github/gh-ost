@@ -353,7 +353,7 @@ func (this *Inspector) validateBinlogs() error {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
 			return fmt.Errorf("You must be using ROW binlog format. I can switch it for you, provided --switch-to-rbr and that %s doesn't have replicas", this.connectionConfig.Key.String())
 		}
-		query := fmt.Sprintf(`show /* gh-ost */ slave hosts`)
+		query := `show /* gh-ost */ slave hosts`
 		countReplicas := 0
 		err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 			countReplicas++
