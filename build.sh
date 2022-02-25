@@ -41,7 +41,7 @@ function build {
     builddir=$(setuptree)
     cp $buildpath/$target $builddir/gh-ost/usr/bin
     cd $buildpath
-    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'GitHub' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t rpm --rpm-rpmbuild-define "_build_id_links none" .
+    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'GitHub' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t rpm --rpm-rpmbuild-define "_build_id_links none" --rpm-os linux .
     fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'GitHub' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t deb --deb-no-default-config-files .
     cd -
   fi
