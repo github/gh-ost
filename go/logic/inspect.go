@@ -364,8 +364,7 @@ func (this *Inspector) validateBinlogs() error {
 	}
 	query = `select @@global.binlog_row_image`
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.OriginalBinlogRowImage); err != nil {
-		// Only as of 5.6. We wish to support 5.5 as well
-		this.migrationContext.OriginalBinlogRowImage = "FULL"
+		return err
 	}
 	this.migrationContext.OriginalBinlogRowImage = strings.ToUpper(this.migrationContext.OriginalBinlogRowImage)
 	if this.migrationContext.OriginalBinlogRowImage != "FULL" {
