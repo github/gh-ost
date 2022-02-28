@@ -430,7 +430,8 @@ func (this *Inspector) validateGTIDConfig() error {
 	if err := this.db.QueryRow(query).Scan(&gtidMode, &enforceGtidConsistency); err != nil {
 		return err
 	}
-	if gtidMode != "ON" || (enforceGtidConsistency != "ON" && enforceGtidConsistency != "1") {
+	enforceGtidConsistency = strings.ToUpper(enforceGtidConsistency)
+	if strings.ToUpper(gtidMode) != "ON" || (enforceGtidConsistency != "ON" && enforceGtidConsistency != "1") {
 		return fmt.Errorf("%s must have gtid_mode=ON and enforce_gtid_consistency=ON to use GTID support", this.connectionConfig.Key.String())
 	}
 
