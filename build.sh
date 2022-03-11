@@ -23,18 +23,17 @@ function build {
     exit 1
   fi
 
-  # TODO: remove GO111MODULE once gh-ost uses Go modules
-  echo "Building ${osname} binary"
+  echo "Building ${osname}-${GOARCH} binary"
   export GOOS
   export GOARCH
   GO111MODULE=off go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
 
   if [ $? -ne 0 ]; then
-      echo "Build failed for ${osname}"
+      echo "Build failed for ${osname} ${GOARCH}."
       exit 1
   fi
 
-  (cd $buildpath && tar cfz ./gh-ost-binary-${osshort}-${timestamp}.tar.gz $target)
+  (cd $buildpath && tar cfz ./gh-ost-binary-${osshort}-${GOARCH}-${timestamp}.tar.gz $target)
 
   if [ "$GOOS" == "linux" ] ; then
     echo "Creating Distro full packages"
@@ -64,7 +63,9 @@ main() {
   mkdir -p ${buildpath}
   rm -rf ${buildpath:?}/*
   build GNU/Linux linux linux amd64
+  build GNU/Linux linux linux arm64
   build macOS osx darwin amd64
+  build macOS osx darwin arm64
 
   echo "Binaries found in:"
   find $buildpath/gh-ost* -type f -maxdepth 1
