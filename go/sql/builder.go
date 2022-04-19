@@ -42,6 +42,8 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 			token = fmt.Sprintf("ELT(?, %s)", column.EnumValues)
 		} else if column.Type == JSONColumnType {
 			token = "convert(? using utf8mb4)"
+		} else if column.Type == DecimalColumnType {
+			token = fmt.Sprintf("cast(? as %s)", column.TypeDesc)
 		} else {
 			token = "?"
 		}
@@ -96,9 +98,9 @@ func BuildEqualsComparison(columns []string, values []string) (result string, er
 	return result, nil
 }
 
-func BuildEqualsPreparedComparison(columns []string) (result string, err error) {
-	values := buildPreparedValues(len(columns))
-	return BuildEqualsComparison(columns, values)
+func BuildEqualsPreparedComparison(columns *ColumnList) (result string, err error) {
+	values := buildColumnsPreparedValues(columns)
+	return BuildEqualsComparison(columns.Names(), values)
 }
 
 func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
@@ -114,6 +116,8 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 			setToken = fmt.Sprintf("%s=ELT(?, %s)", EscapeName(column.Name), column.EnumValues)
 		} else if column.Type == JSONColumnType {
 			setToken = fmt.Sprintf("%s=convert(? using utf8mb4)", EscapeName(column.Name))
+		} else if column.Type == DecimalColumnType {
+			setToken = fmt.Sprintf("%s=cast(? as %s)", EscapeName(column.Name), column.TypeDesc)
 		} else {
 			setToken = fmt.Sprintf("%s=?", EscapeName(column.Name))
 		}
@@ -405,7 +409,7 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
-	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
+	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns)
 	if err != nil {
 		return result, uniqueKeyArgs, err
 	}
@@ -500,7 +504,7 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 		return "", sharedArgs, uniqueKeyArgs, err
 	}
 
-	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
+	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns)
 	result = fmt.Sprintf(`
  			update /* gh-ost %s.%s */
  					%s.%s

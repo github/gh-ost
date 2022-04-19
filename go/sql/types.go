@@ -24,6 +24,7 @@ const (
 	JSONColumnType
 	FloatColumnType
 	BinaryColumnType
+	DecimalColumnType
 )
 
 const maxMediumintUnsigned int32 = 16777215
@@ -37,6 +38,7 @@ type Column struct {
 	IsUnsigned           bool
 	Charset              string
 	Type                 ColumnType
+	TypeDesc             string // for example: decimal(32,0)
 	EnumValues           string
 	timezoneConversion   *TimezoneConversion
 	enumToTextConversion bool
@@ -189,6 +191,14 @@ func (this *ColumnList) SetColumnType(columnName string, columnType ColumnType) 
 
 func (this *ColumnList) GetColumnType(columnName string) ColumnType {
 	return this.GetColumn(columnName).Type
+}
+
+func (this *ColumnList) SetTypeDesc(columnName string, desc string) {
+	this.GetColumn(columnName).TypeDesc = desc
+}
+
+func (this *ColumnList) GetTypeDesc(columnName string) string {
+	return this.GetColumn(columnName).TypeDesc
 }
 
 func (this *ColumnList) SetConvertDatetimeToTimestamp(columnName string, toTimezone string) {

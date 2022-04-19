@@ -573,6 +573,7 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 				continue
 			}
 
+			column.TypeDesc = columnType
 			if strings.Contains(columnType, "unsigned") {
 				column.IsUnsigned = true
 			}
@@ -601,6 +602,9 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			}
 			if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
 				column.Charset = charset
+			}
+			if strings.HasPrefix(columnType, "decimal") {
+				column.Type = sql.DecimalColumnType
 			}
 		}
 		return nil
