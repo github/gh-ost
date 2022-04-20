@@ -94,7 +94,7 @@ func TestBuildEqualsPreparedComparison(t *testing.T) {
 		cols.SetUnsigned("c1")
 		comparison, err := BuildEqualsPreparedComparison(cols)
 		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(comparison, "((`c1` = cast(cast(? as decimal(30,0)) as unsigned)) and (`c2` = ?))")
+		test.S(t).ExpectEquals(comparison, "((`c1` = cast(? as decimal(30,0))) and (`c2` = ?))")
 	}
 }
 
@@ -121,7 +121,7 @@ func TestBuildSetPreparedClause(t *testing.T) {
 		columns.SetUnsigned("c1")
 		clause, err := BuildSetPreparedClause(columns)
 		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(clause, "`c1`=cast(cast(? as decimal(30,0)) as unsigned)")
+		test.S(t).ExpectEquals(clause, "`c1`=cast(? as decimal(30,0))")
 	}
 	{
 		columns := NewColumnList([]string{"c1", "c2"})
@@ -543,7 +543,7 @@ func TestBuildDMLDeleteQueryDecimal(t *testing.T) {
 				from
 					mydb.tbl
 				where
-					((position = cast(cast(? as decimal(30,0)) as unsigned)) and (name = ?))
+					((position = cast(? as decimal(30,0))) and (name = ?))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{[]byte("70610020200305193000"), "testname"}))
@@ -706,7 +706,7 @@ func TestBuildDMLInsertQueryDecimal(t *testing.T) {
 				into mydb.tbl
 					(position, name, age, id)
 				values
-					(cast(cast(? as decimal(30,0)) as unsigned), ?, ?, ?)
+					(cast(? as decimal(30,0)), ?, ?, ?)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{[]byte("70610020200305193000"), "testname", 23, 3}))
@@ -906,9 +906,9 @@ func TestBuildDMLUpdateQueryDecimal(t *testing.T) {
 		expected := `
 			update /* gh-ost mydb.tbl */
 			  mydb.tbl
-					set id=?, name=?, position=cast(cast(? as decimal(30,0)) as unsigned), age=?
+					set id=?, name=?, position=cast(? as decimal(30,0)), age=?
 				where
-					((position = cast(cast(? as decimal(30,0)) as unsigned)))
+					((position = cast(? as decimal(30,0))))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", []byte("70610020200305193000"), int8(-2)}))

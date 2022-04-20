@@ -44,7 +44,7 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 			token = "convert(? using utf8mb4)"
 		} else if column.Type == DecimalColumnType {
 			if column.IsUnsigned {
-				token = fmt.Sprintf("cast(cast(? as %s) as unsigned)", strings.TrimSuffix(column.TypeDesc, " unsigned"))
+				token = fmt.Sprintf("cast(? as %s)", strings.TrimSuffix(column.TypeDesc, " unsigned"))
 			} else {
 				token = fmt.Sprintf("cast(? as %s)", strings.TrimSuffix(column.TypeDesc, " signed"))
 			}
@@ -122,7 +122,7 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 			setToken = fmt.Sprintf("%s=convert(? using utf8mb4)", EscapeName(column.Name))
 		} else if column.Type == DecimalColumnType {
 			if column.IsUnsigned {
-				setToken = fmt.Sprintf("%s=cast(cast(? as %s) as unsigned)", EscapeName(column.Name), strings.TrimSuffix(column.TypeDesc, " unsigned"))
+				setToken = fmt.Sprintf("%s=cast(? as %s)", EscapeName(column.Name), strings.TrimSuffix(column.TypeDesc, " unsigned"))
 			} else {
 				setToken = fmt.Sprintf("%s=cast(? as %s)", EscapeName(column.Name), strings.TrimSuffix(column.TypeDesc, " signed"))
 			}
