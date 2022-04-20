@@ -43,7 +43,11 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 		} else if column.Type == JSONColumnType {
 			token = "convert(? using utf8mb4)"
 		} else if column.Type == DecimalColumnType {
-			token = fmt.Sprintf("cast(? as %s)", column.TypeDesc)
+			if column.IsUnsigned {
+				token = fmt.Sprintf("cast(cast(? as %s) as unsigned)", strings.TrimSuffix(column.TypeDesc, " unsigned"))
+			} else {
+				token = fmt.Sprintf("cast(? as %s)", strings.TrimSuffix(column.TypeDesc, " signed"))
+			}
 		} else {
 			token = "?"
 		}
@@ -117,7 +121,11 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 		} else if column.Type == JSONColumnType {
 			setToken = fmt.Sprintf("%s=convert(? using utf8mb4)", EscapeName(column.Name))
 		} else if column.Type == DecimalColumnType {
-			setToken = fmt.Sprintf("%s=cast(? as %s)", EscapeName(column.Name), column.TypeDesc)
+			if column.IsUnsigned {
+				setToken = fmt.Sprintf("%s=cast(cast(? as %s) as unsigned)", EscapeName(column.Name), strings.TrimSuffix(column.TypeDesc, " unsigned"))
+			} else {
+				setToken = fmt.Sprintf("%s=cast(? as %s)", EscapeName(column.Name), strings.TrimSuffix(column.TypeDesc, " signed"))
+			}
 		} else {
 			setToken = fmt.Sprintf("%s=?", EscapeName(column.Name))
 		}

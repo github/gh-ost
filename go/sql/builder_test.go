@@ -85,6 +85,17 @@ func TestBuildEqualsPreparedComparison(t *testing.T) {
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(comparison, "((`c1` = cast(? as decimal(30,0))) and (`c2` = ?))")
 	}
+	{
+		// unsigned
+		columns := []string{"c1", "c2"}
+		cols := NewColumnList(columns)
+		cols.SetColumnType("c1", DecimalColumnType)
+		cols.SetTypeDesc("c1", "decimal(30,0) unsigned")
+		cols.SetUnsigned("c1")
+		comparison, err := BuildEqualsPreparedComparison(cols)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(comparison, "((`c1` = cast(cast(? as decimal(30,0)) as unsigned)) and (`c2` = ?))")
+	}
 }
 
 func TestBuildSetPreparedClause(t *testing.T) {
@@ -101,6 +112,16 @@ func TestBuildSetPreparedClause(t *testing.T) {
 		clause, err := BuildSetPreparedClause(columns)
 		test.S(t).ExpectNil(err)
 		test.S(t).ExpectEquals(clause, "`c1`=cast(? as decimal(30,0))")
+	}
+	{
+		// unsigned
+		columns := NewColumnList([]string{"c1"})
+		columns.SetColumnType("c1", DecimalColumnType)
+		columns.SetTypeDesc("c1", "decimal(30,0) unsigned")
+		columns.SetUnsigned("c1")
+		clause, err := BuildSetPreparedClause(columns)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(clause, "`c1`=cast(cast(? as decimal(30,0)) as unsigned)")
 	}
 	{
 		columns := NewColumnList([]string{"c1", "c2"})
@@ -511,6 +532,24 @@ func TestBuildDMLDeleteQueryDecimal(t *testing.T) {
 	}
 	{
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
+		uniqueKeyColumns.SetColumnType("position", DecimalColumnType)
+		uniqueKeyColumns.SetTypeDesc("position", "decimal(30,0) unsigned")
+		uniqueKeyColumns.SetUnsigned("position")
+
+		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
+		test.S(t).ExpectNil(err)
+		expected := `
+			delete /* gh-ost mydb.tbl */
+				from
+					mydb.tbl
+				where
+					((position = cast(cast(? as decimal(30,0)) as unsigned)) and (name = ?))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{[]byte("70610020200305193000"), "testname"}))
+	}
+	{
+		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
 		args := []interface{}{"first", 17}
 
 		_, _, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
@@ -651,6 +690,23 @@ func TestBuildDMLInsertQueryDecimal(t *testing.T) {
 					(position, name, age, id)
 				values
 					(cast(? as decimal(30,0)), ?, ?, ?)
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{[]byte("70610020200305193000"), "testname", 23, 3}))
+	}
+	{
+		sharedColumns := NewColumnList([]string{"position", "name", "age", "id"})
+		sharedColumns.SetColumnType("position", DecimalColumnType)
+		sharedColumns.SetTypeDesc("position", "decimal(30,0) unsigned")
+		sharedColumns.SetUnsigned("position")
+		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		test.S(t).ExpectNil(err)
+		expected := `
+			replace /* gh-ost mydb.tbl */
+				into mydb.tbl
+					(position, name, age, id)
+				values
+					(cast(cast(? as decimal(30,0)) as unsigned), ?, ?, ?)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{[]byte("70610020200305193000"), "testname", 23, 3}))
@@ -832,6 +888,27 @@ func TestBuildDMLUpdateQueryDecimal(t *testing.T) {
 					set id=?, name=?, position=cast(? as decimal(30,0)), age=?
 				where
 					((position = cast(? as decimal(30,0))))
+		`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", []byte("70610020200305193000"), int8(-2)}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{[]byte("70610020200305193001")}))
+	}
+	{
+		// set uniqueKeyColumns and sharedColumns
+		uniqueKeyColumns.SetColumnType("position", DecimalColumnType)
+		uniqueKeyColumns.SetTypeDesc("position", "decimal(30,0) unsigned")
+		uniqueKeyColumns.SetUnsigned("position")
+		sharedColumns.SetColumnType("position", DecimalColumnType)
+		sharedColumns.SetTypeDesc("position", "decimal(30,0) unsigned")
+		sharedColumns.SetUnsigned("position")
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		test.S(t).ExpectNil(err)
+		expected := `
+			update /* gh-ost mydb.tbl */
+			  mydb.tbl
+					set id=?, name=?, position=cast(cast(? as decimal(30,0)) as unsigned), age=?
+				where
+					((position = cast(cast(? as decimal(30,0)) as unsigned)))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", []byte("70610020200305193000"), int8(-2)}))
