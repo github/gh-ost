@@ -9,6 +9,7 @@ import (
 	gosql "database/sql"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,7 @@ type Inspector struct {
 	informationSchemaDb *gosql.DB
 	migrationContext    *base.MigrationContext
 	name                string
+	grantOnRe           *regexp.Regexp
 }
 
 func NewInspector(migrationContext *base.MigrationContext) *Inspector {
@@ -37,6 +39,7 @@ func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 		connectionConfig: migrationContext.InspectorConnectionConfig,
 		migrationContext: migrationContext,
 		name:             "inspector",
+		grantOnRe:        regexp.MustCompile(" ON `(.*?)`\\.\\*"),
 	}
 }
 
@@ -242,16 +245,10 @@ func (this *Inspector) validateGrants() error {
 			if strings.Contains(grant, `REPLICATION SLAVE`) && strings.Contains(grant, ` ON *.*`) {
 				foundReplicationSlave = true
 			}
-			if strings.Contains(grant, fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.*", this.migrationContext.DatabaseName)) {
+			if this.grantContainsAll(grant, "GRANT ALL PRIVILEGES ") {
 				foundDBAll = true
 			}
-			if strings.Contains(grant, fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.*", strings.Replace(this.migrationContext.DatabaseName, "_", "\\_", -1))) {
-				foundDBAll = true
-			}
-			if base.StringContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`, ` ON *.*`) {
-				foundDBAll = true
-			}
-			if base.StringContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`, fmt.Sprintf(" ON `%s`.*", this.migrationContext.DatabaseName)) {
+			if this.grantContainsAll(grant, `ALTER`, `CREATE`, `DELETE`, `DROP`, `INDEX`, `INSERT`, `LOCK TABLES`, `SELECT`, `TRIGGER`, `UPDATE`) {
 				foundDBAll = true
 			}
 		}
@@ -276,6 +273,41 @@ func (this *Inspector) validateGrants() error {
 	}
 	this.migrationContext.Log.Debugf("Privileges: Super: %t, REPLICATION CLIENT: %t, REPLICATION SLAVE: %t, ALL on *.*: %t, ALL on %s.*: %t", foundSuper, foundReplicationClient, foundReplicationSlave, foundAll, sql.EscapeName(this.migrationContext.DatabaseName), foundDBAll)
 	return this.migrationContext.Log.Errorf("User has insufficient privileges for migration. Needed: SUPER|REPLICATION CLIENT, REPLICATION SLAVE and ALL on %s.*", sql.EscapeName(this.migrationContext.DatabaseName))
+}
+
+// grantContainsAll verifies the passed grant contain all the passed strings and
+// that the grant match the DB
+func (this *Inspector) grantContainsAll(grant string, substrings ...string) bool {
+	if !base.StringContainsAll(grant, substrings...) {
+		return false
+	}
+	if strings.Contains(grant, ` ON *.*`) {
+		return true
+	}
+	matches := this.grantOnRe.FindStringSubmatch(grant)
+	if matches == nil {
+		return false
+	}
+	mysqlPattern := matches[1]
+	regexPattern := "^"
+	escape := false
+	for _, c := range mysqlPattern {
+		if escape {
+			regexPattern += regexp.QuoteMeta(string(c))
+			escape = false
+		} else if c == '%' {
+			regexPattern += ".*"
+		} else if c == '_' {
+			regexPattern += "."
+		} else if c == '\\' {
+			escape = true
+		} else {
+			regexPattern += regexp.QuoteMeta(string(c))
+		}
+	}
+	regexPattern += "$"
+	match, _ := regexp.MatchString(regexPattern, this.migrationContext.DatabaseName)
+	return match
 }
 
 // restartReplication is required so that we are _certain_ the binlog format and
