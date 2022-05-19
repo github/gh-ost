@@ -23,6 +23,35 @@ import (
 
 const startSlavePostWaitMilliseconds = 500 * time.Millisecond
 
+var grantOnRegexp = regexp.MustCompile(" ON `(.*?)`\\.\\*")
+
+func grantMatch(grant string, databaseName string) bool {
+	matches := grantOnRegexp.FindStringSubmatch(grant)
+	if matches == nil {
+		return false
+	}
+	mysqlPattern := matches[1]
+	regexPattern := "^"
+	escape := false
+	for _, c := range mysqlPattern {
+		if escape {
+			regexPattern += regexp.QuoteMeta(string(c))
+			escape = false
+		} else if c == '%' {
+			regexPattern += ".*"
+		} else if c == '_' {
+			regexPattern += "."
+		} else if c == '\\' {
+			escape = true
+		} else {
+			regexPattern += regexp.QuoteMeta(string(c))
+		}
+	}
+	regexPattern += "$"
+	match, _ := regexp.MatchString(regexPattern, databaseName)
+	return match
+}
+
 // Inspector reads data from the read-MySQL-server (typically a replica, but can be the master)
 // It is used for gaining initial status and structure, and later also follow up on progress and changelog
 type Inspector struct {
@@ -31,7 +60,6 @@ type Inspector struct {
 	informationSchemaDb *gosql.DB
 	migrationContext    *base.MigrationContext
 	name                string
-	grantOnRe           *regexp.Regexp
 }
 
 func NewInspector(migrationContext *base.MigrationContext) *Inspector {
@@ -39,7 +67,6 @@ func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 		connectionConfig: migrationContext.InspectorConnectionConfig,
 		migrationContext: migrationContext,
 		name:             "inspector",
-		grantOnRe:        regexp.MustCompile(" ON `(.*?)`\\.\\*"),
 	}
 }
 
@@ -281,33 +308,7 @@ func (this *Inspector) grantContainsAll(grant string, substrings ...string) bool
 	if !base.StringContainsAll(grant, substrings...) {
 		return false
 	}
-	if strings.Contains(grant, ` ON *.*`) {
-		return true
-	}
-	matches := this.grantOnRe.FindStringSubmatch(grant)
-	if matches == nil {
-		return false
-	}
-	mysqlPattern := matches[1]
-	regexPattern := "^"
-	escape := false
-	for _, c := range mysqlPattern {
-		if escape {
-			regexPattern += regexp.QuoteMeta(string(c))
-			escape = false
-		} else if c == '%' {
-			regexPattern += ".*"
-		} else if c == '_' {
-			regexPattern += "."
-		} else if c == '\\' {
-			escape = true
-		} else {
-			regexPattern += regexp.QuoteMeta(string(c))
-		}
-	}
-	regexPattern += "$"
-	match, _ := regexp.MatchString(regexPattern, this.migrationContext.DatabaseName)
-	return match
+	return strings.Contains(grant, ` ON *.*`) || grantMatch(grant, this.migrationContext.DatabaseName)
 }
 
 // restartReplication is required so that we are _certain_ the binlog format and
