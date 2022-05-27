@@ -14,7 +14,6 @@ import (
 
 	"github.com/github/gh-ost/go/sql"
 
-	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/openark/golib/log"
 	"github.com/openark/golib/sqlutils"
 )
@@ -143,33 +142,41 @@ func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKe
 	return GetMasterConnectionConfigSafe(masterConfig, visitedKeys, allowMasterMaster)
 }
 
-func GetReplicationBinlogCoordinates(db *gosql.DB) (readBinlogCoordinates *BinlogCoordinates, executeBinlogCoordinates *BinlogCoordinates, err error) {
+func GetReplicationBinlogCoordinates(db *gosql.DB, gtid bool) (readBinlogCoordinates, executeBinlogCoordinates BinlogCoordinates, err error) {
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
-		readBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("Master_Log_File"),
-			LogPos:  m.GetInt64("Read_Master_Log_Pos"),
-		}
-		executeBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("Relay_Master_Log_File"),
-			LogPos:  m.GetInt64("Exec_Master_Log_Pos"),
+		if gtid {
+			executeBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Executed_Gtid_Set"))
+			if err != nil {
+				return err
+			}
+			readBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Retrieved_Gtid_Set"))
+			if err != nil {
+				return err
+			}
+		} else {
+			readBinlogCoordinates = NewFileBinlogCoordinates(
+				m.GetString("Master_Log_File"),
+				m.GetInt64("Read_Master_Log_Pos"),
+			)
+			executeBinlogCoordinates = NewFileBinlogCoordinates(
+				m.GetString("Relay_Master_Log_File"),
+				m.GetInt64("Exec_Master_Log_Pos"),
+			)
 		}
 		return nil
 	})
 	return readBinlogCoordinates, executeBinlogCoordinates, err
 }
 
-func GetSelfBinlogCoordinates(db *gosql.DB) (selfBinlogCoordinates *BinlogCoordinates, err error) {
+func GetSelfBinlogCoordinates(db *gosql.DB, gtid bool) (selfBinlogCoordinates BinlogCoordinates, err error) {
 	err = sqlutils.QueryRowsMap(db, `show master status`, func(m sqlutils.RowMap) error {
-		selfBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("File"),
-			LogPos:  m.GetInt64("Position"),
-		}
-		if execGtidSet := m.GetString("Executed_Gtid_Set"); execGtidSet != "" {
-			gtidSet, err := gomysql.ParseMysqlGTIDSet(execGtidSet)
-			if err != nil {
-				return err
-			}
-			selfBinlogCoordinates.GTIDSet = gtidSet.(*gomysql.MysqlGTIDSet)
+		if gtid {
+			selfBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Executed_Gtid_Set"))
+		} else {
+			selfBinlogCoordinates = NewFileBinlogCoordinates(
+				m.GetString("File"),
+				m.GetInt64("Position"),
+			)
 		}
 		return nil
 	})
