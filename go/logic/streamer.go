@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -16,6 +16,7 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/openark/golib/sqlutils"
 )
 
@@ -139,7 +140,11 @@ func (this *EventsStreamer) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinat
 }
 
 func (this *EventsStreamer) GetReconnectBinlogCoordinates() *mysql.BinlogCoordinates {
-	return &mysql.BinlogCoordinates{LogFile: this.GetCurrentBinlogCoordinates().LogFile, LogPos: 4}
+	current := this.GetCurrentBinlogCoordinates()
+	if current.GTIDSet != nil {
+		return &mysql.BinlogCoordinates{GTIDSet: current.GTIDSet}
+	}
+	return &mysql.BinlogCoordinates{LogFile: current.LogFile, LogPos: 4}
 }
 
 // readCurrentBinlogCoordinates reads master status from hooked server
@@ -150,6 +155,13 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 		this.initialBinlogCoordinates = &mysql.BinlogCoordinates{
 			LogFile: m.GetString("File"),
 			LogPos:  m.GetInt64("Position"),
+		}
+		if execGtidSet := m.GetString("Executed_Gtid_Set"); execGtidSet != "" && this.migrationContext.UseGTIDs {
+			gtidSet, err := gomysql.ParseMysqlGTIDSet(execGtidSet)
+			if err != nil {
+				return err
+			}
+			this.initialBinlogCoordinates.GTIDSet = gtidSet.(*gomysql.MysqlGTIDSet)
 		}
 		foundMasterStatus = true
 

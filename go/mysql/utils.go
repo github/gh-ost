@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -142,26 +142,41 @@ func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKe
 	return GetMasterConnectionConfigSafe(masterConfig, visitedKeys, allowMasterMaster)
 }
 
-func GetReplicationBinlogCoordinates(db *gosql.DB) (readBinlogCoordinates *BinlogCoordinates, executeBinlogCoordinates *BinlogCoordinates, err error) {
+func GetReplicationBinlogCoordinates(db *gosql.DB, gtid bool) (readBinlogCoordinates, executeBinlogCoordinates BinlogCoordinates, err error) {
 	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
-		readBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("Master_Log_File"),
-			LogPos:  m.GetInt64("Read_Master_Log_Pos"),
-		}
-		executeBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("Relay_Master_Log_File"),
-			LogPos:  m.GetInt64("Exec_Master_Log_Pos"),
+		if gtid {
+			executeBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Executed_Gtid_Set"))
+			if err != nil {
+				return err
+			}
+			readBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Retrieved_Gtid_Set"))
+			if err != nil {
+				return err
+			}
+		} else {
+			readBinlogCoordinates = NewFileBinlogCoordinates(
+				m.GetString("Master_Log_File"),
+				m.GetInt64("Read_Master_Log_Pos"),
+			)
+			executeBinlogCoordinates = NewFileBinlogCoordinates(
+				m.GetString("Relay_Master_Log_File"),
+				m.GetInt64("Exec_Master_Log_Pos"),
+			)
 		}
 		return nil
 	})
 	return readBinlogCoordinates, executeBinlogCoordinates, err
 }
 
-func GetSelfBinlogCoordinates(db *gosql.DB) (selfBinlogCoordinates *BinlogCoordinates, err error) {
+func GetSelfBinlogCoordinates(db *gosql.DB, gtid bool) (selfBinlogCoordinates BinlogCoordinates, err error) {
 	err = sqlutils.QueryRowsMap(db, `show master status`, func(m sqlutils.RowMap) error {
-		selfBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("File"),
-			LogPos:  m.GetInt64("Position"),
+		if gtid {
+			selfBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Executed_Gtid_Set"))
+		} else {
+			selfBinlogCoordinates = NewFileBinlogCoordinates(
+				m.GetString("File"),
+				m.GetInt64("Position"),
+			)
 		}
 		return nil
 	})

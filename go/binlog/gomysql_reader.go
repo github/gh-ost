@@ -1,5 +1,5 @@
 /*
-   Copyright 2021 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -15,6 +15,7 @@ import (
 
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
+	uuid "github.com/satori/go.uuid"
 	"golang.org/x/net/context"
 )
 
@@ -25,6 +26,7 @@ type GoMySQLReader struct {
 	binlogStreamer           *replication.BinlogStreamer
 	currentCoordinates       mysql.BinlogCoordinates
 	currentCoordinatesMutex  *sync.Mutex
+	nextCoordinates          mysql.BinlogCoordinates
 	LastAppliedRowsEventHint mysql.BinlogCoordinates
 }
 
@@ -63,8 +65,12 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 
 	this.currentCoordinates = coordinates
 	this.migrationContext.Log.Infof("Connecting binlog streamer at %+v", this.currentCoordinates)
-	// Start sync with specified binlog file and position
-	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{this.currentCoordinates.LogFile, uint32(this.currentCoordinates.LogPos)})
+	// Start sync with specified GTID set or binlog file and position
+	if this.migrationContext.UseGTIDs {
+		this.binlogStreamer, err = this.binlogSyncer.StartSyncGTID(this.currentCoordinates.GTIDSet)
+	} else {
+		this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{this.currentCoordinates.LogFile, uint32(this.currentCoordinates.LogPos)})
+	}
 
 	return err
 }
@@ -78,7 +84,7 @@ func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinate
 
 // StreamEvents
 func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
-	if this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
+	if !this.migrationContext.UseGTIDs && this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
 		this.migrationContext.Log.Debugf("Skipping handled query at %+v", this.currentCoordinates)
 		return nil
 	}
@@ -120,6 +126,11 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 		// In reality, reads will be synchronous
 		entriesChannel <- binlogEntry
 	}
+	if this.migrationContext.UseGTIDs {
+		this.currentCoordinatesMutex.Lock()
+		defer this.currentCoordinatesMutex.Unlock()
+		this.currentCoordinates = this.nextCoordinates
+	}
 	this.LastAppliedRowsEventHint = this.currentCoordinates
 	return nil
 }
@@ -142,15 +153,46 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			defer this.currentCoordinatesMutex.Unlock()
 			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
 		}()
-		if rotateEvent, ok := ev.Event.(*replication.RotateEvent); ok {
+
+		switch event := ev.Event.(type) {
+		case *replication.PreviousGTIDsEvent:
+			if !this.migrationContext.UseGTIDs {
+				continue
+			}
 			func() {
 				this.currentCoordinatesMutex.Lock()
 				defer this.currentCoordinatesMutex.Unlock()
-				this.currentCoordinates.LogFile = string(rotateEvent.NextLogName)
+				if err := this.currentCoordinates.GTIDSet.Update(event.GTIDSets); err != nil {
+					this.migrationContext.Log.Errorf("Failed to parse GTID set: %v", err)
+				}
 			}()
-			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), rotateEvent.NextLogName)
-		} else if rowsEvent, ok := ev.Event.(*replication.RowsEvent); ok {
-			if err := this.handleRowsEvent(ev, rowsEvent, entriesChannel); err != nil {
+		case *replication.GTIDEvent:
+			if !this.migrationContext.UseGTIDs {
+				continue
+			}
+			sid, err := uuid.FromBytes(event.SID)
+			if err != nil {
+				return err
+			}
+			func() {
+				this.currentCoordinatesMutex.Lock()
+				defer this.currentCoordinatesMutex.Unlock()
+				this.nextCoordinates = this.currentCoordinates
+				interval := gomysql.Interval{Start: event.GNO, Stop: event.GNO + 1}
+				this.nextCoordinates.GTIDSet.AddSet(gomysql.NewUUIDSet(sid, interval))
+			}()
+		case *replication.RotateEvent:
+			if this.migrationContext.UseGTIDs {
+				continue
+			}
+			func() {
+				this.currentCoordinatesMutex.Lock()
+				defer this.currentCoordinatesMutex.Unlock()
+				this.currentCoordinates.LogFile = string(event.NextLogName)
+			}()
+			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), event.NextLogName)
+		case *replication.RowsEvent:
+			if err := this.handleRowsEvent(ev, event, entriesChannel); err != nil {
 				return err
 			}
 		}

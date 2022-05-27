@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -7,21 +7,22 @@ package binlog
 
 import (
 	"fmt"
+
 	"github.com/github/gh-ost/go/mysql"
+
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
 // BinlogEntry describes an entry in the binary log
 type BinlogEntry struct {
 	Coordinates mysql.BinlogCoordinates
-	EndLogPos   uint64
-
-	DmlEvent *BinlogDMLEvent
+	DmlEvent    *BinlogDMLEvent
 }
 
 // NewBinlogEntry creates an empty, ready to go BinlogEntry object
-func NewBinlogEntry(logFile string, logPos uint64) *BinlogEntry {
+func NewBinlogEntry(logFile string, logPos uint64, gtidSet *gomysql.MysqlGTIDSet) *BinlogEntry {
 	binlogEntry := &BinlogEntry{
-		Coordinates: mysql.BinlogCoordinates{LogFile: logFile, LogPos: int64(logPos)},
+		Coordinates: mysql.BinlogCoordinates{LogFile: logFile, LogPos: int64(logPos), GTIDSet: gtidSet},
 	}
 	return binlogEntry
 }
@@ -36,9 +37,7 @@ func NewBinlogEntryAt(coordinates mysql.BinlogCoordinates) *BinlogEntry {
 
 // Duplicate creates and returns a new binlog entry, with some of the attributes pre-assigned
 func (this *BinlogEntry) Duplicate() *BinlogEntry {
-	binlogEntry := NewBinlogEntry(this.Coordinates.LogFile, uint64(this.Coordinates.LogPos))
-	binlogEntry.EndLogPos = this.EndLogPos
-	return binlogEntry
+	return NewBinlogEntry(this.Coordinates.LogFile, uint64(this.Coordinates.LogPos), this.Coordinates.GTIDSet)
 }
 
 // String() returns a string representation of this binlog entry
