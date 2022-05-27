@@ -6,79 +6,83 @@
 package mysql
 
 import (
+	"errors"
+
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
-// GTIDBinlogCoordinates described binary log coordinates in the form of a binlog file & log position.
+// GTIDBinlogCoordinates describe binary log coordinates in MySQL GTID format.
 type GTIDBinlogCoordinates struct {
-	Set *gomysql.MysqlGTIDSet
+	GTIDSet *gomysql.MysqlGTIDSet
+	UUIDSet *gomysql.UUIDSet
 }
 
-// ParseGTIDSetBinlogCoordinates parses a MySQL GTID set into a *GTIDBinlogCoordinates struct.
-func ParseGTIDSetBinlogCoordinates(gtidSet string) (*GTIDBinlogCoordinates, error) {
+// NewGTIDBinlogCoordinates parses a MySQL GTID set into a *GTIDBinlogCoordinates struct.
+func NewGTIDBinlogCoordinates(gtidSet string) (*GTIDBinlogCoordinates, error) {
 	set, err := gomysql.ParseMysqlGTIDSet(gtidSet)
-	return &GTIDBinlogCoordinates{set.(*gomysql.MysqlGTIDSet)}, err
+	return &GTIDBinlogCoordinates{
+		GTIDSet: set.(*gomysql.MysqlGTIDSet),
+	}, err
 }
 
-// DisplayString returns a user-friendly string representation of these coordinates
+// DisplayString returns a user-friendly string representation of these current UUID set or the full GTID set.
 func (this *GTIDBinlogCoordinates) DisplayString() string {
-	return this.Set.String()
+	if this.UUIDSet != nil {
+		return this.UUIDSet.String()
+	}
+	return this.String()
 }
 
-// String returns a user-friendly string representation of these coordinates
+// String returns a user-friendly string representation of these full GTID set.
 func (this GTIDBinlogCoordinates) String() string {
-	return this.DisplayString()
+	return this.GTIDSet.String()
 }
 
 // Equals tests equality of this coordinate and another one.
-func (this *GTIDBinlogCoordinates) Equals(other *GTIDBinlogCoordinates) bool {
-	if other == nil {
+func (this *GTIDBinlogCoordinates) Equals(other BinlogCoordinates) bool {
+	if other == nil || this.IsEmpty() || other.IsEmpty() {
 		return false
 	}
-	return other.Set != nil && this.Set.Equal(other.Set)
+
+	otherBinlogCoordinates := &GTIDBinlogCoordinates{}
+	if err := binlogCoordinatesToImplementation(other, otherBinlogCoordinates); err != nil {
+		panic(err)
+	}
+
+	return this.GTIDSet.Equal(otherBinlogCoordinates.GTIDSet)
 }
 
-// IsEmpty returns true if the GTID set is empty, unnamed
+// IsEmpty returns true if the GTID set is empty.
 func (this *GTIDBinlogCoordinates) IsEmpty() bool {
-	return this.Set == nil
+	return this.GTIDSet == nil
 }
 
 // SmallerThan returns true if this coordinate is strictly smaller than the other.
-func (this *GTIDBinlogCoordinates) SmallerThan(other *GTIDBinlogCoordinates) bool {
-	// if GTID SIDs are equal we compare the interval stop points
-	// if GTID SIDs differ we have to assume there is a new/larger event
-	if other.Set == nil || other.Set.Sets == nil {
-		return false
+func (this *GTIDBinlogCoordinates) SmallerThan(other BinlogCoordinates) bool {
+	otherBinlogCoordinates := &GTIDBinlogCoordinates{}
+	if err := binlogCoordinatesToImplementation(other, otherBinlogCoordinates); err != nil {
+		panic(err)
 	}
-	if len(this.Set.Sets) < len(other.Set.Sets) {
-		return true
-	}
-	for sid, otherSet := range other.Set.Sets {
-		thisSet, ok := this.Set.Sets[sid]
-		if !ok {
-			return true // 'this' is missing an SID
-		}
-		if len(thisSet.Intervals) < len(otherSet.Intervals) {
-			return true // 'this' has fewer intervals
-		}
-		for i, otherInterval := range otherSet.Intervals {
-			if len(thisSet.Intervals)-1 > i {
-				return true
-			}
-			thisInterval := thisSet.Intervals[i]
-			if thisInterval.Start < otherInterval.Start || thisInterval.Stop < otherInterval.Stop {
-				return true
-			}
-		}
-	}
-	return false
+
+	// if 'this' does not contain the same sets we assume we are behind 'other'.
+	// there are probably edge cases where this isn't true
+	return !this.GTIDSet.Contain(other.GTIDSet)
 }
 
 // SmallerThanOrEquals returns true if this coordinate is the same or equal to the other one.
-// We do NOT compare the type so we can not use this.Equals()
-func (this *GTIDBinlogCoordinates) SmallerThanOrEquals(other *GTIDBinlogCoordinates) bool {
-	if this.SmallerThan(other) {
-		return true
+func (this *GTIDBinlogCoordinates) SmallerThanOrEquals(other BinlogCoordinates) bool {
+	return this.Equals(other) || this.SmallerThan(other)
+}
+
+func (this *GTIDBinlogCoordinates) Update(update interface{}) error {
+	switch u := update.(type) {
+	case *gomysql.UUIDSet:
+		this.GTIDSet.AddSet(u)
+		this.UUIDSet = u
+	case *gomysql.MysqlGTIDSet:
+		this.GTIDSet = u
+	default:
+		return errors.New("unsupported update")
 	}
-	return other.Set != nil && this.Set.Equal(other.Set)
+	return nil
 }

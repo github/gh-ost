@@ -20,19 +20,18 @@ func init() {
 	detachPattern, _ = regexp.Compile(`//([^/:]+):([\d]+)`) // e.g. `//binlog.01234:567890`
 }
 
-type BinlogType int
-
-const (
-	BinaryLog BinlogType = iota
-	RelayLog
-)
-
 // FileBinlogCoordinates described binary log coordinates in the form of a binlog file & log position.
 type FileBinlogCoordinates struct {
 	LogFile   string
 	LogPos    int64
-	Type      BinlogType
 	EventSize int64
+}
+
+func NewFileBinlogCoordinates(logFile string, logPos int64) *FileBinlogCoordinates {
+	return &FileBinlogCoordinates{
+		LogFile: logFile,
+		LogPos:  logPos,
+	}
 }
 
 // ParseFileBinlogCoordinates parses a log file/position string into a *BinlogCoordinates struct.
@@ -47,11 +46,6 @@ func ParseFileBinlogCoordinates(logFileLogPos string) (*FileBinlogCoordinates, e
 	} else {
 		return &FileBinlogCoordinates{LogFile: tokens[0], LogPos: logPos}, nil
 	}
-}
-
-// Name returns the name of the BinlogCoordinates interface implementation
-func (this *FileBinlogCoordinates) Name() string {
-	return "file"
 }
 
 // DisplayString returns a user-friendly string representation of these coordinates
@@ -70,7 +64,7 @@ func (this *FileBinlogCoordinates) Equals(other BinlogCoordinates) bool {
 	if !ok || other == nil {
 		return false
 	}
-	return this.LogFile == coord.LogFile && this.LogPos == coord.LogPos && this.Type == coord.Type
+	return this.LogFile == coord.LogFile && this.LogPos == coord.LogPos
 }
 
 // IsEmpty returns true if the log file is empty, unnamed
@@ -138,7 +132,7 @@ func (this *FileBinlogCoordinates) FileNumber() (int, int) {
 
 // PreviousFileCoordinatesBy guesses the filename of the previous binlog/relaylog, by given offset (number of files back)
 func (this *FileBinlogCoordinates) PreviousFileCoordinatesBy(offset int) (BinlogCoordinates, error) {
-	result := &FileBinlogCoordinates{LogPos: 0, Type: this.Type}
+	result := &FileBinlogCoordinates{}
 
 	fileNum, numLen := this.FileNumber()
 	if fileNum == 0 {
@@ -160,7 +154,7 @@ func (this *FileBinlogCoordinates) PreviousFileCoordinates() (BinlogCoordinates,
 
 // PreviousFileCoordinates guesses the filename of the previous binlog/relaylog
 func (this *FileBinlogCoordinates) NextFileCoordinates() (BinlogCoordinates, error) {
-	result := &FileBinlogCoordinates{LogPos: 0, Type: this.Type}
+	result := &FileBinlogCoordinates{}
 
 	fileNum, numLen := this.FileNumber()
 	newNumStr := fmt.Sprintf("%d", (fileNum + 1))

@@ -989,7 +989,7 @@ func (this *Applier) StopReplication() error {
 		return err
 	}
 
-	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.migrationContext.ApplierMySQLVersion, this.db)
+	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.migrationContext.ApplierMySQLVersion, this.db, this.migrationContext.UseGTIDs)
 	if err != nil {
 		return err
 	}
