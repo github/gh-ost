@@ -6,7 +6,6 @@
 package base
 
 import (
-	"fmt"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -89,7 +88,7 @@ func TestReadConfigFile(t *testing.T) {
 		}
 		defer os.Remove(f.Name())
 
-		f.Write([]byte(fmt.Sprintf("[client]\nuser=test\npassword=123456")))
+		f.Write([]byte("[client]\nuser=test\npassword=123456"))
 		context := NewMigrationContext()
 		context.ConfigFile = f.Name()
 		if err := context.ReadConfigFile(); err != nil {
@@ -109,7 +108,7 @@ func TestReadConfigFile(t *testing.T) {
 		}
 		defer os.Remove(f.Name())
 
-		f.Write([]byte(fmt.Sprintf("[osc]\nmax_load=10")))
+		f.Write([]byte("[osc]\nmax_load=10"))
 		context := NewMigrationContext()
 		context.ConfigFile = f.Name()
 		if err := context.ReadConfigFile(); err != nil {

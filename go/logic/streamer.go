@@ -220,5 +220,4 @@ func (this *EventsStreamer) Close() (err error) {
 
 func (this *EventsStreamer) Teardown() {
 	this.db.Close()
-	return
 }

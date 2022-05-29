@@ -25,9 +25,7 @@ func PrettifyDurationOutput(d time.Duration) string {
 	if d < time.Second {
 		return "0s"
 	}
-	result := fmt.Sprintf("%s", d)
-	result = prettifyDurationRegexp.ReplaceAllString(result, "")
-	return result
+	return prettifyDurationRegexp.ReplaceAllString(d.String(), "")
 }
 
 func FileExists(fileName string) bool {

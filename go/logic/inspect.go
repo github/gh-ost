@@ -804,5 +804,4 @@ func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err er
 func (this *Inspector) Teardown() {
 	this.db.Close()
 	this.informationSchemaDb.Close()
-	return
 }

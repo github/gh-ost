@@ -64,7 +64,10 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 	this.currentCoordinates = coordinates
 	this.migrationContext.Log.Infof("Connecting binlog streamer at %+v", this.currentCoordinates)
 	// Start sync with specified binlog file and position
-	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{this.currentCoordinates.LogFile, uint32(this.currentCoordinates.LogPos)})
+	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{
+		Name: this.currentCoordinates.LogFile,
+		Pos:  uint32(this.currentCoordinates.LogPos),
+	})
 
 	return err
 }

@@ -72,9 +72,7 @@ func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) [
 	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT_TOKEN=%s", this.migrationContext.HooksHintToken))
 	env = append(env, fmt.Sprintf("GH_OST_DRY_RUN=%t", this.migrationContext.Noop))
 
-	for _, variable := range extraVariables {
-		env = append(env, variable)
-	}
+	env = append(env, extraVariables...)
 	return env
 }
 
