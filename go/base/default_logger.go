@@ -1,3 +1,8 @@
+/*
+   Copyright 2022 GitHub Inc.
+         See https://github.com/github/gh-ost/blob/master/LICENSE
+*/
+
 package base
 
 import (

@@ -1,5 +1,6 @@
 /*
    Copyright 2015 Shlomi Noach, courtesy Booking.com
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -12,9 +13,7 @@ import (
 	"strings"
 )
 
-const (
-	DefaultInstancePort = 3306
-)
+const DefaultInstancePort = 3306
 
 var (
 	ipv4HostPortRegexp = regexp.MustCompile("^([^:]+):([0-9]+)$")
