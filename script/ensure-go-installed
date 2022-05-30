@@ -4,10 +4,10 @@ PREFERRED_GO_VERSION=go1.16.4
 SUPPORTED_GO_VERSIONS='go1.1[56]'
 
 GO_PKG_DARWIN=${PREFERRED_GO_VERSION}.darwin-amd64.pkg
-GO_PKG_DARWIN_SHA=0f215de06019a054a3da46a0722989986c956d719c7a0a8fc38a5f3c216d6f6b
+GO_PKG_DARWIN_SHA=9f9b940d0f4b3ac764f0a33d78384a87b804aab29d1aacbdc9bca3a3480e9272
 
 GO_PKG_LINUX=${PREFERRED_GO_VERSION}.linux-amd64.tar.gz
-GO_PKG_LINUX_SHA=4a7fa60f323ee1416a4b1425aefc37ea359e9d64df19c326a58953a97ad41ea5
+GO_PKG_LINUX_SHA=7154e88f5a8047aad4b80ebace58a059e36e7e2e4eb3b383127a28c711b4ff59
 
 export ROOTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
 cd $ROOTDIR
@@ -35,7 +35,7 @@ if [ -z "$(which go)" ] || [ -z "$(go version | grep "$SUPPORTED_GO_VERSIONS")" 
     curl -L -O https://dl.google.com/go/$GO_PKG_DARWIN
     shasum -a256 $GO_PKG_DARWIN | grep $GO_PKG_DARWIN_SHA
     xar -xf $GO_PKG_DARWIN
-    cpio -i < com.googlecode.go.pkg/Payload
+    cpio -i < org.golang.go.pkg/Payload
   else
     curl -L -O https://dl.google.com/go/$GO_PKG_LINUX
     shasum -a256 $GO_PKG_LINUX | grep $GO_PKG_LINUX_SHA
