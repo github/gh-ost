@@ -280,6 +280,7 @@ func (this *Throttler) criticalLoadIsMet() (met bool, variableName string, value
 
 // collectReplicationLag reads the latest changelog heartbeat value
 func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<- bool) {
+	collectInterval := this.migrationContext.GetThrottleHTTPInterval()
 	collectFunc := func() (sleep bool, err error) {
 		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
 			return true, nil
@@ -290,7 +291,7 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 		}
 
 		// make the HTTP context timeout equal to the ticker interval
-		ctx, cancel := context.WithTimeout(context.Background(), this.migrationContext.GetThrottleHTTPInterval())
+		ctx, cancel := context.WithTimeout(context.Background(), collectInterval)
 		defer cancel()
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
@@ -316,7 +317,7 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 
 	firstThrottlingCollected <- true
 
-	ticker := time.Tick(this.migrationContext.GetThrottleHTTPInterval())
+	ticker := time.Tick(collectInterval)
 	for range ticker {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
