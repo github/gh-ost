@@ -640,11 +640,11 @@ func (this *MigrationContext) SetThrottleHTTP(throttleHTTP string) {
 	this.throttleHTTP = throttleHTTP
 }
 
-func (this *MigrationContext) SetThrottleHTTPInterval(timeoutMillis int64) {
+func (this *MigrationContext) SetThrottleHTTPInterval(intervalMillis int64) {
 	this.throttleHTTPMutex.Lock()
 	defer this.throttleHTTPMutex.Unlock()
 
-	this.ThrottleHTTPInterval = time.Duration(timeoutMillis) * time.Millisecond
+	this.ThrottleHTTPInterval = time.Duration(intervalMillis) * time.Millisecond
 }
 
 func (this *MigrationContext) GetThrottleHTTPInterval() time.Duration {
