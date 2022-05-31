@@ -9,4 +9,5 @@ linters:
   enable:
     - gosimple
     - govet
+    - noctx
     - unused

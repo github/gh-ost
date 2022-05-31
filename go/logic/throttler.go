@@ -6,6 +6,7 @@
 package logic
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -44,6 +45,7 @@ const frenoMagicHint = "freno"
 type Throttler struct {
 	migrationContext  *base.MigrationContext
 	applier           *Applier
+	httpClient        *http.Client
 	inspector         *Inspector
 	finishedMigrating int64
 }
@@ -52,6 +54,7 @@ func NewThrottler(migrationContext *base.MigrationContext, applier *Applier, ins
 	return &Throttler{
 		migrationContext:  migrationContext,
 		applier:           applier,
+		httpClient:        &http.Client{},
 		inspector:         inspector,
 		finishedMigrating: 0,
 	}
@@ -285,7 +288,17 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 		if url == "" {
 			return true, nil
 		}
-		resp, err := http.Head(url)
+
+		// make the HTTP context timeout equal to the ticker interval
+		ctx, cancel := context.WithTimeout(context.Background(), this.migrationContext.GetThrottleHTTPInterval())
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+		if err != nil {
+			return false, err
+		}
+
+		resp, err := this.httpClient.Do(req)
 		if err != nil {
 			return false, err
 		}
@@ -303,7 +316,7 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 
 	firstThrottlingCollected <- true
 
-	ticker := time.Tick(100 * time.Millisecond)
+	ticker := time.Tick(this.migrationContext.GetThrottleHTTPInterval())
 	for range ticker {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
