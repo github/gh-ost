@@ -112,7 +112,7 @@ It is also interesting to observe that `gh-ost` is the only application writing 
 
 When `gh-ost` pauses (throttles), it issues no writes on the ghost table. Because there are no triggers, write workload is decoupled from the `gh-ost` write workload. And because we're using an asynchronous approach, the algorithm already handles a time difference between a master write time and the ghost apply time. A difference of a few microseconds is no different from a difference of minutes or hours.
 
-When `gh-ost` [throttles](throttle.md), either by replication lag, `max-load` setting or and explicit [interactive user command](interactive-commands.md), the master is back to normal. It sees no more writes on the ghost table.
+When `gh-ost` [throttles](throttle.md), either by replication lag, `max-load` setting or an explicit [interactive user command](interactive-commands.md), the master is back to normal. It sees no more writes on the ghost table.
 An exception is the ongoing heartbeat writes onto the changelog table, which we consider to be negligible.
 
 #### Testability

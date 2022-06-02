@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
@@ -142,6 +142,7 @@ type MigrationContext struct {
 	HooksHintMessage                    string
 	HooksHintOwner                      string
 	HooksHintToken                      string
+	HooksStatusIntervalSec              int64
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -583,8 +584,8 @@ func (this *MigrationContext) SetMaxLagMillisecondsThrottleThreshold(maxLagMilli
 }
 
 func (this *MigrationContext) SetChunkSize(chunkSize int64) {
-	if chunkSize < 100 {
-		chunkSize = 100
+	if chunkSize < 10 {
+		chunkSize = 10
 	}
 	if chunkSize > 100000 {
 		chunkSize = 100000
