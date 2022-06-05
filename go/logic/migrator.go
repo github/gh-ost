@@ -534,19 +534,19 @@ func (this *Migrator) cutOver() (err error) {
 			}
 		}
 	}
-	if this.migrationContext.CutOverType == base.CutOverAtomic {
+
+	switch this.migrationContext.CutOverType {
+	case base.CutOverAtomic:
 		// Atomic solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
-		err := this.atomicCutOver()
-		this.handleCutOverResult(err)
-		return err
+		err = this.atomicCutOver()
+	case base.CutOverTwoStep:
+		err = this.cutOverTwoStep()
+	default:
+		return this.migrationContext.Log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 	}
-	if this.migrationContext.CutOverType == base.CutOverTwoStep {
-		err := this.cutOverTwoStep()
-		this.handleCutOverResult(err)
-		return err
-	}
-	return this.migrationContext.Log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
+	this.handleCutOverResult(err)
+	return err
 }
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,

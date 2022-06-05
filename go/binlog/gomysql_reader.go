@@ -145,15 +145,17 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			defer this.currentCoordinatesMutex.Unlock()
 			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
 		}()
-		if rotateEvent, ok := ev.Event.(*replication.RotateEvent); ok {
+
+		switch binlogEvent := ev.Event.(type) {
+		case *replication.RotateEvent:
 			func() {
 				this.currentCoordinatesMutex.Lock()
 				defer this.currentCoordinatesMutex.Unlock()
-				this.currentCoordinates.LogFile = string(rotateEvent.NextLogName)
+				this.currentCoordinates.LogFile = string(binlogEvent.NextLogName)
 			}()
-			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), rotateEvent.NextLogName)
-		} else if rowsEvent, ok := ev.Event.(*replication.RowsEvent); ok {
-			if err := this.handleRowsEvent(ev, rowsEvent, entriesChannel); err != nil {
+			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), binlogEvent.NextLogName)
+		case *replication.RowsEvent:
+			if err := this.handleRowsEvent(ev, binlogEvent, entriesChannel); err != nil {
 				return err
 			}
 		}
