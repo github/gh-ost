@@ -564,7 +564,7 @@ func (this *Inspector) CountTableRows(ctx context.Context) error {
 	if err := conn.QueryRowContext(ctx, query).Scan(&rowsEstimate); err != nil {
 		switch err {
 		case context.Canceled, context.DeadlineExceeded:
-			log.Infof("exact row count cancelled (%s), likely because I'm about to cut over. I'm going to kill that query.", ctx.Err())
+			this.migrationContext.Log.Infof("exact row count cancelled (%s), likely because I'm about to cut over. I'm going to kill that query.", ctx.Err())
 			return Kill(this.db, connectionID)
 		default:
 			return err
