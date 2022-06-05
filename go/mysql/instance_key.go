@@ -1,5 +1,6 @@
 /*
    Copyright 2015 Shlomi Noach, courtesy Booking.com
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -12,15 +13,16 @@ import (
 	"strings"
 )
 
-const (
-	DefaultInstancePort = 3306
-)
+const DefaultInstancePort = 3306
 
 var (
 	ipv4HostPortRegexp = regexp.MustCompile("^([^:]+):([0-9]+)$")
 	ipv4HostRegexp     = regexp.MustCompile("^([^:]+)$")
-	ipv6HostPortRegexp = regexp.MustCompile("^\\[([:0-9a-fA-F]+)\\]:([0-9]+)$") // e.g. [2001:db8:1f70::999:de8:7648:6e8]:3308
-	ipv6HostRegexp     = regexp.MustCompile("^([:0-9a-fA-F]+)$")                // e.g. 2001:db8:1f70::999:de8:7648:6e8
+
+	// e.g. [2001:db8:1f70::999:de8:7648:6e8]:3308
+	ipv6HostPortRegexp = regexp.MustCompile("^\\[([:0-9a-fA-F]+)\\]:([0-9]+)$") //nolint:gosimple
+	// e.g. 2001:db8:1f70::999:de8:7648:6e8
+	ipv6HostRegexp = regexp.MustCompile("^([:0-9a-fA-F]+)$")
 )
 
 // InstanceKey is an instance indicator, identified by hostname and port

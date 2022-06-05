@@ -2,6 +2,8 @@
 
 ### Requirements
 
+- `gh-ost` currently requires MySQL versions 5.7 and greater.
+
 - You will need to have one server serving Row Based Replication (RBR) format binary logs. Right now `FULL` row image is supported. `MINIMAL` to be supported in the near future. `gh-ost` prefers to work with replicas. You may [still have your master configured with Statement Based Replication](migrating-with-sbr.md) (SBR).
 
 - If you are using a replica, the table must have an identical schema between the master and replica.
