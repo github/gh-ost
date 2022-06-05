@@ -8,6 +8,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,7 +17,7 @@ import (
 	"github.com/github/gh-ost/go/logic"
 	"github.com/github/gh-ost/go/sql"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/outbrain/golib/log"
+	"github.com/openark/golib/log"
 
 	"golang.org/x/crypto/ssh/terminal"
 )
@@ -98,7 +99,7 @@ func main() {
 	flag.BoolVar(&migrationContext.AssumeRBR, "assume-rbr", false, "set to 'true' when you know for certain your server uses 'ROW' binlog_format. gh-ost is unable to tell, event after reading binlog_format, whether the replication process does indeed use 'ROW', and restarts replication to be certain RBR setting is applied. Such operation requires SUPER privileges which you might not have. Setting this flag avoids restarting replication and you can proceed to use gh-ost without SUPER privileges")
 	flag.BoolVar(&migrationContext.CutOverExponentialBackoff, "cut-over-exponential-backoff", false, "Wait exponentially longer intervals between failed cut-over attempts. Wait intervals obey a maximum configurable with 'exponential-backoff-max-interval').")
 	exponentialBackoffMaxInterval := flag.Int64("exponential-backoff-max-interval", 64, "Maximum number of seconds to wait between attempts when performing various operations with exponential backoff.")
-	chunkSize := flag.Int64("chunk-size", 1000, "amount of rows to handle in each iteration (allowed range: 100-100,000)")
+	chunkSize := flag.Int64("chunk-size", 1000, "amount of rows to handle in each iteration (allowed range: 10-100,000)")
 	dmlBatchSize := flag.Int64("dml-batch-size", 10, "batch size for DML events to apply in a single transaction (range 1-100)")
 	defaultRetries := flag.Int64("default-retries", 60, "Default number of retries for various operations before panicking")
 	cutOverLockTimeoutSeconds := flag.Int64("cut-over-lock-timeout-seconds", 3, "Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout)")
@@ -124,13 +125,14 @@ func main() {
 	flag.StringVar(&migrationContext.HooksHintMessage, "hooks-hint", "", "arbitrary message to be injected to hooks via GH_OST_HOOKS_HINT, for your convenience")
 	flag.StringVar(&migrationContext.HooksHintOwner, "hooks-hint-owner", "", "arbitrary name of owner to be injected to hooks via GH_OST_HOOKS_HINT_OWNER, for your convenience")
 	flag.StringVar(&migrationContext.HooksHintToken, "hooks-hint-token", "", "arbitrary token to be injected to hooks via GH_OST_HOOKS_HINT_TOKEN, for your convenience")
+	flag.Int64Var(&migrationContext.HooksStatusIntervalSec, "hooks-status-interval", 60, "how many seconds to wait between calling onStatus hook")
 
 	flag.UintVar(&migrationContext.ReplicaServerId, "replica-server-id", 99999, "server id used by gh-ost process. Default: 99999")
 
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")
 	flag.Int64Var(&migrationContext.CriticalLoadIntervalMilliseconds, "critical-load-interval-millis", 0, "When 0, migration immediately bails out upon meeting critical-load. When non-zero, a second check is done after given interval, and migration only bails out if 2nd check still meets critical load")
-	flag.Int64Var(&migrationContext.CriticalLoadHibernateSeconds, "critical-load-hibernate-seconds", 0, "When nonzero, critical-load does not panic and bail out; instead, gh-ost goes into hibernate for the specified duration. It will not read/write anything to from/to any server")
+	flag.Int64Var(&migrationContext.CriticalLoadHibernateSeconds, "critical-load-hibernate-seconds", 0, "When non-zero, critical-load does not panic and bail out; instead, gh-ost goes into hibernation for the specified duration. It will not read/write anything from/to any server")
 	quiet := flag.Bool("quiet", false, "quiet")
 	verbose := flag.Bool("verbose", false, "verbose")
 	debug := flag.Bool("debug", false, "debug mode (very verbose)")
@@ -188,6 +190,11 @@ func main() {
 			log.Fatalf("--database must be provided and database name must not be empty, or --alter must specify database name")
 		}
 	}
+
+	if err := flag.Set("database", url.QueryEscape(migrationContext.DatabaseName)); err != nil {
+		migrationContext.Log.Fatale(err)
+	}
+
 	if migrationContext.OriginalTableName == "" {
 		if parser.HasExplicitTable() {
 			migrationContext.OriginalTableName = parser.GetExplicitTable()

@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -15,14 +15,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/outbrain/golib/log"
+	"github.com/openark/golib/log"
 
-	"gopkg.in/gcfg.v1"
-	gcfgscanner "gopkg.in/gcfg.v1/scanner"
+	"github.com/go-ini/ini"
 )
 
 // RowsEstimateMethod is the type of row number estimation
@@ -141,6 +140,7 @@ type MigrationContext struct {
 	HooksHintMessage                    string
 	HooksHintOwner                      string
 	HooksHintToken                      string
+	HooksStatusIntervalSec              int64
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -552,8 +552,8 @@ func (this *MigrationContext) SetMaxLagMillisecondsThrottleThreshold(maxLagMilli
 }
 
 func (this *MigrationContext) SetChunkSize(chunkSize int64) {
-	if chunkSize < 100 {
-		chunkSize = 100
+	if chunkSize < 10 {
+		chunkSize = 10
 	}
 	if chunkSize > 100000 {
 		chunkSize = 100000
@@ -807,10 +807,39 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if this.ConfigFile == "" {
 		return nil
 	}
-	gcfg.RelaxedParserMode = true
-	gcfgscanner.RelaxedScannerMode = true
-	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
-		return fmt.Errorf("Error reading config file %s. Details: %s", this.ConfigFile, err.Error())
+	cfg, err := ini.Load(this.ConfigFile)
+	if err != nil {
+		return err
+	}
+
+	if cfg.Section("client").Haskey("user") {
+		this.config.Client.User = cfg.Section("client").Key("user").String()
+	}
+
+	if cfg.Section("client").Haskey("password") {
+		this.config.Client.Password = cfg.Section("client").Key("password").String()
+	}
+
+	if cfg.Section("osc").Haskey("chunk_size") {
+		this.config.Osc.Chunk_Size, err = cfg.Section("osc").Key("chunk_size").Int64()
+		if err != nil {
+			return fmt.Errorf("Unable to read osc chunk size: %s", err.Error())
+		}
+	}
+
+	if cfg.Section("osc").Haskey("max_load") {
+		this.config.Osc.Max_Load = cfg.Section("osc").Key("max_load").String()
+	}
+
+	if cfg.Section("osc").Haskey("replication_lag_query") {
+		this.config.Osc.Replication_Lag_Query = cfg.Section("osc").Key("replication_lag_query").String()
+	}
+
+	if cfg.Section("osc").Haskey("max_lag_millis") {
+		this.config.Osc.Max_Lag_Millis, err = cfg.Section("osc").Key("max_lag_millis").Int64()
+		if err != nil {
+			return fmt.Errorf("Unable to read max lag millis: %s", err.Error())
+		}
 	}
 
 	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull

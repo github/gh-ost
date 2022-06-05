@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -33,11 +33,13 @@ func EscapeName(name string) string {
 }
 
 func buildColumnsPreparedValues(columns *ColumnList) []string {
-	values := make([]string, columns.Len(), columns.Len())
+	values := make([]string, columns.Len())
 	for i, column := range columns.Columns() {
 		var token string
 		if column.timezoneConversion != nil {
 			token = fmt.Sprintf("convert_tz(?, '%s', '%s')", column.timezoneConversion.ToTimezone, "+00:00")
+		} else if column.enumToTextConversion {
+			token = fmt.Sprintf("ELT(?, %s)", column.EnumValues)
 		} else if column.Type == JSONColumnType {
 			token = "convert(? using utf8mb4)"
 		} else {
@@ -49,7 +51,7 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 }
 
 func buildPreparedValues(length int) []string {
-	values := make([]string, length, length)
+	values := make([]string, length)
 	for i := 0; i < length; i++ {
 		values[i] = "?"
 	}
@@ -57,7 +59,7 @@ func buildPreparedValues(length int) []string {
 }
 
 func duplicateNames(names []string) []string {
-	duplicate := make([]string, len(names), len(names))
+	duplicate := make([]string, len(names))
 	copy(duplicate, names)
 	return duplicate
 }
@@ -108,6 +110,8 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 		var setToken string
 		if column.timezoneConversion != nil {
 			setToken = fmt.Sprintf("%s=convert_tz(?, '%s', '%s')", EscapeName(column.Name), column.timezoneConversion.ToTimezone, "+00:00")
+		} else if column.enumToTextConversion {
+			setToken = fmt.Sprintf("%s=ELT(?, %s)", EscapeName(column.Name), column.EnumValues)
 		} else if column.Type == JSONColumnType {
 			setToken = fmt.Sprintf("%s=convert(? using utf8mb4)", EscapeName(column.Name))
 		} else {
@@ -257,8 +261,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
-	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
-	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
+	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames))
+	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames))
 	for i, column := range uniqueKeyColumns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
@@ -312,8 +316,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
-	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
-	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
+	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames))
+	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames))
 	for i, column := range uniqueKeyColumns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
@@ -364,7 +368,7 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 	tableName = EscapeName(tableName)
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
-	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
+	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumnNames))
 	for i, column := range uniqueKeyColumns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {

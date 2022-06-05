@@ -18,31 +18,31 @@ function build {
   GOOS=$3
   GOARCH=$4
 
-  if ! go version | egrep -q 'go(1\.1[56])' ; then
+  if ! go version | egrep -q 'go1\.(1[5-9]|[2-9][0-9]{1})' ; then
     echo "go version must be 1.15 or above"
     exit 1
   fi
 
-  # TODO: remove GO111MODULE once gh-ost uses Go modules
-  echo "Building ${osname} binary"
+  echo "Building ${osname}-${GOARCH} binary"
   export GOOS
   export GOARCH
-  GO111MODULE=off go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
+  go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
 
   if [ $? -ne 0 ]; then
-      echo "Build failed for ${osname}"
+      echo "Build failed for ${osname} ${GOARCH}."
       exit 1
   fi
 
-  (cd $buildpath && tar cfz ./gh-ost-binary-${osshort}-${timestamp}.tar.gz $target)
+  (cd $buildpath && tar cfz ./gh-ost-binary-${osshort}-${GOARCH}-${timestamp}.tar.gz $target)
 
   if [ "$GOOS" == "linux" ] ; then
     echo "Creating Distro full packages"
     builddir=$(setuptree)
     cp $buildpath/$target $builddir/gh-ost/usr/bin
     cd $buildpath
-    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'shlomi-noach <shlomi-noach+gh-ost-deb@github.com>' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t rpm --rpm-rpmbuild-define "_build_id_links none" .
-    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'shlomi-noach <shlomi-noach+gh-ost-deb@github.com>' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t deb --deb-no-default-config-files .
+    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'GitHub' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t rpm --rpm-rpmbuild-define "_build_id_links none" --rpm-os linux .
+    fpm -v "${RELEASE_VERSION}" --epoch 1 -f -s dir -n gh-ost -m 'GitHub' --description "GitHub's Online Schema Migrations for MySQL " --url "https://github.com/github/gh-ost" --vendor "GitHub" --license "Apache 2.0" -C $builddir/gh-ost --prefix=/ -t deb --deb-no-default-config-files .
+    cd -
   fi
 }
 
@@ -63,10 +63,15 @@ main() {
   mkdir -p ${buildpath}
   rm -rf ${buildpath:?}/*
   build GNU/Linux linux linux amd64
-  # build macOS osx darwin amd64
+  build GNU/Linux linux linux arm64
+  build macOS osx darwin amd64
+  build macOS osx darwin arm64
 
   echo "Binaries found in:"
   find $buildpath/gh-ost* -type f -maxdepth 1
+
+  echo "Checksums:"
+  (cd $buildpath && shasum -a256 gh-ost* 2>/dev/null)
 }
 
 main "$@"

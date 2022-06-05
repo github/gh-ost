@@ -1,6 +1,5 @@
 /*
-/*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -14,7 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/github/gh-ost/go/base"
-	"github.com/outbrain/golib/log"
+	"github.com/openark/golib/log"
 )
 
 const (
@@ -72,9 +71,7 @@ func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) [
 	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT_TOKEN=%s", this.migrationContext.HooksHintToken))
 	env = append(env, fmt.Sprintf("GH_OST_DRY_RUN=%t", this.migrationContext.Noop))
 
-	for _, variable := range extraVariables {
-		env = append(env, variable)
-	}
+	env = append(env, extraVariables...)
 	return env
 }
 

@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -13,8 +13,8 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
-	gomysql "github.com/siddontang/go-mysql/mysql"
-	"github.com/siddontang/go-mysql/replication"
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/replication"
 	"golang.org/x/net/context"
 )
 
@@ -64,7 +64,10 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 	this.currentCoordinates = coordinates
 	this.migrationContext.Log.Infof("Connecting binlog streamer at %+v", this.currentCoordinates)
 	// Start sync with specified binlog file and position
-	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{this.currentCoordinates.LogFile, uint32(this.currentCoordinates.LogPos)})
+	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{
+		Name: this.currentCoordinates.LogFile,
+		Pos:  uint32(this.currentCoordinates.LogPos),
+	})
 
 	return err
 }

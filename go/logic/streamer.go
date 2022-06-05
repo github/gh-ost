@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -16,7 +16,7 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 
-	"github.com/outbrain/golib/sqlutils"
+	"github.com/openark/golib/sqlutils"
 )
 
 type BinlogEventListener struct {
@@ -220,5 +220,4 @@ func (this *EventsStreamer) Close() (err error) {
 
 func (this *EventsStreamer) Teardown() {
 	this.db.Close()
-	return
 }
