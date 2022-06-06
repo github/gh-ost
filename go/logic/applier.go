@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	GhostChangelogComment  = "gh-ost changelog"
-	atomicCutOverMagicHint = "ghost-cut-over-sentry"
+	GhostChangelogTableComment = "gh-ost changelog"
+	atomicCutOverMagicHint     = "ghost-cut-over-sentry"
 )
 
 type dmlBuildResult struct {
@@ -243,7 +243,7 @@ func (this *Applier) CreateChangelogTable() error {
 		) auto_increment=256 comment='%s'`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
-		GhostChangelogComment,
+		GhostChangelogTableComment,
 	)
 	this.migrationContext.Log.Infof("Creating changelog table %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
