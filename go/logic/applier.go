@@ -1,5 +1,5 @@
 /*
-   Copyright 2021 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	GhostChangelogComment  = "gh-ost changelog"
 	atomicCutOverMagicHint = "ghost-cut-over-sentry"
 )
 
@@ -233,16 +234,16 @@ func (this *Applier) CreateChangelogTable() error {
 		return err
 	}
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s (
-			id bigint auto_increment,
+			id bigint unsigned auto_increment,
 			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			hint varchar(64) charset ascii not null,
 			value varchar(4096) charset ascii not null,
 			primary key(id),
 			unique key hint_uidx(hint)
-		) auto_increment=256
-		`,
+		) auto_increment=256 comment='%s'`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+		GhostChangelogComment,
 	)
 	this.migrationContext.Log.Infof("Creating changelog table %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
