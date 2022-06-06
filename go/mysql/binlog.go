@@ -1,5 +1,6 @@
 /*
    Copyright 2015 Shlomi Noach, courtesy Booking.com
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -7,29 +8,14 @@ package mysql
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
-)
-
-var detachPattern *regexp.Regexp
-
-func init() {
-	detachPattern, _ = regexp.Compile(`//([^/:]+):([\d]+)`) // e.g. `//binlog.01234:567890`
-}
-
-type BinlogType int
-
-const (
-	BinaryLog BinlogType = iota
-	RelayLog
 )
 
 // BinlogCoordinates described binary log coordinates in the form of log file & log position.
 type BinlogCoordinates struct {
 	LogFile string
 	LogPos  int64
-	Type    BinlogType
 }
 
 // ParseInstanceKey will parse an InstanceKey from a string representation such as 127.0.0.1:3306
@@ -61,7 +47,7 @@ func (this *BinlogCoordinates) Equals(other *BinlogCoordinates) bool {
 	if other == nil {
 		return false
 	}
-	return this.LogFile == other.LogFile && this.LogPos == other.LogPos && this.Type == other.Type
+	return this.LogFile == other.LogFile && this.LogPos == other.LogPos
 }
 
 // IsEmpty returns true if the log file is empty, unnamed
@@ -86,5 +72,5 @@ func (this *BinlogCoordinates) SmallerThanOrEquals(other *BinlogCoordinates) boo
 	if this.SmallerThan(other) {
 		return true
 	}
-	return this.LogFile == other.LogFile && this.LogPos == other.LogPos // No Type comparison
+	return this.LogFile == other.LogFile && this.LogPos == other.LogPos
 }
