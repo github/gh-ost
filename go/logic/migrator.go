@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -174,16 +174,6 @@ func (this *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 		this.migrationContext.PanicAbort <- err
 	}
 	return err
-}
-
-// executeAndThrottleOnError executes a given function. If it errors, it
-// throttles.
-func (this *Migrator) executeAndThrottleOnError(operation func() error) (err error) {
-	if err := operation(); err != nil {
-		this.throttler.throttle(nil)
-		return err
-	}
-	return nil
 }
 
 // consumeRowCopyComplete blocks on the rowCopyComplete channel once, and then
@@ -829,57 +819,57 @@ func (this *Migrator) initiateStatus() error {
 // migration, and as response to the "status" interactive command.
 func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
-	fmt.Fprintln(w, fmt.Sprintf("# Migrating %s.%s; Ghost table is %s.%s",
+	fmt.Fprintf(w, "# Migrating %s.%s; Ghost table is %s.%s\n",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.OriginalTableName),
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-	))
-	fmt.Fprintln(w, fmt.Sprintf("# Migrating %+v; inspecting %+v; executing on %+v",
+	)
+	fmt.Fprintf(w, "# Migrating %+v; inspecting %+v; executing on %+v\n",
 		*this.applier.connectionConfig.ImpliedKey,
 		*this.inspector.connectionConfig.ImpliedKey,
 		this.migrationContext.Hostname,
-	))
-	fmt.Fprintln(w, fmt.Sprintf("# Migration started at %+v",
+	)
+	fmt.Fprintf(w, "# Migration started at %+v\n",
 		this.migrationContext.StartTime.Format(time.RubyDate),
-	))
+	)
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
-	fmt.Fprintln(w, fmt.Sprintf("# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f",
+	fmt.Fprintf(w, "# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f\n",
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
 		atomic.LoadInt64(&this.migrationContext.DMLBatchSize),
 		maxLoad.String(),
 		criticalLoad.String(),
 		this.migrationContext.GetNiceRatio(),
-	))
+	)
 	if this.migrationContext.ThrottleFlagFile != "" {
 		setIndicator := ""
 		if base.FileExists(this.migrationContext.ThrottleFlagFile) {
 			setIndicator = "[set]"
 		}
-		fmt.Fprintln(w, fmt.Sprintf("# throttle-flag-file: %+v %+v",
+		fmt.Fprintf(w, "# throttle-flag-file: %+v %+v\n",
 			this.migrationContext.ThrottleFlagFile, setIndicator,
-		))
+		)
 	}
 	if this.migrationContext.ThrottleAdditionalFlagFile != "" {
 		setIndicator := ""
 		if base.FileExists(this.migrationContext.ThrottleAdditionalFlagFile) {
 			setIndicator = "[set]"
 		}
-		fmt.Fprintln(w, fmt.Sprintf("# throttle-additional-flag-file: %+v %+v",
+		fmt.Fprintf(w, "# throttle-additional-flag-file: %+v %+v\n",
 			this.migrationContext.ThrottleAdditionalFlagFile, setIndicator,
-		))
+		)
 	}
 	if throttleQuery := this.migrationContext.GetThrottleQuery(); throttleQuery != "" {
-		fmt.Fprintln(w, fmt.Sprintf("# throttle-query: %+v",
+		fmt.Fprintf(w, "# throttle-query: %+v\n",
 			throttleQuery,
-		))
+		)
 	}
 	if throttleControlReplicaKeys := this.migrationContext.GetThrottleControlReplicaKeys(); throttleControlReplicaKeys.Len() > 0 {
-		fmt.Fprintln(w, fmt.Sprintf("# throttle-control-replicas count: %+v",
+		fmt.Fprintf(w, "# throttle-control-replicas count: %+v\n",
 			throttleControlReplicaKeys.Len(),
-		))
+		)
 	}
 
 	if this.migrationContext.PostponeCutOverFlagFile != "" {
@@ -887,20 +877,20 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 		if base.FileExists(this.migrationContext.PostponeCutOverFlagFile) {
 			setIndicator = "[set]"
 		}
-		fmt.Fprintln(w, fmt.Sprintf("# postpone-cut-over-flag-file: %+v %+v",
+		fmt.Fprintf(w, "# postpone-cut-over-flag-file: %+v %+v\n",
 			this.migrationContext.PostponeCutOverFlagFile, setIndicator,
-		))
+		)
 	}
 	if this.migrationContext.PanicFlagFile != "" {
-		fmt.Fprintln(w, fmt.Sprintf("# panic-flag-file: %+v",
+		fmt.Fprintf(w, "# panic-flag-file: %+v\n",
 			this.migrationContext.PanicFlagFile,
-		))
+		)
 	}
-	fmt.Fprintln(w, fmt.Sprintf("# Serving on unix socket: %+v",
+	fmt.Fprintf(w, "# Serving on unix socket: %+v\n",
 		this.migrationContext.ServeSocketFile,
-	))
+	)
 	if this.migrationContext.ServeTCPPort != 0 {
-		fmt.Fprintln(w, fmt.Sprintf("# Serving on TCP port: %+v", this.migrationContext.ServeTCPPort))
+		fmt.Fprintf(w, "# Serving on TCP port: %+v\n", this.migrationContext.ServeTCPPort)
 	}
 }
 
@@ -1022,7 +1012,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
 
-	if elapsedSeconds%60 == 0 {
+	if elapsedSeconds%this.migrationContext.HooksStatusIntervalSec == 0 {
 		this.hooksExecutor.onStatus(status)
 	}
 }
@@ -1201,7 +1191,6 @@ func (this *Migrator) iterateChunks() error {
 		// Enqueue copy operation; to be executed by executeWriteFuncs()
 		this.copyRowsQueue <- copyRowsFunc
 	}
-	return nil
 }
 
 func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
@@ -1307,7 +1296,6 @@ func (this *Migrator) executeWriteFuncs() error {
 			}
 		}
 	}
-	return nil
 }
 
 // finalCleanup takes actions at very end of migration, dropping tables etc.

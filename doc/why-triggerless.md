@@ -7,7 +7,7 @@ Existing MySQL schema migration tools:
 - [LHM](https://github.com/soundcloud/lhm)
 - [oak-online-alter-table](https://github.com/shlomi-noach/openarkkit)
 
-are all using [triggers](http://dev.mysql.com/doc/refman/5.6/en/triggers.html) to propagate live changes on your table onto a ghost/shadow table that is slowly being synchronized. The tools not all work the same: while most use a synchronous approach (all changes applied on the ghost table), the Facebook tool uses an asynchronous approach (changes are appended to a changelog table, later reviewed and applied on ghost table).
+are all using [triggers](https://dev.mysql.com/doc/refman/5.7/en/triggers.html) to propagate live changes on your table onto a ghost/shadow table that is slowly being synchronized. The tools not all work the same: while most use a synchronous approach (all changes applied on the ghost table), the Facebook tool uses an asynchronous approach (changes are appended to a changelog table, later reviewed and applied on ghost table).
 
 Use of triggers simplifies a lot of the flow in doing a live table migration, but also poses some limitations or difficulties. Here are reasons why we choose to [design a triggerless solution](triggerless-design.md) to schema migrations.
 
