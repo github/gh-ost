@@ -46,6 +46,7 @@ type Throttler struct {
 	migrationContext  *base.MigrationContext
 	applier           *Applier
 	httpClient        *http.Client
+	httpClientTimeout time.Duration
 	inspector         *Inspector
 	finishedMigrating int64
 }
@@ -55,6 +56,7 @@ func NewThrottler(migrationContext *base.MigrationContext, applier *Applier, ins
 		migrationContext:  migrationContext,
 		applier:           applier,
 		httpClient:        &http.Client{},
+		httpClientTimeout: time.Duration(migrationContext.ThrottleHTTPTimeoutMillis) * time.Millisecond,
 		inspector:         inspector,
 		finishedMigrating: 0,
 	}
@@ -280,7 +282,6 @@ func (this *Throttler) criticalLoadIsMet() (met bool, variableName string, value
 
 // collectReplicationLag reads the latest changelog heartbeat value
 func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<- bool) {
-	httpTimeout := time.Duration(this.migrationContext.ThrottleHTTPTimeoutMillis) * time.Millisecond
 	collectFunc := func() (sleep bool, err error) {
 		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
 			return true, nil
@@ -290,7 +291,7 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 			return true, nil
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), this.httpClientTimeout)
 		defer cancel()
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
