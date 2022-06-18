@@ -315,8 +315,8 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 
 	firstThrottlingCollected <- true
 
-	interval := time.Duration(this.migrationContext.ThrottleHTTPIntervalMillis) * time.Millisecond
-	ticker := time.Tick(interval)
+	collectInterval := time.Duration(this.migrationContext.ThrottleHTTPIntervalMillis) * time.Millisecond
+	ticker := time.Tick(collectInterval)
 	for range ticker {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
