@@ -43,6 +43,7 @@ const frenoMagicHint = "freno"
 // Throttler collects metrics related to throttling and makes informed decision
 // whether throttling should take place.
 type Throttler struct {
+	appVersion        string
 	migrationContext  *base.MigrationContext
 	applier           *Applier
 	httpClient        *http.Client
@@ -51,8 +52,9 @@ type Throttler struct {
 	finishedMigrating int64
 }
 
-func NewThrottler(migrationContext *base.MigrationContext, applier *Applier, inspector *Inspector) *Throttler {
+func NewThrottler(migrationContext *base.MigrationContext, applier *Applier, inspector *Inspector, appVersion string) *Throttler {
 	return &Throttler{
+		appVersion:        appVersion,
 		migrationContext:  migrationContext,
 		applier:           applier,
 		httpClient:        &http.Client{},
@@ -298,6 +300,7 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 		if err != nil {
 			return false, err
 		}
+		req.Header.Set("User-Agent", fmt.Sprintf("gh-ost/%s", this.appVersion))
 
 		resp, err := this.httpClient.Do(req)
 		if err != nil {

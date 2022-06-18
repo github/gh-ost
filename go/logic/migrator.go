@@ -61,6 +61,7 @@ const (
 
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
+	appVersion       string
 	parser           *sql.AlterTableParser
 	inspector        *Inspector
 	applier          *Applier
@@ -86,8 +87,9 @@ type Migrator struct {
 	finishedMigrating int64
 }
 
-func NewMigrator(context *base.MigrationContext) *Migrator {
+func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 	migrator := &Migrator{
+		appVersion:                 appVersion,
 		migrationContext:           context,
 		parser:                     sql.NewAlterTableParser(),
 		ghostTableMigrated:         make(chan bool),
@@ -1064,7 +1066,7 @@ func (this *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (this *Migrator) initiateThrottler() error {
-	this.throttler = NewThrottler(this.migrationContext, this.applier, this.inspector)
+	this.throttler = NewThrottler(this.migrationContext, this.applier, this.inspector, this.appVersion)
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	this.migrationContext.Log.Infof("Waiting for first throttle metrics to be collected")
