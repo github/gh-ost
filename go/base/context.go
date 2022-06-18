@@ -186,7 +186,7 @@ type MigrationContext struct {
 	etaNanoseonds                          int64
 	ThrottleHTTPIntervalMillis             int64
 	ThrottleHTTPStatusCode                 int64
-	ThrottleHTTPTimeout                    time.Duration
+	ThrottleHTTPTimeoutMillis              int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
 	TotalDMLEventsApplied                  int64
@@ -639,20 +639,6 @@ func (this *MigrationContext) SetThrottleHTTP(throttleHTTP string) {
 	defer this.throttleHTTPMutex.Unlock()
 
 	this.throttleHTTP = throttleHTTP
-}
-
-func (this *MigrationContext) SetThrottleHTTPTimeout(timeoutMillis int64) {
-	this.throttleHTTPMutex.Lock()
-	defer this.throttleHTTPMutex.Unlock()
-
-	this.ThrottleHTTPTimeout = time.Duration(timeoutMillis) * time.Millisecond
-}
-
-func (this *MigrationContext) GetThrottleHTTPTimeout() time.Duration {
-	this.throttleHTTPMutex.Lock()
-	defer this.throttleHTTPMutex.Unlock()
-
-	return this.ThrottleHTTPTimeout
 }
 
 func (this *MigrationContext) SetIgnoreHTTPErrors(ignoreHTTPErrors bool) {

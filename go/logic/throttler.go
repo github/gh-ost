@@ -289,7 +289,8 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 			return true, nil
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), this.migrationContext.GetThrottleHTTPTimeout())
+		httpTimeout := time.Duration(this.migrationContext.ThrottleHTTPTimeoutMillis) * time.Millisecond
+		ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
 		defer cancel()
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
