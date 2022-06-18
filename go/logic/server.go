@@ -303,10 +303,10 @@ help                                     # This message
 				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetThrottleHTTPInterval())
 				return NoPrintStatusRule, nil
 			}
-			if timeoutMillis, err := strconv.ParseInt(arg, 10, 64); err != nil {
+			if intervalMillis, err := strconv.ParseInt(arg, 10, 64); err != nil {
 				return NoPrintStatusRule, err
 			} else {
-				this.migrationContext.SetThrottleHTTPInterval(timeoutMillis)
+				this.migrationContext.SetThrottleHTTPInterval(intervalMillis)
 				return ForcePrintStatusAndHintRule, nil
 			}
 		}
@@ -316,10 +316,10 @@ help                                     # This message
 				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetThrottleHTTPTimeout())
 				return NoPrintStatusRule, nil
 			}
-			if timeout, err := strconv.ParseInt(arg, 10, 64); err != nil {
+			if timeoutMillis, err := strconv.ParseInt(arg, 10, 64); err != nil {
 				return NoPrintStatusRule, err
 			} else {
-				this.migrationContext.SetThrottleHTTPTimeout(timeout)
+				this.migrationContext.SetThrottleHTTPTimeout(timeoutMillis)
 				return ForcePrintStatusAndHintRule, nil
 			}
 		}
