@@ -144,26 +144,28 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 	case "help":
 		{
 			fmt.Fprint(writer, `available commands:
-status                               # Print a detailed status message
-sup                                  # Print a short status message
-coordinates                          # Print the currently inspected coordinates
-applier                              # Print the hostname of the applier
-inspector                            # Print the hostname of the inspector
-chunk-size=<newsize>                 # Set a new chunk-size
-dml-batch-size=<newsize>             # Set a new dml-batch-size
-nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
-critical-load=<load>                 # Set a new set of max-load thresholds
-max-lag-millis=<max-lag>             # Set a new replication lag threshold
-replication-lag-query=<query>        # Set a new query that determines replication lag (no quotes)
-max-load=<load>                      # Set a new set of max-load thresholds
-throttle-query=<query>               # Set a new throttle-query (no quotes)
-throttle-http=<URL>                  # Set a new throttle URL
-throttle-control-replicas=<replicas> # Set a new comma delimited list of throttle control replicas
-throttle                             # Force throttling
-no-throttle                          # End forced throttling (other throttling may still apply)
-unpostpone                           # Bail out a cut-over postpone; proceed to cut-over
-panic                                # panic and quit without cleanup
-help                                 # This message
+status                                   # Print a detailed status message
+sup                                      # Print a short status message
+coordinates                              # Print the currently inspected coordinates
+applier                                  # Print the hostname of the applier
+inspector                                # Print the hostname of the inspector
+chunk-size=<newsize>                     # Set a new chunk-size
+dml-batch-size=<newsize>                 # Set a new dml-batch-size
+nice-ratio=<ratio>                       # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
+critical-load=<load>                     # Set a new set of max-load thresholds
+max-lag-millis=<max-lag>                 # Set a new replication lag threshold
+replication-lag-query=<query>            # Set a new query that determines replication lag (no quotes)
+max-load=<load>                          # Set a new set of max-load thresholds
+throttle-query=<query>                   # Set a new throttle-query (no quotes)
+throttle-http=<URL>                      # Set a new throttle URL
+throttle-http-interval-millis=<interval> # Set throttler HTTP polling interval in milliseconds
+throttle-http-timeout-millis=<interval>  # Set throttler HTTP timeout in milliseconds
+throttle-control-replicas=<replicas>     # Set a new comma delimited list of throttle control replicas
+throttle                                 # Force throttling
+no-throttle                              # End forced throttling (other throttling may still apply)
+unpostpone                               # Bail out a cut-over postpone; proceed to cut-over
+panic                                    # panic and quit without cleanup
+help                                     # This message
 - use '?' (question mark) as argument to get info rather than set. e.g. "max-load=?" will just print out current max-load.
 `)
 		}
@@ -201,10 +203,10 @@ help                                 # This message
 				fmt.Fprintf(writer, "%+v\n", atomic.LoadInt64(&this.migrationContext.ChunkSize))
 				return NoPrintStatusRule, nil
 			}
-			if chunkSize, err := strconv.Atoi(arg); err != nil {
+			if chunkSize, err := strconv.ParseInt(arg, 10, 64); err != nil {
 				return NoPrintStatusRule, err
 			} else {
-				this.migrationContext.SetChunkSize(int64(chunkSize))
+				this.migrationContext.SetChunkSize(chunkSize)
 				return ForcePrintStatusAndHintRule, nil
 			}
 		}
@@ -214,10 +216,10 @@ help                                 # This message
 				fmt.Fprintf(writer, "%+v\n", atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
 				return NoPrintStatusRule, nil
 			}
-			if dmlBatchSize, err := strconv.Atoi(arg); err != nil {
+			if dmlBatchSize, err := strconv.ParseInt(arg, 10, 64); err != nil {
 				return NoPrintStatusRule, err
 			} else {
-				this.migrationContext.SetDMLBatchSize(int64(dmlBatchSize))
+				this.migrationContext.SetDMLBatchSize(dmlBatchSize)
 				return ForcePrintStatusAndHintRule, nil
 			}
 		}
@@ -227,10 +229,10 @@ help                                 # This message
 				fmt.Fprintf(writer, "%+v\n", atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold))
 				return NoPrintStatusRule, nil
 			}
-			if maxLagMillis, err := strconv.Atoi(arg); err != nil {
+			if maxLagMillis, err := strconv.ParseInt(arg, 10, 64); err != nil {
 				return NoPrintStatusRule, err
 			} else {
-				this.migrationContext.SetMaxLagMillisecondsThrottleThreshold(int64(maxLagMillis))
+				this.migrationContext.SetMaxLagMillisecondsThrottleThreshold(maxLagMillis)
 				return ForcePrintStatusAndHintRule, nil
 			}
 		}
@@ -294,6 +296,32 @@ help                                 # This message
 			this.migrationContext.SetThrottleHTTP(arg)
 			fmt.Fprintf(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
+		}
+	case "throttle-http-interval-millis":
+		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetThrottleHTTPInterval())
+				return NoPrintStatusRule, nil
+			}
+			if timeoutMillis, err := strconv.ParseInt(arg, 10, 64); err != nil {
+				return NoPrintStatusRule, err
+			} else {
+				this.migrationContext.SetThrottleHTTPInterval(timeoutMillis)
+				return ForcePrintStatusAndHintRule, nil
+			}
+		}
+	case "throttle-http-timeout-millis":
+		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetThrottleHTTPTimeout())
+				return NoPrintStatusRule, nil
+			}
+			if timeout, err := strconv.ParseInt(arg, 10, 64); err != nil {
+				return NoPrintStatusRule, err
+			} else {
+				this.migrationContext.SetThrottleHTTPTimeout(timeout)
+				return ForcePrintStatusAndHintRule, nil
+			}
 		}
 	case "throttle-control-replicas":
 		{
