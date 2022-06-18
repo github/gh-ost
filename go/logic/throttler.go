@@ -289,7 +289,6 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 			return true, nil
 		}
 
-		// make the HTTP context timeout equal to the ticker interval
 		ctx, cancel := context.WithTimeout(context.Background(), this.migrationContext.GetThrottleHTTPTimeout())
 		defer cancel()
 
