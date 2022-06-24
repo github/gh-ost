@@ -26,6 +26,7 @@ type ChangelogState string
 const (
 	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
+	ReadMigrationRangeValues                  = "ReadMigrationRangeValues"
 )
 
 func ReadChangelogState(s string) ChangelogState {
@@ -234,6 +235,8 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
 		}
+	case ReadMigrationRangeValues:
+		// no-op event
 	default:
 		{
 			return fmt.Errorf("Unknown changelog state: %+v", changelogState)
