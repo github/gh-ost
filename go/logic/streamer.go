@@ -180,6 +180,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	var successiveFailures int64
 	var lastAppliedRowsEventHint mysql.BinlogCoordinates
 	for {
+		this.migrationContext.Log.Debugf("Am I gonna stop??, %v", canStopStreaming())
 		if canStopStreaming() {
 			return nil
 		}
