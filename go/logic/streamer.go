@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/github/gh-ost/go/base"
@@ -222,4 +223,5 @@ func (this *EventsStreamer) Teardown() {
 	this.migrationContext.Log.Debugf("Tearing down...")
 	this.db.Close()
 	this.Close()
+	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 }
