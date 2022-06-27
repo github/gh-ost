@@ -219,5 +219,7 @@ func (this *EventsStreamer) Close() (err error) {
 }
 
 func (this *EventsStreamer) Teardown() {
+	this.migrationContext.Log.Debugf("Tearing down...")
 	this.db.Close()
+	this.Close()
 }
