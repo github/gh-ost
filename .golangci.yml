@@ -9,6 +9,8 @@ linters:
   enable:
     - gosimple
     - govet
+    - noctx
     - rowserrcheck
     - sqlclosecheck
     - unused
+    
