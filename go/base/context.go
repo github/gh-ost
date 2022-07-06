@@ -82,6 +82,8 @@ type MigrationContext struct {
 	AlterStatement        string
 	AlterStatementOptions string // anything following the 'ALTER TABLE [schema.]table' from AlterStatement
 
+	countMutex               sync.Mutex
+	countTableRowsCancelFunc func()
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
 	AllowedRunningOnMaster   bool
@@ -426,6 +428,36 @@ func (this *MigrationContext) IsTransactionalTable() bool {
 		}
 	}
 	return false
+}
+
+// SetCountTableRowsCancelFunc sets the cancel function for the CountTableRows query context
+func (this *MigrationContext) SetCountTableRowsCancelFunc(f func()) {
+	this.countMutex.Lock()
+	defer this.countMutex.Unlock()
+
+	this.countTableRowsCancelFunc = f
+}
+
+// IsCountingTableRows returns true if the migration has a table count query running
+func (this *MigrationContext) IsCountingTableRows() bool {
+	this.countMutex.Lock()
+	defer this.countMutex.Unlock()
+
+	return this.countTableRowsCancelFunc != nil
+}
+
+// CancelTableRowsCount cancels the CountTableRows query context. It is safe to
+// call function even when IsCountingTableRows is false.
+func (this *MigrationContext) CancelTableRowsCount() {
+	this.countMutex.Lock()
+	defer this.countMutex.Unlock()
+
+	if this.countTableRowsCancelFunc == nil {
+		return
+	}
+
+	this.countTableRowsCancelFunc()
+	this.countTableRowsCancelFunc = nil
 }
 
 // ElapsedTime returns time since very beginning of the process
