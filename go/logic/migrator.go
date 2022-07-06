@@ -6,6 +6,7 @@
 package logic
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -295,8 +296,8 @@ func (this *Migrator) countTableRows() (err error) {
 		return nil
 	}
 
-	countRowsFunc := func() error {
-		if err := this.inspector.CountTableRows(); err != nil {
+	countRowsFunc := func(ctx context.Context) error {
+		if err := this.inspector.CountTableRows(ctx); err != nil {
 			return err
 		}
 		if err := this.hooksExecutor.onRowCountComplete(); err != nil {
@@ -306,12 +307,17 @@ func (this *Migrator) countTableRows() (err error) {
 	}
 
 	if this.migrationContext.ConcurrentCountTableRows {
+		// store a cancel func so we can stop this query before a cut over
+		rowCountContext, rowCountCancel := context.WithCancel(context.Background())
+		this.migrationContext.SetCountTableRowsCancelFunc(rowCountCancel)
+
 		this.migrationContext.Log.Infof("As instructed, counting rows in the background; meanwhile I will use an estimated count, and will update it later on")
-		go countRowsFunc()
+		go countRowsFunc(rowCountContext)
+
 		// and we ignore errors, because this turns to be a background job
 		return nil
 	}
-	return countRowsFunc()
+	return countRowsFunc(context.Background())
 }
 
 func (this *Migrator) createFlagFiles() (err error) {
@@ -415,6 +421,10 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	this.printStatus(ForcePrintStatusRule)
 
+	if this.migrationContext.IsCountingTableRows() {
+		this.migrationContext.Log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
+		this.migrationContext.CancelTableRowsCount()
+	}
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
 	}
