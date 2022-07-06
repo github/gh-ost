@@ -27,6 +27,7 @@ type ChangelogState string
 const (
 	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
 	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
+	ReadMigrationRangeValues                  = "ReadMigrationRangeValues"
 )
 
 func ReadChangelogState(s string) ChangelogState {
@@ -62,6 +63,7 @@ const (
 
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
+	appVersion       string
 	parser           *sql.AlterTableParser
 	inspector        *Inspector
 	applier          *Applier
@@ -87,8 +89,9 @@ type Migrator struct {
 	finishedMigrating int64
 }
 
-func NewMigrator(context *base.MigrationContext) *Migrator {
+func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 	migrator := &Migrator{
+		appVersion:                 appVersion,
 		migrationContext:           context,
 		parser:                     sql.NewAlterTableParser(),
 		ghostTableMigrated:         make(chan bool),
@@ -235,6 +238,8 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
 		}
+	case ReadMigrationRangeValues:
+		// no-op event
 	default:
 		{
 			return fmt.Errorf("Unknown changelog state: %+v", changelogState)
@@ -544,19 +549,19 @@ func (this *Migrator) cutOver() (err error) {
 			}
 		}
 	}
-	if this.migrationContext.CutOverType == base.CutOverAtomic {
+
+	switch this.migrationContext.CutOverType {
+	case base.CutOverAtomic:
 		// Atomic solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
-		err := this.atomicCutOver()
-		this.handleCutOverResult(err)
-		return err
+		err = this.atomicCutOver()
+	case base.CutOverTwoStep:
+		err = this.cutOverTwoStep()
+	default:
+		return this.migrationContext.Log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 	}
-	if this.migrationContext.CutOverType == base.CutOverTwoStep {
-		err := this.cutOverTwoStep()
-		this.handleCutOverResult(err)
-		return err
-	}
-	return this.migrationContext.Log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
+	this.handleCutOverResult(err)
+	return err
 }
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
@@ -1016,7 +1021,8 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
 
-	if elapsedSeconds%this.migrationContext.HooksStatusIntervalSec == 0 {
+	hooksStatusIntervalSec := this.migrationContext.HooksStatusIntervalSec
+	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {
 		this.hooksExecutor.onStatus(status)
 	}
 }
@@ -1074,7 +1080,7 @@ func (this *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (this *Migrator) initiateThrottler() error {
-	this.throttler = NewThrottler(this.migrationContext, this.applier, this.inspector)
+	this.throttler = NewThrottler(this.migrationContext, this.applier, this.inspector, this.appVersion)
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	this.migrationContext.Log.Infof("Waiting for first throttle metrics to be collected")
