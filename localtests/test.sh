@@ -224,6 +224,8 @@ test_single() {
   ghost_checksum=$(cat $ghost_content_output_file | md5sum)
 
   if [ "$orig_checksum" != "$ghost_checksum" ] ; then
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test" -ss > $orig_content_output_file
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho" -ss > $ghost_content_output_file
     echo "ERROR $test_name: checksum mismatch"
     echo "---"
     diff $orig_content_output_file $ghost_content_output_file
