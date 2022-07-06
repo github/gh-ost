@@ -1,4 +1,4 @@
-FROM golang:1.16.4
+FROM golang:1.17
 LABEL maintainer="github@github.com"
 
 RUN apt-get update
