@@ -87,10 +87,10 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 
 	for _, listener := range this.listeners {
 		listener := listener
-		if strings.ToLower(listener.databaseName) != strings.ToLower(binlogEvent.DatabaseName) {
+		if !strings.EqualFold(listener.databaseName, binlogEvent.DatabaseName) {
 			continue
 		}
-		if strings.ToLower(listener.tableName) != strings.ToLower(binlogEvent.TableName) {
+		if !strings.EqualFold(listener.tableName, binlogEvent.TableName) {
 			continue
 		}
 		if listener.async {
@@ -123,10 +123,7 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 
 // initBinlogReader creates and connects the reader: we hook up to a MySQL server as a replica
 func (this *EventsStreamer) initBinlogReader(binlogCoordinates *mysql.BinlogCoordinates) error {
-	goMySQLReader, err := binlog.NewGoMySQLReader(this.migrationContext)
-	if err != nil {
-		return err
-	}
+	goMySQLReader := binlog.NewGoMySQLReader(this.migrationContext)
 	if err := goMySQLReader.ConnectBinlogStreamer(*binlogCoordinates); err != nil {
 		return err
 	}

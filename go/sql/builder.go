@@ -501,6 +501,9 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	}
 
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
+	if err != nil {
+		return "", sharedArgs, uniqueKeyArgs, err
+	}
 	result = fmt.Sprintf(`
  			update /* gh-ost %s.%s */
  					%s.%s

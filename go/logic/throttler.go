@@ -6,6 +6,7 @@
 package logic
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -42,16 +43,22 @@ const frenoMagicHint = "freno"
 // Throttler collects metrics related to throttling and makes informed decision
 // whether throttling should take place.
 type Throttler struct {
+	appVersion        string
 	migrationContext  *base.MigrationContext
 	applier           *Applier
+	httpClient        *http.Client
+	httpClientTimeout time.Duration
 	inspector         *Inspector
 	finishedMigrating int64
 }
 
-func NewThrottler(migrationContext *base.MigrationContext, applier *Applier, inspector *Inspector) *Throttler {
+func NewThrottler(migrationContext *base.MigrationContext, applier *Applier, inspector *Inspector, appVersion string) *Throttler {
 	return &Throttler{
+		appVersion:        appVersion,
 		migrationContext:  migrationContext,
 		applier:           applier,
+		httpClient:        &http.Client{},
+		httpClientTimeout: time.Duration(migrationContext.ThrottleHTTPTimeoutMillis) * time.Millisecond,
 		inspector:         inspector,
 		finishedMigrating: 0,
 	}
@@ -161,8 +168,9 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 	collectFunc()
 	firstThrottlingCollected <- true
 
-	ticker := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
-	for range ticker {
+	ticker := time.NewTicker(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -237,12 +245,14 @@ func (this *Throttler) collectControlReplicasLag() {
 		}
 		this.migrationContext.SetControlReplicasLagResult(readControlReplicasLag())
 	}
-	aggressiveTicker := time.Tick(100 * time.Millisecond)
+
 	relaxedFactor := 10
 	counter := 0
 	shouldReadLagAggressively := false
 
-	for range aggressiveTicker {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -285,7 +295,17 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 		if url == "" {
 			return true, nil
 		}
-		resp, err := http.Head(url)
+
+		ctx, cancel := context.WithTimeout(context.Background(), this.httpClientTimeout)
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+		if err != nil {
+			return false, err
+		}
+		req.Header.Set("User-Agent", fmt.Sprintf("gh-ost/%s", this.appVersion))
+
+		resp, err := this.httpClient.Do(req)
 		if err != nil {
 			return false, err
 		}
@@ -303,8 +323,10 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 
 	firstThrottlingCollected <- true
 
-	ticker := time.Tick(100 * time.Millisecond)
-	for range ticker {
+	collectInterval := time.Duration(this.migrationContext.ThrottleHTTPIntervalMillis) * time.Millisecond
+	ticker := time.NewTicker(collectInterval)
+	defer ticker.Stop()
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -423,8 +445,9 @@ func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 		this.collectGeneralThrottleMetrics()
 		firstThrottlingCollected <- true
 
-		throttlerMetricsTick := time.Tick(1 * time.Second)
-		for range throttlerMetricsTick {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}
@@ -435,9 +458,7 @@ func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 }
 
 // initiateThrottlerChecks initiates the throttle ticker and sets the basic behavior of throttling.
-func (this *Throttler) initiateThrottlerChecks() error {
-	throttlerTick := time.Tick(100 * time.Millisecond)
-
+func (this *Throttler) initiateThrottlerChecks() {
 	throttlerFunction := func() {
 		alreadyThrottling, currentReason, _ := this.migrationContext.IsThrottled()
 		shouldThrottle, throttleReason, throttleReasonHint := this.shouldThrottle()
@@ -454,14 +475,15 @@ func (this *Throttler) initiateThrottlerChecks() error {
 		this.migrationContext.SetThrottled(shouldThrottle, throttleReason, throttleReasonHint)
 	}
 	throttlerFunction()
-	for range throttlerTick {
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
-			return nil
+			return
 		}
 		throttlerFunction()
 	}
-
-	return nil
 }
 
 // throttle sees if throttling needs take place, and if so, continuously sleeps (blocks)

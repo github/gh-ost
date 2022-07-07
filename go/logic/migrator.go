@@ -6,6 +6,7 @@
 package logic
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -26,7 +27,8 @@ type ChangelogState string
 const (
 	AllEventsUpToLockProcessed ChangelogState = "AllEventsUpToLockProcessed"
 	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
-	Migrated                   ChangelogState = "Migrated"
+  Migrated                   ChangelogState = "Migrated"
+	ReadMigrationRangeValues   ChangelogState = "ReadMigrationRangeValues"
 )
 
 func ReadChangelogState(s string) ChangelogState {
@@ -62,6 +64,7 @@ const (
 
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
+	appVersion       string
 	parser           *sql.AlterTableParser
 	inspector        *Inspector
 	applier          *Applier
@@ -87,8 +90,9 @@ type Migrator struct {
 	finishedMigrating int64
 }
 
-func NewMigrator(context *base.MigrationContext) *Migrator {
+func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 	migrator := &Migrator{
+		appVersion:                 appVersion,
 		migrationContext:           context,
 		parser:                     sql.NewAlterTableParser(),
 		ghostTableMigrated:         make(chan bool),
@@ -237,6 +241,8 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
 		}
+	case ReadMigrationRangeValues:
+		// no-op event
 	default:
 		{
 			return fmt.Errorf("Unknown changelog state: %+v", changelogState)
@@ -293,8 +299,8 @@ func (this *Migrator) countTableRows() (err error) {
 		return nil
 	}
 
-	countRowsFunc := func() error {
-		if err := this.inspector.CountTableRows(); err != nil {
+	countRowsFunc := func(ctx context.Context) error {
+		if err := this.inspector.CountTableRows(ctx); err != nil {
 			return err
 		}
 		if err := this.hooksExecutor.onRowCountComplete(); err != nil {
@@ -304,12 +310,17 @@ func (this *Migrator) countTableRows() (err error) {
 	}
 
 	if this.migrationContext.ConcurrentCountTableRows {
+		// store a cancel func so we can stop this query before a cut over
+		rowCountContext, rowCountCancel := context.WithCancel(context.Background())
+		this.migrationContext.SetCountTableRowsCancelFunc(rowCountCancel)
+
 		this.migrationContext.Log.Infof("As instructed, counting rows in the background; meanwhile I will use an estimated count, and will update it later on")
-		go countRowsFunc()
+		go countRowsFunc(rowCountContext)
+
 		// and we ignore errors, because this turns to be a background job
 		return nil
 	}
-	return countRowsFunc()
+	return countRowsFunc(context.Background())
 }
 
 func (this *Migrator) createFlagFiles() (err error) {
@@ -413,6 +424,10 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	this.printStatus(ForcePrintStatusRule)
 
+	if this.migrationContext.IsCountingTableRows() {
+		this.migrationContext.Log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
+		this.migrationContext.CancelTableRowsCount()
+	}
 	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
 		return err
 	}
@@ -537,19 +552,19 @@ func (this *Migrator) cutOver() (err error) {
 			}
 		}
 	}
-	if this.migrationContext.CutOverType == base.CutOverAtomic {
+
+	switch this.migrationContext.CutOverType {
+	case base.CutOverAtomic:
 		// Atomic solution: we use low timeout and multiple attempts. But for
 		// each failed attempt, we throttle until replication lag is back to normal
-		err := this.atomicCutOver()
-		this.handleCutOverResult(err)
-		return err
+		err = this.atomicCutOver()
+	case base.CutOverTwoStep:
+		err = this.cutOverTwoStep()
+	default:
+		return this.migrationContext.Log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 	}
-	if this.migrationContext.CutOverType == base.CutOverTwoStep {
-		err := this.cutOverTwoStep()
-		this.handleCutOverResult(err)
-		return err
-	}
-	return this.migrationContext.Log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
+	this.handleCutOverResult(err)
+	return err
 }
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
@@ -797,17 +812,16 @@ func (this *Migrator) initiateInspector() (err error) {
 }
 
 // initiateStatus sets and activates the printStatus() ticker
-func (this *Migrator) initiateStatus() error {
+func (this *Migrator) initiateStatus() {
 	this.printStatus(ForcePrintStatusAndHintRule)
-	statusTick := time.Tick(1 * time.Second)
-	for range statusTick {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
-			return nil
+			return
 		}
 		go this.printStatus(HeuristicPrintStatusRule)
 	}
-
-	return nil
 }
 
 // printMigrationStatusHint prints a detailed configuration dump, that is useful
@@ -1009,7 +1023,8 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
 
-	if elapsedSeconds%this.migrationContext.HooksStatusIntervalSec == 0 {
+	hooksStatusIntervalSec := this.migrationContext.HooksStatusIntervalSec
+	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {
 		this.hooksExecutor.onStatus(status)
 	}
 }
@@ -1039,8 +1054,9 @@ func (this *Migrator) initiateStreaming() error {
 	}()
 
 	go func() {
-		ticker := time.Tick(1 * time.Second)
-		for range ticker {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}
@@ -1067,7 +1083,7 @@ func (this *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (this *Migrator) initiateThrottler() error {
-	this.throttler = NewThrottler(this.migrationContext, this.applier, this.inspector)
+	this.throttler = NewThrottler(this.migrationContext, this.applier, this.inspector, this.appVersion)
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
 	this.migrationContext.Log.Infof("Waiting for first throttle metrics to be collected")

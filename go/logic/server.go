@@ -134,7 +134,7 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 		}
 	}
 	argIsQuestion := (arg == "?")
-	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
+	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged"
 
 	if err := this.hooksExecutor.onInteractiveCommand(command); err != nil {
 		return NoPrintStatusRule, err
@@ -282,7 +282,7 @@ help                                 # This message
 				return NoPrintStatusRule, nil
 			}
 			this.migrationContext.SetThrottleQuery(arg)
-			fmt.Fprintf(writer, throttleHint)
+			fmt.Fprintln(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "throttle-http":
@@ -292,7 +292,7 @@ help                                 # This message
 				return NoPrintStatusRule, nil
 			}
 			this.migrationContext.SetThrottleHTTP(arg)
-			fmt.Fprintf(writer, throttleHint)
+			fmt.Fprintln(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "throttle-control-replicas":
@@ -315,7 +315,7 @@ help                                 # This message
 				return NoPrintStatusRule, err
 			}
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
-			fmt.Fprintf(writer, throttleHint)
+			fmt.Fprintln(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "no-throttle", "unthrottle", "resume", "continue":
