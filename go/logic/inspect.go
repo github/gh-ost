@@ -6,6 +6,7 @@
 package logic
 
 import (
+	"context"
 	gosql "database/sql"
 	"fmt"
 	"reflect"
@@ -532,18 +533,48 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 	return nil
 }
 
+// Kill kills a query for connectionID.
+// - @amason: this should go somewhere _other_ than `logic`, but I couldn't decide
+// between `base`, `sql`, or `mysql`.
+func Kill(db *gosql.DB, connectionID string) error {
+	_, err := db.Exec(`KILL QUERY %s`, connectionID)
+	return err
+}
+
 // CountTableRows counts exact number of rows on the original table
-func (this *Inspector) CountTableRows() error {
+func (this *Inspector) CountTableRows(ctx context.Context) error {
 	atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 0)
 
 	this.migrationContext.Log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 
-	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
-	var rowsEstimate int64
-	if err := this.db.QueryRow(query).Scan(&rowsEstimate); err != nil {
+	conn, err := this.db.Conn(ctx)
+	if err != nil {
 		return err
 	}
+	defer conn.Close()
+
+	var connectionID string
+	if err := conn.QueryRowContext(ctx, `SELECT /* gh-ost */ CONNECTION_ID()`).Scan(&connectionID); err != nil {
+		return err
+	}
+
+	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	var rowsEstimate int64
+	if err := conn.QueryRowContext(ctx, query).Scan(&rowsEstimate); err != nil {
+		switch err {
+		case context.Canceled, context.DeadlineExceeded:
+			this.migrationContext.Log.Infof("exact row count cancelled (%s), likely because I'm about to cut over. I'm going to kill that query.", ctx.Err())
+			return Kill(this.db, connectionID)
+		default:
+			return err
+		}
+	}
+
+	// row count query finished. nil out the cancel func, so the main migration thread
+	// doesn't bother calling it after row copy is done.
+	this.migrationContext.SetCountTableRowsCancelFunc(nil)
+
 	atomic.StoreInt64(&this.migrationContext.RowsEstimate, rowsEstimate)
 	this.migrationContext.UsedRowsEstimateMethod = base.CountRowsEstimate
 

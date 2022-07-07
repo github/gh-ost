@@ -383,10 +383,13 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	if err != nil {
 		return err
 	}
+
 	rows, err := this.db.Query(query)
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
+
 	for rows.Next() {
 		this.migrationContext.MigrationRangeMinValues = sql.NewColumnValues(uniqueKey.Len())
 		if err = rows.Scan(this.migrationContext.MigrationRangeMinValues.ValuesPointers...); err != nil {
@@ -395,8 +398,7 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	}
 	this.migrationContext.Log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
 
-	err = rows.Err()
-	return err
+	return rows.Err()
 }
 
 // ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
@@ -406,10 +408,13 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	if err != nil {
 		return err
 	}
+
 	rows, err := this.db.Query(query)
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
+
 	for rows.Next() {
 		this.migrationContext.MigrationRangeMaxValues = sql.NewColumnValues(uniqueKey.Len())
 		if err = rows.Scan(this.migrationContext.MigrationRangeMaxValues.ValuesPointers...); err != nil {
@@ -418,12 +423,31 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	}
 	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
 
-	err = rows.Err()
-	return err
+	return rows.Err()
 }
 
-// ReadMigrationRangeValues reads min/max values that will be used for rowcopy
+// ReadMigrationRangeValues reads min/max values that will be used for rowcopy.
+// Before read min/max, write a changelog state into the ghc table to avoid lost data in mysql two-phase commit.
+/*
+Detail description of the lost data in mysql two-phase commit issue by @Fanduzi:
+	When using semi-sync and setting rpl_semi_sync_master_wait_point=AFTER_SYNC,
+	if an INSERT statement is being committed but blocks due to an unmet ack count,
+	the data inserted by the transaction is not visible to ReadMigrationRangeValues,
+	so the copy of the existing data in the table does not include the new row inserted by the transaction.
+	However, the binlog event for the transaction is already written to the binlog,
+	so the addDMLEventsListener only captures the binlog event after the transaction,
+	and thus the transaction's binlog event is not captured, resulting in data loss.
+
+	If write a changelog into ghc table before ReadMigrationRangeValues, and the transaction commit blocks
+	because the ack is not met, then the changelog will not be able to write, so the ReadMigrationRangeValues
+	will not be run. When the changelog writes successfully, the ReadMigrationRangeValues will read the
+	newly inserted data, thus Avoiding data loss due to the above problem.
+*/
 func (this *Applier) ReadMigrationRangeValues() error {
+	if _, err := this.WriteChangelogState(string(ReadMigrationRangeValues)); err != nil {
+		return err
+	}
+
 	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
 		return err
 	}
@@ -460,10 +484,13 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		if err != nil {
 			return hasFurtherRange, err
 		}
+
 		rows, err := this.db.Query(query, explodedArgs...)
 		if err != nil {
 			return hasFurtherRange, err
 		}
+		defer rows.Close()
+
 		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
