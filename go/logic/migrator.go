@@ -811,7 +811,7 @@ func (this *Migrator) initiateInspector() (err error) {
 // initiateStatus sets and activates the printStatus() ticker
 func (this *Migrator) initiateStatus() {
 	this.printStatus(ForcePrintStatusAndHintRule)
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		<-ticker.C
@@ -1052,7 +1052,7 @@ func (this *Migrator) initiateStreaming() error {
 	}()
 
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
 			<-ticker.C

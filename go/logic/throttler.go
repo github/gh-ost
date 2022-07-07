@@ -448,7 +448,7 @@ func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 		this.collectGeneralThrottleMetrics()
 		firstThrottlingCollected <- true
 
-		throttlerMetricsTick := time.NewTicker(1 * time.Second)
+		throttlerMetricsTick := time.NewTicker(time.Second)
 		defer throttlerMetricsTick.Stop()
 		for {
 			<-throttlerMetricsTick.C
