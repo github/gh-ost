@@ -27,7 +27,7 @@ type ChangelogState string
 const (
 	AllEventsUpToLockProcessed ChangelogState = "AllEventsUpToLockProcessed"
 	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
-  Migrated                   ChangelogState = "Migrated"
+	Migrated                   ChangelogState = "Migrated"
 	ReadMigrationRangeValues   ChangelogState = "ReadMigrationRangeValues"
 )
 
