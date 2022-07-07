@@ -247,15 +247,14 @@ func (this *Throttler) collectControlReplicasLag() {
 		this.migrationContext.SetControlReplicasLagResult(readControlReplicasLag())
 	}
 
-	aggressiveTicker := time.NewTicker(100 * time.Millisecond)
-	defer aggressiveTicker.Stop()
-
 	relaxedFactor := 10
 	counter := 0
 	shouldReadLagAggressively := false
 
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 	for {
-		<-aggressiveTicker.C
+		<-ticker.C
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -464,9 +463,6 @@ func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 
 // initiateThrottlerChecks initiates the throttle ticker and sets the basic behavior of throttling.
 func (this *Throttler) initiateThrottlerChecks() {
-	throttlerTick := time.NewTicker(100 * time.Millisecond)
-	defer throttlerTick.Stop()
-
 	throttlerFunction := func() {
 		alreadyThrottling, currentReason, _ := this.migrationContext.IsThrottled()
 		shouldThrottle, throttleReason, throttleReasonHint := this.shouldThrottle()
@@ -483,8 +479,11 @@ func (this *Throttler) initiateThrottlerChecks() {
 		this.migrationContext.SetThrottled(shouldThrottle, throttleReason, throttleReasonHint)
 	}
 	throttlerFunction()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 	for {
-		<-throttlerTick.C
+		<-ticker.C
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
