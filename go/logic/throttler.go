@@ -448,10 +448,10 @@ func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 		this.collectGeneralThrottleMetrics()
 		firstThrottlingCollected <- true
 
-		throttlerMetricsTick := time.NewTicker(time.Second)
-		defer throttlerMetricsTick.Stop()
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
 		for {
-			<-throttlerMetricsTick.C
+			<-ticker.C
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}
