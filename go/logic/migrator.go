@@ -977,7 +977,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		state = fmt.Sprintf("throttled, %s", throttleReason)
 	}
 
-	shouldPrintStatus := false
+	var shouldPrintStatus bool
 	if rule == HeuristicPrintStatusRule {
 		if elapsedSeconds <= 60 {
 			shouldPrintStatus = true
@@ -1291,7 +1291,7 @@ func (this *Migrator) executeWriteFuncs() error {
 						if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
 							copyRowsDuration := time.Since(copyRowsStartTime)
 							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
-							sleepTime := time.Duration(time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond)
+							sleepTime := time.Duration(sleepTimeNanosecondFloat64) * time.Nanosecond
 							time.Sleep(sleepTime)
 						}
 					}

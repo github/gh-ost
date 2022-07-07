@@ -270,7 +270,7 @@ func main() {
 	}
 	if *askPass {
 		fmt.Println("Password:")
-		bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+		bytePassword, err := term.ReadPassword(syscall.Stdin)
 		if err != nil {
 			migrationContext.Log.Fatale(err)
 		}
@@ -300,10 +300,9 @@ func main() {
 	acceptSignals(migrationContext)
 
 	migrator := logic.NewMigrator(migrationContext, AppVersion)
-	err := migrator.Migrate()
-	if err != nil {
+	if err := migrator.Migrate(); err != nil {
 		migrator.ExecOnFailureHook()
 		migrationContext.Log.Fatale(err)
 	}
-	fmt.Fprintf(os.Stdout, "# Done\n")
+	fmt.Fprintln(os.Stdout, "# Done")
 }

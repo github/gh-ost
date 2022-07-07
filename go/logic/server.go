@@ -1,5 +1,5 @@
 /*
-   Copyright 2021 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -122,8 +122,6 @@ func (this *Server) onServerCommand(command string, writer *bufio.Writer) (err e
 
 // applyServerCommand parses and executes commands by user
 func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (printStatusRule PrintStatusRule, err error) {
-	printStatusRule = NoPrintStatusRule
-
 	tokens := strings.SplitN(command, "=", 2)
 	command = strings.TrimSpace(tokens[0])
 	arg := ""

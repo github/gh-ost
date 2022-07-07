@@ -167,7 +167,7 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 	if includeEquals {
 		comparison, err := BuildEqualsComparison(columns, values)
 		if err != nil {
-			return "", explodedArgs, nil
+			return "", explodedArgs, err
 		}
 		comparisons = append(comparisons, comparison)
 		explodedArgs = append(explodedArgs, args...)
