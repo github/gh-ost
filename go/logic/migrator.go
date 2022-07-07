@@ -220,7 +220,7 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	changelogState := ReadChangelogState(changelogStateString)
 	this.migrationContext.Log.Infof("Intercepted changelog state %s", changelogState)
 	switch changelogState {
-	case Migrated:
+	case Migrated, ReadMigrationRangeValues:
 		// no-op event
 	case GhostTableMigrated:
 		{
@@ -241,8 +241,6 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
 		}
-	case ReadMigrationRangeValues:
-		// no-op event
 	default:
 		{
 			return fmt.Errorf("Unknown changelog state: %+v", changelogState)
