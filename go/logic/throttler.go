@@ -170,8 +170,7 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 
 	ticker := time.NewTicker(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	defer ticker.Stop()
-	for {
-		<-ticker.C
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -328,8 +327,7 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 	collectInterval := time.Duration(this.migrationContext.ThrottleHTTPIntervalMillis) * time.Millisecond
 	ticker := time.NewTicker(collectInterval)
 	defer ticker.Stop()
-	for {
-		<-ticker.C
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -450,8 +448,7 @@ func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		for {
-			<-ticker.C
+		for range ticker.C {
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}
@@ -482,8 +479,7 @@ func (this *Throttler) initiateThrottlerChecks() {
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	for {
-		<-ticker.C
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}

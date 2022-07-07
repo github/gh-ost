@@ -813,8 +813,7 @@ func (this *Migrator) initiateStatus() {
 	this.printStatus(ForcePrintStatusAndHintRule)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	for {
-		<-ticker.C
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -1054,8 +1053,7 @@ func (this *Migrator) initiateStreaming() error {
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		for {
-			<-ticker.C
+		for range ticker.C {
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}

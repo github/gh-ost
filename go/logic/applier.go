@@ -345,8 +345,7 @@ func (this *Applier) InitiateHeartbeat() {
 
 	ticker := time.NewTicker(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	defer ticker.Stop()
-	for {
-		<-ticker.C
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
