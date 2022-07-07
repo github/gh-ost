@@ -19,8 +19,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/log"
 
-	// TODO: move to golang.org/x/term
-	"golang.org/x/crypto/ssh/terminal" // nolint:staticcheck
+	"golang.org/x/term"
 )
 
 var AppVersion string
@@ -271,7 +270,7 @@ func main() {
 	}
 	if *askPass {
 		fmt.Println("Password:")
-		bytePassword, err := terminal.ReadPassword(int(syscall.Stdin))
+		bytePassword, err := term.ReadPassword(int(syscall.Stdin))
 		if err != nil {
 			migrationContext.Log.Fatale(err)
 		}
