@@ -19,7 +19,8 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/log"
 
-	"golang.org/x/crypto/ssh/terminal"
+	// TODO: move to golang.org/x/term
+	"golang.org/x/crypto/ssh/terminal" // nolint:staticcheck
 )
 
 var AppVersion string

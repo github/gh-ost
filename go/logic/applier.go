@@ -72,7 +72,6 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 }
 
 func (this *Applier) InitDBConnections() (err error) {
-
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
@@ -345,8 +344,9 @@ func (this *Applier) InitiateHeartbeat() {
 	}
 	injectHeartbeat()
 
-	heartbeatTick := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
-	for range heartbeatTick {
+	ticker := time.NewTicker(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
