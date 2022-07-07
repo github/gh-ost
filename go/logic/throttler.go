@@ -252,8 +252,7 @@ func (this *Throttler) collectControlReplicasLag() {
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	for {
-		<-ticker.C
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
