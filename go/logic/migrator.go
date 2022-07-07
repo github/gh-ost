@@ -26,8 +26,8 @@ type ChangelogState string
 
 const (
 	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
-	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
-	ReadMigrationRangeValues                  = "ReadMigrationRangeValues"
+	AllEventsUpToLockProcessed ChangelogState = "AllEventsUpToLockProcessed"
+	ReadMigrationRangeValues   ChangelogState = "ReadMigrationRangeValues"
 )
 
 func ReadChangelogState(s string) ChangelogState {
@@ -809,17 +809,17 @@ func (this *Migrator) initiateInspector() (err error) {
 }
 
 // initiateStatus sets and activates the printStatus() ticker
-func (this *Migrator) initiateStatus() error {
+func (this *Migrator) initiateStatus() {
 	this.printStatus(ForcePrintStatusAndHintRule)
-	statusTick := time.Tick(1 * time.Second)
-	for range statusTick {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		<-ticker.C
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
-			return nil
+			return
 		}
 		go this.printStatus(HeuristicPrintStatusRule)
 	}
-
-	return nil
 }
 
 // printMigrationStatusHint prints a detailed configuration dump, that is useful
@@ -1052,8 +1052,10 @@ func (this *Migrator) initiateStreaming() error {
 	}()
 
 	go func() {
-		ticker := time.Tick(1 * time.Second)
-		for range ticker {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			<-ticker.C
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}

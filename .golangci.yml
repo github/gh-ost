@@ -5,10 +5,7 @@ run:
 linters:
   disable:
     - errcheck
-    - staticcheck
   enable:
-    - gosimple
-    - govet
     - noctx
     - rowserrcheck
     - sqlclosecheck
