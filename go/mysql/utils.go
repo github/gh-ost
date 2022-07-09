@@ -206,7 +206,7 @@ func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnL
 	return sql.NewColumnList(columnNames), sql.NewColumnList(virtualColumnNames), nil
 }
 
-// Kill kills a query by connection id
+// Kill executes a KILL QUERY by connection id
 func Kill(db *gosql.DB, connectionID string) error {
 	_, err := db.Exec(`KILL QUERY %s`, connectionID)
 	return err
