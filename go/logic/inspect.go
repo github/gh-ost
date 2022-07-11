@@ -533,14 +533,6 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 	return nil
 }
 
-// Kill kills a query for connectionID.
-// - @amason: this should go somewhere _other_ than `logic`, but I couldn't decide
-// between `base`, `sql`, or `mysql`.
-func Kill(db *gosql.DB, connectionID string) error {
-	_, err := db.Exec(`KILL QUERY %s`, connectionID)
-	return err
-}
-
 // CountTableRows counts exact number of rows on the original table
 func (this *Inspector) CountTableRows(ctx context.Context) error {
 	atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 1)
@@ -565,7 +557,7 @@ func (this *Inspector) CountTableRows(ctx context.Context) error {
 		switch err {
 		case context.Canceled, context.DeadlineExceeded:
 			this.migrationContext.Log.Infof("exact row count cancelled (%s), likely because I'm about to cut over. I'm going to kill that query.", ctx.Err())
-			return Kill(this.db, connectionID)
+			return mysql.Kill(this.db, connectionID)
 		default:
 			return err
 		}
