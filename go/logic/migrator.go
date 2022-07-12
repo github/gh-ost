@@ -25,8 +25,9 @@ import (
 type ChangelogState string
 
 const (
-	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
 	AllEventsUpToLockProcessed ChangelogState = "AllEventsUpToLockProcessed"
+	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
+	Migrated                   ChangelogState = "Migrated"
 	ReadMigrationRangeValues   ChangelogState = "ReadMigrationRangeValues"
 )
 
@@ -219,6 +220,8 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	changelogState := ReadChangelogState(changelogStateString)
 	this.migrationContext.Log.Infof("Intercepted changelog state %s", changelogState)
 	switch changelogState {
+	case Migrated, ReadMigrationRangeValues:
+		// no-op event
 	case GhostTableMigrated:
 		{
 			this.ghostTableMigrated <- true
@@ -238,8 +241,6 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
 		}
-	case ReadMigrationRangeValues:
-		// no-op event
 	default:
 		{
 			return fmt.Errorf("Unknown changelog state: %+v", changelogState)
@@ -1311,6 +1312,11 @@ func (this *Migrator) executeWriteFuncs() error {
 // finalCleanup takes actions at very end of migration, dropping tables etc.
 func (this *Migrator) finalCleanup() error {
 	atomic.StoreInt64(&this.migrationContext.CleanupImminentFlag, 1)
+
+	this.migrationContext.Log.Infof("Writing changelog state: %+v", Migrated)
+	if _, err := this.applier.WriteChangelogState(string(Migrated)); err != nil {
+		return err
+	}
 
 	if this.migrationContext.Noop {
 		if createTableStatement, err := this.inspector.showCreateTable(this.migrationContext.GetGhostTableName()); err == nil {
