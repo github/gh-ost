@@ -10,7 +10,7 @@ if [ -z "$GOPATH" ]; then
 fi
 
 if [ ! -x "$GOPATH/bin/golangci-lint" ]; then
-  echo "Installing golangci-lint with install script: $GOLANGCI_INSTALL_SCRIPT"
+  echo "Installing golangci-lint $GOLANGCI_RELEASE using script: $GOLANGCI_INSTALL_SCRIPT"
   curl -sSfL $GOLANGCI_INSTALL_SCRIPT | sh -s -- -b $(go env GOPATH)/bin $GOLANGCI_RELEASE
 fi
 
