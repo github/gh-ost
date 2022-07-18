@@ -4,8 +4,21 @@ linters:
   disable:
     - errcheck
   enable:
+    - contextcheck
+    - durationcheck
+    - errname
+    - execinquery
+    - gofmt
+    - ifshort
+    - misspell
+    - nilerr
     - noctx
+    - nolintlint
+    - nosprintfhostport
+    - prealloc
     - rowserrcheck
     - sqlclosecheck
+    - unconvert
     - unused
-    
+    - wastedassign
+    - whitespace

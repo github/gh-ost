@@ -35,8 +35,7 @@ const detachHint = "//"
 
 // ParseInstanceKey will parse an InstanceKey from a string representation such as 127.0.0.1:3306
 func NewRawInstanceKey(hostPort string) (*InstanceKey, error) {
-	hostname := ""
-	port := ""
+	var hostname, port string
 	if submatch := ipv4HostPortRegexp.FindStringSubmatch(hostPort); len(submatch) > 0 {
 		hostname = submatch[1]
 		port = submatch[2]
