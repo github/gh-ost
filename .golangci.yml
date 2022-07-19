@@ -1,16 +1,24 @@
 run:
   timeout: 5m
-  modules-download-mode: readonly
-
 linters:
   disable:
     - errcheck
-    - staticcheck
   enable:
-    - gosimple
-    - govet
+    - contextcheck
+    - durationcheck
+    - errname
+    - execinquery
+    - gofmt
+    - ifshort
+    - misspell
+    - nilerr
     - noctx
+    - nolintlint
+    - nosprintfhostport
+    - prealloc
     - rowserrcheck
     - sqlclosecheck
+    - unconvert
     - unused
-    
+    - wastedassign
+    - whitespace

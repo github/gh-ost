@@ -25,9 +25,10 @@ import (
 type ChangelogState string
 
 const (
+	AllEventsUpToLockProcessed ChangelogState = "AllEventsUpToLockProcessed"
 	GhostTableMigrated         ChangelogState = "GhostTableMigrated"
-	AllEventsUpToLockProcessed                = "AllEventsUpToLockProcessed"
-	ReadMigrationRangeValues                  = "ReadMigrationRangeValues"
+	Migrated                   ChangelogState = "Migrated"
+	ReadMigrationRangeValues   ChangelogState = "ReadMigrationRangeValues"
 )
 
 func ReadChangelogState(s string) ChangelogState {
@@ -219,6 +220,8 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	changelogState := ReadChangelogState(changelogStateString)
 	this.migrationContext.Log.Infof("Intercepted changelog state %s", changelogState)
 	switch changelogState {
+	case Migrated, ReadMigrationRangeValues:
+		// no-op event
 	case GhostTableMigrated:
 		{
 			this.ghostTableMigrated <- true
@@ -238,8 +241,6 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 				this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
 			}()
 		}
-	case ReadMigrationRangeValues:
-		// no-op event
 	default:
 		{
 			return fmt.Errorf("Unknown changelog state: %+v", changelogState)
@@ -809,17 +810,16 @@ func (this *Migrator) initiateInspector() (err error) {
 }
 
 // initiateStatus sets and activates the printStatus() ticker
-func (this *Migrator) initiateStatus() error {
+func (this *Migrator) initiateStatus() {
 	this.printStatus(ForcePrintStatusAndHintRule)
-	statusTick := time.Tick(1 * time.Second)
-	for range statusTick {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
-			return nil
+			return
 		}
 		go this.printStatus(HeuristicPrintStatusRule)
 	}
-
-	return nil
 }
 
 // printMigrationStatusHint prints a detailed configuration dump, that is useful
@@ -978,7 +978,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		state = fmt.Sprintf("throttled, %s", throttleReason)
 	}
 
-	shouldPrintStatus := false
+	var shouldPrintStatus bool
 	if rule == HeuristicPrintStatusRule {
 		if elapsedSeconds <= 60 {
 			shouldPrintStatus = true
@@ -1052,8 +1052,9 @@ func (this *Migrator) initiateStreaming() error {
 	}()
 
 	go func() {
-		ticker := time.Tick(1 * time.Second)
-		for range ticker {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}
@@ -1291,7 +1292,7 @@ func (this *Migrator) executeWriteFuncs() error {
 						if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
 							copyRowsDuration := time.Since(copyRowsStartTime)
 							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
-							sleepTime := time.Duration(time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond)
+							sleepTime := time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond
 							time.Sleep(sleepTime)
 						}
 					}
@@ -1311,6 +1312,11 @@ func (this *Migrator) executeWriteFuncs() error {
 // finalCleanup takes actions at very end of migration, dropping tables etc.
 func (this *Migrator) finalCleanup() error {
 	atomic.StoreInt64(&this.migrationContext.CleanupImminentFlag, 1)
+
+	this.migrationContext.Log.Infof("Writing changelog state: %+v", Migrated)
+	if _, err := this.applier.WriteChangelogState(string(Migrated)); err != nil {
+		return err
+	}
 
 	if this.migrationContext.Noop {
 		if createTableStatement, err := this.inspector.showCreateTable(this.migrationContext.GetGhostTableName()); err == nil {

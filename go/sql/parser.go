@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -135,7 +135,6 @@ func (this *AlterTableParser) parseAlterToken(alterToken string) (err error) {
 }
 
 func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err error) {
-
 	this.alterStatementOptions = alterStatement
 	for _, alterTableRegexp := range alterTableExplicitSchemaTableRegexps {
 		if submatch := alterTableRegexp.FindStringSubmatch(this.alterStatementOptions); len(submatch) > 0 {

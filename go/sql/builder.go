@@ -167,7 +167,7 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 	if includeEquals {
 		comparison, err := BuildEqualsComparison(columns, values)
 		if err != nil {
-			return "", explodedArgs, nil
+			return "", explodedArgs, err
 		}
 		comparisons = append(comparisons, comparison)
 		explodedArgs = append(explodedArgs, args...)
@@ -501,6 +501,9 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	}
 
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
+	if err != nil {
+		return "", sharedArgs, uniqueKeyArgs, err
+	}
 	result = fmt.Sprintf(`
  			update /* gh-ost %s.%s */
  					%s.%s

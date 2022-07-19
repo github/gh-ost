@@ -59,7 +59,6 @@ func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer 
 // AddListener registers a new listener for binlog events, on a per-table basis
 func (this *EventsStreamer) AddListener(
 	async bool, databaseName string, tableName string, onDmlEvent func(event *binlog.BinlogDMLEvent) error) (err error) {
-
 	this.listenersMutex.Lock()
 	defer this.listenersMutex.Unlock()
 
@@ -87,10 +86,10 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 
 	for _, listener := range this.listeners {
 		listener := listener
-		if strings.ToLower(listener.databaseName) != strings.ToLower(binlogEvent.DatabaseName) {
+		if !strings.EqualFold(listener.databaseName, binlogEvent.DatabaseName) {
 			continue
 		}
-		if strings.ToLower(listener.tableName) != strings.ToLower(binlogEvent.TableName) {
+		if !strings.EqualFold(listener.tableName, binlogEvent.TableName) {
 			continue
 		}
 		if listener.async {

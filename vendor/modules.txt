@@ -39,18 +39,17 @@ github.com/siddontang/go-log/loggers
 go.uber.org/atomic
 # golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83
 ## explicit; go 1.11
-golang.org/x/crypto/ssh/terminal
 # golang.org/x/net v0.0.0-20210224082022-3d97a244fca7
 ## explicit; go 1.11
 golang.org/x/net/context
-# golang.org/x/sys v0.0.0-20201119102817-f84b799fce68
-## explicit; go 1.12
+# golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1
+## explicit; go 1.17
 golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/plan9
 golang.org/x/sys/unix
 golang.org/x/sys/windows
-# golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1
-## explicit; go 1.11
+# golang.org/x/term v0.0.0-20220526004731-065cf7ba2467
+## explicit; go 1.17
 golang.org/x/term
 # golang.org/x/text v0.3.6
 ## explicit; go 1.11
