@@ -1,5 +1,5 @@
 /*
-   Copyright 2021 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -122,8 +122,6 @@ func (this *Server) onServerCommand(command string, writer *bufio.Writer) (err e
 
 // applyServerCommand parses and executes commands by user
 func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (printStatusRule PrintStatusRule, err error) {
-	printStatusRule = NoPrintStatusRule
-
 	tokens := strings.SplitN(command, "=", 2)
 	command = strings.TrimSpace(tokens[0])
 	arg := ""
@@ -134,7 +132,7 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 		}
 	}
 	argIsQuestion := (arg == "?")
-	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
+	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged"
 
 	if err := this.hooksExecutor.onInteractiveCommand(command); err != nil {
 		return NoPrintStatusRule, err
@@ -282,7 +280,7 @@ help                                 # This message
 				return NoPrintStatusRule, nil
 			}
 			this.migrationContext.SetThrottleQuery(arg)
-			fmt.Fprintf(writer, throttleHint)
+			fmt.Fprintln(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "throttle-http":
@@ -292,7 +290,7 @@ help                                 # This message
 				return NoPrintStatusRule, nil
 			}
 			this.migrationContext.SetThrottleHTTP(arg)
-			fmt.Fprintf(writer, throttleHint)
+			fmt.Fprintln(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "throttle-control-replicas":
@@ -315,7 +313,7 @@ help                                 # This message
 				return NoPrintStatusRule, err
 			}
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
-			fmt.Fprintf(writer, throttleHint)
+			fmt.Fprintln(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "no-throttle", "unthrottle", "resume", "continue":

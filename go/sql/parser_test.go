@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -40,7 +40,6 @@ func TestParseAlterStatementTrivialRename(t *testing.T) {
 }
 
 func TestParseAlterStatementWithAutoIncrement(t *testing.T) {
-
 	statements := []string{
 		"auto_increment=7",
 		"auto_increment = 7",
@@ -150,7 +149,6 @@ func TestSanitizeQuotesFromAlterStatement(t *testing.T) {
 }
 
 func TestParseAlterStatementDroppedColumns(t *testing.T) {
-
 	{
 		parser := NewAlterTableParser()
 		statement := "drop column b"
@@ -190,7 +188,6 @@ func TestParseAlterStatementDroppedColumns(t *testing.T) {
 }
 
 func TestParseAlterStatementRenameTable(t *testing.T) {
-
 	{
 		parser := NewAlterTableParser()
 		statement := "drop column b"
@@ -230,7 +227,6 @@ func TestParseAlterStatementRenameTable(t *testing.T) {
 }
 
 func TestParseAlterStatementExplicitTable(t *testing.T) {
-
 	{
 		parser := NewAlterTableParser()
 		statement := "drop column b"
