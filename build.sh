@@ -35,7 +35,8 @@ function build {
 
   (cd $buildpath && tar cfz ./gh-ost-binary-${osshort}-${GOARCH}-${timestamp}.tar.gz $target)
 
-  if [ "$GOOS" == "linux" ] ; then
+  # build RPM and deb for Linux, x86-64 only
+  if [ "$GOOS" == "linux" ] && [ "$GOARCH" == "amd64" ] ; then
     echo "Creating Distro full packages"
     builddir=$(setuptree)
     cp $buildpath/$target $builddir/gh-ost/usr/bin
