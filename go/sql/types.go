@@ -47,13 +47,10 @@ type Column struct {
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
 	if s, ok := arg.(string); ok {
-		// string, charset conversion
-		if encoding, ok := charsetEncodingMap[this.Charset]; ok {
-			arg, _ = encoding.NewDecoder().String(s)
-		}
+                arg2Bytes := []byte(s)
+                arg = arg2Bytes
 
 		if this.Type == BinaryColumnType && isUniqueKeyColumn {
-			arg2Bytes := []byte(arg.(string))
 			size := len(arg2Bytes)
 			if uint(size) < this.BinaryOctetLength {
 				buf := bytes.NewBuffer(arg2Bytes)
