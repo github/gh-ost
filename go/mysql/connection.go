@@ -115,15 +115,15 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 		hostname = fmt.Sprintf("[%s]", hostname)
 	}
 
-	tls := "false"
+	tlsOption := "false"
 	if this.tlsConfig != nil {
-		tls = TLS_CONFIG_KEY
+		tlsOption = TLS_CONFIG_KEY
 	}
 	connectionParams := []string{
 		"autocommit=true",
 		"charset=utf8mb4,utf8,latin1",
 		"interpolateParams=true",
-		fmt.Sprintf("tls=%s", tls),
+		fmt.Sprintf("tls=%s", tlsOption),
 		fmt.Sprintf("transaction_isolation=%q", transactionIsolation),
 		fmt.Sprintf("timeout=%fs", this.Timeout),
 		fmt.Sprintf("readTimeout=%fs", this.Timeout),
