@@ -6,6 +6,10 @@ A more in-depth discussion of various `gh-ost` command line flags: implementatio
 
 Add this flag when executing on Aliyun RDS.
 
+### allow-zero-in-date
+
+Allows the user to make schema changes that include a zero date or zero in date (e.g. adding a `datetime default '0000-00-00 00:00:00'` column), even if global `sql_mode` on MySQL has `NO_ZERO_IN_DATE,NO_ZERO_DATE`.
+
 ###  azure
 
 Add this flag when executing on Azure Database for MySQL.

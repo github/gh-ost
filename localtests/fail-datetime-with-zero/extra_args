@@ -1,0 +1,1 @@
+--alter="change column dt dt datetime not null default '1970-00-00 00:00:00'"
