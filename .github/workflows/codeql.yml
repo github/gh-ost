@@ -16,9 +16,9 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
         
-    - name: Initialize CodeQL 
+    - name: Initialize CodeQL
       uses: github/codeql-action/init@v1
     
     - name: Perform CodeQL Analysis

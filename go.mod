@@ -1,6 +1,6 @@
 module github.com/github/gh-ost
 
-go 1.17
+go 1.18
 
 require (
 	github.com/go-ini/ini v1.62.0
@@ -8,8 +8,8 @@ require (
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/openark/golib v0.0.0-20210531070646-355f37940af8
 	github.com/satori/go.uuid v1.2.0
-	golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83
 	golang.org/x/net v0.0.0-20210224082022-3d97a244fca7
+	golang.org/x/term v0.0.0-20220526004731-065cf7ba2467
 	golang.org/x/text v0.3.6
 )
 
@@ -21,7 +21,6 @@ require (
 	github.com/smartystreets/goconvey v1.6.4 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1 // indirect
-	golang.org/x/term v0.0.0-20220526004731-065cf7ba2467 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/ini.v1 v1.62.0 // indirect
 )

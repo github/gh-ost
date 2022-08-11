@@ -1,25 +1,35 @@
 name: CI
 
-on: [pull_request]
+on:
+  pull_request:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version:
+        - 1.16 # minimum
+        - 1.17 # previous
+        - 1.18 # current
+        - 1.19 # next
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Set up Go
-      uses: actions/setup-go@v1
+      id: setup-go
+      uses: actions/setup-go@v3
       with:
-        go-version: 1.17
+        go-version: ${{ matrix.go-version }}
 
     - name: Build
       run: script/cibuild
 
+    # only upload binary artifact for current version
     - name: Upload gh-ost binary artifact
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v3
+      if: ${{ startsWith(steps.setup-go.outputs.go-version, '1.18') }}
       with:
         name: gh-ost
         path: bin/gh-ost
