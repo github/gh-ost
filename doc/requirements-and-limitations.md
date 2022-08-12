@@ -20,6 +20,8 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 - Switching your `binlog_format` to `ROW`, in the case where it is _not_ `ROW` and you explicitly specified `--switch-to-rbr`
   - If your replication is already in RBR (`binlog_format=ROW`) you can specify `--assume-rbr` to avoid the `STOP SLAVE/START SLAVE` operations, hence no need for `SUPER`.
 
+- `gh-ost` uses the `REPEATABLE_READ` transaction isolation level for all MySQL connections, regardless of the server default.
+
 - Running `--test-on-replica`: before the cut-over phase, `gh-ost` stops replication so that you can compare the two tables and satisfy that the migration is sound.
 
 ### Limitations
