@@ -439,14 +439,14 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 }
 
 // ReadMigrationMinValues returns the minimum values to be iterated on rowcopy
-func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
+func (this *Applier) ReadMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
 	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
 	if err != nil {
 		return err
 	}
 
-	rows, err := this.db.Query(query)
+	rows, err := tx.Query(query)
 	if err != nil {
 		return err
 	}
@@ -464,14 +464,14 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 }
 
 // ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
-func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
+func (this *Applier) ReadMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
 	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
 	if err != nil {
 		return err
 	}
 
-	rows, err := this.db.Query(query)
+	rows, err := tx.Query(query)
 	if err != nil {
 		return err
 	}
@@ -510,13 +510,20 @@ func (this *Applier) ReadMigrationRangeValues() error {
 		return err
 	}
 
-	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
+	tx, err := this.db.Begin()
+	if err != nil {
 		return err
 	}
-	if err := this.ReadMigrationMaxValues(this.migrationContext.UniqueKey); err != nil {
+	defer tx.Rollback()
+
+	if err := this.ReadMigrationMinValues(tx, this.migrationContext.UniqueKey); err != nil {
 		return err
 	}
-	return nil
+	if err := this.ReadMigrationMaxValues(tx, this.migrationContext.UniqueKey); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // CalculateNextIterationRangeEndValues reads the next-iteration-range-end unique key values,
