@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -122,17 +123,16 @@ func (this *Applier) validateAndReadTimeZone() error {
 // - User may skip strict mode
 // - User may allow zero dats or zero in dates
 func (this *Applier) generateSqlModeQuery() string {
-	sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
+	sqlModeAddendum := []string{`NO_AUTO_VALUE_ON_ZERO`}
 	if !this.migrationContext.SkipStrictMode {
-		sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
+		sqlModeAddendum = append(sqlModeAddendum, `STRICT_ALL_TABLES`)
 	}
-	sqlModeQuery := fmt.Sprintf("CONCAT(@@session.sql_mode, ',%s')", sqlModeAddendum)
+	sqlModeQuery := fmt.Sprintf("CONCAT(@@session.sql_mode, ',%s')", strings.Join(sqlModeAddendum, ","))
 	if this.migrationContext.AllowZeroInDate {
 		sqlModeQuery = fmt.Sprintf("REPLACE(REPLACE(%s, 'NO_ZERO_IN_DATE', ''), 'NO_ZERO_DATE', '')", sqlModeQuery)
 	}
-	sqlModeQuery = fmt.Sprintf("sql_mode = %s", sqlModeQuery)
 
-	return sqlModeQuery
+	return fmt.Sprintf("sql_mode = %s", sqlModeQuery)
 }
 
 // readTableColumns reads table columns on applier

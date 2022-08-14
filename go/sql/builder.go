@@ -505,13 +505,13 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 		return "", sharedArgs, uniqueKeyArgs, err
 	}
 	result = fmt.Sprintf(`
- 			update /* gh-ost %s.%s */
- 					%s.%s
+			update /* gh-ost %s.%s */
+					%s.%s
 				set
 					%s
 				where
- 					%s
- 		`, databaseName, tableName,
+					%s
+		`, databaseName, tableName,
 		databaseName, tableName,
 		setClause,
 		equalsComparison,
