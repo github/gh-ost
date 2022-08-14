@@ -438,8 +438,8 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 	return result, nil
 }
 
-// ReadMigrationMinValues returns the minimum values to be iterated on rowcopy
-func (this *Applier) ReadMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
+// readMigrationMinValues returns the minimum values to be iterated on rowcopy
+func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
 	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
 	if err != nil {
@@ -463,8 +463,8 @@ func (this *Applier) ReadMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 	return rows.Err()
 }
 
-// ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
-func (this *Applier) ReadMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
+// readMigrationMaxValues returns the maximum values to be iterated on rowcopy
+func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
 	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
 	if err != nil {
@@ -516,10 +516,10 @@ func (this *Applier) ReadMigrationRangeValues() error {
 	}
 	defer tx.Rollback()
 
-	if err := this.ReadMigrationMinValues(tx, this.migrationContext.UniqueKey); err != nil {
+	if err := this.readMigrationMinValues(tx, this.migrationContext.UniqueKey); err != nil {
 		return err
 	}
-	if err := this.ReadMigrationMaxValues(tx, this.migrationContext.UniqueKey); err != nil {
+	if err := this.readMigrationMaxValues(tx, this.migrationContext.UniqueKey); err != nil {
 		return err
 	}
 
