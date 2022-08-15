@@ -1,10 +1,16 @@
+/*
+   Copyright 2022 GitHub Inc.
+         See https://github.com/github/gh-ost/blob/master/LICENSE
+*/
+
 package logic
 
 import (
 	"testing"
 
-	"github.com/github/gh-ost/go/sql"
 	test "github.com/openark/golib/tests"
+
+	"github.com/github/gh-ost/go/sql"
 )
 
 func TestInspectGetSharedUniqueKeys(t *testing.T) {
