@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -122,8 +122,6 @@ func (this *Server) onServerCommand(command string, writer *bufio.Writer) (err e
 
 // applyServerCommand parses and executes commands by user
 func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (printStatusRule PrintStatusRule, err error) {
-	printStatusRule = NoPrintStatusRule
-
 	tokens := strings.SplitN(command, "=", 2)
 	command = strings.TrimSpace(tokens[0])
 	arg := ""
@@ -134,7 +132,7 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 		}
 	}
 	argIsQuestion := (arg == "?")
-	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged\n"
+	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged"
 
 	if err := this.hooksExecutor.onInteractiveCommand(command); err != nil {
 		return NoPrintStatusRule, err
@@ -146,7 +144,9 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 			fmt.Fprint(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
-coordinates													 # Print the currently inspected coordinates
+coordinates                          # Print the currently inspected coordinates
+applier                              # Print the hostname of the applier
+inspector                            # Print the hostname of the inspector
 chunk-size=<newsize>                 # Set a new chunk-size
 dml-batch-size=<newsize>             # Set a new dml-batch-size
 nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
@@ -177,6 +177,22 @@ help                                 # This message
 			}
 			return NoPrintStatusRule, fmt.Errorf("coordinates are read-only")
 		}
+	case "applier":
+		if this.migrationContext.ApplierConnectionConfig != nil && this.migrationContext.ApplierConnectionConfig.ImpliedKey != nil {
+			fmt.Fprintf(writer, "Host: %s, Version: %s\n",
+				this.migrationContext.ApplierConnectionConfig.ImpliedKey.String(),
+				this.migrationContext.ApplierMySQLVersion,
+			)
+		}
+		return NoPrintStatusRule, nil
+	case "inspector":
+		if this.migrationContext.InspectorConnectionConfig != nil && this.migrationContext.InspectorConnectionConfig.ImpliedKey != nil {
+			fmt.Fprintf(writer, "Host: %s, Version: %s\n",
+				this.migrationContext.InspectorConnectionConfig.ImpliedKey.String(),
+				this.migrationContext.InspectorMySQLVersion,
+			)
+		}
+		return NoPrintStatusRule, nil
 	case "chunk-size":
 		{
 			if argIsQuestion {
@@ -264,7 +280,7 @@ help                                 # This message
 				return NoPrintStatusRule, nil
 			}
 			this.migrationContext.SetThrottleQuery(arg)
-			fmt.Fprintf(writer, throttleHint)
+			fmt.Fprintln(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "throttle-http":
@@ -274,7 +290,7 @@ help                                 # This message
 				return NoPrintStatusRule, nil
 			}
 			this.migrationContext.SetThrottleHTTP(arg)
-			fmt.Fprintf(writer, throttleHint)
+			fmt.Fprintln(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "throttle-control-replicas":
@@ -297,7 +313,7 @@ help                                 # This message
 				return NoPrintStatusRule, err
 			}
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 1)
-			fmt.Fprintf(writer, throttleHint)
+			fmt.Fprintln(writer, throttleHint)
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "no-throttle", "unthrottle", "resume", "continue":

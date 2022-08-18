@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,12 +17,13 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/outbrain/golib/sqlutils"
-	"sync"
+	"github.com/openark/golib/log"
+	"github.com/openark/golib/sqlutils"
 )
 
 const (
-	atomicCutOverMagicHint = "ghost-cut-over-sentry"
+	GhostChangelogTableComment = "gh-ost changelog"
+	atomicCutOverMagicHint     = "ghost-cut-over-sentry"
 )
 
 type dmlBuildResult struct {
@@ -57,6 +59,7 @@ type Applier struct {
 	singletonDB       *gosql.DB
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
+	name              string
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -64,11 +67,11 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 		connectionConfig:  migrationContext.ApplierConnectionConfig,
 		migrationContext:  migrationContext,
 		finishedMigrating: 0,
+		name:              "applier",
 	}
 }
 
 func (this *Applier) InitDBConnections() (err error) {
-
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
@@ -78,18 +81,18 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	this.singletonDB.SetMaxOpenConns(1)
-	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext)
+	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
 	if err != nil {
 		return err
 	}
-	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig, this.migrationContext); err != nil {
+	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig, this.migrationContext, this.name); err != nil {
 		return err
 	}
 	this.migrationContext.ApplierMySQLVersion = version
 	if err := this.validateAndReadTimeZone(); err != nil {
 		return err
 	}
-	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {
@@ -112,6 +115,24 @@ func (this *Applier) validateAndReadTimeZone() error {
 
 	this.migrationContext.Log.Infof("will use time_zone='%s' on applier", this.migrationContext.ApplierTimeZone)
 	return nil
+}
+
+// generateSqlModeQuery return a `sql_mode = ...` query, to be wrapped with a `set session` or `set global`,
+// based on gh-ost configuration:
+// - User may skip strict mode
+// - User may allow zero dats or zero in dates
+func (this *Applier) generateSqlModeQuery() string {
+	sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
+	if !this.migrationContext.SkipStrictMode {
+		sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
+	}
+	sqlModeQuery := fmt.Sprintf("CONCAT(@@session.sql_mode, ',%s')", sqlModeAddendum)
+	if this.migrationContext.AllowZeroInDate {
+		sqlModeQuery = fmt.Sprintf("REPLACE(REPLACE(%s, 'NO_ZERO_IN_DATE', ''), 'NO_ZERO_DATE', '')", sqlModeQuery)
+	}
+	sqlModeQuery = fmt.Sprintf("sql_mode = %s", sqlModeQuery)
+
+	return sqlModeQuery
 }
 
 // readTableColumns reads table columns on applier
@@ -179,11 +200,33 @@ func (this *Applier) CreateGhostTable() error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
-	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
-		return err
-	}
-	this.migrationContext.Log.Infof("Ghost table created")
-	return nil
+
+	err := func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
+
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(query); err != nil {
+			return err
+		}
+		this.migrationContext.Log.Infof("Ghost table created")
+		if err := tx.Commit(); err != nil {
+			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
+			// there's no need to commit; but let's do this the legit way anyway.
+			return err
+		}
+		return nil
+	}()
+
+	return err
 }
 
 // AlterGhost applies `alter` statement on ghost table
@@ -198,10 +241,51 @@ func (this *Applier) AlterGhost() error {
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
 	this.migrationContext.Log.Debugf("ALTER statement: %s", query)
+
+	err := func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
+
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(query); err != nil {
+			return err
+		}
+		this.migrationContext.Log.Infof("Ghost table altered")
+		if err := tx.Commit(); err != nil {
+			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
+			// there's no need to commit; but let's do this the legit way anyway.
+			return err
+		}
+		return nil
+	}()
+
+	return err
+}
+
+// AlterGhost applies `alter` statement on ghost table
+func (this *Applier) AlterGhostAutoIncrement() error {
+	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s AUTO_INCREMENT=%d`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		this.migrationContext.OriginalTableAutoIncrement,
+	)
+	this.migrationContext.Log.Infof("Altering ghost table AUTO_INCREMENT value %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	)
+	this.migrationContext.Log.Debugf("AUTO_INCREMENT ALTER statement: %s", query)
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
 	}
-	this.migrationContext.Log.Infof("Ghost table altered")
+	this.migrationContext.Log.Infof("Ghost table AUTO_INCREMENT altered")
 	return nil
 }
 
@@ -211,16 +295,16 @@ func (this *Applier) CreateChangelogTable() error {
 		return err
 	}
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s (
-			id bigint auto_increment,
+			id bigint unsigned auto_increment,
 			last_update timestamp not null DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			hint varchar(64) charset ascii not null,
 			value varchar(4096) charset ascii not null,
 			primary key(id),
 			unique key hint_uidx(hint)
-		) auto_increment=256
-		`,
+		) auto_increment=256 comment='%s'`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
+		GhostChangelogTableComment,
 	)
 	this.migrationContext.Log.Infof("Creating changelog table %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -322,8 +406,9 @@ func (this *Applier) InitiateHeartbeat() {
 	}
 	injectHeartbeat()
 
-	heartbeatTick := time.Tick(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
-	for range heartbeatTick {
+	ticker := time.NewTicker(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -360,10 +445,13 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	if err != nil {
 		return err
 	}
+
 	rows, err := this.db.Query(query)
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
+
 	for rows.Next() {
 		this.migrationContext.MigrationRangeMinValues = sql.NewColumnValues(uniqueKey.Len())
 		if err = rows.Scan(this.migrationContext.MigrationRangeMinValues.ValuesPointers...); err != nil {
@@ -372,8 +460,7 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	}
 	this.migrationContext.Log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
 
-	err = rows.Err()
-	return err
+	return rows.Err()
 }
 
 // ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
@@ -383,10 +470,13 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	if err != nil {
 		return err
 	}
+
 	rows, err := this.db.Query(query)
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
+
 	for rows.Next() {
 		this.migrationContext.MigrationRangeMaxValues = sql.NewColumnValues(uniqueKey.Len())
 		if err = rows.Scan(this.migrationContext.MigrationRangeMaxValues.ValuesPointers...); err != nil {
@@ -395,12 +485,31 @@ func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
 	}
 	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
 
-	err = rows.Err()
-	return err
+	return rows.Err()
 }
 
-// ReadMigrationRangeValues reads min/max values that will be used for rowcopy
+// ReadMigrationRangeValues reads min/max values that will be used for rowcopy.
+// Before read min/max, write a changelog state into the ghc table to avoid lost data in mysql two-phase commit.
+/*
+Detail description of the lost data in mysql two-phase commit issue by @Fanduzi:
+	When using semi-sync and setting rpl_semi_sync_master_wait_point=AFTER_SYNC,
+	if an INSERT statement is being committed but blocks due to an unmet ack count,
+	the data inserted by the transaction is not visible to ReadMigrationRangeValues,
+	so the copy of the existing data in the table does not include the new row inserted by the transaction.
+	However, the binlog event for the transaction is already written to the binlog,
+	so the addDMLEventsListener only captures the binlog event after the transaction,
+	and thus the transaction's binlog event is not captured, resulting in data loss.
+
+	If write a changelog into ghc table before ReadMigrationRangeValues, and the transaction commit blocks
+	because the ack is not met, then the changelog will not be able to write, so the ReadMigrationRangeValues
+	will not be run. When the changelog writes successfully, the ReadMigrationRangeValues will read the
+	newly inserted data, thus Avoiding data loss due to the above problem.
+*/
 func (this *Applier) ReadMigrationRangeValues() error {
+	if _, err := this.WriteChangelogState(string(ReadMigrationRangeValues)); err != nil {
+		return err
+	}
+
 	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
 		return err
 	}
@@ -437,10 +546,13 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		if err != nil {
 			return hasFurtherRange, err
 		}
+
 		rows, err := this.db.Query(query, explodedArgs...)
 		if err != nil {
 			return hasFurtherRange, err
 		}
+		defer rows.Close()
+
 		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
@@ -489,12 +601,9 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 			return nil, err
 		}
 		defer tx.Rollback()
+
 		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
-		sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
-		if !this.migrationContext.SkipStrictMode {
-			sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
-		}
-		sessionQuery = fmt.Sprintf("%s, sql_mode = CONCAT(@@session.sql_mode, ',%s')", sessionQuery, sqlModeAddendum)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
@@ -992,7 +1101,6 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
 func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
-
 	var totalDelta int64
 
 	err := func() error {
@@ -1007,12 +1115,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		}
 
 		sessionQuery := "SET SESSION time_zone = '+00:00'"
-
-		sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
-		if !this.migrationContext.SkipStrictMode {
-			sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
-		}
-		sessionQuery = fmt.Sprintf("%s, sql_mode = CONCAT(@@session.sql_mode, ',%s')", sessionQuery, sqlModeAddendum)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return rollback(err)
@@ -1022,11 +1125,20 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 				if buildResult.err != nil {
 					return rollback(buildResult.err)
 				}
-				if _, err := tx.Exec(buildResult.query, buildResult.args...); err != nil {
+				result, err := tx.Exec(buildResult.query, buildResult.args...)
+				if err != nil {
 					err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), buildResult.query, buildResult.args)
 					return rollback(err)
 				}
-				totalDelta += buildResult.rowsDelta
+
+				rowsAffected, err := result.RowsAffected()
+				if err != nil {
+					log.Warningf("error getting rows affected from DML event query: %s. i'm going to assume that the DML affected a single row, but this may result in inaccurate statistics", err)
+					rowsAffected = 1
+				}
+				// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
+				// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
+				totalDelta += buildResult.rowsDelta * rowsAffected
 			}
 		}
 		if err := tx.Commit(); err != nil {

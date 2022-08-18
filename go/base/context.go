@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -15,14 +15,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/outbrain/golib/log"
+	"github.com/openark/golib/log"
 
-	"gopkg.in/gcfg.v1"
-	gcfgscanner "gopkg.in/gcfg.v1/scanner"
+	"github.com/go-ini/ini"
 )
 
 // RowsEstimateMethod is the type of row number estimation
@@ -52,6 +51,7 @@ const (
 const (
 	HTTPStatusOK       = 200
 	MaxEventsBatchSize = 1000
+	ETAUnknown         = math.MinInt64
 )
 
 var (
@@ -82,6 +82,8 @@ type MigrationContext struct {
 	AlterStatement        string
 	AlterStatementOptions string // anything following the 'ALTER TABLE [schema.]table' from AlterStatement
 
+	countMutex               sync.Mutex
+	countTableRowsCancelFunc func()
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
 	AllowedRunningOnMaster   bool
@@ -90,6 +92,7 @@ type MigrationContext struct {
 	AssumeRBR                bool
 	SkipForeignKeyChecks     bool
 	SkipStrictMode           bool
+	AllowZeroInDate          bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
@@ -97,6 +100,7 @@ type MigrationContext struct {
 	DiscardForeignKeys       bool
 	AliyunRDS                bool
 	GoogleCloudPlatform      bool
+	AzureMySQL               bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -139,6 +143,7 @@ type MigrationContext struct {
 	HooksHintMessage                    string
 	HooksHintOwner                      string
 	HooksHintToken                      string
+	HooksStatusIntervalSec              int64
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -177,9 +182,14 @@ type MigrationContext struct {
 	RenameTablesEndTime                    time.Time
 	pointOfInterestTime                    time.Time
 	pointOfInterestTimeMutex               *sync.Mutex
+	lastHeartbeatOnChangelogTime           time.Time
+	lastHeartbeatOnChangelogMutex          *sync.Mutex
 	CurrentLag                             int64
 	currentProgress                        uint64
+	etaNanoseonds                          int64
+	ThrottleHTTPIntervalMillis             int64
 	ThrottleHTTPStatusCode                 int64
+	ThrottleHTTPTimeoutMillis              int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
 	TotalDMLEventsApplied                  int64
@@ -203,6 +213,7 @@ type MigrationContext struct {
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableVirtualColumns      *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
+	OriginalTableAutoIncrement       uint64
 	GhostTableColumns                *sql.ColumnList
 	GhostTableVirtualColumns         *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
@@ -263,6 +274,7 @@ func NewMigrationContext() *MigrationContext {
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
 		DMLBatchSize:                        10,
+		etaNanoseonds:                       ETAUnknown,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
 		throttleMutex:                       &sync.Mutex{},
@@ -270,6 +282,7 @@ func NewMigrationContext() *MigrationContext {
 		throttleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
+		lastHeartbeatOnChangelogMutex:       &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
 		Log:                                 NewDefaultLogger(),
@@ -418,6 +431,36 @@ func (this *MigrationContext) IsTransactionalTable() bool {
 	return false
 }
 
+// SetCountTableRowsCancelFunc sets the cancel function for the CountTableRows query context
+func (this *MigrationContext) SetCountTableRowsCancelFunc(f func()) {
+	this.countMutex.Lock()
+	defer this.countMutex.Unlock()
+
+	this.countTableRowsCancelFunc = f
+}
+
+// IsCountingTableRows returns true if the migration has a table count query running
+func (this *MigrationContext) IsCountingTableRows() bool {
+	this.countMutex.Lock()
+	defer this.countMutex.Unlock()
+
+	return this.countTableRowsCancelFunc != nil
+}
+
+// CancelTableRowsCount cancels the CountTableRows query context. It is safe to
+// call function even when IsCountingTableRows is false.
+func (this *MigrationContext) CancelTableRowsCount() {
+	this.countMutex.Lock()
+	defer this.countMutex.Unlock()
+
+	if this.countTableRowsCancelFunc == nil {
+		return
+	}
+
+	this.countTableRowsCancelFunc()
+	this.countTableRowsCancelFunc = nil
+}
+
 // ElapsedTime returns time since very beginning of the process
 func (this *MigrationContext) ElapsedTime() time.Duration {
 	return time.Since(this.StartTime)
@@ -453,6 +496,10 @@ func (this *MigrationContext) MarkRowCopyEndTime() {
 	this.RowCopyEndTime = time.Now()
 }
 
+func (this *MigrationContext) TimeSinceLastHeartbeatOnChangelog() time.Duration {
+	return time.Since(this.GetLastHeartbeatOnChangelogTime())
+}
+
 func (this *MigrationContext) GetCurrentLagDuration() time.Duration {
 	return time.Duration(atomic.LoadInt64(&this.CurrentLag))
 }
@@ -463,6 +510,22 @@ func (this *MigrationContext) GetProgressPct() float64 {
 
 func (this *MigrationContext) SetProgressPct(progressPct float64) {
 	atomic.StoreUint64(&this.currentProgress, math.Float64bits(progressPct))
+}
+
+func (this *MigrationContext) GetETADuration() time.Duration {
+	return time.Duration(atomic.LoadInt64(&this.etaNanoseonds))
+}
+
+func (this *MigrationContext) SetETADuration(etaDuration time.Duration) {
+	atomic.StoreInt64(&this.etaNanoseonds, etaDuration.Nanoseconds())
+}
+
+func (this *MigrationContext) GetETASeconds() int64 {
+	nano := atomic.LoadInt64(&this.etaNanoseonds)
+	if nano < 0 {
+		return ETAUnknown
+	}
+	return nano / int64(time.Second)
 }
 
 // math.Float64bits([f=0..100])
@@ -492,6 +555,20 @@ func (this *MigrationContext) TimeSincePointOfInterest() time.Duration {
 	return time.Since(this.pointOfInterestTime)
 }
 
+func (this *MigrationContext) SetLastHeartbeatOnChangelogTime(t time.Time) {
+	this.lastHeartbeatOnChangelogMutex.Lock()
+	defer this.lastHeartbeatOnChangelogMutex.Unlock()
+
+	this.lastHeartbeatOnChangelogTime = t
+}
+
+func (this *MigrationContext) GetLastHeartbeatOnChangelogTime() time.Time {
+	this.lastHeartbeatOnChangelogMutex.Lock()
+	defer this.lastHeartbeatOnChangelogMutex.Unlock()
+
+	return this.lastHeartbeatOnChangelogTime
+}
+
 func (this *MigrationContext) SetHeartbeatIntervalMilliseconds(heartbeatIntervalMilliseconds int64) {
 	if heartbeatIntervalMilliseconds < 100 {
 		heartbeatIntervalMilliseconds = 100
@@ -510,8 +587,8 @@ func (this *MigrationContext) SetMaxLagMillisecondsThrottleThreshold(maxLagMilli
 }
 
 func (this *MigrationContext) SetChunkSize(chunkSize int64) {
-	if chunkSize < 100 {
-		chunkSize = 100
+	if chunkSize < 10 {
+		chunkSize = 10
 	}
 	if chunkSize > 100000 {
 		chunkSize = 100000
@@ -765,10 +842,39 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if this.ConfigFile == "" {
 		return nil
 	}
-	gcfg.RelaxedParserMode = true
-	gcfgscanner.RelaxedScannerMode = true
-	if err := gcfg.ReadFileInto(&this.config, this.ConfigFile); err != nil {
-		return fmt.Errorf("Error reading config file %s. Details: %s", this.ConfigFile, err.Error())
+	cfg, err := ini.Load(this.ConfigFile)
+	if err != nil {
+		return err
+	}
+
+	if cfg.Section("client").HasKey("user") {
+		this.config.Client.User = cfg.Section("client").Key("user").String()
+	}
+
+	if cfg.Section("client").HasKey("password") {
+		this.config.Client.Password = cfg.Section("client").Key("password").String()
+	}
+
+	if cfg.Section("osc").HasKey("chunk_size") {
+		this.config.Osc.Chunk_Size, err = cfg.Section("osc").Key("chunk_size").Int64()
+		if err != nil {
+			return fmt.Errorf("Unable to read osc chunk size: %s", err.Error())
+		}
+	}
+
+	if cfg.Section("osc").HasKey("max_load") {
+		this.config.Osc.Max_Load = cfg.Section("osc").Key("max_load").String()
+	}
+
+	if cfg.Section("osc").HasKey("replication_lag_query") {
+		this.config.Osc.Replication_Lag_Query = cfg.Section("osc").Key("replication_lag_query").String()
+	}
+
+	if cfg.Section("osc").HasKey("max_lag_millis") {
+		this.config.Osc.Max_Lag_Millis, err = cfg.Section("osc").Key("max_lag_millis").Int64()
+		if err != nil {
+			return fmt.Errorf("Unable to read max lag millis: %s", err.Error())
+		}
 	}
 
 	// We accept user & password in the form "${SOME_ENV_VARIABLE}" in which case we pull

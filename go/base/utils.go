@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	gosql "database/sql"
+
 	"github.com/github/gh-ost/go/mysql"
 )
 
@@ -24,9 +25,7 @@ func PrettifyDurationOutput(d time.Duration) string {
 	if d < time.Second {
 		return "0s"
 	}
-	result := fmt.Sprintf("%s", d)
-	result = prettifyDurationRegexp.ReplaceAllString(result, "")
-	return result
+	return prettifyDurationRegexp.ReplaceAllString(d.String(), "")
 }
 
 func FileExists(fileName string) bool {
@@ -62,7 +61,7 @@ func StringContainsAll(s string, substrings ...string) bool {
 	return nonEmptyStringsFound
 }
 
-func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext) (string, error) {
+func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext, name string) (string, error) {
 	versionQuery := `select @@global.version`
 	var port, extraPort int
 	var version string
@@ -70,12 +69,13 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 		return "", err
 	}
 	extraPortQuery := `select @@global.extra_port`
-	if err := db.QueryRow(extraPortQuery).Scan(&extraPort); err != nil {
+	if err := db.QueryRow(extraPortQuery).Scan(&extraPort); err != nil { // nolint:staticcheck
 		// swallow this error. not all servers support extra_port
 	}
 	// AliyunRDS set users port to "NULL", replace it by gh-ost param
 	// GCP set users port to "NULL", replace it by gh-ost param
-	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform {
+	// Azure MySQL set users port to a different value by design, replace it by gh-ost para
+	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform || migrationContext.AzureMySQL {
 		port = connectionConfig.Key.Port
 	} else {
 		portQuery := `select @@global.port`
@@ -85,7 +85,7 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	}
 
 	if connectionConfig.Key.Port == port || (extraPort > 0 && connectionConfig.Key.Port == extraPort) {
-		migrationContext.Log.Infof("connection validated on %+v", connectionConfig.Key)
+		migrationContext.Log.Infof("%s connection validated on %+v", name, connectionConfig.Key)
 		return version, nil
 	} else if extraPort == 0 {
 		return "", fmt.Errorf("Unexpected database port reported: %+v", port)

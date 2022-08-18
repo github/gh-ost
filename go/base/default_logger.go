@@ -1,7 +1,12 @@
+/*
+   Copyright 2022 GitHub Inc.
+         See https://github.com/github/gh-ost/blob/master/LICENSE
+*/
+
 package base
 
 import (
-	"github.com/outbrain/golib/log"
+	"github.com/openark/golib/log"
 )
 
 type simpleLogger struct{}
@@ -12,22 +17,18 @@ func NewDefaultLogger() *simpleLogger {
 
 func (*simpleLogger) Debug(args ...interface{}) {
 	log.Debug(args[0].(string), args[1:])
-	return
 }
 
 func (*simpleLogger) Debugf(format string, args ...interface{}) {
 	log.Debugf(format, args...)
-	return
 }
 
 func (*simpleLogger) Info(args ...interface{}) {
 	log.Info(args[0].(string), args[1:])
-	return
 }
 
 func (*simpleLogger) Infof(format string, args ...interface{}) {
 	log.Infof(format, args...)
-	return
 }
 
 func (*simpleLogger) Warning(args ...interface{}) error {
@@ -64,10 +65,8 @@ func (*simpleLogger) Fatale(err error) error {
 
 func (*simpleLogger) SetLevel(level log.LogLevel) {
 	log.SetLevel(level)
-	return
 }
 
 func (*simpleLogger) SetPrintStackTrace(printStackTraceFlag bool) {
 	log.SetPrintStackTrace(printStackTraceFlag)
-	return
 }

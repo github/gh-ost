@@ -12,6 +12,7 @@ test_logfile=/tmp/gh-ost-test.log
 default_ghost_binary=/tmp/gh-ost-test
 ghost_binary=""
 exec_command_file=/tmp/gh-ost-test.bash
+ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
 throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
@@ -204,6 +205,18 @@ test_single() {
     return 1
   fi
 
+  gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "show create table _gh_ost_test_gho\G" -ss > $ghost_structure_output_file
+
+  if [ -f $tests_path/$test_name/expect_table_structure ] ; then
+    expected_table_structure="$(cat $tests_path/$test_name/expect_table_structure)"
+    if ! grep -q "$expected_table_structure" $ghost_structure_output_file ; then
+      echo
+      echo "ERROR $test_name: table structure was expected to include ${expected_table_structure} but did not. cat $ghost_structure_output_file:"
+      cat $ghost_structure_output_file
+      return 1
+    fi
+  fi
+
   echo_dot
   gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss > $orig_content_output_file
   gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss > $ghost_content_output_file
@@ -211,6 +224,8 @@ test_single() {
   ghost_checksum=$(cat $ghost_content_output_file | md5sum)
 
   if [ "$orig_checksum" != "$ghost_checksum" ] ; then
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test" -ss > $orig_content_output_file
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho" -ss > $ghost_content_output_file
     echo "ERROR $test_name: checksum mismatch"
     echo "---"
     diff $orig_content_output_file $ghost_content_output_file
@@ -229,7 +244,9 @@ build_binary() {
     echo "Using binary: $ghost_binary"
     return 0
   fi
+
   go build -o $ghost_binary go/cmd/gh-ost/main.go
+
   if [ $? -ne 0 ] ; then
     echo "Build failure"
     exit 1

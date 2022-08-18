@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -16,6 +16,7 @@ var (
 	renameColumnRegexp                   = regexp.MustCompile(`(?i)\bchange\s+(column\s+|)([\S]+)\s+([\S]+)\s+`)
 	dropColumnRegexp                     = regexp.MustCompile(`(?i)\bdrop\s+(column\s+|)([\S]+)$`)
 	renameTableRegexp                    = regexp.MustCompile(`(?i)\brename\s+(to|as)\s+`)
+	autoIncrementRegexp                  = regexp.MustCompile(`(?i)\bauto_increment[\s]*=[\s]*([0-9]+)`)
 	alterTableExplicitSchemaTableRegexps = []*regexp.Regexp{
 		// ALTER TABLE `scm`.`tbl` something
 		regexp.MustCompile(`(?i)\balter\s+table\s+` + "`" + `([^` + "`" + `]+)` + "`" + `[.]` + "`" + `([^` + "`" + `]+)` + "`" + `\s+(.*$)`),
@@ -32,12 +33,14 @@ var (
 		// ALTER TABLE tbl something
 		regexp.MustCompile(`(?i)\balter\s+table\s+([\S]+)\s+(.*$)`),
 	}
+	enumValuesRegexp = regexp.MustCompile("^enum[(](.*)[)]$")
 )
 
 type AlterTableParser struct {
-	columnRenameMap map[string]string
-	droppedColumns  map[string]bool
-	isRenameTable   bool
+	columnRenameMap        map[string]string
+	droppedColumns         map[string]bool
+	isRenameTable          bool
+	isAutoIncrementDefined bool
 
 	alterStatementOptions string
 	alterTokens           []string
@@ -122,11 +125,16 @@ func (this *AlterTableParser) parseAlterToken(alterToken string) (err error) {
 			this.isRenameTable = true
 		}
 	}
+	{
+		// auto_increment
+		if autoIncrementRegexp.MatchString(alterToken) {
+			this.isAutoIncrementDefined = true
+		}
+	}
 	return nil
 }
 
 func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err error) {
-
 	this.alterStatementOptions = alterStatement
 	for _, alterTableRegexp := range alterTableExplicitSchemaTableRegexps {
 		if submatch := alterTableRegexp.FindStringSubmatch(this.alterStatementOptions); len(submatch) > 0 {
@@ -173,6 +181,11 @@ func (this *AlterTableParser) DroppedColumnsMap() map[string]bool {
 func (this *AlterTableParser) IsRenameTable() bool {
 	return this.isRenameTable
 }
+
+func (this *AlterTableParser) IsAutoIncrementDefined() bool {
+	return this.isAutoIncrementDefined
+}
+
 func (this *AlterTableParser) GetExplicitSchema() string {
 	return this.explicitSchema
 }
@@ -191,4 +204,11 @@ func (this *AlterTableParser) HasExplicitTable() bool {
 
 func (this *AlterTableParser) GetAlterStatementOptions() string {
 	return this.alterStatementOptions
+}
+
+func ParseEnumValues(enumColumnType string) string {
+	if submatch := enumValuesRegexp.FindStringSubmatch(enumColumnType); len(submatch) > 0 {
+		return submatch[1]
+	}
+	return enumColumnType
 }

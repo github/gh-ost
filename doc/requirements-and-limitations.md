@@ -2,6 +2,8 @@
 
 ### Requirements
 
+- `gh-ost` currently requires MySQL versions 5.7 and greater.
+
 - You will need to have one server serving Row Based Replication (RBR) format binary logs. Right now `FULL` row image is supported. `MINIMAL` to be supported in the near future. `gh-ost` prefers to work with replicas. You may [still have your master configured with Statement Based Replication](migrating-with-sbr.md) (SBR).
 
 - If you are using a replica, the table must have an identical schema between the master and replica.
@@ -17,6 +19,8 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 
 - Switching your `binlog_format` to `ROW`, in the case where it is _not_ `ROW` and you explicitly specified `--switch-to-rbr`
   - If your replication is already in RBR (`binlog_format=ROW`) you can specify `--assume-rbr` to avoid the `STOP SLAVE/START SLAVE` operations, hence no need for `SUPER`.
+
+- `gh-ost` uses the `REPEATABLE_READ` transaction isolation level for all MySQL connections, regardless of the server default.
 
 - Running `--test-on-replica`: before the cut-over phase, `gh-ost` stops replication so that you can compare the two tables and satisfy that the migration is sound.
 
@@ -41,6 +45,7 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
 - Amazon RDS works, but has its own [limitations](rds.md).
 - Google Cloud SQL works, `--gcp` flag required.
 - Aliyun RDS works, `--aliyun-rds` flag required.
+- Azure Database for MySQL works, `--azure` flag required, and have detailed document about it. (azure.md)
 
 - Multisource is not supported when migrating via replica. It _should_ work (but never tested) when connecting directly to master (`--allow-on-master`)
 
