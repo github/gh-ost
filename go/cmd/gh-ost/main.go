@@ -78,6 +78,7 @@ func main() {
 	flag.BoolVar(&migrationContext.DiscardForeignKeys, "discard-foreign-keys", false, "DANGER! This flag will migrate a table that has foreign keys and will NOT create foreign keys on the ghost table, thus your altered table will have NO foreign keys. This is useful for intentional dropping of foreign keys")
 	flag.BoolVar(&migrationContext.SkipForeignKeyChecks, "skip-foreign-key-checks", false, "set to 'true' when you know for certain there are no foreign keys on your table, and wish to skip the time it takes for gh-ost to verify that")
 	flag.BoolVar(&migrationContext.SkipStrictMode, "skip-strict-mode", false, "explicitly tell gh-ost binlog applier not to enforce strict sql mode")
+	flag.BoolVar(&migrationContext.AllowZeroInDate, "allow-zero-in-date", false, "explicitly tell gh-ost binlog applier to ignore NO_ZERO_IN_DATE,NO_ZERO_DATE in sql_mode")
 	flag.BoolVar(&migrationContext.AliyunRDS, "aliyun-rds", false, "set to 'true' when you execute on Aliyun RDS.")
 	flag.BoolVar(&migrationContext.GoogleCloudPlatform, "gcp", false, "set to 'true' when you execute on a 1st generation Google Cloud Platform (GCP).")
 	flag.BoolVar(&migrationContext.AzureMySQL, "azure", false, "set to 'true' when you execute on Azure Database on MySQL.")
@@ -180,7 +181,7 @@ func main() {
 	}
 
 	if migrationContext.AlterStatement == "" {
-		log.Fatalf("--alter must be provided and statement must not be empty")
+		log.Fatal("--alter must be provided and statement must not be empty")
 	}
 	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
 	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
@@ -189,7 +190,7 @@ func main() {
 		if parser.HasExplicitSchema() {
 			migrationContext.DatabaseName = parser.GetExplicitSchema()
 		} else {
-			log.Fatalf("--database must be provided and database name must not be empty, or --alter must specify database name")
+			log.Fatal("--database must be provided and database name must not be empty, or --alter must specify database name")
 		}
 	}
 
@@ -201,48 +202,48 @@ func main() {
 		if parser.HasExplicitTable() {
 			migrationContext.OriginalTableName = parser.GetExplicitTable()
 		} else {
-			log.Fatalf("--table must be provided and table name must not be empty, or --alter must specify table name")
+			log.Fatal("--table must be provided and table name must not be empty, or --alter must specify table name")
 		}
 	}
 	migrationContext.Noop = !(*executeFlag)
 	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {
-		migrationContext.Log.Fatalf("--allow-on-master and --test-on-replica are mutually exclusive")
+		migrationContext.Log.Fatal("--allow-on-master and --test-on-replica are mutually exclusive")
 	}
 	if migrationContext.AllowedRunningOnMaster && migrationContext.MigrateOnReplica {
-		migrationContext.Log.Fatalf("--allow-on-master and --migrate-on-replica are mutually exclusive")
+		migrationContext.Log.Fatal("--allow-on-master and --migrate-on-replica are mutually exclusive")
 	}
 	if migrationContext.MigrateOnReplica && migrationContext.TestOnReplica {
-		migrationContext.Log.Fatalf("--migrate-on-replica and --test-on-replica are mutually exclusive")
+		migrationContext.Log.Fatal("--migrate-on-replica and --test-on-replica are mutually exclusive")
 	}
 	if migrationContext.SwitchToRowBinlogFormat && migrationContext.AssumeRBR {
-		migrationContext.Log.Fatalf("--switch-to-rbr and --assume-rbr are mutually exclusive")
+		migrationContext.Log.Fatal("--switch-to-rbr and --assume-rbr are mutually exclusive")
 	}
 	if migrationContext.TestOnReplicaSkipReplicaStop {
 		if !migrationContext.TestOnReplica {
-			migrationContext.Log.Fatalf("--test-on-replica-skip-replica-stop requires --test-on-replica to be enabled")
+			migrationContext.Log.Fatal("--test-on-replica-skip-replica-stop requires --test-on-replica to be enabled")
 		}
 		migrationContext.Log.Warning("--test-on-replica-skip-replica-stop enabled. We will not stop replication before cut-over. Ensure you have a plugin that does this.")
 	}
 	if migrationContext.CliMasterUser != "" && migrationContext.AssumeMasterHostname == "" {
-		migrationContext.Log.Fatalf("--master-user requires --assume-master-host")
+		migrationContext.Log.Fatal("--master-user requires --assume-master-host")
 	}
 	if migrationContext.CliMasterPassword != "" && migrationContext.AssumeMasterHostname == "" {
-		migrationContext.Log.Fatalf("--master-password requires --assume-master-host")
+		migrationContext.Log.Fatal("--master-password requires --assume-master-host")
 	}
 	if migrationContext.TLSCACertificate != "" && !migrationContext.UseTLS {
-		migrationContext.Log.Fatalf("--ssl-ca requires --ssl")
+		migrationContext.Log.Fatal("--ssl-ca requires --ssl")
 	}
 	if migrationContext.TLSCertificate != "" && !migrationContext.UseTLS {
-		migrationContext.Log.Fatalf("--ssl-cert requires --ssl")
+		migrationContext.Log.Fatal("--ssl-cert requires --ssl")
 	}
 	if migrationContext.TLSKey != "" && !migrationContext.UseTLS {
-		migrationContext.Log.Fatalf("--ssl-key requires --ssl")
+		migrationContext.Log.Fatal("--ssl-key requires --ssl")
 	}
 	if migrationContext.TLSAllowInsecure && !migrationContext.UseTLS {
-		migrationContext.Log.Fatalf("--ssl-allow-insecure requires --ssl")
+		migrationContext.Log.Fatal("--ssl-allow-insecure requires --ssl")
 	}
 	if *replicationLagQuery != "" {
-		migrationContext.Log.Warningf("--replication-lag-query is deprecated")
+		migrationContext.Log.Warning("--replication-lag-query is deprecated")
 	}
 
 	switch *cutOver {

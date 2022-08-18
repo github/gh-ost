@@ -117,6 +117,24 @@ func (this *Applier) validateAndReadTimeZone() error {
 	return nil
 }
 
+// generateSqlModeQuery return a `sql_mode = ...` query, to be wrapped with a `set session` or `set global`,
+// based on gh-ost configuration:
+// - User may skip strict mode
+// - User may allow zero dats or zero in dates
+func (this *Applier) generateSqlModeQuery() string {
+	sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
+	if !this.migrationContext.SkipStrictMode {
+		sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
+	}
+	sqlModeQuery := fmt.Sprintf("CONCAT(@@session.sql_mode, ',%s')", sqlModeAddendum)
+	if this.migrationContext.AllowZeroInDate {
+		sqlModeQuery = fmt.Sprintf("REPLACE(REPLACE(%s, 'NO_ZERO_IN_DATE', ''), 'NO_ZERO_DATE', '')", sqlModeQuery)
+	}
+	sqlModeQuery = fmt.Sprintf("sql_mode = %s", sqlModeQuery)
+
+	return sqlModeQuery
+}
+
 // readTableColumns reads table columns on applier
 func (this *Applier) readTableColumns() (err error) {
 	this.migrationContext.Log.Infof("Examining table structure on applier")
@@ -182,11 +200,33 @@ func (this *Applier) CreateGhostTable() error {
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
-	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
-		return err
-	}
-	this.migrationContext.Log.Infof("Ghost table created")
-	return nil
+
+	err := func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
+
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(query); err != nil {
+			return err
+		}
+		this.migrationContext.Log.Infof("Ghost table created")
+		if err := tx.Commit(); err != nil {
+			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
+			// there's no need to commit; but let's do this the legit way anyway.
+			return err
+		}
+		return nil
+	}()
+
+	return err
 }
 
 // AlterGhost applies `alter` statement on ghost table
@@ -201,11 +241,33 @@ func (this *Applier) AlterGhost() error {
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
 	)
 	this.migrationContext.Log.Debugf("ALTER statement: %s", query)
-	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
-		return err
-	}
-	this.migrationContext.Log.Infof("Ghost table altered")
-	return nil
+
+	err := func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
+
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(query); err != nil {
+			return err
+		}
+		this.migrationContext.Log.Infof("Ghost table altered")
+		if err := tx.Commit(); err != nil {
+			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
+			// there's no need to commit; but let's do this the legit way anyway.
+			return err
+		}
+		return nil
+	}()
+
+	return err
 }
 
 // AlterGhost applies `alter` statement on ghost table
@@ -539,12 +601,9 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 			return nil, err
 		}
 		defer tx.Rollback()
+
 		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
-		sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
-		if !this.migrationContext.SkipStrictMode {
-			sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
-		}
-		sessionQuery = fmt.Sprintf("%s, sql_mode = CONCAT(@@session.sql_mode, ',%s')", sessionQuery, sqlModeAddendum)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
@@ -1056,12 +1115,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		}
 
 		sessionQuery := "SET SESSION time_zone = '+00:00'"
-
-		sqlModeAddendum := `,NO_AUTO_VALUE_ON_ZERO`
-		if !this.migrationContext.SkipStrictMode {
-			sqlModeAddendum = fmt.Sprintf("%s,STRICT_ALL_TABLES", sqlModeAddendum)
-		}
-		sessionQuery = fmt.Sprintf("%s, sql_mode = CONCAT(@@session.sql_mode, ',%s')", sessionQuery, sqlModeAddendum)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return rollback(err)
