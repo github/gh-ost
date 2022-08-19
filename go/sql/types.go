@@ -47,8 +47,8 @@ type Column struct {
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
 	if s, ok := arg.(string); ok {
-                arg2Bytes := []byte(s)
-                arg = arg2Bytes
+		arg2Bytes := []byte(s)
+		arg = arg2Bytes
 
 		if this.Type == BinaryColumnType && isUniqueKeyColumn {
 			size := len(arg2Bytes)
