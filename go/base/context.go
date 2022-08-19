@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
@@ -82,6 +82,8 @@ type MigrationContext struct {
 	AlterStatement        string
 	AlterStatementOptions string // anything following the 'ALTER TABLE [schema.]table' from AlterStatement
 
+	countMutex               sync.Mutex
+	countTableRowsCancelFunc func()
 	CountTableRows           bool
 	ConcurrentCountTableRows bool
 	AllowedRunningOnMaster   bool
@@ -90,6 +92,7 @@ type MigrationContext struct {
 	AssumeRBR                bool
 	SkipForeignKeyChecks     bool
 	SkipStrictMode           bool
+	AllowZeroInDate          bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
@@ -184,7 +187,9 @@ type MigrationContext struct {
 	CurrentLag                             int64
 	currentProgress                        uint64
 	etaNanoseonds                          int64
+	ThrottleHTTPIntervalMillis             int64
 	ThrottleHTTPStatusCode                 int64
+	ThrottleHTTPTimeoutMillis              int64
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
 	TotalDMLEventsApplied                  int64
@@ -424,6 +429,36 @@ func (this *MigrationContext) IsTransactionalTable() bool {
 		}
 	}
 	return false
+}
+
+// SetCountTableRowsCancelFunc sets the cancel function for the CountTableRows query context
+func (this *MigrationContext) SetCountTableRowsCancelFunc(f func()) {
+	this.countMutex.Lock()
+	defer this.countMutex.Unlock()
+
+	this.countTableRowsCancelFunc = f
+}
+
+// IsCountingTableRows returns true if the migration has a table count query running
+func (this *MigrationContext) IsCountingTableRows() bool {
+	this.countMutex.Lock()
+	defer this.countMutex.Unlock()
+
+	return this.countTableRowsCancelFunc != nil
+}
+
+// CancelTableRowsCount cancels the CountTableRows query context. It is safe to
+// call function even when IsCountingTableRows is false.
+func (this *MigrationContext) CancelTableRowsCount() {
+	this.countMutex.Lock()
+	defer this.countMutex.Unlock()
+
+	if this.countTableRowsCancelFunc == nil {
+		return
+	}
+
+	this.countTableRowsCancelFunc()
+	this.countTableRowsCancelFunc = nil
 }
 
 // ElapsedTime returns time since very beginning of the process
@@ -812,30 +847,30 @@ func (this *MigrationContext) ReadConfigFile() error {
 		return err
 	}
 
-	if cfg.Section("client").Haskey("user") {
+	if cfg.Section("client").HasKey("user") {
 		this.config.Client.User = cfg.Section("client").Key("user").String()
 	}
 
-	if cfg.Section("client").Haskey("password") {
+	if cfg.Section("client").HasKey("password") {
 		this.config.Client.Password = cfg.Section("client").Key("password").String()
 	}
 
-	if cfg.Section("osc").Haskey("chunk_size") {
+	if cfg.Section("osc").HasKey("chunk_size") {
 		this.config.Osc.Chunk_Size, err = cfg.Section("osc").Key("chunk_size").Int64()
 		if err != nil {
 			return fmt.Errorf("Unable to read osc chunk size: %s", err.Error())
 		}
 	}
 
-	if cfg.Section("osc").Haskey("max_load") {
+	if cfg.Section("osc").HasKey("max_load") {
 		this.config.Osc.Max_Load = cfg.Section("osc").Key("max_load").String()
 	}
 
-	if cfg.Section("osc").Haskey("replication_lag_query") {
+	if cfg.Section("osc").HasKey("replication_lag_query") {
 		this.config.Osc.Replication_Lag_Query = cfg.Section("osc").Key("replication_lag_query").String()
 	}
 
-	if cfg.Section("osc").Haskey("max_lag_millis") {
+	if cfg.Section("osc").HasKey("max_lag_millis") {
 		this.config.Osc.Max_Lag_Millis, err = cfg.Section("osc").Key("max_lag_millis").Int64()
 		if err != nil {
 			return fmt.Errorf("Unable to read max lag millis: %s", err.Error())

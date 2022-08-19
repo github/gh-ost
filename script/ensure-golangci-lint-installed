@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# See https://github.com/golangci/golangci-lint/releases
+GOLANGCI_RELEASE=v1.46.2
+GOLANGCI_INSTALL_SCRIPT=https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh
+
+if [ -z "$GOPATH" ]; then
+  echo "GOPATH must be set"
+  exit 1
+fi
+
+if [ ! -x "$GOPATH/bin/golangci-lint" ]; then
+  echo "Installing golangci-lint $GOLANGCI_RELEASE using script: $GOLANGCI_INSTALL_SCRIPT"
+  curl -sSfL $GOLANGCI_INSTALL_SCRIPT | sh -s -- -b $(go env GOPATH)/bin $GOLANGCI_RELEASE
+fi
+
+$GOPATH/bin/golangci-lint --version

@@ -1,0 +1,15 @@
+#!/bin/bash
+
+set -e
+
+. script/ensure-go-installed
+. script/ensure-golangci-lint-installed
+
+if [ -x "$GOPATH/bin/golangci-lint" ]; then
+  echo "Running golangci-lint run"
+  $GOPATH/bin/golangci-lint run --config=.golangci.yml
+  echo "Done, exit code: $?"
+else
+  echo "ERROR: cannot find golangci-lint at $GOPATH/bin"
+  exit 1
+fi

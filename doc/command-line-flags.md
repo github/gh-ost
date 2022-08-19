@@ -6,6 +6,10 @@ A more in-depth discussion of various `gh-ost` command line flags: implementatio
 
 Add this flag when executing on Aliyun RDS.
 
+### allow-zero-in-date
+
+Allows the user to make schema changes that include a zero date or zero in date (e.g. adding a `datetime default '0000-00-00 00:00:00'` column), even if global `sql_mode` on MySQL has `NO_ZERO_IN_DATE,NO_ZERO_DATE`.
+
 ###  azure
 
 Add this flag when executing on Azure Database for MySQL.
@@ -241,6 +245,14 @@ Provide a command delimited list of replicas; `gh-ost` will throttle when any of
 ### throttle-http
 
 Provide an HTTP endpoint; `gh-ost` will issue `HEAD` requests on given URL and throttle whenever response status code is not `200`. The URL can be queried and updated dynamically via [interactive commands](interactive-commands.md). Empty URL disables the HTTP check.
+
+### throttle-http-interval-millis
+
+Defaults to 100. Configures the HTTP throttle check interval in milliseconds.
+
+### throttle-http-timeout-millis
+
+Defaults to 1000 (1 second). Configures the HTTP throttler check timeout in milliseconds.
 
 ### timestamp-old-table
 
