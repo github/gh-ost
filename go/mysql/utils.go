@@ -233,3 +233,9 @@ func GetTriggers(db *gosql.DB, databaseName, tableName string) (triggers []Trigg
 	}
 	return triggers, nil
 }
+
+// Kill executes a KILL QUERY by connection id
+func Kill(db *gosql.DB, connectionID string) error {
+	_, err := db.Exec(`KILL QUERY %s`, connectionID)
+	return err
+}

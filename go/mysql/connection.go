@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -12,12 +12,14 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"strings"
 
 	"github.com/go-sql-driver/mysql"
 )
 
 const (
-	TLS_CONFIG_KEY = "ghost"
+	transactionIsolation = "REPEATABLE-READ"
+	TLS_CONFIG_KEY       = "ghost"
 )
 
 // ConnectionConfig is the minimal configuration required to connect to a MySQL server
@@ -112,12 +114,23 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 		// Wrap IPv6 literals in square brackets
 		hostname = fmt.Sprintf("[%s]", hostname)
 	}
-	interpolateParams := true
+
 	// go-mysql-driver defaults to false if tls param is not provided; explicitly setting here to
 	// simplify construction of the DSN below.
 	tlsOption := "false"
 	if this.tlsConfig != nil {
 		tlsOption = TLS_CONFIG_KEY
 	}
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?timeout=%fs&readTimeout=%fs&writeTimeout=%fs&interpolateParams=%t&autocommit=true&charset=utf8mb4,utf8,latin1&tls=%s", this.User, this.Password, hostname, this.Key.Port, databaseName, this.Timeout, this.Timeout, this.Timeout, interpolateParams, tlsOption)
+	connectionParams := []string{
+		"autocommit=true",
+		"charset=utf8mb4,utf8,latin1",
+		"interpolateParams=true",
+		fmt.Sprintf("tls=%s", tlsOption),
+		fmt.Sprintf("transaction_isolation=%q", transactionIsolation),
+		fmt.Sprintf("timeout=%fs", this.Timeout),
+		fmt.Sprintf("readTimeout=%fs", this.Timeout),
+		fmt.Sprintf("writeTimeout=%fs", this.Timeout),
+	}
+
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s", this.User, this.Password, hostname, this.Key.Port, databaseName, strings.Join(connectionParams, "&"))
 }

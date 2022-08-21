@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -33,7 +33,7 @@ func EscapeName(name string) string {
 }
 
 func buildColumnsPreparedValues(columns *ColumnList) []string {
-	values := make([]string, columns.Len(), columns.Len())
+	values := make([]string, columns.Len())
 	for i, column := range columns.Columns() {
 		var token string
 		if column.timezoneConversion != nil {
@@ -51,7 +51,7 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 }
 
 func buildPreparedValues(length int) []string {
-	values := make([]string, length, length)
+	values := make([]string, length)
 	for i := 0; i < length; i++ {
 		values[i] = "?"
 	}
@@ -59,7 +59,7 @@ func buildPreparedValues(length int) []string {
 }
 
 func duplicateNames(names []string) []string {
-	duplicate := make([]string, len(names), len(names))
+	duplicate := make([]string, len(names))
 	copy(duplicate, names)
 	return duplicate
 }
@@ -167,7 +167,7 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 	if includeEquals {
 		comparison, err := BuildEqualsComparison(columns, values)
 		if err != nil {
-			return "", explodedArgs, nil
+			return "", explodedArgs, err
 		}
 		comparisons = append(comparisons, comparison)
 		explodedArgs = append(explodedArgs, args...)
@@ -261,8 +261,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
-	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
-	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
+	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames))
+	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames))
 	for i, column := range uniqueKeyColumns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
@@ -316,8 +316,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
-	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
-	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
+	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames))
+	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames))
 	for i, column := range uniqueKeyColumns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
@@ -368,7 +368,7 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 	tableName = EscapeName(tableName)
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
-	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumnNames), len(uniqueKeyColumnNames))
+	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumnNames))
 	for i, column := range uniqueKeyColumns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
@@ -503,6 +503,9 @@ func BuildDMLUpdateQuery(databaseName, tableName string,
 	}
 
 	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
+	if err != nil {
+		return "", sharedArgs, uniqueKeyArgs, err
+	}
 	result = fmt.Sprintf(`
  			update /* gh-ost %s.%s */
  					%s.%s

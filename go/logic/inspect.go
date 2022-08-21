@@ -1,11 +1,12 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package logic
 
 import (
+	"context"
 	gosql "database/sql"
 	"fmt"
 	"reflect"
@@ -283,7 +284,7 @@ func (this *Inspector) validateGrants() error {
 // It is entirely possible, for example, that the replication is using 'STATEMENT'
 // binlog format even as the variable says 'ROW'
 func (this *Inspector) restartReplication() error {
-	this.migrationContext.Log.Infof("Restarting replication on %s:%d to make sure binlog settings apply to replication thread", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	this.migrationContext.Log.Infof("Restarting replication on %s to make sure binlog settings apply to replication thread", this.connectionConfig.Key.String())
 
 	masterKey, _ := mysql.GetMasterKeyFromSlaveStatus(this.connectionConfig)
 	if masterKey == nil {
@@ -342,13 +343,13 @@ func (this *Inspector) validateBinlogs() error {
 		return err
 	}
 	if !hasBinaryLogs {
-		return fmt.Errorf("%s:%d must have binary logs enabled", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return fmt.Errorf("%s must have binary logs enabled", this.connectionConfig.Key.String())
 	}
 	if this.migrationContext.RequiresBinlogFormatChange() {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
-			return fmt.Errorf("You must be using ROW binlog format. I can switch it for you, provided --switch-to-rbr and that %s:%d doesn't have replicas", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+			return fmt.Errorf("You must be using ROW binlog format. I can switch it for you, provided --switch-to-rbr and that %s doesn't have replicas", this.connectionConfig.Key.String())
 		}
-		query := fmt.Sprintf(`show /* gh-ost */ slave hosts`)
+		query := `show /* gh-ost */ slave hosts`
 		countReplicas := 0
 		err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 			countReplicas++
@@ -358,21 +359,20 @@ func (this *Inspector) validateBinlogs() error {
 			return err
 		}
 		if countReplicas > 0 {
-			return fmt.Errorf("%s:%d has %s binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
+			return fmt.Errorf("%s has %s binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.String(), this.migrationContext.OriginalBinlogFormat)
 		}
-		this.migrationContext.Log.Infof("%s:%d has %s binlog_format. I will change it to ROW, and will NOT change it back, even in the event of failure.", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogFormat)
+		this.migrationContext.Log.Infof("%s has %s binlog_format. I will change it to ROW, and will NOT change it back, even in the event of failure.", this.connectionConfig.Key.String(), this.migrationContext.OriginalBinlogFormat)
 	}
 	query = `select @@global.binlog_row_image`
 	if err := this.db.QueryRow(query).Scan(&this.migrationContext.OriginalBinlogRowImage); err != nil {
-		// Only as of 5.6. We wish to support 5.5 as well
-		this.migrationContext.OriginalBinlogRowImage = "FULL"
+		return err
 	}
 	this.migrationContext.OriginalBinlogRowImage = strings.ToUpper(this.migrationContext.OriginalBinlogRowImage)
 	if this.migrationContext.OriginalBinlogRowImage != "FULL" {
-		return fmt.Errorf("%s:%d has '%s' binlog_row_image, and only 'FULL' is supported. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port, this.migrationContext.OriginalBinlogRowImage)
+		return fmt.Errorf("%s has '%s' binlog_row_image, and only 'FULL' is supported. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again", this.connectionConfig.Key.String(), this.migrationContext.OriginalBinlogRowImage)
 	}
 
-	this.migrationContext.Log.Infof("binary logs validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	this.migrationContext.Log.Infof("binary logs validated on %s", this.connectionConfig.Key.String())
 	return nil
 }
 
@@ -385,25 +385,25 @@ func (this *Inspector) validateLogSlaveUpdates() error {
 	}
 
 	if logSlaveUpdates {
-		this.migrationContext.Log.Infof("log_slave_updates validated on %s:%d", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		this.migrationContext.Log.Infof("log_slave_updates validated on %s", this.connectionConfig.Key.String())
 		return nil
 	}
 
 	if this.migrationContext.IsTungsten {
-		this.migrationContext.Log.Warningf("log_slave_updates not found on %s:%d, but --tungsten provided, so I'm proceeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		this.migrationContext.Log.Warningf("log_slave_updates not found on %s, but --tungsten provided, so I'm proceeding", this.connectionConfig.Key.String())
 		return nil
 	}
 
 	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
-		return fmt.Errorf("%s:%d must have log_slave_updates enabled for testing/migrating on replica", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		return fmt.Errorf("%s must have log_slave_updates enabled for testing/migrating on replica", this.connectionConfig.Key.String())
 	}
 
 	if this.migrationContext.InspectorIsAlsoApplier() {
-		this.migrationContext.Log.Warningf("log_slave_updates not found on %s:%d, but executing directly on master, so I'm proceeding", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+		this.migrationContext.Log.Warningf("log_slave_updates not found on %s, but executing directly on master, so I'm proceeding", this.connectionConfig.Key.String())
 		return nil
 	}
 
-	return fmt.Errorf("%s:%d must have log_slave_updates enabled for executing migration", this.connectionConfig.Key.Hostname, this.connectionConfig.Key.Port)
+	return fmt.Errorf("%s must have log_slave_updates enabled for executing migration", this.connectionConfig.Key.String())
 }
 
 // validateTable makes sure the table we need to operate on actually exists
@@ -596,17 +596,39 @@ func (this *Inspector) estimateTableRowsViaExplain() error {
 }
 
 // CountTableRows counts exact number of rows on the original table
-func (this *Inspector) CountTableRows() error {
+func (this *Inspector) CountTableRows(ctx context.Context) error {
 	atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 1)
 	defer atomic.StoreInt64(&this.migrationContext.CountingRowsFlag, 0)
 
 	this.migrationContext.Log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 
-	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
-	var rowsEstimate int64
-	if err := this.db.QueryRow(query).Scan(&rowsEstimate); err != nil {
+	conn, err := this.db.Conn(ctx)
+	if err != nil {
 		return err
 	}
+	defer conn.Close()
+
+	var connectionID string
+	if err := conn.QueryRowContext(ctx, `SELECT /* gh-ost */ CONNECTION_ID()`).Scan(&connectionID); err != nil {
+		return err
+	}
+
+	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	var rowsEstimate int64
+	if err := conn.QueryRowContext(ctx, query).Scan(&rowsEstimate); err != nil {
+		switch err {
+		case context.Canceled, context.DeadlineExceeded:
+			this.migrationContext.Log.Infof("exact row count cancelled (%s), likely because I'm about to cut over. I'm going to kill that query.", ctx.Err())
+			return mysql.Kill(this.db, connectionID)
+		default:
+			return err
+		}
+	}
+
+	// row count query finished. nil out the cancel func, so the main migration thread
+	// doesn't bother calling it after row copy is done.
+	this.migrationContext.SetCountTableRowsCancelFunc(nil)
+
 	atomic.StoreInt64(&this.migrationContext.RowsEstimate, rowsEstimate)
 	this.migrationContext.UsedRowsEstimateMethod = base.CountRowsEstimate
 
@@ -891,5 +913,4 @@ func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err er
 func (this *Inspector) Teardown() {
 	this.db.Close()
 	this.informationSchemaDb.Close()
-	return
 }

@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -67,9 +67,10 @@ func TestGetDBUri(t *testing.T) {
 	c.Key = InstanceKey{Hostname: "myhost", Port: 3306}
 	c.User = "gromit"
 	c.Password = "penguin"
+	c.Timeout = 1.2345
 
 	uri := c.GetDBUri("test")
-	test.S(t).ExpectEquals(uri, "gromit:penguin@tcp(myhost:3306)/test?timeout=0.000000s&readTimeout=0.000000s&writeTimeout=0.000000s&interpolateParams=true&autocommit=true&charset=utf8mb4,utf8,latin1&tls=false")
+	test.S(t).ExpectEquals(uri, `gromit:penguin@tcp(myhost:3306)/test?autocommit=true&charset=utf8mb4,utf8,latin1&interpolateParams=true&tls=false&transaction_isolation="REPEATABLE-READ"&timeout=1.234500s&readTimeout=1.234500s&writeTimeout=1.234500s`)
 }
 
 func TestGetDBUriWithTLSSetup(t *testing.T) {
@@ -77,8 +78,9 @@ func TestGetDBUriWithTLSSetup(t *testing.T) {
 	c.Key = InstanceKey{Hostname: "myhost", Port: 3306}
 	c.User = "gromit"
 	c.Password = "penguin"
+	c.Timeout = 1.2345
 	c.tlsConfig = &tls.Config{}
 
 	uri := c.GetDBUri("test")
-	test.S(t).ExpectEquals(uri, "gromit:penguin@tcp(myhost:3306)/test?timeout=0.000000s&readTimeout=0.000000s&writeTimeout=0.000000s&interpolateParams=true&autocommit=true&charset=utf8mb4,utf8,latin1&tls=ghost")
+	test.S(t).ExpectEquals(uri, `gromit:penguin@tcp(myhost:3306)/test?autocommit=true&charset=utf8mb4,utf8,latin1&interpolateParams=true&tls=ghost&transaction_isolation="REPEATABLE-READ"&timeout=1.234500s&readTimeout=1.234500s&writeTimeout=1.234500s`)
 }

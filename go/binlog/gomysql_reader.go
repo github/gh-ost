@@ -1,5 +1,5 @@
 /*
-   Copyright 2021 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -28,31 +28,24 @@ type GoMySQLReader struct {
 	LastAppliedRowsEventHint mysql.BinlogCoordinates
 }
 
-func NewGoMySQLReader(migrationContext *base.MigrationContext) (binlogReader *GoMySQLReader, err error) {
-	binlogReader = &GoMySQLReader{
+func NewGoMySQLReader(migrationContext *base.MigrationContext) *GoMySQLReader {
+	connectionConfig := migrationContext.InspectorConnectionConfig
+	return &GoMySQLReader{
 		migrationContext:        migrationContext,
-		connectionConfig:        migrationContext.InspectorConnectionConfig,
+		connectionConfig:        connectionConfig,
 		currentCoordinates:      mysql.BinlogCoordinates{},
 		currentCoordinatesMutex: &sync.Mutex{},
-		binlogSyncer:            nil,
-		binlogStreamer:          nil,
+		binlogSyncer: replication.NewBinlogSyncer(replication.BinlogSyncerConfig{
+			ServerID:   uint32(migrationContext.ReplicaServerId),
+			Flavor:     gomysql.MySQLFlavor,
+			Host:       connectionConfig.Key.Hostname,
+			Port:       uint16(connectionConfig.Key.Port),
+			User:       connectionConfig.User,
+			Password:   connectionConfig.Password,
+			TLSConfig:  connectionConfig.TLSConfig(),
+			UseDecimal: true,
+		}),
 	}
-
-	serverId := uint32(migrationContext.ReplicaServerId)
-
-	binlogSyncerConfig := replication.BinlogSyncerConfig{
-		ServerID:   serverId,
-		Flavor:     "mysql",
-		Host:       binlogReader.connectionConfig.Key.Hostname,
-		Port:       uint16(binlogReader.connectionConfig.Key.Port),
-		User:       binlogReader.connectionConfig.User,
-		Password:   binlogReader.connectionConfig.Password,
-		TLSConfig:  binlogReader.connectionConfig.TLSConfig(),
-		UseDecimal: true,
-	}
-	binlogReader.binlogSyncer = replication.NewBinlogSyncer(binlogSyncerConfig)
-
-	return binlogReader, err
 }
 
 // ConnectBinlogStreamer
@@ -64,7 +57,10 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 	this.currentCoordinates = coordinates
 	this.migrationContext.Log.Infof("Connecting binlog streamer at %+v", this.currentCoordinates)
 	// Start sync with specified binlog file and position
-	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{this.currentCoordinates.LogFile, uint32(this.currentCoordinates.LogPos)})
+	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{
+		Name: this.currentCoordinates.LogFile,
+		Pos:  uint32(this.currentCoordinates.LogPos),
+	})
 
 	return err
 }
@@ -142,15 +138,17 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			defer this.currentCoordinatesMutex.Unlock()
 			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
 		}()
-		if rotateEvent, ok := ev.Event.(*replication.RotateEvent); ok {
+
+		switch binlogEvent := ev.Event.(type) {
+		case *replication.RotateEvent:
 			func() {
 				this.currentCoordinatesMutex.Lock()
 				defer this.currentCoordinatesMutex.Unlock()
-				this.currentCoordinates.LogFile = string(rotateEvent.NextLogName)
+				this.currentCoordinates.LogFile = string(binlogEvent.NextLogName)
 			}()
-			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), rotateEvent.NextLogName)
-		} else if rowsEvent, ok := ev.Event.(*replication.RowsEvent); ok {
-			if err := this.handleRowsEvent(ev, rowsEvent, entriesChannel); err != nil {
+			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), binlogEvent.NextLogName)
+		case *replication.RowsEvent:
+			if err := this.handleRowsEvent(ev, binlogEvent, entriesChannel); err != nil {
 				return err
 			}
 		}
