@@ -1302,10 +1302,10 @@ func (this *Migrator) executeWriteFuncs() error {
 
 func (this *Migrator) drainApplierEventQueue() error {
 	for {
-		this.throttler.throttle(nil)
 		select {
 		case eventStruct := <-this.applyEventsQueue:
 			{
+				this.throttler.throttle(nil)
 				if err := this.onApplyEventStruct(eventStruct); err != nil {
 					return err
 				}
