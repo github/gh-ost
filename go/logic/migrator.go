@@ -781,31 +781,29 @@ func (this *Migrator) initiateInspector() (err error) {
 		return err
 	}
 
-	var applierConnConfig *mysql.ConnectionConfig
-	inspectorConnConfig := this.migrationContext.InspectorConnectionConfig
-
 	// So far so good, table is accessible and valid.
 	// Let's get master connection config
+	inspectorConnConfig := this.migrationContext.InspectorConnectionConfig
 	if this.migrationContext.AssumeMasterHostname == "" {
 		// No forced master host; detect master
-		if applierConnConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
+		if this.migrationContext.ApplierConnectionConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
 			return err
 		}
-		this.migrationContext.Log.Infof("Master found to be %+v", *applierConnConfig.ImpliedKey)
+		this.migrationContext.Log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	} else {
 		// Forced master host.
 		key, err := mysql.ParseInstanceKey(this.migrationContext.AssumeMasterHostname)
 		if err != nil {
 			return err
 		}
-		applierConnConfig = inspectorConnConfig.DuplicateCredentials(*key)
+		this.migrationContext.ApplierConnectionConfig = inspectorConnConfig.DuplicateCredentials(*key)
 		if this.migrationContext.CliMasterUser != "" {
-			applierConnConfig.User = this.migrationContext.CliMasterUser
+			this.migrationContext.ApplierConnectionConfig.User = this.migrationContext.CliMasterUser
 		}
 		if this.migrationContext.CliMasterPassword != "" {
-			applierConnConfig.Password = this.migrationContext.CliMasterPassword
+			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
 		}
-		this.migrationContext.Log.Infof("Master forced to be %+v", *applierConnConfig.ImpliedKey)
+		this.migrationContext.Log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	}
 	// validate configs
 	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
@@ -813,16 +811,16 @@ func (this *Migrator) initiateInspector() (err error) {
 			return fmt.Errorf("Instructed to --test-on-replica or --migrate-on-replica, but the server we connect to doesn't seem to be a replica")
 		}
 		this.migrationContext.Log.Infof("--test-on-replica or --migrate-on-replica given. Will not execute on master %+v but rather on replica %+v itself",
-			*applierConnConfig.ImpliedKey, *inspectorConnConfig.ImpliedKey,
+			*this.migrationContext.ApplierConnectionConfig.ImpliedKey, *inspectorConnConfig.ImpliedKey,
 		)
-		applierConnConfig = inspectorConnConfig.Duplicate()
+		this.migrationContext.ApplierConnectionConfig = inspectorConnConfig.Duplicate()
 		if this.migrationContext.GetThrottleControlReplicaKeys().Len() == 0 {
 			if err = this.migrationContext.AddThrottleControlReplicaKey(inspectorConnConfig.Key); err != nil {
 				return err
 			}
 		}
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
-		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", inspectorConnConfig, applierConnConfig)
+		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", inspectorConnConfig, this.migrationContext.ApplierConnectionConfig)
 	}
 	if err := this.inspector.validateLogSlaveUpdates(); err != nil {
 		return err
