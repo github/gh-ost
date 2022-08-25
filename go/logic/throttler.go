@@ -155,17 +155,19 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 			} else {
 				atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
 			}
-		} else {
-			if heartbeatValue, err := this.inspector.readChangelogState("heartbeat"); err != nil {
-				return this.migrationContext.Log.Errore(err)
-			} else {
-				this.parseChangelogHeartbeat(heartbeatValue)
-			}
+			return nil
 		}
-		return nil
+
+		if heartbeatValue, err := this.inspector.readChangelogState("heartbeat"); err != nil {
+			return this.migrationContext.Log.Errore(err)
+		} else {
+			return this.parseChangelogHeartbeat(heartbeatValue)
+		}
 	}
 
-	collectFunc()
+	if err := collectFunc(); err != nil {
+		this.migrationContext.Log.Errorf("Throttler failed to collect replication lag: %+v", err)
+	}
 	firstThrottlingCollected <- true
 
 	ticker := time.NewTicker(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
@@ -174,7 +176,11 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
-		go collectFunc()
+		go func() {
+			if err := collectFunc(); err != nil {
+				this.migrationContext.Log.Errorf("Throttler failed to collect replication lag: %+v", err)
+			}
+		}()
 	}
 }
 
@@ -441,8 +447,15 @@ func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 	go this.collectThrottleHTTPStatus(firstThrottlingCollected)
 
 	go func() {
-		this.collectGeneralThrottleMetrics()
-		firstThrottlingCollected <- true
+		for {
+			if err := this.collectGeneralThrottleMetrics(); err != nil {
+				this.migrationContext.Log.Errorf("Failed to collect throttler metrics: %+v", err)
+				time.Sleep(time.Second)
+			} else {
+				firstThrottlingCollected <- true
+				break
+			}
+		}
 
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
@@ -451,7 +464,9 @@ func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 				return
 			}
 
-			this.collectGeneralThrottleMetrics()
+			if err := this.collectGeneralThrottleMetrics(); err != nil {
+				this.migrationContext.Log.Errorf("Failed to collect throttler metrics: %+v", err)
+			}
 		}
 	}()
 }
@@ -459,17 +474,21 @@ func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 // initiateThrottlerChecks initiates the throttle ticker and sets the basic behavior of throttling.
 func (this *Throttler) initiateThrottlerChecks() {
 	throttlerFunction := func() {
+		var err error
 		alreadyThrottling, currentReason, _ := this.migrationContext.IsThrottled()
 		shouldThrottle, throttleReason, throttleReasonHint := this.shouldThrottle()
 		if shouldThrottle && !alreadyThrottling {
 			// New throttling
-			this.applier.WriteAndLogChangelog("throttle", throttleReason)
+			_, err = this.applier.WriteAndLogChangelog("throttle", throttleReason)
 		} else if shouldThrottle && alreadyThrottling && (currentReason != throttleReason) {
 			// Change of reason
-			this.applier.WriteAndLogChangelog("throttle", throttleReason)
+			_, err = this.applier.WriteAndLogChangelog("throttle", throttleReason)
 		} else if alreadyThrottling && !shouldThrottle {
 			// End of throttling
-			this.applier.WriteAndLogChangelog("throttle", "done throttling")
+			_, err = this.applier.WriteAndLogChangelog("throttle", "done throttling")
+		}
+		if err != nil {
+			this.migrationContext.Log.Errorf("Failed to write changelog event: %+v", err)
 		}
 		this.migrationContext.SetThrottled(shouldThrottle, throttleReason, throttleReasonHint)
 	}

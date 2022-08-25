@@ -94,10 +94,14 @@ func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) 
 		}
 		if listener.async {
 			go func() {
-				listener.onDmlEvent(binlogEvent)
+				if err := listener.onDmlEvent(binlogEvent); err != nil {
+					this.migrationContext.Log.Errorf("Failed to notify listeners of DML event: %+v", err)
+				}
 			}()
 		} else {
-			listener.onDmlEvent(binlogEvent)
+			if err := listener.onDmlEvent(binlogEvent); err != nil {
+				this.migrationContext.Log.Errorf("Failed to notify listeners of DML event: %+v", err)
+			}
 		}
 	}
 }

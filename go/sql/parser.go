@@ -56,10 +56,10 @@ func NewAlterTableParser() *AlterTableParser {
 	}
 }
 
-func NewParserFromAlterStatement(alterStatement string) *AlterTableParser {
+func NewParserFromAlterStatement(alterStatement string) (*AlterTableParser, error) {
 	parser := NewAlterTableParser()
-	parser.ParseAlterStatement(alterStatement)
-	return parser
+	err := parser.ParseAlterStatement(alterStatement)
+	return parser, err
 }
 
 func (this *AlterTableParser) tokenizeAlterStatement(alterStatement string) (tokens []string, err error) {
@@ -154,7 +154,9 @@ func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err er
 	alterTokens, _ := this.tokenizeAlterStatement(this.alterStatementOptions)
 	for _, alterToken := range alterTokens {
 		alterToken = this.sanitizeQuotesFromAlterStatement(alterToken)
-		this.parseAlterToken(alterToken)
+		if err = this.parseAlterToken(alterToken); err != nil {
+			return err
+		}
 		this.alterTokens = append(this.alterTokens, alterToken)
 	}
 	return nil

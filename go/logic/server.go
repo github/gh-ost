@@ -70,7 +70,7 @@ func (this *Server) BindTCPPort() (err error) {
 }
 
 // Serve begins listening & serving on whichever device was configured
-func (this *Server) Serve() (err error) {
+func (this *Server) Serve() {
 	go func() {
 		for {
 			conn, err := this.unixListener.Accept()
@@ -80,6 +80,7 @@ func (this *Server) Serve() (err error) {
 			go this.handleConnection(conn)
 		}
 	}()
+
 	go func() {
 		if this.tcpListener == nil {
 			return
@@ -92,19 +93,20 @@ func (this *Server) Serve() (err error) {
 			go this.handleConnection(conn)
 		}
 	}()
-
-	return nil
 }
 
-func (this *Server) handleConnection(conn net.Conn) (err error) {
+func (this *Server) handleConnection(conn net.Conn) {
 	if conn != nil {
 		defer conn.Close()
 	}
 	command, _, err := bufio.NewReader(conn).ReadLine()
 	if err != nil {
-		return err
+		this.migrationContext.Log.Errorf("Failed to read connection: %+v", err)
+		return
 	}
-	return this.onServerCommand(string(command), bufio.NewWriter(conn))
+	if err := this.onServerCommand(string(command), bufio.NewWriter(conn)); err != nil {
+		this.migrationContext.Log.Errorf("Failed to execute %q server command: %+v", command, err)
+	}
 }
 
 // onServerCommand responds to a user's interactive command

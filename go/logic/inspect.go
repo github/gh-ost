@@ -137,7 +137,9 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		return err
 	}
 	for i, sharedUniqueKey := range sharedUniqueKeys {
-		this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &sharedUniqueKey.Columns)
+		if err = this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &sharedUniqueKey.Columns); err != nil {
+			return err
+		}
 		uniqueKeyIsValid := true
 		for _, column := range sharedUniqueKey.Columns.Columns() {
 			switch column.Type {
@@ -179,8 +181,14 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	// This additional step looks at which columns are unsigned. We could have merged this within
 	// the `getTableColumns()` function, but it's a later patch and introduces some complexity; I feel
 	// comfortable in doing this as a separate step.
-	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, &this.migrationContext.UniqueKey.Columns)
-	this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns, this.migrationContext.MappedSharedColumns)
+	if err = this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.OriginalTableColumns,
+		this.migrationContext.SharedColumns, &this.migrationContext.UniqueKey.Columns); err != nil {
+		return err
+	}
+	if err = this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.GhostTableColumns,
+		this.migrationContext.MappedSharedColumns); err != nil {
+		return err
+	}
 
 	for i := range this.migrationContext.SharedColumns.Columns() {
 		column := this.migrationContext.SharedColumns.Columns()[i]

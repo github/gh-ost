@@ -146,19 +146,19 @@ func (this *Applier) readTableColumns() (err error) {
 }
 
 // showTableStatus returns the output of `show table status like '...'` command
-func (this *Applier) showTableStatus(tableName string) (rowMap sqlutils.RowMap) {
+func (this *Applier) showTableStatus(tableName string) (rowMap sqlutils.RowMap, err error) {
 	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(this.migrationContext.DatabaseName), tableName)
-	sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+	err = sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		rowMap = m
 		return nil
 	})
-	return rowMap
+	return rowMap, err
 }
 
 // tableExists checks if a given table exists in database
-func (this *Applier) tableExists(tableName string) (tableFound bool) {
-	m := this.showTableStatus(tableName)
-	return (m != nil)
+func (this *Applier) tableExists(tableName string) (tableFound bool, err error) {
+	m, err := this.showTableStatus(tableName)
+	return (m != nil), err
 }
 
 // ValidateOrDropExistingTables verifies ghost and changelog tables do not exist,
@@ -169,7 +169,10 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 			return err
 		}
 	}
-	if this.tableExists(this.migrationContext.GetGhostTableName()) {
+	tableExists, err := this.tableExists(this.migrationContext.GetGhostTableName())
+	if err != nil {
+		return err
+	} else if tableExists {
 		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-ghost-table to force dropping it, though I really prefer that you drop it or rename it away", sql.EscapeName(this.migrationContext.GetGhostTableName()))
 	}
 	if this.migrationContext.InitiallyDropOldTable {
@@ -181,7 +184,10 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 		this.migrationContext.Log.Fatalf("--timestamp-old-table defined, but resulting table name (%s) is too long (only %d characters allowed)", this.migrationContext.GetOldTableName(), mysql.MaxTableNameLength)
 	}
 
-	if this.tableExists(this.migrationContext.GetOldTableName()) {
+	tableExists, err = this.tableExists(this.migrationContext.GetOldTableName())
+	if err != nil {
+		return err
+	} else if tableExists {
 		return fmt.Errorf("Table %s already exists. Panicking. Use --initially-drop-old-table to force dropping it, though I really prefer that you drop it or rename it away", sql.EscapeName(this.migrationContext.GetOldTableName()))
 	}
 
@@ -378,7 +384,9 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 }
 
 func (this *Applier) WriteAndLogChangelog(hint, value string) (string, error) {
-	this.WriteChangelog(hint, value)
+	if hint, err := this.WriteChangelog(hint, value); err != nil {
+		return hint, err
+	}
 	return this.WriteChangelog(fmt.Sprintf("%s at %d", hint, time.Now().UnixNano()), value)
 }
 
@@ -404,7 +412,9 @@ func (this *Applier) InitiateHeartbeat() {
 		}
 		return nil
 	}
-	injectHeartbeat()
+	if err := injectHeartbeat(); err != nil {
+		this.migrationContext.Log.Errorf("Failed to inject heartbeat: %+v", err)
+	}
 
 	ticker := time.NewTicker(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	defer ticker.Stop()
@@ -419,6 +429,7 @@ func (this *Applier) InitiateHeartbeat() {
 			continue
 		}
 		if err := injectHeartbeat(); err != nil {
+			this.migrationContext.Log.Errorf("Failed to inject heartbeat: %+v", err)
 			return
 		}
 	}
@@ -856,10 +867,10 @@ func (this *Applier) ExpectProcess(sessionId int64, stateHint, infoHint string) 
 func (this *Applier) DropAtomicCutOverSentryTableIfExists() error {
 	this.migrationContext.Log.Infof("Looking for magic cut-over table")
 	tableName := this.migrationContext.GetOldTableName()
-	rowMap := this.showTableStatus(tableName)
-	if rowMap == nil {
-		// Table does not exist
-		return nil
+	rowMap, err := this.showTableStatus(tableName)
+	if err != nil || rowMap == nil {
+		// Error or table does not exist (nil)
+		return err
 	}
 	if rowMap["Comment"].String != atomicCutOverMagicHint {
 		return fmt.Errorf("Expected magic comment on %s, did not find it", tableName)

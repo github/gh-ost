@@ -20,6 +20,7 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
+	"github.com/openark/golib/log"
 )
 
 type ChangelogState string
@@ -313,7 +314,7 @@ func (this *Migrator) countTableRows() (err error) {
 		this.migrationContext.SetCountTableRowsCancelFunc(rowCountCancel)
 
 		this.migrationContext.Log.Infof("As instructed, counting rows in the background; meanwhile I will use an estimated count, and will update it later on")
-		go countRowsFunc(rowCountContext)
+		go countRowsFunc(rowCountContext) // nolint:errcheck
 
 		// and we ignore errors, because this turns to be a background job
 		return nil
@@ -392,7 +393,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateServer(); err != nil {
 		return err
 	}
-	defer this.server.RemoveSocketFile()
+	defer this.server.RemoveSocketFile() // nolint:errcheck
 
 	if err := this.countTableRows(); err != nil {
 		return err
@@ -409,8 +410,16 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
-	go this.executeWriteFuncs()
-	go this.iterateChunks()
+	go func() {
+		if err := this.executeWriteFuncs(); err != nil {
+			this.migrationContext.Log.Errorf("Failed to execute write operation(s): %+v", err)
+		}
+	}()
+	go func() {
+		if err := this.iterateChunks(); err != nil {
+			this.migrationContext.Log.Errorf("Failed to iterate chunks: %+v", err)
+		}
+	}()
 	this.migrationContext.MarkRowCopyStartTime()
 	go this.initiateStatus()
 
@@ -456,10 +465,12 @@ func (this *Migrator) ExecOnFailureHook() (err error) {
 	return this.hooksExecutor.onFailure()
 }
 
-func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
+func (this *Migrator) handleCutOverResult(cutOverError error) error {
 	if this.migrationContext.TestOnReplica {
 		// We're merely testing, we don't want to keep this state. Rollback the renames as possible
-		this.applier.RenameTablesRollback()
+		if err := this.applier.RenameTablesRollback(); err != nil {
+			log.Errorf("Failed to rollback table renames: %+v", err)
+		}
 	}
 	if cutOverError == nil {
 		return nil
@@ -483,7 +494,7 @@ func (this *Migrator) handleCutOverResult(cutOverError error) (err error) {
 			}
 		}
 	}
-	return nil
+	return cutOverError
 }
 
 // cutOver performs the final step of migration, based on migration
@@ -500,7 +511,7 @@ func (this *Migrator) cutOver() (err error) {
 
 	this.migrationContext.MarkPointOfInterest()
 	this.migrationContext.Log.Debugf("checking for cut-over postpone")
-	this.sleepWhileTrue(
+	if err = this.sleepWhileTrue(
 		func() (bool, error) {
 			heartbeatLag := this.migrationContext.TimeSinceLastHeartbeatOnChangelog()
 			maxLagMillisecondsThrottle := time.Duration(atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)) * time.Millisecond
@@ -528,7 +539,10 @@ func (this *Migrator) cutOver() (err error) {
 			}
 			return false, nil
 		},
-	)
+	); err != nil {
+		return err
+	}
+
 	atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 0)
 	this.migrationContext.MarkPointOfInterest()
 	this.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
@@ -561,8 +575,8 @@ func (this *Migrator) cutOver() (err error) {
 	default:
 		return this.migrationContext.Log.Fatalf("Unknown cut-over type: %d; should never get here!", this.migrationContext.CutOverType)
 	}
-	this.handleCutOverResult(err)
-	return err
+
+	return this.handleCutOverResult(err)
 }
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
@@ -644,7 +658,9 @@ func (this *Migrator) atomicCutOver() (err error) {
 	defer func() {
 		okToUnlockTable <- true
 		dropCutOverSentryTableOnce.Do(func() {
-			this.applier.DropAtomicCutOverSentryTableIfExists()
+			if err := this.applier.DropAtomicCutOverSentryTableIfExists(); err != nil {
+				this.migrationContext.Log.Errorf("Failed to drop cut-over sentry table: %+v", err)
+			}
 		})
 	}()
 
@@ -764,28 +780,32 @@ func (this *Migrator) initiateInspector() (err error) {
 	if err := this.inspector.InspectOriginalTable(); err != nil {
 		return err
 	}
+
+	var applierConnConfig *mysql.ConnectionConfig
+	inspectorConnConfig := this.migrationContext.InspectorConnectionConfig
+
 	// So far so good, table is accessible and valid.
 	// Let's get master connection config
 	if this.migrationContext.AssumeMasterHostname == "" {
 		// No forced master host; detect master
-		if this.migrationContext.ApplierConnectionConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
+		if applierConnConfig, err = this.inspector.getMasterConnectionConfig(); err != nil {
 			return err
 		}
-		this.migrationContext.Log.Infof("Master found to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
+		this.migrationContext.Log.Infof("Master found to be %+v", *applierConnConfig.ImpliedKey)
 	} else {
 		// Forced master host.
 		key, err := mysql.ParseInstanceKey(this.migrationContext.AssumeMasterHostname)
 		if err != nil {
 			return err
 		}
-		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.DuplicateCredentials(*key)
+		applierConnConfig = inspectorConnConfig.DuplicateCredentials(*key)
 		if this.migrationContext.CliMasterUser != "" {
-			this.migrationContext.ApplierConnectionConfig.User = this.migrationContext.CliMasterUser
+			applierConnConfig.User = this.migrationContext.CliMasterUser
 		}
 		if this.migrationContext.CliMasterPassword != "" {
-			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
+			applierConnConfig.Password = this.migrationContext.CliMasterPassword
 		}
-		this.migrationContext.Log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
+		this.migrationContext.Log.Infof("Master forced to be %+v", *applierConnConfig.ImpliedKey)
 	}
 	// validate configs
 	if this.migrationContext.TestOnReplica || this.migrationContext.MigrateOnReplica {
@@ -793,14 +813,16 @@ func (this *Migrator) initiateInspector() (err error) {
 			return fmt.Errorf("Instructed to --test-on-replica or --migrate-on-replica, but the server we connect to doesn't seem to be a replica")
 		}
 		this.migrationContext.Log.Infof("--test-on-replica or --migrate-on-replica given. Will not execute on master %+v but rather on replica %+v itself",
-			*this.migrationContext.ApplierConnectionConfig.ImpliedKey, *this.migrationContext.InspectorConnectionConfig.ImpliedKey,
+			*applierConnConfig.ImpliedKey, *inspectorConnConfig.ImpliedKey,
 		)
-		this.migrationContext.ApplierConnectionConfig = this.migrationContext.InspectorConnectionConfig.Duplicate()
+		applierConnConfig = inspectorConnConfig.Duplicate()
 		if this.migrationContext.GetThrottleControlReplicaKeys().Len() == 0 {
-			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.InspectorConnectionConfig.Key)
+			if err = this.migrationContext.AddThrottleControlReplicaKey(inspectorConnConfig.Key); err != nil {
+				return err
+			}
 		}
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
-		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", this.migrationContext.InspectorConnectionConfig, this.migrationContext.ApplierConnectionConfig)
+		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", inspectorConnConfig, applierConnConfig)
 	}
 	if err := this.inspector.validateLogSlaveUpdates(); err != nil {
 		return err
@@ -1014,16 +1036,20 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		state,
 		eta,
 	)
-	this.applier.WriteChangelog(
+	if _, err := this.applier.WriteChangelog(
 		fmt.Sprintf("copy iteration %d at %d", this.migrationContext.GetIteration(), time.Now().Unix()),
 		status,
-	)
+	); err != nil {
+		this.migrationContext.Log.Errorf("Failed to write to changelog: %+v", err)
+	}
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
 
 	hooksStatusIntervalSec := this.migrationContext.HooksStatusIntervalSec
 	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {
-		this.hooksExecutor.onStatus(status)
+		if err := this.hooksExecutor.onStatus(status); err != nil {
+			this.migrationContext.Log.Errorf("Failed to run on-status hook: %+v", err)
+		}
 	}
 }
 
@@ -1033,14 +1059,16 @@ func (this *Migrator) initiateStreaming() error {
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
-	this.eventsStreamer.AddListener(
+	if err := this.eventsStreamer.AddListener(
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.GetChangelogTableName(),
 		func(dmlEvent *binlog.BinlogDMLEvent) error {
 			return this.onChangelogEvent(dmlEvent)
 		},
-	)
+	); err != nil {
+		return err
+	}
 
 	go func() {
 		this.migrationContext.Log.Debugf("Beginning streaming")
@@ -1124,7 +1152,9 @@ func (this *Migrator) initiateApplier() error {
 			return err
 		}
 	}
-	this.applier.WriteChangelogState(string(GhostTableMigrated))
+	if _, err := this.applier.WriteChangelogState(string(GhostTableMigrated)); err != nil {
+		return err
+	}
 	go this.applier.InitiateHeartbeat()
 	return nil
 }
