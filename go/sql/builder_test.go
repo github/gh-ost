@@ -371,7 +371,7 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 					((name = ?) and (position = ?))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{[]byte("testname"), 17}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{"testname", 17}))
 	}
 	{
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
@@ -386,7 +386,7 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 					((position = ?) and (name = ?))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17, []byte("testname")}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17, "testname"}))
 	}
 	{
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
@@ -452,7 +452,7 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 					(?, ?, ?, ?)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
 	}
 	{
 		sharedColumns := NewColumnList([]string{"position", "name", "age", "id"})
@@ -466,7 +466,7 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 					(?, ?, ?, ?)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{17, []byte("testname"), 23, 3}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{17, "testname", 23, 3}))
 	}
 	{
 		sharedColumns := NewColumnList([]string{"position", "name", "surprise", "id"})
@@ -499,7 +499,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 					(?, ?, ?, ?)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), int8(-1), 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", int8(-1), 23}))
 	}
 	{
 		// testing unsigned
@@ -515,7 +515,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 					(?, ?, ?, ?)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), uint8(255), 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", uint8(255), 23}))
 	}
 	{
 		// testing unsigned
@@ -531,7 +531,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 					(?, ?, ?, ?)
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), uint32(4294967295), 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", uint32(4294967295), 23}))
 	}
 }
 
@@ -554,7 +554,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 					((position = ?))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
 		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17}))
 	}
 	{
@@ -570,8 +570,8 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 					((position = ?) and (name = ?))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), 17, 23}))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17, []byte("testname")}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17, "testname"}))
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
@@ -586,7 +586,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 					((age = ?))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
 		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{56}))
 	}
 	{
@@ -602,8 +602,8 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 					((age = ?) and (position = ?) and (id = ?) and (name = ?))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), 17, 23}))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{56, 17, 3, []byte("testname")}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{56, 17, 3, "testname"}))
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
@@ -631,7 +631,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 					((id = ?))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
 		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{3}))
 	}
 }
@@ -656,7 +656,7 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 					((position = ?))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), int8(-17), int8(-2)}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", int8(-17), int8(-2)}))
 		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{int8(-3)}))
 	}
 	{
@@ -673,7 +673,7 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 					((position = ?))
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, []byte("testname"), int8(-17), uint8(254)}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", int8(-17), uint8(254)}))
 		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{uint8(253)}))
 	}
 }

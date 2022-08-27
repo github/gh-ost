@@ -32,6 +32,11 @@ type TimezoneConversion struct {
 	ToTimezone string
 }
 
+type CharacterSetConversion struct {
+	ToCharset   string
+	FromCharset string
+}
+
 type Column struct {
 	Name                 string
 	IsUnsigned           bool
@@ -43,12 +48,20 @@ type Column struct {
 	// add Octet length for binary type, fix bytes with suffix "00" get clipped in mysql binlog.
 	// https://github.com/github/gh-ost/issues/909
 	BinaryOctetLength uint
+	charsetConversion *CharacterSetConversion
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
 	if s, ok := arg.(string); ok {
 		arg2Bytes := []byte(s)
-		arg = arg2Bytes
+		// convert to bytes if character string without charsetConversion.
+		if this.Charset != "" && this.charsetConversion == nil {
+			arg = arg2Bytes
+		} else {
+			if encoding, ok := charsetEncodingMap[this.Charset]; ok {
+				arg, _ = encoding.NewDecoder().String(s)
+			}
+		}
 
 		if this.Type == BinaryColumnType && isUniqueKeyColumn {
 			size := len(arg2Bytes)
@@ -233,6 +246,10 @@ func (this *ColumnList) IsSubsetOf(other *ColumnList) bool {
 
 func (this *ColumnList) Len() int {
 	return len(this.columns)
+}
+
+func (this *ColumnList) SetCharsetConversion(columnName string, fromCharset string, toCharset string) {
+	this.GetColumn(columnName).charsetConversion = &CharacterSetConversion{FromCharset: fromCharset, ToCharset: toCharset}
 }
 
 // UniqueKey is the combination of a key's name and columns
