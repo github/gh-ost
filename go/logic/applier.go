@@ -48,7 +48,7 @@ func newDmlBuildResultError(err error) *dmlBuildResult {
 	}
 }
 
-// Applier connects and writes the the applier-server, which is the server where migration
+// Applier connects and writes the applier-server, which is the server where migration
 // happens. This is typically the master, but could be a replica when `--test-on-replica` or
 // `--execute-on-replica` are given.
 // Applier is the one to actually write row data and apply binlog events onto the ghost table.
