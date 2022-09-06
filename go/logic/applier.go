@@ -49,7 +49,7 @@ func newDmlBuildResultError(err error) *dmlBuildResult {
 	}
 }
 
-// Applier connects and writes the the applier-server, which is the server where migration
+// Applier connects and writes the applier-server, which is the server where migration
 // happens. This is typically the master, but could be a replica when `--test-on-replica` or
 // `--execute-on-replica` are given.
 // Applier is the one to actually write row data and apply binlog events onto the ghost table.
@@ -438,15 +438,15 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 	return result, nil
 }
 
-// ReadMigrationMinValues returns the minimum values to be iterated on rowcopy
-func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
+// readMigrationMinValues returns the minimum values to be iterated on rowcopy
+func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
 	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
 	if err != nil {
 		return err
 	}
 
-	rows, err := this.db.Query(query)
+	rows, err := tx.Query(query)
 	if err != nil {
 		return err
 	}
@@ -463,15 +463,15 @@ func (this *Applier) ReadMigrationMinValues(uniqueKey *sql.UniqueKey) error {
 	return rows.Err()
 }
 
-// ReadMigrationMaxValues returns the maximum values to be iterated on rowcopy
-func (this *Applier) ReadMigrationMaxValues(uniqueKey *sql.UniqueKey) error {
+// readMigrationMaxValues returns the maximum values to be iterated on rowcopy
+func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
 	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
 	if err != nil {
 		return err
 	}
 
-	rows, err := this.db.Query(query)
+	rows, err := tx.Query(query)
 	if err != nil {
 		return err
 	}
@@ -510,13 +510,20 @@ func (this *Applier) ReadMigrationRangeValues() error {
 		return err
 	}
 
-	if err := this.ReadMigrationMinValues(this.migrationContext.UniqueKey); err != nil {
+	tx, err := this.db.Begin()
+	if err != nil {
 		return err
 	}
-	if err := this.ReadMigrationMaxValues(this.migrationContext.UniqueKey); err != nil {
+	defer tx.Rollback()
+
+	if err := this.readMigrationMinValues(tx, this.migrationContext.UniqueKey); err != nil {
 		return err
 	}
-	return nil
+	if err := this.readMigrationMaxValues(tx, this.migrationContext.UniqueKey); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // CalculateNextIterationRangeEndValues reads the next-iteration-range-end unique key values,
