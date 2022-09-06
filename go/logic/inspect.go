@@ -132,10 +132,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	if err != nil {
 		return err
 	}
-	sharedUniqueKeys, err := this.getSharedUniqueKeys(this.migrationContext.OriginalTableUniqueKeys, this.migrationContext.GhostTableUniqueKeys)
-	if err != nil {
-		return err
-	}
+	sharedUniqueKeys := this.getSharedUniqueKeys(this.migrationContext.OriginalTableUniqueKeys, this.migrationContext.GhostTableUniqueKeys)
 	for i, sharedUniqueKey := range sharedUniqueKeys {
 		this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &sharedUniqueKey.Columns)
 		uniqueKeyIsValid := true
@@ -731,7 +728,7 @@ func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*
 
 // getSharedUniqueKeys returns the intersection of two given unique keys,
 // testing by list of columns
-func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [](*sql.UniqueKey)) (uniqueKeys [](*sql.UniqueKey), err error) {
+func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys []*sql.UniqueKey) (uniqueKeys []*sql.UniqueKey) {
 	// We actually do NOT rely on key name, just on the set of columns. This is because maybe
 	// the ALTER is on the name itself...
 	for _, originalUniqueKey := range originalUniqueKeys {
@@ -741,7 +738,7 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 			}
 		}
 	}
-	return uniqueKeys, nil
+	return uniqueKeys
 }
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
