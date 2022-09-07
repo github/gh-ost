@@ -10,7 +10,6 @@ insert into gh_ost_test values (1, 7, 'Pass');
 insert into gh_ost_test values (2, 8, 'Fail');
 insert into gh_ost_test values (3, 19, 'Pass');
 
-/*
 drop event if exists gh_ost_test;
 delimiter ;;
 create event gh_ost_test
@@ -21,10 +20,6 @@ create event gh_ost_test
   enable
   do
 begin
-  insert into gh_ost_test values (null, 11, 'red');
-  insert into gh_ost_test values (null, 13, 'green');
-  insert into gh_ost_test values (null, 17, 'blue');
-  set @last_insert_id := last_insert_id();
-  update gh_ost_test set e='orange' where id = @last_insert_id;
+  insert into gh_ost_test (i, result) values(12345, 0);
+  insert into gh_ost_test (i, result) values(12345, 1);
 end ;;
-*/
