@@ -8,6 +8,7 @@ create table gh_ost_test (
 
 insert into gh_ost_test values (null, 7, 'red');
 
+/*
 drop event if exists gh_ost_test;
 delimiter ;;
 create event gh_ost_test
@@ -24,3 +25,4 @@ begin
   set @last_insert_id := last_insert_id();
   update gh_ost_test set e='orange' where id = @last_insert_id;
 end ;;
+*/
