@@ -2,11 +2,13 @@ drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int auto_increment,
   i int not null,
-  e enum('red', 'green', 'blue', 'orange') not null,
+  result enum('Pass', 'Fail') not null,
   primary key(id)
-) auto_increment=1;
+) auto_increment=1 default charset=latin1;
 
-insert into gh_ost_test values (null, 7, 'red');
+insert into gh_ost_test values (1, 7, 'Pass');
+insert into gh_ost_test values (2, 8, 'Fail');
+insert into gh_ost_test values (3, 19, 'Pass');
 
 /*
 drop event if exists gh_ost_test;
