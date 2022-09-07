@@ -1,1 +1,1 @@
---alter="modify column e enum('red', 'green', 'blue', 'purple') default null"
+--alter="modify column e enum('red', 'green', 'blue', 'purple') not null"

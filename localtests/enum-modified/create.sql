@@ -2,7 +2,7 @@ drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int auto_increment,
   i int not null,
-  e enum('red', 'green', 'blue', 'orange') null default null collate 'utf8_bin',
+  e enum('red', 'green', 'blue', 'orange') not null,
   primary key(id)
 ) auto_increment=1;
 
