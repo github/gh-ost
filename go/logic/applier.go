@@ -122,6 +122,7 @@ func (this *Applier) validateAndReadTimeZone() error {
 // based on gh-ost configuration:
 // - User may skip strict mode
 // - User may allow zero dats or zero in dates
+// - User may skip strict trans table mode
 func (this *Applier) generateSqlModeQuery() string {
 	sqlModeAddendum := []string{`NO_AUTO_VALUE_ON_ZERO`}
 	if !this.migrationContext.SkipStrictMode {
@@ -130,6 +131,9 @@ func (this *Applier) generateSqlModeQuery() string {
 	sqlModeQuery := fmt.Sprintf("CONCAT(@@session.sql_mode, ',%s')", strings.Join(sqlModeAddendum, ","))
 	if this.migrationContext.AllowZeroInDate {
 		sqlModeQuery = fmt.Sprintf("REPLACE(REPLACE(%s, 'NO_ZERO_IN_DATE', ''), 'NO_ZERO_DATE', '')", sqlModeQuery)
+	}
+	if this.migrationContext.SkipStrictTransTables {
+		sqlModeQuery = fmt.Sprintf("REPLACE(%s, 'STRICT_TRANS_TABLES', '')", sqlModeQuery)
 	}
 
 	return fmt.Sprintf("sql_mode = %s", sqlModeQuery)

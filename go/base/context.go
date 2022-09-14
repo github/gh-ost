@@ -92,6 +92,7 @@ type MigrationContext struct {
 	AssumeRBR                bool
 	SkipForeignKeyChecks     bool
 	SkipStrictMode           bool
+	SkipStrictTransTables    bool
 	AllowZeroInDate          bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
