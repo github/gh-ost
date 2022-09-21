@@ -62,7 +62,7 @@ func NewParserFromAlterStatement(alterStatement string) *AlterTableParser {
 	return parser
 }
 
-func (this *AlterTableParser) tokenizeAlterStatement(alterStatement string) (tokens []string, err error) {
+func (this *AlterTableParser) tokenizeAlterStatement(alterStatement string) (tokens []string) {
 	terminatingQuote := rune(0)
 	f := func(c rune) bool {
 		switch {
@@ -86,7 +86,7 @@ func (this *AlterTableParser) tokenizeAlterStatement(alterStatement string) (tok
 	for i := range tokens {
 		tokens[i] = strings.TrimSpace(tokens[i])
 	}
-	return tokens, nil
+	return tokens
 }
 
 func (this *AlterTableParser) sanitizeQuotesFromAlterStatement(alterStatement string) (strippedStatement string) {
@@ -95,7 +95,7 @@ func (this *AlterTableParser) sanitizeQuotesFromAlterStatement(alterStatement st
 	return strippedStatement
 }
 
-func (this *AlterTableParser) parseAlterToken(alterToken string) (err error) {
+func (this *AlterTableParser) parseAlterToken(alterToken string) {
 	{
 		// rename
 		allStringSubmatch := renameColumnRegexp.FindAllStringSubmatch(alterToken, -1)
@@ -131,7 +131,6 @@ func (this *AlterTableParser) parseAlterToken(alterToken string) (err error) {
 			this.isAutoIncrementDefined = true
 		}
 	}
-	return nil
 }
 
 func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err error) {
@@ -151,8 +150,7 @@ func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err er
 			break
 		}
 	}
-	alterTokens, _ := this.tokenizeAlterStatement(this.alterStatementOptions)
-	for _, alterToken := range alterTokens {
+	for _, alterToken := range this.tokenizeAlterStatement(this.alterStatementOptions) {
 		alterToken = this.sanitizeQuotesFromAlterStatement(alterToken)
 		this.parseAlterToken(alterToken)
 		this.alterTokens = append(this.alterTokens, alterToken)

@@ -8,6 +8,7 @@ package logic
 import (
 	"context"
 	gosql "database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -554,13 +555,11 @@ func (this *Inspector) CountTableRows(ctx context.Context) error {
 	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	var rowsEstimate int64
 	if err := conn.QueryRowContext(ctx, query).Scan(&rowsEstimate); err != nil {
-		switch err {
-		case context.Canceled, context.DeadlineExceeded:
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			this.migrationContext.Log.Infof("exact row count cancelled (%s), likely because I'm about to cut over. I'm going to kill that query.", ctx.Err())
 			return mysql.Kill(this.db, connectionID)
-		default:
-			return err
 		}
+		return err
 	}
 
 	// row count query finished. nil out the cancel func, so the main migration thread
