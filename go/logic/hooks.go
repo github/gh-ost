@@ -35,13 +35,13 @@ const (
 
 type HooksExecutor struct {
 	migrationContext *base.MigrationContext
-	output           io.Writer
+	writer           io.Writer
 }
 
 func NewHooksExecutor(migrationContext *base.MigrationContext) *HooksExecutor {
 	return &HooksExecutor{
 		migrationContext: migrationContext,
-		output:           os.Stderr,
+		writer:           os.Stderr,
 	}
 }
 
@@ -75,13 +75,13 @@ func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) [
 }
 
 // executeHook executes a command, and sets relevant environment variables
-// combined output & error are printed to the configured output io.Writer.
+// combined output & error are printed to the configured writer.
 func (this *HooksExecutor) executeHook(hook string, extraVariables ...string) error {
 	cmd := exec.Command(hook)
 	cmd.Env = this.applyEnvironmentVariables(extraVariables...)
 
 	combinedOutput, err := cmd.CombinedOutput()
-	fmt.Fprintln(this.output, string(combinedOutput))
+	fmt.Fprintln(this.writer, string(combinedOutput))
 	return log.Errore(err)
 }
 

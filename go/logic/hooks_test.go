@@ -72,7 +72,7 @@ func TestHooksExecutorExecuteHooks(t *testing.T) {
 		defer os.RemoveAll(migrationContext.HooksPath)
 
 		var buf bytes.Buffer
-		hooksExecutor.output = &buf
+		hooksExecutor.writer = &buf
 		tests.S(t).ExpectNil(hooksExecutor.executeHooks("success-hook", "TEST="+t.Name()))
 
 		scanner := bufio.NewScanner(&buf)
