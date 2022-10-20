@@ -427,6 +427,10 @@ func (this *MigrationContext) IsTransactionalTable() bool {
 		{
 			return true
 		}
+	case "rocksdb":
+		{
+			return true
+		}
 	}
 	return false
 }
