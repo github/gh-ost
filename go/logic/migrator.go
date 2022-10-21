@@ -97,6 +97,7 @@ type Migrator struct {
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 	migrator := &Migrator{
 		appVersion:                 appVersion,
+		hooksExecutor:              NewHooksExecutor(context),
 		migrationContext:           context,
 		parser:                     sql.NewAlterTableParser(),
 		ghostTableMigrated:         make(chan bool),
@@ -110,15 +111,6 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		finishedMigrating:      0,
 	}
 	return migrator
-}
-
-// initiateHooksExecutor
-func (this *Migrator) initiateHooksExecutor() (err error) {
-	this.hooksExecutor = NewHooksExecutor(this.migrationContext)
-	if err := this.hooksExecutor.initHooks(); err != nil {
-		return err
-	}
-	return nil
 }
 
 // sleepWhileTrue sleeps indefinitely until the given function returns 'false'
@@ -341,9 +333,6 @@ func (this *Migrator) Migrate() (err error) {
 
 	go this.listenOnPanicAbort()
 
-	if err := this.initiateHooksExecutor(); err != nil {
-		return err
-	}
 	if err := this.hooksExecutor.onStartup(); err != nil {
 		return err
 	}
