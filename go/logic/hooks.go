@@ -7,6 +7,7 @@ package logic
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,16 +35,14 @@ const (
 
 type HooksExecutor struct {
 	migrationContext *base.MigrationContext
+	writer           io.Writer
 }
 
 func NewHooksExecutor(migrationContext *base.MigrationContext) *HooksExecutor {
 	return &HooksExecutor{
 		migrationContext: migrationContext,
+		writer:           os.Stderr,
 	}
-}
-
-func (this *HooksExecutor) initHooks() error {
-	return nil
 }
 
 func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []string {
@@ -76,13 +75,13 @@ func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) [
 }
 
 // executeHook executes a command, and sets relevant environment variables
-// combined output & error are printed to gh-ost's standard error.
+// combined output & error are printed to the configured writer.
 func (this *HooksExecutor) executeHook(hook string, extraVariables ...string) error {
 	cmd := exec.Command(hook)
 	cmd.Env = this.applyEnvironmentVariables(extraVariables...)
 
 	combinedOutput, err := cmd.CombinedOutput()
-	fmt.Fprintln(os.Stderr, string(combinedOutput))
+	fmt.Fprintln(this.writer, string(combinedOutput))
 	return log.Errore(err)
 }
 
