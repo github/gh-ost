@@ -390,9 +390,9 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
-	if err := this.initiateThrottler(); err != nil {
-		return err
-	}
+
+	this.initiateThrottler()
+
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
@@ -1091,7 +1091,7 @@ func (this *Migrator) addDMLEventsListener() error {
 }
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
-func (this *Migrator) initiateThrottler() error {
+func (this *Migrator) initiateThrottler() {
 	this.throttler = NewThrottler(this.migrationContext, this.applier, this.inspector, this.appVersion)
 
 	go this.throttler.initiateThrottlerCollection(this.firstThrottlingCollected)
@@ -1101,8 +1101,6 @@ func (this *Migrator) initiateThrottler() error {
 	<-this.firstThrottlingCollected // other, general metrics
 	this.migrationContext.Log.Infof("First throttle metrics collected")
 	go this.throttler.initiateThrottlerChecks()
-
-	return nil
 }
 
 func (this *Migrator) initiateApplier() error {
