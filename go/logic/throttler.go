@@ -314,6 +314,8 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 		if err != nil {
 			return false, err
 		}
+		defer resp.Body.Close()
+
 		atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(resp.StatusCode))
 		return false, nil
 	}
