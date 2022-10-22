@@ -1134,7 +1134,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 				}
 				result, err := tx.Exec(buildResult.query, buildResult.args...)
 				if err != nil {
-					err = fmt.Errorf("%s; query=%s; args=%+v", err.Error(), buildResult.query, buildResult.args)
+					err = fmt.Errorf("%w; query=%s; args=%+v", err, buildResult.query, buildResult.args)
 					return rollback(err)
 				}
 
