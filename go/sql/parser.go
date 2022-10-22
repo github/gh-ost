@@ -152,9 +152,7 @@ func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err er
 	}
 	for _, alterToken := range this.tokenizeAlterStatement(this.alterStatementOptions) {
 		alterToken = this.sanitizeQuotesFromAlterStatement(alterToken)
-		if err = this.parseAlterToken(alterToken); err != nil {
-			return err
-		}
+		this.parseAlterToken(alterToken)
 		this.alterTokens = append(this.alterTokens, alterToken)
 	}
 	return nil
