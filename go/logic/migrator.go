@@ -1036,6 +1036,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
+	this.migrationContext.Log.Infof(status)
 
 	hooksStatusIntervalSec := this.migrationContext.HooksStatusIntervalSec
 	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {
