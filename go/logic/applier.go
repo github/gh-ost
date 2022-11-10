@@ -188,6 +188,54 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 	return nil
 }
 
+// AttemptInstantDDL attempts to use instant DDL (from MySQL 8.0, and earlier in Aurora and some others.)
+// to apply the ALTER statement immediately. If it errors, the original
+// gh-ost algorithm can be used. However, if it's successful -- a lot
+// of time can potentially be saved. Instant operations include:
+// - Adding a column
+// - Dropping a column
+// - Dropping an index
+// - Extending a varchar column
+// It is safer to attempt the change than try and parse the DDL, since
+// there might be specifics about the table which make it not possible to apply instantly.
+func (this *Applier) AttemptInstantDDL() error {
+
+	query := fmt.Sprintf(`ALTER /* gh-ost */ TABLE %s.%s %s, ALGORITHM=INSTANT`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		this.migrationContext.AlterStatementOptions,
+	)
+	this.migrationContext.Log.Infof("INSTANT DDL Query is: %s", query)
+
+	err := func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
+
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(query); err != nil {
+			this.migrationContext.Log.Infof("INSTANT DDL failed: %s", err)
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
+			// there's no need to commit; but let's do this the legit way anyway.
+			return err
+		}
+		return nil
+	}()
+
+	return err
+
+}
+
 // CreateGhostTable creates the ghost table on the applier host
 func (this *Applier) CreateGhostTable() error {
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s like %s.%s`,
