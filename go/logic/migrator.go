@@ -381,7 +381,6 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateApplier(); err != nil {
 		return err
 	}
-
 	if err := this.createFlagFiles(); err != nil {
 		return err
 	}
