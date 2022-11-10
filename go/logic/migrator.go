@@ -362,12 +362,26 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
+	// In MySQL 8.0 (and possibly earlier) some DDL statements can be applied instantly.
+	// As just a metadata change. We can't detect this unless we attempt the statement
+	// (i.e. there is no explain for DDL).
+	if this.migrationContext.AttemptInstantDDL {
+		this.migrationContext.Log.Infof("Attempting to execute ALTER TABLE as INSTANT DDL")
+		if err := this.attemptInstantDDL(); err == nil {
+			this.migrationContext.Log.Infof("Success! Table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+			return nil
+		} else {
+			this.migrationContext.Log.Infof("INSTANT DDL failed, will proceed with original algorithm: %s", err)
+		}
+	}
+
 	if err := this.initiateStreaming(); err != nil {
 		return err
 	}
 	if err := this.initiateApplier(); err != nil {
 		return err
 	}
+
 	if err := this.createFlagFiles(); err != nil {
 		return err
 	}
@@ -743,6 +757,17 @@ func (this *Migrator) initiateServer() (err error) {
 
 	go this.server.Serve()
 	return nil
+}
+
+// attemptInstantDDL tries to apply the DDL statement directly to the table
+// using a ALGORITHM=INSTANT assertion. If this fails, it will return an error,
+// in which case the original algorithm should be used.
+func (this *Migrator) attemptInstantDDL() (err error) {
+	this.applier = NewApplier(this.migrationContext)
+	if err := this.applier.InitDBConnections(); err != nil {
+		return err
+	}
+	return this.applier.AttemptInstantDDL()
 }
 
 // initiateInspector connects, validates and inspects the "inspector" server.
