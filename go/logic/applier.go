@@ -116,6 +116,32 @@ func (this *Applier) validateAndReadTimeZone() error {
 	this.migrationContext.Log.Infof("will use time_zone='%s' on applier", this.migrationContext.ApplierTimeZone)
 	return nil
 }
+// generateSqlModeQuery return a `sql_mode = ...` query, to be wrapped with a `set session` or `set global`,
+// based on gh-ost configuration:
+// - User may skip strict mode
+// - User may allow zero dats or zero in dates
+func (this *Applier) generateSqlModeQuery() string {
+	sqlModeAddendum := []string{`NO_AUTO_VALUE_ON_ZERO`}
+	if !this.migrationContext.SkipStrictMode {
+		sqlModeAddendum = append(sqlModeAddendum, `STRICT_ALL_TABLES`)
+	}
+	sqlModeQuery := fmt.Sprintf("CONCAT(@@session.sql_mode, ',%s')", strings.Join(sqlModeAddendum, ","))
+	if this.migrationContext.AllowZeroInDate {
+		sqlModeQuery = fmt.Sprintf("REPLACE(REPLACE(%s, 'NO_ZERO_IN_DATE', ''), 'NO_ZERO_DATE', '')", sqlModeQuery)
+	}
+
+	return fmt.Sprintf("sql_mode = %s", sqlModeQuery)
+}
+
+// generateInstantDDLQuery returns the SQL for this ALTER operation
+// with an INSTANT assertion (requires MySQL 8.0+)
+func (this *Applier) generateInstantDDLQuery() string {
+	return fmt.Sprintf(`ALTER /* gh-ost */ TABLE %s.%s %s, ALGORITHM=INSTANT`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		this.migrationContext.AlterStatementOptions,
+	)
+}
 
 // readTableColumns reads table columns on applier
 func (this *Applier) readTableColumns() (err error) {
@@ -170,22 +196,21 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 	return nil
 }
 
-// AttemptInstantDDL attempts to use instant DDL (from MySQL 8.0, and earlier in Aurora and some others.)
-// to apply the ALTER statement immediately. If it errors, the original
-// gh-ost algorithm can be used. However, if it's successful -- a lot
-// of time can potentially be saved. Instant operations include:
+// AttemptInstantDDL attempts to use instant DDL (from MySQL 8.0, and earlier in Aurora and some others).
+// If successful, the operation is only a meta-data change so a lot of time is saved!
+// The risk of attempting to instant DDL when not supported is that a metadata lock may be acquired.
+// This is minor, since gh-ost will eventually require a metadata lock anyway, but at the cut-over stage.
+// Instant operations include:
 // - Adding a column
 // - Dropping a column
 // - Dropping an index
-// - Extending a varchar column
-// It is safer to attempt the change than try and parse the DDL, since
-// there might be specifics about the table which make it not possible to apply instantly.
+// - Extending a VARCHAR column
+// - Adding a virtual generated column
+// It is not reliable to parse the `alter` statement to determine if it is instant or not.
+// This is because the table might be in an older row format, or have some other incompatibility
+// that is difficult to identify.
 func (this *Applier) AttemptInstantDDL() error {
-	query := fmt.Sprintf(`ALTER /* gh-ost */ TABLE %s.%s %s, ALGORITHM=INSTANT`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-		this.migrationContext.AlterStatementOptions,
-	)
+	query := this.generateInstantDDLQuery()
 	this.migrationContext.Log.Infof("INSTANT DDL query is: %s", query)
 	// We don't need a trx, because for instant DDL the SQL mode doesn't matter.
 	_, err := this.db.Exec(query)
