@@ -45,6 +45,22 @@ If you happen to _know_ your servers use RBR (Row Based Replication, i.e. `binlo
 Skipping this step means `gh-ost` would not need the `SUPER` privilege in order to operate.
 You may want to use this on Amazon RDS.
 
+### attempt-instant-ddl
+
+MySQL 8.0 support "instant DDL" for some operations. If an alter statement can be completed with instant DDL, only a metadata change is required internally, so MySQL will return _instantly_ (only requiring a metadata lock to complete). Instant operations include:
+
+- Adding a column
+- Dropping a column
+- Dropping an index
+- Extending a varchar column
+- Adding a virtual generated column
+
+It is not reliable to parse the `ALTER` statement to determine if it is instant or not. This is because the table might be in an older row format, or have some other incompatibility that is difficult to identify.
+
+The risks of attempting to instant DDL are relatively minor: Gh-ost may need to acquire a metadata lock at the start of the operation. This is not a problem for most scenarios, but it could be a problem for users that start the DDL during a period with long running transactions.
+
+gh-ost will automatically fallback to the normal DDL process if the attempt to use instant DDL is unsuccessful.
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:

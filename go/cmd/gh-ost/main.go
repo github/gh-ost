@@ -67,7 +67,7 @@ func main() {
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
 	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
-	flag.BoolVar(&migrationContext.AttemptInstantDDL, "attempt-instant-ddl", true, "Attempt to use instant DDL for this migration first.")
+	flag.BoolVar(&migrationContext.AttemptInstantDDL, "attempt-instant-ddl", false, "Attempt to use instant DDL for this migration first")
 
 	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
 	flag.BoolVar(&migrationContext.ConcurrentCountTableRows, "concurrent-rowcount", true, "(with --exact-rowcount), when true (default): count rows after row-copy begins, concurrently, and adjust row estimate later on; when false: first count rows, then start row copy")

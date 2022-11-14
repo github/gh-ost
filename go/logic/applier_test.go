@@ -170,3 +170,17 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 		test.S(t).ExpectEquals(res[0].args[3], 42)
 	})
 }
+
+func TestApplierInstantDDL(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrationContext.DatabaseName = "test"
+	migrationContext.OriginalTableName = "mytable"
+	migrationContext.AlterStatementOptions = "ADD INDEX (foo)"
+	applier := NewApplier(migrationContext)
+
+	t.Run("instantDDLstmt", func(t *testing.T) {
+		stmt := applier.generateInstantDDLQuery()
+		test.S(t).ExpectEquals(stmt, "ALTER /* gh-ost */ TABLE `test`.`mytable` ADD INDEX (foo), ALGORITHM=INSTANT")
+	})
+
+}

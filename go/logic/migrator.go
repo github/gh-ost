@@ -352,15 +352,14 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	// In MySQL 8.0 (and possibly earlier) some DDL statements can be applied instantly.
-	// As just a metadata change. We can't detect this unless we attempt the statement
-	// (i.e. there is no explain for DDL).
+	// Attempt to do this if AttemptInstantDDL is set.
 	if this.migrationContext.AttemptInstantDDL {
-		this.migrationContext.Log.Infof("Attempting to execute ALTER TABLE as INSTANT DDL")
+		this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 		if err := this.attemptInstantDDL(); err == nil {
-			this.migrationContext.Log.Infof("Success! Table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+			this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 			return nil
 		} else {
-			this.migrationContext.Log.Infof("INSTANT DDL failed, will proceed with original algorithm: %s", err)
+			this.migrationContext.Log.Infof("ALGORITHM=INSTANT failed, proceeding with original algorithm: %s", err)
 		}
 	}
 
