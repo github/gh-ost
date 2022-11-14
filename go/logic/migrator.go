@@ -362,6 +362,15 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
+	if err := this.initiateStreaming(); err != nil {
+		return err
+	}
+	if err := this.initiateApplier(); err != nil {
+		return err
+	}
+	if err := this.createFlagFiles(); err != nil {
+		return err
+	}
 	// In MySQL 8.0 (and possibly earlier) some DDL statements can be applied instantly.
 	// Attempt to do this if AttemptInstantDDL is set.
 	if this.migrationContext.AttemptInstantDDL {
@@ -372,16 +381,6 @@ func (this *Migrator) Migrate() (err error) {
 		} else {
 			this.migrationContext.Log.Infof("ALGORITHM=INSTANT failed, proceeding with original algorithm: %s", err)
 		}
-	}
-
-	if err := this.initiateStreaming(); err != nil {
-		return err
-	}
-	if err := this.initiateApplier(); err != nil {
-		return err
-	}
-	if err := this.createFlagFiles(); err != nil {
-		return err
 	}
 
 	initialLag, _ := this.inspector.getReplicationLag()
@@ -761,10 +760,6 @@ func (this *Migrator) initiateServer() (err error) {
 // using a ALGORITHM=INSTANT assertion. If this fails, it will return an error,
 // in which case the original algorithm should be used.
 func (this *Migrator) attemptInstantDDL() (err error) {
-	this.applier = NewApplier(this.migrationContext)
-	if err := this.applier.InitDBConnections(); err != nil {
-		return err
-	}
 	return this.applier.AttemptInstantDDL()
 }
 

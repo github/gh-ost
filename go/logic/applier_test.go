@@ -182,5 +182,4 @@ func TestApplierInstantDDL(t *testing.T) {
 		stmt := applier.generateInstantDDLQuery()
 		test.S(t).ExpectEquals(stmt, "ALTER /* gh-ost */ TABLE `test`.`mytable` ADD INDEX (foo), ALGORITHM=INSTANT")
 	})
-
 }
