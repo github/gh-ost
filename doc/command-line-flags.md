@@ -57,7 +57,7 @@ MySQL 8.0 supports "instant DDL" for some operations. If an alter statement can 
 
 It is not reliable to parse the `ALTER` statement to determine if it is instant or not. This is because the table might be in an older row format, or have some other incompatibility that is difficult to identify.
 
-The risks of attempting instant DDL are relatively minor: `gh-ost` may need to acquire a metadata lock at the start of the operation. This is not a problem for most scenarios, but it could be a problem for users that start the DDL during a period with long running transactions.
+`--attempt-instant-ddl` is disabled by default, but the risks of enabling it are relatively minor: `gh-ost` may need to acquire a metadata lock at the start of the operation. This is not a problem for most scenarios, but it could be a problem for users that start the DDL during a period with long running transactions.
 
 `gh-ost` will automatically fallback to the normal DDL process if the attempt to use instant DDL is unsuccessful.
 
