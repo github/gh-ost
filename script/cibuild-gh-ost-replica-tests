@@ -61,7 +61,7 @@ test_mysql_version() {
   gh-ost-test-mysql-master -uroot -e "grant all on *.* to 'gh-ost'@'%'"
 
   echo "### Running gh-ost tests for $mysql_version"
-  bash ./localtests/test.sh -b bin/gh-ost datetime-with-zero
+  bash -x ./localtests/test.sh -b bin/gh-ost
 
   find sandboxes -name "stop_all" | bash
 }
