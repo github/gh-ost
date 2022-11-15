@@ -364,7 +364,7 @@ func (this *Migrator) Migrate() (err error) {
 	// Attempt to do this if AttemptInstantDDL is set.
 	if this.migrationContext.AttemptInstantDDL {
 		this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
-		if err := this.attemptInstantDDL(); err == nil {
+		if err := this.applier.AttemptInstantDDL(); err == nil {
 			this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 			return nil
 		} else {
@@ -743,13 +743,6 @@ func (this *Migrator) initiateServer() (err error) {
 
 	go this.server.Serve()
 	return nil
-}
-
-// attemptInstantDDL tries to apply the DDL statement directly to the table
-// using a ALGORITHM=INSTANT assertion. If this fails, it will return an error,
-// in which case the original algorithm should be used.
-func (this *Migrator) attemptInstantDDL() (err error) {
-	return this.applier.AttemptInstantDDL()
 }
 
 // initiateInspector connects, validates and inspects the "inspector" server.
