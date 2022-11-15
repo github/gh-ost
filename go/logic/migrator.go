@@ -368,7 +368,7 @@ func (this *Migrator) Migrate() (err error) {
 			this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 			return nil
 		} else {
-			this.migrationContext.Log.Infof("ALGORITHM=INSTANT failed, proceeding with original algorithm: %s", err)
+			this.migrationContext.Log.Infof("ALGORITHM=INSTANT not supported for this operation, proceeding with original algorithm: %s", err)
 		}
 	}
 
