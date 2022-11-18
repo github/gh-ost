@@ -118,6 +118,7 @@ test_single() {
 
   cat $tests_path/$test_name/create.sql
   bash -x gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
+  echo $?
 
   extra_args=""
   if [ -f $tests_path/$test_name/extra_args ] ; then
