@@ -365,6 +365,56 @@ func (this *Applier) dropTable(tableName string) error {
 	return nil
 }
 
+// dropTriggers drop the triggers on the applied host
+func (this *Applier) DropTriggersFromGhost() error {
+	if len(this.migrationContext.Triggers) > 0 {
+		for _, trigger := range this.migrationContext.Triggers {
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
+			query := fmt.Sprintf("drop trigger if exists %s", sql.EscapeName(triggerName))
+			_, err := sqlutils.ExecNoPrepare(this.db, query)
+			if err != nil {
+				return err
+			}
+			this.migrationContext.Log.Infof("Trigger '%s' dropped", triggerName)
+		}
+	}
+	return nil
+}
+
+// createTriggers creates the triggers on the applied host
+func (this *Applier) createTriggers(tableName string) error {
+	if len(this.migrationContext.Triggers) > 0 {
+		for _, trigger := range this.migrationContext.Triggers {
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
+			query := fmt.Sprintf(`create /* gh-ost */ trigger %s %s %s on %s.%s for each row
+		%s`,
+				sql.EscapeName(triggerName),
+				trigger.Timing,
+				trigger.Event,
+				sql.EscapeName(this.migrationContext.DatabaseName),
+				sql.EscapeName(tableName),
+				trigger.Statement,
+			)
+			this.migrationContext.Log.Infof("Createing trigger %s on %s.%s",
+				sql.EscapeName(triggerName),
+				sql.EscapeName(this.migrationContext.DatabaseName),
+				sql.EscapeName(tableName),
+			)
+			if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+				return err
+			}
+		}
+		this.migrationContext.Log.Infof("Triggers created on %s", tableName)
+	}
+	return nil
+}
+
+// CreateTriggers creates the original triggers on applier host
+func (this *Applier) CreateTriggersOnGhost() error {
+	err := this.createTriggers(this.migrationContext.GetGhostTableName())
+	return err
+}
+
 // DropChangelogTable drops the changelog table on the applier host
 func (this *Applier) DropChangelogTable() error {
 	return this.dropTable(this.migrationContext.GetChangelogTableName())
@@ -1127,7 +1177,7 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
 				return results
 			}
-			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, this.migrationContext.SharedVirtualColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args := sqlutils.Args()
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)

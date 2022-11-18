@@ -544,7 +544,8 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"position"})
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		generatedColumns := NewColumnList([]string{})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, generatedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -560,7 +561,8 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		generatedColumns := NewColumnList([]string{})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, generatedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -576,7 +578,8 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age"})
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		generatedColumns := NewColumnList([]string{})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, generatedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -592,7 +595,8 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age", "position", "id", "name"})
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		generatedColumns := NewColumnList([]string{})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, generatedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -608,20 +612,23 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age", "surprise"})
-		_, _, _, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		generatedColumns := NewColumnList([]string{})
+		_, _, _, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, generatedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNotNil(err)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{})
-		_, _, _, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		generatedColumns := NewColumnList([]string{})
+		_, _, _, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, generatedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNotNil(err)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		mappedColumns := NewColumnList([]string{"id", "name", "role", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"id"})
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, mappedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		generatedColumns := NewColumnList([]string{})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, mappedColumns, generatedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -643,10 +650,11 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 	valueArgs := []interface{}{3, "testname", "newval", int8(-17), int8(-2)}
 	whereArgs := []interface{}{3, "testname", "findme", int8(-3), 56}
 	sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
+	generatedColumns := NewColumnList([]string{})
 	uniqueKeyColumns := NewColumnList([]string{"position"})
 	{
 		// test signed
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, generatedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -663,7 +671,7 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 		// test unsigned
 		sharedColumns.SetUnsigned("age")
 		uniqueKeyColumns.SetUnsigned("position")
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, generatedColumns, uniqueKeyColumns, valueArgs, whereArgs)
 		test.S(t).ExpectNil(err)
 		expected := `
 			update /* gh-ost mydb.tbl */

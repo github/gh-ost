@@ -170,7 +170,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		}
 	}
 
-	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.OriginalTableVirtualColumns, this.migrationContext.GhostTableVirtualColumns, this.migrationContext.ColumnRenameMap)
+	this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, this.migrationContext.SharedVirtualColumns = this.getSharedColumns(this.migrationContext.OriginalTableColumns, this.migrationContext.GhostTableColumns, this.migrationContext.OriginalTableVirtualColumns, this.migrationContext.GhostTableVirtualColumns, this.migrationContext.ColumnRenameMap)
 	this.migrationContext.Log.Infof("Shared columns are %s", this.migrationContext.SharedColumns)
 	// By fact that a non-empty unique key exists we also know the shared columns are non-empty
 
@@ -484,7 +484,7 @@ func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) erro
 	return nil
 }
 
-// validateTableTriggers makes sure no triggers exist on the migrated table
+// validateTableTriggers makes sure no triggers exist on the migrated table. if --include_triggers is used then it fetches the triggers
 func (this *Inspector) validateTableTriggers() error {
 	query := `
 		SELECT COUNT(*) AS num_triggers
@@ -506,9 +506,71 @@ func (this *Inspector) validateTableTriggers() error {
 		return err
 	}
 	if numTriggers > 0 {
-		return this.migrationContext.Log.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		if this.migrationContext.IncludeTriggers {
+			this.migrationContext.Log.Infof("Found %d triggers on %s.%s.", numTriggers, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+			this.migrationContext.Triggers, err = mysql.GetTriggers(this.db, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
+			if err != nil {
+				return err
+			}
+			if err := this.validateGhostTriggersDontExist(); err != nil {
+				return err
+			}
+			if err := this.validateGhostTriggersLength(); err != nil {
+				return err
+			}
+			return nil
+		}
+		return this.migrationContext.Log.Errorf("Found triggers on %s.%s. Tables with triggers are supported only when using \"include-triggers\" flag. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+
 	}
 	this.migrationContext.Log.Debugf("Validated no triggers exist on table")
+	return nil
+}
+
+// verifyTriggersDontExist verifies before createing new triggers we want to make sure these triggers dont exist already in the DB
+func (this *Inspector) validateGhostTriggersDontExist() error {
+	if len(this.migrationContext.Triggers) > 0 {
+		var foundTriggers []string
+		for _, trigger := range this.migrationContext.Triggers {
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
+			query := "select 1 from information_schema.triggers where trigger_name = ? and trigger_schema = ?"
+			err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+				triggerExists := rowMap.GetInt("1")
+				if triggerExists == 1 {
+					foundTriggers = append(foundTriggers, triggerName)
+				}
+				return nil
+			},
+				triggerName,
+				this.migrationContext.DatabaseName,
+			)
+			if err != nil {
+				return err
+			}
+		}
+		if len(foundTriggers) > 0 {
+			return this.migrationContext.Log.Errorf("Found gh-ost triggers (%s). Please use a different suffix or drop them. Bailing out", strings.Join(foundTriggers, ","))
+		}
+	}
+
+	return nil
+}
+
+func (this *Inspector) validateGhostTriggersLength() error {
+	if len(this.migrationContext.Triggers) > 0 {
+		var foundTriggers []string
+		for _, trigger := range this.migrationContext.Triggers {
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
+			if ok := this.migrationContext.ValidateGhostTriggerLengthBelowMaxLength(triggerName); !ok {
+				foundTriggers = append(foundTriggers, triggerName)
+			}
+
+		}
+		if len(foundTriggers) > 0 {
+			return this.migrationContext.Log.Errorf("Gh-ost triggers (%s) length > %d characters. Bailing out", strings.Join(foundTriggers, ","), mysql.MaxTableNameLength)
+		}
+	}
+
 	return nil
 }
 
@@ -741,8 +803,9 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 }
 
 // getSharedColumns returns the intersection of two lists of columns in same order as the first list
-func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, originalVirtualColumns, ghostVirtualColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList) {
+func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.ColumnList, originalVirtualColumns, ghostVirtualColumns *sql.ColumnList, columnRenameMap map[string]string) (*sql.ColumnList, *sql.ColumnList, *sql.ColumnList) {
 	sharedColumnNames := []string{}
+	sharedVirtualColumnNames := []string{}
 	for _, originalColumn := range originalColumns.Names() {
 		isSharedColumn := false
 		for _, ghostColumn := range ghostColumns.Names() {
@@ -775,6 +838,29 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 			sharedColumnNames = append(sharedColumnNames, originalColumn)
 		}
 	}
+	// Virtual columns
+	for _, originalColumn := range originalVirtualColumns.Names() {
+		isSharedColumn := false
+		for _, ghostColumn := range ghostVirtualColumns.Names() {
+			if strings.EqualFold(originalColumn, ghostColumn) {
+				isSharedColumn = true
+				break
+			}
+			if strings.EqualFold(columnRenameMap[originalColumn], ghostColumn) {
+				isSharedColumn = true
+				break
+			}
+		}
+		for droppedColumn := range this.migrationContext.DroppedColumnsMap {
+			if strings.EqualFold(originalColumn, droppedColumn) {
+				isSharedColumn = false
+				break
+			}
+		}
+		if isSharedColumn {
+			sharedVirtualColumnNames = append(sharedVirtualColumnNames, originalColumn)
+		}
+	}
 	mappedSharedColumnNames := []string{}
 	for _, columnName := range sharedColumnNames {
 		if mapped, ok := columnRenameMap[columnName]; ok {
@@ -783,7 +869,7 @@ func (this *Inspector) getSharedColumns(originalColumns, ghostColumns *sql.Colum
 			mappedSharedColumnNames = append(mappedSharedColumnNames, columnName)
 		}
 	}
-	return sql.NewColumnList(sharedColumnNames), sql.NewColumnList(mappedSharedColumnNames)
+	return sql.NewColumnList(sharedColumnNames), sql.NewColumnList(mappedSharedColumnNames), sql.NewColumnList(sharedVirtualColumnNames)
 }
 
 // showCreateTable returns the `show create table` statement for given table

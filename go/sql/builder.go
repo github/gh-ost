@@ -461,7 +461,9 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	return result, sharedArgs, nil
 }
 
-func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns, uniqueKeyColumns *ColumnList, valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {
+func BuildDMLUpdateQuery(databaseName, tableName string,
+	tableColumns, sharedColumns, mappedSharedColumns, sharedVirtualColumns, uniqueKeyColumns *ColumnList,
+	valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {
 	if len(valueArgs) != tableColumns.Len() {
 		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("value args count differs from table column count in BuildDMLUpdateQuery")
 	}
@@ -471,7 +473,7 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	if !sharedColumns.IsSubsetOf(tableColumns) {
 		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("shared columns is not a subset of table columns in BuildDMLUpdateQuery")
 	}
-	if !uniqueKeyColumns.IsSubsetOf(sharedColumns) {
+	if !uniqueKeyColumns.IsSubsetOf(ConcatenateColumnList(sharedColumns, sharedVirtualColumns)) {
 		return result, sharedArgs, uniqueKeyArgs, fmt.Errorf("unique key columns is not a subset of shared columns in BuildDMLUpdateQuery")
 	}
 	if sharedColumns.Len() == 0 {
