@@ -360,6 +360,17 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.createFlagFiles(); err != nil {
 		return err
 	}
+	// In MySQL 8.0 (and possibly earlier) some DDL statements can be applied instantly.
+	// Attempt to do this if AttemptInstantDDL is set.
+	if this.migrationContext.AttemptInstantDDL {
+		this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
+		if err := this.applier.AttemptInstantDDL(); err == nil {
+			this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+			return nil
+		} else {
+			this.migrationContext.Log.Infof("ALGORITHM=INSTANT not supported for this operation, proceeding with original algorithm: %s", err)
+		}
+	}
 
 	initialLag, _ := this.inspector.getReplicationLag()
 	this.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
