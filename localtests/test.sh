@@ -116,7 +116,8 @@ test_single() {
     gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
   fi
 
-  gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
+  cat $tests_path/$test_name/create.sql
+  bash -x gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
 
   extra_args=""
   if [ -f $tests_path/$test_name/extra_args ] ; then
