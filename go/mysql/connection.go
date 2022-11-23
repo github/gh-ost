@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	transactionIsolation = "REPEATABLE-READ"
 	TLS_CONFIG_KEY       = "ghost"
 )
 
@@ -30,11 +29,13 @@ type ConnectionConfig struct {
 	ImpliedKey *InstanceKey
 	tlsConfig  *tls.Config
 	Timeout    float64
+	transactionIsolation string
 }
 
-func NewConnectionConfig() *ConnectionConfig {
+func NewConnectionConfig(transactionIsolation string) *ConnectionConfig {
 	config := &ConnectionConfig{
 		Key: InstanceKey{},
+		transactionIsolation: transactionIsolation,
 	}
 	config.ImpliedKey = &config.Key
 	return config
@@ -126,7 +127,7 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 		"charset=utf8mb4,utf8,latin1",
 		"interpolateParams=true",
 		fmt.Sprintf("tls=%s", tlsOption),
-		fmt.Sprintf("transaction_isolation=%q", transactionIsolation),
+		fmt.Sprintf("transaction_isolation=%q", this.transactionIsolation),
 		fmt.Sprintf("timeout=%fs", this.Timeout),
 		fmt.Sprintf("readTimeout=%fs", this.Timeout),
 		fmt.Sprintf("writeTimeout=%fs", this.Timeout),

@@ -246,6 +246,9 @@ Allows `gh-ost` to connect to the MySQL servers using encrypted connections, but
 
 `--ssl-key=/path/to/ssl-key.key`: SSL private key file (in PEM format).
 
+### storage-engine
+default is `innodb`. When set to `rocksdb`, some necessary changes (e.g. sets isolation level to READ_COMMITTED) is made to support rocksdb as transactional engine. 
+
 ### test-on-replica
 
 Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [`testing-on-replica`](testing-on-replica.md)

@@ -13,12 +13,17 @@ import (
 	test "github.com/openark/golib/tests"
 )
 
+const (
+	transactionIsolation = "REPEATABLE-READ"
+)
+
+
 func init() {
 	log.SetLevel(log.ERROR)
 }
 
 func TestNewConnectionConfig(t *testing.T) {
-	c := NewConnectionConfig()
+	c := NewConnectionConfig(transactionIsolation)
 	test.S(t).ExpectEquals(c.Key.Hostname, "")
 	test.S(t).ExpectEquals(c.Key.Port, 0)
 	test.S(t).ExpectEquals(c.ImpliedKey.Hostname, "")
@@ -28,7 +33,7 @@ func TestNewConnectionConfig(t *testing.T) {
 }
 
 func TestDuplicateCredentials(t *testing.T) {
-	c := NewConnectionConfig()
+	c := NewConnectionConfig(transactionIsolation)
 	c.Key = InstanceKey{Hostname: "myhost", Port: 3306}
 	c.User = "gromit"
 	c.Password = "penguin"
@@ -48,7 +53,7 @@ func TestDuplicateCredentials(t *testing.T) {
 }
 
 func TestDuplicate(t *testing.T) {
-	c := NewConnectionConfig()
+	c := NewConnectionConfig(transactionIsolation)
 	c.Key = InstanceKey{Hostname: "myhost", Port: 3306}
 	c.User = "gromit"
 	c.Password = "penguin"
@@ -63,7 +68,7 @@ func TestDuplicate(t *testing.T) {
 }
 
 func TestGetDBUri(t *testing.T) {
-	c := NewConnectionConfig()
+	c := NewConnectionConfig(transactionIsolation)
 	c.Key = InstanceKey{Hostname: "myhost", Port: 3306}
 	c.User = "gromit"
 	c.Password = "penguin"
@@ -74,7 +79,7 @@ func TestGetDBUri(t *testing.T) {
 }
 
 func TestGetDBUriWithTLSSetup(t *testing.T) {
-	c := NewConnectionConfig()
+	c := NewConnectionConfig(transactionIsolation)
 	c.Key = InstanceKey{Hostname: "myhost", Port: 3306}
 	c.User = "gromit"
 	c.Password = "penguin"

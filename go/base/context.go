@@ -270,8 +270,6 @@ func NewMigrationContext() *MigrationContext {
 		Uuid:                                uuid.NewV4().String(),
 		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
-		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
-		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
 		DMLBatchSize:                        10,
@@ -288,6 +286,21 @@ func NewMigrationContext() *MigrationContext {
 		PanicAbort:                          make(chan error),
 		Log:                                 NewDefaultLogger(),
 	}
+}
+
+func (this *MigrationContext) SetConnectionConfig(storageEngine string) error {
+	transactionIsolation := "REPEATABLE-READ"
+	switch storageEngine {
+	case "rocksdb":
+		transactionIsolation = "READ-COMMITTED"
+	case "innodb":
+		transactionIsolation = "REPEATABLE-READ"
+	default:
+		transactionIsolation = "REPEATABLE-READ"
+	}
+	this.InspectorConnectionConfig = mysql.NewConnectionConfig(transactionIsolation)
+	this.ApplierConnectionConfig = mysql.NewConnectionConfig(transactionIsolation)
+	return nil
 }
 
 func getSafeTableName(baseName string, suffix string) string {
