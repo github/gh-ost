@@ -117,6 +117,14 @@ test_single() {
   fi
 
   gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
+  test_create_result=$?
+
+  if [ $test_create_result -ne 0 ] ; then
+    echo
+    echo "ERROR $test_name create failure. cat $tests_path/$test_name/create.sql:"
+    cat $tests_path/$test_name/create.sql
+    return 1
+  fi
 
   extra_args=""
   if [ -f $tests_path/$test_name/extra_args ] ; then
@@ -255,7 +263,7 @@ build_binary() {
 
 test_all() {
   build_binary
-  find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | egrep "$test_pattern" | while read test_name ; do
+  find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | egrep "$test_pattern" | sort | while read test_name ; do
     test_single "$test_name"
     if [ $? -ne 0 ] ; then
       create_statement=$(gh-ost-test-mysql-replica test -t -e "show create table _gh_ost_test_gho \G")
