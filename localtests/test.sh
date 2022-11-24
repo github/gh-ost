@@ -166,6 +166,7 @@ test_single() {
     --initially-drop-socket-file \
     --default-retries=3 \
     --chunk-size=10 \
+    --test-on-replica \
     --verbose \
     --debug \
     --stack \
