@@ -7,6 +7,8 @@
 # Usage: localtests/test/sh [filter]
 # By default, runs all tests. Given filter, will only run tests matching given regep
 
+set -x
+
 tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
 default_ghost_binary=/tmp/gh-ost-test
