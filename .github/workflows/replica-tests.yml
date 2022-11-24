@@ -19,7 +19,7 @@ jobs:
         go-version: 1.17
 
     - name: set up tmpfs
-      run: sudo mount -t tmpfs -o size=2G tmpfs /home/runner/work/gh-ost
+      run: sudo mount -t tmpfs -o size=2G tmpfs /home/runner/work/gh-ost; sudo chmod 777 /home/runner/work/gh-ost
 
     - name: migration tests
       env:
