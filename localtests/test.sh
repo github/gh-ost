@@ -179,6 +179,8 @@ test_single() {
 
   execution_result=$?
 
+  cat $test_logfile
+
   if [ -f $tests_path/$test_name/sql_mode ] ; then
     gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
     gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
