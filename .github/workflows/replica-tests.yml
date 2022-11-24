@@ -11,15 +11,15 @@ jobs:
         version: [mysql-5.7.25,mysql-8.0.16]
 
     steps:
-    - name: set up tmpfs
-      run: sudo mount -t tmpfs -o size=2G tmpfs /home/runner/work/gh-ost
-
     - uses: actions/checkout@v2
 
     - name: Set up Go
       uses: actions/setup-go@v1
       with:
         go-version: 1.17
+
+    - name: set up tmpfs
+      run: sudo mount -t tmpfs -o size=2G tmpfs /home/runner/work/gh-ost/gh-ost/.gopath/src/github.com/github/gh-ost/sandboxes
 
     - name: migration tests
       env:
