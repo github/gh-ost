@@ -20,8 +20,8 @@ jobs:
 
     - name: set up tmpfs
       run: |
-           mkdir -p /home/runner/work/gh-ost/gh-ost/.gopath/src/github.com/github/gh-ost/sandboxes
-           sudo mount -t tmpfs -o size=2G tmpfs /home/runner/work/gh-ost/gh-ost/.gopath/src/github.com/github/gh-ost/sandboxes
+           mkdir -p /home/runner/work/gh-ost/gh-ost/sandboxes
+           sudo mount -t tmpfs -o size=2G tmpfs /home/runner/work/gh-ost/gh-ost/sandboxes
 
     - name: migration tests
       env:
