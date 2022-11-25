@@ -11,6 +11,7 @@ tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
 default_ghost_binary=/tmp/gh-ost-test
 ghost_binary=""
+storage_engine=innodb
 exec_command_file=/tmp/gh-ost-test.bash
 ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
@@ -24,12 +25,13 @@ replica_port=
 original_sql_mode=
 
 OPTIND=1
-while getopts "b:" OPTION
+while getopts "b:s:" OPTION
 do
   case $OPTION in
     b)
-      ghost_binary="$OPTARG"
-    ;;
+      ghost_binary="$OPTARG";;
+    s)
+      storage_engine="$OPTARG";;
   esac
 done
 shift $((OPTIND-1))
@@ -158,7 +160,8 @@ test_single() {
     --assume-master-host=${master_host}:${master_port}
     --database=test \
     --table=gh_ost_test \
-    --alter='engine=innodb' \
+    --storage-engine=${storage_engine} \
+    --alter='engine=${storage_engine}' \
     --exact-rowcount \
     --assume-rbr \
     --initially-drop-old-table \

@@ -29,13 +29,12 @@ type ConnectionConfig struct {
 	ImpliedKey           *InstanceKey
 	tlsConfig            *tls.Config
 	Timeout              float64
-	transactionIsolation string
+	TransactionIsolation string
 }
 
-func NewConnectionConfig(transactionIsolation string) *ConnectionConfig {
+func NewConnectionConfig() *ConnectionConfig {
 	config := &ConnectionConfig{
-		Key:                  InstanceKey{},
-		transactionIsolation: transactionIsolation,
+		Key: InstanceKey{},
 	}
 	config.ImpliedKey = &config.Key
 	return config
@@ -44,11 +43,12 @@ func NewConnectionConfig(transactionIsolation string) *ConnectionConfig {
 // DuplicateCredentials creates a new connection config with given key and with same credentials as this config
 func (this *ConnectionConfig) DuplicateCredentials(key InstanceKey) *ConnectionConfig {
 	config := &ConnectionConfig{
-		Key:       key,
-		User:      this.User,
-		Password:  this.Password,
-		tlsConfig: this.tlsConfig,
-		Timeout:   this.Timeout,
+		Key:                  key,
+		User:                 this.User,
+		Password:             this.Password,
+		tlsConfig:            this.tlsConfig,
+		Timeout:              this.Timeout,
+		TransactionIsolation: this.TransactionIsolation,
 	}
 	config.ImpliedKey = &config.Key
 	return config
@@ -127,7 +127,7 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 		"charset=utf8mb4,utf8,latin1",
 		"interpolateParams=true",
 		fmt.Sprintf("tls=%s", tlsOption),
-		fmt.Sprintf("transaction_isolation=%q", this.transactionIsolation),
+		fmt.Sprintf("transaction_isolation=%q", this.TransactionIsolation),
 		fmt.Sprintf("timeout=%fs", this.Timeout),
 		fmt.Sprintf("readTimeout=%fs", this.Timeout),
 		fmt.Sprintf("writeTimeout=%fs", this.Timeout),

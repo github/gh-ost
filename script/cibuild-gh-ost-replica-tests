@@ -36,8 +36,16 @@ test_mysql_version() {
 
   mkdir -p sandbox/binary
   rm -rf sandbox/binary/*
-  gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/"$mysql_version".tar.xz --sandbox-binary ${PWD}/sandbox/binary
-
+  local mysql_server=${mysql_version%-*}
+  if echo "$mysql_server" | egrep -i "percona" ; then
+    tarball_name=Percona-Server-${mysql_version#*-}-12-Linux.x86_64.glibc2.12-minimal.tar.gz
+    rm -f gh-ost-ci-env/mysql-tarballs/${tarball_name}
+    ln -s "$mysql_version".tar.xz gh-ost-ci-env/mysql-tarballs/${tarball_name}
+    gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/${tarball_name} --sandbox-binary ${PWD}/sandbox/binary
+    rm -f gh-ost-ci-env/mysql-tarballs/${tarball_name}
+  else
+    gh-ost-ci-env/bin/linux/dbdeployer unpack gh-ost-ci-env/mysql-tarballs/"$mysql_version".tar.xz --sandbox-binary ${PWD}/sandbox/binary
+  fi
   mkdir -p sandboxes
   rm -rf sandboxes/*
 
@@ -60,49 +68,45 @@ test_mysql_version() {
   gh-ost-test-mysql-master -uroot -e "create user 'gh-ost'@'%' identified by 'gh-ost'"
   gh-ost-test-mysql-master -uroot -e "grant all on *.* to 'gh-ost'@'%'"
 
-  local mysql_server=${mysql_version%-*}
   if echo "$mysql_server" | egrep -i "percona" ; then
     echo "### Preparing for rocksdb in PerconaServer"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_CFSTATS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_DBSTATS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_PERF_CONTEXT SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_PERF_CONTEXT_GLOBAL SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_CF_OPTIONS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_GLOBAL_INFO SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_COMPACTION_HISTORY SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_COMPACTION_STATS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_ACTIVE_COMPACTION_STATS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_DDL SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_INDEX_FILE_MAP SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_LOCKS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_TRX SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "INSTALL PLUGIN ROCKSDB_DEADLOCK SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-master -uroot -e "set global default_storage_engine='ROCKSDB'"
-    gh-ost-test-mysql-master -uroot -e "set global transaction_isolation='READ-COMMITTED'"
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_CFSTATS SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_DBSTATS SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_PERF_CONTEXT SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_PERF_CONTEXT_GLOBAL SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_CF_OPTIONS SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_GLOBAL_INFO SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_COMPACTION_STATS SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_DDL SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_INDEX_FILE_MAP SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_LOCKS SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_TRX SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'INSTALL PLUGIN ROCKSDB_DEADLOCK SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-master -uroot -e 'set global default_storage_engine="ROCKSDB"'
+    gh-ost-test-mysql-master -uroot -e 'set global transaction_isolation="READ-COMMITTED"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_CFSTATS SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_DBSTATS SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_PERF_CONTEXT SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_PERF_CONTEXT_GLOBAL SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_CF_OPTIONS SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_GLOBAL_INFO SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_COMPACTION_STATS SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_DDL SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_INDEX_FILE_MAP SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_LOCKS SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_TRX SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'INSTALL PLUGIN ROCKSDB_DEADLOCK SONAME "ha_rocksdb.so"'
+    gh-ost-test-mysql-replica -uroot -e 'set global default_storage_engine="ROCKSDB"'
+    gh-ost-test-mysql-replica -uroot -e 'set global transaction_isolation="READ-COMMITTED"'
 
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_CFSTATS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_DBSTATS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_PERF_CONTEXT SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_PERF_CONTEXT_GLOBAL SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_CF_OPTIONS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_GLOBAL_INFO SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_COMPACTION_HISTORY SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_COMPACTION_STATS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_ACTIVE_COMPACTION_STATS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_DDL SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_INDEX_FILE_MAP SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_LOCKS SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_TRX SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "INSTALL PLUGIN ROCKSDB_DEADLOCK SONAME 'ha_rocksdb.so'"
-    gh-ost-test-mysql-replica -uroot -e "set global default_storage_engine='ROCKSDB'"
-    gh-ost-test-mysql-replica -uroot -e "set global transaction_isolation='READ-COMMITTED'"
+    echo "### Running gh-ost tests for $mysql_version"
+    ./localtests/test.sh -b bin/gh-ost -s rocksdb
+  else
+    echo "### Running gh-ost tests for $mysql_version"
+    ./localtests/test.sh -b bin/gh-ost -s innodb
   fi
-
-  echo "### Running gh-ost tests for $mysql_version"
-  ./localtests/test.sh -b bin/gh-ost
-
   find sandboxes -name "stop_all" | bash
 }
 
