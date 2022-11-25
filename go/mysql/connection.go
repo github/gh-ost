@@ -18,23 +18,23 @@ import (
 )
 
 const (
-	TLS_CONFIG_KEY       = "ghost"
+	TLS_CONFIG_KEY = "ghost"
 )
 
 // ConnectionConfig is the minimal configuration required to connect to a MySQL server
 type ConnectionConfig struct {
-	Key        InstanceKey
-	User       string
-	Password   string
-	ImpliedKey *InstanceKey
-	tlsConfig  *tls.Config
-	Timeout    float64
+	Key                  InstanceKey
+	User                 string
+	Password             string
+	ImpliedKey           *InstanceKey
+	tlsConfig            *tls.Config
+	Timeout              float64
 	transactionIsolation string
 }
 
 func NewConnectionConfig(transactionIsolation string) *ConnectionConfig {
 	config := &ConnectionConfig{
-		Key: InstanceKey{},
+		Key:                  InstanceKey{},
 		transactionIsolation: transactionIsolation,
 	}
 	config.ImpliedKey = &config.Key

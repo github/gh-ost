@@ -17,7 +17,6 @@ const (
 	transactionIsolation = "REPEATABLE-READ"
 )
 
-
 func init() {
 	log.SetLevel(log.ERROR)
 }
