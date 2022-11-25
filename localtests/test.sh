@@ -99,7 +99,11 @@ test_single() {
   if [ -f $tests_path/$test_name/ignore_versions ] ; then
     ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
     mysql_version=$(gh-ost-test-mysql-master -s -s -e "select @@version")
+    mysql_version_comment=$(gh-ost-test-mysql-master -s -s -e "select @@version_comment")
     if echo "$mysql_version" | egrep -q "^${ignore_versions}" ; then
+      echo -n "Skipping: $test_name"
+      return 0
+    elif echo "$mysql_version_comment" | egrep -i -q "^${ignore_versions}" ; then
       echo -n "Skipping: $test_name"
       return 0
     fi
