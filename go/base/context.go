@@ -288,7 +288,7 @@ func NewMigrationContext() *MigrationContext {
 	}
 }
 
-func (this *MigrationContext) SetConnectionConfig(storageEngine string) error {
+func (this *MigrationContext) SetConnectionConfig(storageEngine string, host string, port int, timeout float64) error {
 	transactionIsolation := "REPEATABLE-READ"
 	switch storageEngine {
 	case "rocksdb":
@@ -299,6 +299,9 @@ func (this *MigrationContext) SetConnectionConfig(storageEngine string) error {
 		transactionIsolation = "REPEATABLE-READ"
 	}
 	this.InspectorConnectionConfig = mysql.NewConnectionConfig(transactionIsolation)
+	this.InspectorConnectionConfig.Key.Hostname = host
+	this.InspectorConnectionConfig.Key.Port = port
+	this.InspectorConnectionConfig.Timeout = timeout
 	this.ApplierConnectionConfig = mysql.NewConnectionConfig(transactionIsolation)
 	return nil
 }

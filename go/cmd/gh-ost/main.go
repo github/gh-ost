@@ -47,10 +47,10 @@ func acceptSignals(migrationContext *base.MigrationContext) {
 // main is the application's entry point. It will either spawn a CLI or HTTP interfaces.
 func main() {
 	migrationContext := base.NewMigrationContext()
-	flag.StringVar(&migrationContext.InspectorConnectionConfig.Key.Hostname, "host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
+	host := flag.String("host", "127.0.0.1", "MySQL hostname (preferably a replica, not the master)")
+	port := flag.Int("port", 3306, "MySQL port (preferably a replica, not the master)")
+	timeout := flag.Float64("mysql-timeout", 0.0, "Connect, read and write timeout for MySQL")
 	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unable to determine the master")
-	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
-	flag.Float64Var(&migrationContext.InspectorConnectionConfig.Timeout, "mysql-timeout", 0.0, "Connect, read and write timeout for MySQL")
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
 	flag.StringVar(&migrationContext.CliMasterUser, "master-user", "", "MySQL user on master, if different from that on replica. Requires --assume-master-host")
@@ -183,6 +183,10 @@ func main() {
 		migrationContext.Log.SetLevel(log.ERROR)
 	}
 
+	if err := migrationContext.SetConnectionConfig(*storageEngine, *host, *port, *timeout); err != nil {
+		migrationContext.Log.Fatale(err)
+	}
+
 	if migrationContext.AlterStatement == "" {
 		log.Fatal("--alter must be provided and statement must not be empty")
 	}
@@ -247,10 +251,6 @@ func main() {
 	}
 	if *replicationLagQuery != "" {
 		migrationContext.Log.Warning("--replication-lag-query is deprecated")
-	}
-
-	if err := migrationContext.SetConnectionConfig(*storageEngine); err != nil {
-		migrationContext.Log.Fatale(err)
 	}
 
 	switch *cutOver {
