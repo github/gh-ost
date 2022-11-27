@@ -252,6 +252,9 @@ func main() {
 	if *replicationLagQuery != "" {
 		migrationContext.Log.Warning("--replication-lag-query is deprecated")
 	}
+	if *storageEngine == "rocksdb" {
+		migrationContext.Log.Warning("RocksDB storage engine support is experimental")
+	}
 
 	switch *cutOver {
 	case "atomic", "default", "":

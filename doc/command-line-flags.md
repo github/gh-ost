@@ -247,7 +247,16 @@ Allows `gh-ost` to connect to the MySQL servers using encrypted connections, but
 `--ssl-key=/path/to/ssl-key.key`: SSL private key file (in PEM format).
 
 ### storage-engine
-default is `innodb`. When set to `rocksdb`, some necessary changes (e.g. sets isolation level to READ_COMMITTED) is made to support rocksdb as transactional engine. 
+default is `innodb`, and `rocksdb`as an optional. InnoDB and RocksDB are both transactional engines, supporting both shared and exclusive row locks.
+
+But RocksDB currently lacks a few features support compared to InnoDB:
+- Gap Locks
+- Foreign Key
+- Generated Columns
+- Spatial
+- Geometry
+
+When `--storage-engine=rocksdb`, `gh-ost` will make some changes necessary (e.g. sets isolation level to `READ_COMMITTED`) to support RocksDB.
 
 ### test-on-replica
 

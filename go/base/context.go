@@ -295,8 +295,6 @@ func (this *MigrationContext) SetConnectionConfig(storageEngine string) error {
 	switch storageEngine {
 	case "rocksdb":
 		transactionIsolation = "READ-COMMITTED"
-	case "innodb":
-		transactionIsolation = "REPEATABLE-READ"
 	default:
 		transactionIsolation = "REPEATABLE-READ"
 	}
