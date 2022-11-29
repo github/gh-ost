@@ -290,6 +290,19 @@ func NewMigrationContext() *MigrationContext {
 	}
 }
 
+func (this *MigrationContext) SetConnectionConfig(storageEngine string) error {
+	var transactionIsolation string
+	switch storageEngine {
+	case "rocksdb":
+		transactionIsolation = "READ-COMMITTED"
+	default:
+		transactionIsolation = "REPEATABLE-READ"
+	}
+	this.InspectorConnectionConfig.TransactionIsolation = transactionIsolation
+	this.ApplierConnectionConfig.TransactionIsolation = transactionIsolation
+	return nil
+}
+
 func getSafeTableName(baseName string, suffix string) string {
 	name := fmt.Sprintf("_%s_%s", baseName, suffix)
 	if len(name) <= mysql.MaxTableNameLength {
@@ -425,6 +438,10 @@ func (this *MigrationContext) IsTransactionalTable() bool {
 			return true
 		}
 	case "tokudb":
+		{
+			return true
+		}
+	case "rocksdb":
 		{
 			return true
 		}

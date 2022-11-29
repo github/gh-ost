@@ -68,6 +68,7 @@ func main() {
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
 	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
 	flag.BoolVar(&migrationContext.AttemptInstantDDL, "attempt-instant-ddl", false, "Attempt to use instant DDL for this migration first")
+	storageEngine := flag.String("storage-engine", "innodb", "Specify table storage engine (default: 'innodb'). When 'rocksdb': the session transaction isolation level is changed from REPEATABLE_READ to READ_COMMITTED.")
 
 	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
 	flag.BoolVar(&migrationContext.ConcurrentCountTableRows, "concurrent-rowcount", true, "(with --exact-rowcount), when true (default): count rows after row-copy begins, concurrently, and adjust row estimate later on; when false: first count rows, then start row copy")
@@ -182,6 +183,10 @@ func main() {
 		migrationContext.Log.SetLevel(log.ERROR)
 	}
 
+	if err := migrationContext.SetConnectionConfig(*storageEngine); err != nil {
+		migrationContext.Log.Fatale(err)
+	}
+
 	if migrationContext.AlterStatement == "" {
 		log.Fatal("--alter must be provided and statement must not be empty")
 	}
@@ -246,6 +251,9 @@ func main() {
 	}
 	if *replicationLagQuery != "" {
 		migrationContext.Log.Warning("--replication-lag-query is deprecated")
+	}
+	if *storageEngine == "rocksdb" {
+		migrationContext.Log.Warning("RocksDB storage engine support is experimental")
 	}
 
 	switch *cutOver {
