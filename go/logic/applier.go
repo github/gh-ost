@@ -935,7 +935,7 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 }
 
 // AtomicCutOverMagicLock
-func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error, dropCutOverSentryTableOnce *sync.Once) error {
+func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable, unlockGhostTableDone <-chan bool, tableUnlocked chan<- error, dropCutOverSentryTableOnce *sync.Once, okToUnlockGhostTable chan<- bool) error {
 	tx, err := this.db.Begin()
 	if err != nil {
 		tableLocked <- err
@@ -1021,6 +1021,17 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		}
 	})
 
+	okToUnlockGhostTable <- true
+	// release original table lock at last,
+	// should send unlockGhostTableDone channel in exception scenario to make sure unlock original table lock success.
+
+	select {
+	case <-unlockGhostTableDone:
+		this.migrationContext.Log.Infof("Receive ghost table unlocked channel, unlock tables now")
+	case <-time.After(time.Duration(time.Second)):
+		this.migrationContext.Log.Errorf("Wait unlock ghost table timeout, force unlock tables now")
+	}
+
 	// Tables still locked
 	this.migrationContext.Log.Infof("Releasing lock from %s.%s, %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -1039,7 +1050,21 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 }
 
 // AtomicCutoverRename
-func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed chan<- error) error {
+func (this *Applier) AtomicCutoverRename(sessionIdChan, lockGhostSessionIdChan chan int64, tablesRenamed, ghostTableLocked, ghostTableUnlocked chan error, okToUnlockGhostTable, unlockGhostTableDone chan bool) error {
+	// lock gho table before rename, after lock open a goroutine wait okToUnlockGhoTable channel
+	// lock original&magic table (session1) -> lock ghost table (session2) -> cut-over table (session3 #blocked) ->
+	// drop magic table (session1) ->  unlock ghost table (session2) -> unlock original table (session1)
+	go func() {
+		if err := this.AtomicCutOverGhostLock(ghostTableLocked, ghostTableUnlocked, lockGhostSessionIdChan, okToUnlockGhostTable, unlockGhostTableDone); err != nil {
+			this.migrationContext.Log.Errore(err)
+		}
+	}()
+
+	if err := <-ghostTableLocked; err != nil {
+		sessionIdChan <- -1
+		return this.migrationContext.Log.Errore(err)
+	}
+
 	tx, err := this.db.Begin()
 	if err != nil {
 		return err
@@ -1078,6 +1103,77 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 	}
 	tablesRenamed <- nil
 	this.migrationContext.Log.Infof("Tables renamed")
+	return nil
+}
+
+// AtomicCutOverGhostLock
+func (this *Applier) AtomicCutOverGhostLock(ghostTableLocked, ghostTableUnlocked chan<- error, lockGhostSessionIdChan chan int64, okToUnlockGhostTable <-chan bool, unlockGhostTableDone chan<- bool) error {
+	tx, err := this.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tx.Rollback()
+		unlockGhostTableDone <- true
+		lockGhostSessionIdChan <- -1
+		ghostTableLocked <- fmt.Errorf("Unexpected error in AtomicCutOverGhostLock(), injected to release blocking channel reads")
+		ghostTableUnlocked <- fmt.Errorf("Unexpected error in AtomicCutOverGhostLock(), injected to release blocking channel reads")
+	}()
+	var sessionId int64
+	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
+		return err
+	}
+	lockGhostSessionIdChan <- sessionId
+
+	lockResult := 0
+	query := `select get_lock(?, 0)`
+	lockName := this.GetSessionLockName(sessionId)
+	this.migrationContext.Log.Infof("Grabbing voluntary lock: %s", lockName)
+	if err := tx.QueryRow(query, lockName).Scan(&lockResult); err != nil || lockResult != 1 {
+		err := fmt.Errorf("Unable to acquire lock %s", lockName)
+		ghostTableLocked <- err
+		return err
+	}
+
+	this.migrationContext.Log.Infof("Setting lock ghost table timeout as %d seconds", this.migrationContext.CutOverLockTimeoutSeconds)
+	query = fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.CutOverLockTimeoutSeconds)
+	if _, err := tx.Exec(query); err != nil {
+		return err
+	}
+
+	query = fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	)
+	this.migrationContext.Log.Infof("Locking %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	)
+
+	this.migrationContext.Log.Infof("Issuing and expecting get the %s.%s table lock: %s", this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName(), query)
+	if _, err := tx.Exec(query); err != nil {
+		ghostTableLocked <- err
+		return this.migrationContext.Log.Errore(err)
+	}
+
+	this.migrationContext.Log.Infof("Ghost table locked")
+	ghostTableLocked <- nil // No error.
+
+	<-okToUnlockGhostTable
+	// release gho table lock after drop magic cut-over table
+	this.migrationContext.Log.Infof("Will now proceed to unlock ghost table")
+
+	this.migrationContext.Log.Infof("Releasing lock from %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	)
+	query = `unlock tables`
+	if _, err := tx.Exec(query); err != nil {
+		ghostTableUnlocked <- err
+	}
+	unlockGhostTableDone <- true
+	this.migrationContext.Log.Infof("Ghost table unlocked")
+	ghostTableUnlocked <- nil
 	return nil
 }
 

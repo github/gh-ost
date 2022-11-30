@@ -639,9 +639,12 @@ func (this *Migrator) atomicCutOver() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	okToUnlockTable := make(chan bool, 4)
+	okToUnlockGhostTable := make(chan bool, 4)
+	unlockGhostTableDone := make(chan bool, 4)
 	var dropCutOverSentryTableOnce sync.Once
 	defer func() {
 		okToUnlockTable <- true
+		unlockGhostTableDone <- true
 		dropCutOverSentryTableOnce.Do(func() {
 			this.applier.DropAtomicCutOverSentryTableIfExists()
 		})
@@ -653,7 +656,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	go func() {
-		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, &dropCutOverSentryTableOnce); err != nil {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, unlockGhostTableDone, tableUnlocked, &dropCutOverSentryTableOnce, okToUnlockGhostTable); err != nil {
 			this.migrationContext.Log.Errore(err)
 		}
 	}()
@@ -675,13 +678,23 @@ func (this *Migrator) atomicCutOver() (err error) {
 	var tableRenameKnownToHaveFailed int64
 	renameSessionIdChan := make(chan int64, 2)
 	tablesRenamed := make(chan error, 2)
+
+	ghostTableLocked := make(chan error, 2)
+	ghostTableUnlocked := make(chan error, 2)
+	lockGhostSessionIdChan := make(chan int64, 2)
+
 	go func() {
-		if err := this.applier.AtomicCutoverRename(renameSessionIdChan, tablesRenamed); err != nil {
+		if err := this.applier.AtomicCutoverRename(renameSessionIdChan, lockGhostSessionIdChan, tablesRenamed, ghostTableLocked, ghostTableUnlocked, okToUnlockGhostTable, unlockGhostTableDone); err != nil {
 			// Abort! Release the lock
 			atomic.StoreInt64(&tableRenameKnownToHaveFailed, 1)
 			okToUnlockTable <- true
+			okToUnlockGhostTable <- true
+			unlockGhostTableDone <- true
 		}
 	}()
+	lockGhoSessionId := <-lockGhostSessionIdChan
+	this.migrationContext.Log.Infof("Session locking ghost table is %+v", lockGhoSessionId)
+
 	renameSessionId := <-renameSessionIdChan
 	this.migrationContext.Log.Infof("Session renaming tables is %+v", renameSessionId)
 
@@ -714,6 +727,9 @@ func (this *Migrator) atomicCutOver() (err error) {
 	okToUnlockTable <- true
 	// BAM! magic table dropped, original table lock is released
 	// -> RENAME released -> queries on original are unblocked.
+	if err := <-ghostTableUnlocked; err != nil {
+		return this.migrationContext.Log.Errore(err)
+	}
 	if err := <-tableUnlocked; err != nil {
 		return this.migrationContext.Log.Errore(err)
 	}
