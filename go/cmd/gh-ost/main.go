@@ -190,7 +190,10 @@ func main() {
 	if migrationContext.AlterStatement == "" {
 		log.Fatal("--alter must be provided and statement must not be empty")
 	}
-	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
+	parser, err := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
+	if err != nil {
+		log.Fatale(err)
+	}
 	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
 
 	if migrationContext.DatabaseName == "" {
@@ -312,7 +315,9 @@ func main() {
 
 	migrator := logic.NewMigrator(migrationContext, AppVersion)
 	if err := migrator.Migrate(); err != nil {
-		migrator.ExecOnFailureHook()
+		if err = migrator.ExecOnFailureHook(); err != nil {
+			migrationContext.Log.Errore(err)
+		}
 		migrationContext.Log.Fatale(err)
 	}
 	fmt.Fprintln(os.Stdout, "# Done")

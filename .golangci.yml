@@ -1,8 +1,6 @@
 run:
-  timeout: 5m
+  timeout: 3m
 linters:
-  disable:
-    - errcheck
   enable:
     - bodyclose
     - containedctx
@@ -23,8 +21,23 @@ linters:
     - prealloc
     - rowserrcheck
     - sqlclosecheck
+    - structcheck
     - unconvert
     - unparam
     - unused
     - wastedassign
     - whitespace
+issues:
+  exclude-rules:
+    - linters:
+        - errcheck
+      path: '(.+)_test\.go'
+    - linters:
+        - errcheck
+      text: 'Error return value of `(this\.)?migrationContext\.Log\.(Errore|Errorf|Fatal|Fatale|Fatalf|Warning|Warningf)`'
+    - linters:
+        - errcheck
+      text: 'Error return value of `tx.Rollback`'
+    - linters:
+        - errcheck
+      text: 'Error return value of `log\.(Errore|Errorf|Fatal|Fatale|Fatalf|Warning|Warningf)`'

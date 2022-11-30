@@ -56,10 +56,10 @@ func NewAlterTableParser() *AlterTableParser {
 	}
 }
 
-func NewParserFromAlterStatement(alterStatement string) *AlterTableParser {
+func NewParserFromAlterStatement(alterStatement string) (*AlterTableParser, error) {
 	parser := NewAlterTableParser()
-	parser.ParseAlterStatement(alterStatement)
-	return parser
+	err := parser.ParseAlterStatement(alterStatement)
+	return parser, err
 }
 
 func (this *AlterTableParser) tokenizeAlterStatement(alterStatement string) (tokens []string) {
