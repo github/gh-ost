@@ -52,6 +52,22 @@ const (
 	HTTPStatusOK       = 200
 	MaxEventsBatchSize = 1000
 	ETAUnknown         = math.MinInt64
+
+	// MaxDynamicScaleFactor is the maximum factor dynamic scaling can change the chunkSize from
+	// the setting chunkSize. For example, if the factor is 10, and chunkSize is 1000, then the
+	// values will be in the range of 100 to 10000.
+	MaxDynamicScaleFactor = 50
+	// MaxDynamicStepFactor is the maximum amount each recalculation of the dynamic chunkSize can
+	// increase by. For example, if the newTarget is 5000 but the current target is 1000, the newTarget
+	// will be capped back down to 1500. Over time the number 5000 will be reached, but not straight away.
+	MaxDynamicStepFactor = 1.5
+	// MinDynamicChunkSize is the minimum chunkSize that can be used when dynamic chunkSize is enabled.
+	// This helps prevent a scenario where the chunk size is too small (it can never be less than 1).
+	MinDynamicRowSize = 10
+	// DynamicPanicFactor is the factor by which the feedback process takes immediate action when
+	// the chunkSize appears to be too large. For example, if the PanicFactor is 5, and the target *time*
+	// is 50ms, an actual time 250ms+ will cause the dynamic chunk size to immediately be reduced.
+	DynamicPanicFactor = 5
 )
 
 var (
@@ -118,7 +134,7 @@ type MigrationContext struct {
 
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
-	ChunkSize                           int64
+	chunkSize                           int64
 	niceRatio                           float64
 	MaxLagMillisecondsThrottleThreshold int64
 	throttleControlReplicaKeys          *mysql.InstanceKeyMap
@@ -145,6 +161,12 @@ type MigrationContext struct {
 	HooksHintOwner                      string
 	HooksHintToken                      string
 	HooksStatusIntervalSec              int64
+
+	DynamicChunkSize             bool
+	DynamicChunkSizeTargetMillis int64
+	targetChunkSizeMutex         sync.Mutex
+	targetchunkFeedback          []time.Duration
+	targetChunkSize              int64
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -269,7 +291,7 @@ func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
 		Uuid:                                uuid.NewV4().String(),
 		defaultNumRetries:                   60,
-		ChunkSize:                           1000,
+		chunkSize:                           1000,
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1500,
@@ -287,6 +309,7 @@ func NewMigrationContext() *MigrationContext {
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
 		Log:                                 NewDefaultLogger(),
+		DynamicChunkSize:                    false,
 	}
 }
 
@@ -554,6 +577,81 @@ func (this *MigrationContext) GetTotalRowsCopied() int64 {
 	return atomic.LoadInt64(&this.TotalRowsCopied)
 }
 
+func (this *MigrationContext) ChunkDurationFeedback(d time.Duration) {
+	this.targetChunkSizeMutex.Lock()
+	defer this.targetChunkSizeMutex.Unlock()
+
+	if int64(d) > (this.DynamicChunkSizeTargetMillis * DynamicPanicFactor * int64(time.Millisecond)) {
+		// We're 5x our target size. Something went seriously wrong,
+		// let's pump the brakes immediately to get back into range.
+		fmt.Printf("## error: chunk was too slow! Dividing by 10\n")
+		this.targetchunkFeedback = []time.Duration{}
+		newTarget := float64(this.targetChunkSize) / float64(DynamicPanicFactor*2)
+		this.targetChunkSize = int64(newTarget)
+	}
+	this.targetchunkFeedback = append(this.targetchunkFeedback, d)
+}
+
+func (this *MigrationContext) calculateNewTargetChunkSize() int64 {
+	this.targetChunkSizeMutex.Lock()
+	defer this.targetChunkSizeMutex.Unlock()
+
+	// We do all our math as float64 of time in ns
+	p90 := float64(findP90(this.targetchunkFeedback))
+	targetTime := float64(this.DynamicChunkSizeTargetMillis * int64(time.Millisecond))
+	newTargetRows := float64(this.targetChunkSize) * (targetTime / p90)
+
+	// Apply some final boundary checking:
+	// We are only allowed to scale up/down 50x from the original chunk size.
+	if newTargetRows < float64(this.chunkSize)/MaxDynamicScaleFactor {
+		newTargetRows = float64(this.chunkSize) / MaxDynamicScaleFactor
+	}
+	if newTargetRows > float64(this.chunkSize)*MaxDynamicScaleFactor {
+		newTargetRows = float64(this.chunkSize) * MaxDynamicScaleFactor
+	}
+	// We only ever increase by 50% at a time.
+	// This ensures a gradual step up if there is some non-linear behavior.
+	// There's plenty of time to increase more.
+	if newTargetRows > float64(this.targetChunkSize)*MaxDynamicStepFactor {
+		newTargetRows = float64(this.targetChunkSize) * MaxDynamicStepFactor
+	}
+	// The newTargetRows must be at least 10,
+	// otherwise we're going too low
+	if newTargetRows < MinDynamicRowSize {
+		newTargetRows = MinDynamicRowSize
+	}
+	this.targetchunkFeedback = []time.Duration{} // reset
+	return int64(newTargetRows)
+}
+
+func (this *MigrationContext) GetChunkSize() int64 {
+	if !this.DynamicChunkSize {
+		return atomic.LoadInt64(&this.chunkSize)
+	}
+	// Historically gh-ost has used a static chunk size (i.e. 1000 rows)
+	// which is can be adjusted while gh-ost is running.
+	// An ideal chunk size is large enough that it can batch operations,
+	// but small enough that it doesn't cause spikes in replica lag.
+	//
+	// The problem with basing the configurable on row-size is two fold:
+	// - Fow very narrow rows, it's not enough (leaving performance on the table).
+	// - For very wide rows (or with many secondary indexes) 1000 might be too high!
+	//
+	// Dynamic chunk size addresses this by using row-size as a starting point,
+	// and then increases or decreases the number based on feedback from previous
+	// copy tasks.
+	if this.targetChunkSize == 0 {
+		this.targetChunkSize = atomic.LoadInt64(&this.chunkSize)
+	}
+	// We need 10 samples to make a decision because we
+	// calculate it from the p90 (i.e. 2nd to highest value).
+	if len(this.targetchunkFeedback) >= 10 {
+		this.targetChunkSize = this.calculateNewTargetChunkSize()
+		fmt.Printf("# Adjusting chunk size based on feedback: %d\n", this.targetChunkSize)
+	}
+	return this.targetChunkSize
+}
+
 func (this *MigrationContext) GetIteration() int64 {
 	return atomic.LoadInt64(&this.Iteration)
 }
@@ -611,7 +709,7 @@ func (this *MigrationContext) SetChunkSize(chunkSize int64) {
 	if chunkSize > 100000 {
 		chunkSize = 100000
 	}
-	atomic.StoreInt64(&this.ChunkSize, chunkSize)
+	atomic.StoreInt64(&this.chunkSize, chunkSize)
 }
 
 func (this *MigrationContext) SetDMLBatchSize(batchSize int64) {

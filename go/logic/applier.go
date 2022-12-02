@@ -577,7 +577,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			&this.migrationContext.UniqueKey.Columns,
 			this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 			this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
-			atomic.LoadInt64(&this.migrationContext.ChunkSize),
+			this.migrationContext.GetChunkSize(),
 			this.migrationContext.GetIteration() == 0,
 			fmt.Sprintf("iteration:%d", this.migrationContext.GetIteration()),
 		)
@@ -614,7 +614,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 // data actually gets copied from original table.
 func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
-	chunkSize = atomic.LoadInt64(&this.migrationContext.ChunkSize)
+	chunkSize = this.migrationContext.GetChunkSize()
 
 	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
 		this.migrationContext.DatabaseName,

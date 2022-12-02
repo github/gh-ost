@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -92,4 +93,11 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	} else {
 		return "", fmt.Errorf("Unexpected database port reported: %+v / extra_port: %+v", port, extraPort)
 	}
+}
+
+func findP90(a []time.Duration) time.Duration {
+	sort.Slice(a, func(i, j int) bool {
+		return a[i] > a[j]
+	})
+	return a[len(a)/10]
 }

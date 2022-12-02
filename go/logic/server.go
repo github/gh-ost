@@ -196,7 +196,7 @@ help                                 # This message
 	case "chunk-size":
 		{
 			if argIsQuestion {
-				fmt.Fprintf(writer, "%+v\n", atomic.LoadInt64(&this.migrationContext.ChunkSize))
+				fmt.Fprintf(writer, "%+v\n", this.migrationContext.GetChunkSize())
 				return NoPrintStatusRule, nil
 			}
 			if chunkSize, err := strconv.Atoi(arg); err != nil {

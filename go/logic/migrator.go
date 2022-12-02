@@ -844,7 +844,7 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
 	fmt.Fprintf(w, "# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f\n",
-		atomic.LoadInt64(&this.migrationContext.ChunkSize),
+		this.migrationContext.GetChunkSize(),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
 		atomic.LoadInt64(&this.migrationContext.DMLBatchSize),
 		maxLoad.String(),
@@ -1315,8 +1315,10 @@ func (this *Migrator) executeWriteFuncs() error {
 						if err := copyRowsFunc(); err != nil {
 							return this.migrationContext.Log.Errore(err)
 						}
+						// Send feedback to the chunker.
+						copyRowsDuration := time.Since(copyRowsStartTime)
+						this.migrationContext.ChunkDurationFeedback(copyRowsDuration)
 						if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
-							copyRowsDuration := time.Since(copyRowsStartTime)
 							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
 							sleepTime := time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond
 							time.Sleep(sleepTime)
