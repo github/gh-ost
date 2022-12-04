@@ -132,7 +132,7 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 
 	if strings.TrimSpace(os.Getenv("GITHUB_ACTION")) == "true" {
 		go func(reader io.Reader) {
-			scanner := bufio.NewScanner(output)
+			scanner := bufio.NewScanner(&output)
 			fmt.Printf("::group::%s stdout\n", test.Name)
 			for scanner.Scan() {
 				fmt.Println(scanner.Text())
