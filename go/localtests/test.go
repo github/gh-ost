@@ -125,9 +125,9 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 
 	log.Printf("[%s] running gh-ost command with extra args: %+v", test.Name, test.ExtraArgs)
 
-	var output, stderr bytes.Buffer
+	var output bytes.Buffer
 	cmd := exec.Command(config.GhostBinary, flags...)
-	cmd.Stderr = &stderr
+	cmd.Stderr = &output
 	cmd.Stdout = &output
 
 	// group stdout log lines if running in GitHub Actions
@@ -147,7 +147,7 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 		if isExpectedFailureOutput(&stderr, test.ExpectedFailure) {
 			return nil
 		}
-		log.Printf("[%s] test failed: %+v", test.Name, stderr.String())
+		log.Printf("[%s] test failed", test.Name)
 	}
 	return err
 }
