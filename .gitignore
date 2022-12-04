@@ -1,5 +1,6 @@
 /.gopath/
 /bin/
 /libexec/
+/localtests/mysql.env
 /.vendor/
 .idea/

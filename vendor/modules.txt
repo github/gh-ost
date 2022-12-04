@@ -11,6 +11,9 @@ github.com/go-mysql-org/go-mysql/utils
 # github.com/go-sql-driver/mysql v1.6.0
 ## explicit; go 1.10
 github.com/go-sql-driver/mysql
+# github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
+## explicit; go 1.13
+github.com/google/shlex
 # github.com/openark/golib v0.0.0-20210531070646-355f37940af8
 ## explicit; go 1.16
 github.com/openark/golib/log
@@ -37,8 +40,6 @@ github.com/siddontang/go-log/loggers
 # go.uber.org/atomic v1.7.0
 ## explicit; go 1.13
 go.uber.org/atomic
-# golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83
-## explicit; go 1.11
 # golang.org/x/net v0.0.0-20210224082022-3d97a244fca7
 ## explicit; go 1.11
 golang.org/x/net/context

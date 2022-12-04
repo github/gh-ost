@@ -135,6 +135,12 @@ func (this *AlterTableParser) parseAlterToken(alterToken string) {
 
 func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err error) {
 	this.alterStatementOptions = alterStatement
+	for _, trimQuote := range []string{`'`, `"`} {
+		if strings.HasPrefix(this.alterStatementOptions, trimQuote) && strings.HasSuffix(this.alterStatementOptions, trimQuote) {
+			this.alterStatementOptions = strings.TrimPrefix(this.alterStatementOptions, trimQuote)
+			this.alterStatementOptions = strings.TrimSuffix(this.alterStatementOptions, trimQuote)
+		}
+	}
 	for _, alterTableRegexp := range alterTableExplicitSchemaTableRegexps {
 		if submatch := alterTableRegexp.FindStringSubmatch(this.alterStatementOptions); len(submatch) > 0 {
 			this.explicitSchema = submatch[1]

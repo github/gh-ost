@@ -1,1 +1,1 @@
---alter='add column `index` int unsigned' \
+--alter='add column `index` int unsigned'

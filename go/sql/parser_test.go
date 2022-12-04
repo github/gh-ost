@@ -6,6 +6,7 @@
 package sql
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -18,13 +19,40 @@ func init() {
 }
 
 func TestParseAlterStatement(t *testing.T) {
-	statement := "add column t int, engine=innodb"
-	parser := NewAlterTableParser()
-	err := parser.ParseAlterStatement(statement)
-	test.S(t).ExpectNil(err)
-	test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
-	test.S(t).ExpectFalse(parser.HasNonTrivialRenames())
-	test.S(t).ExpectFalse(parser.IsAutoIncrementDefined())
+	// plain alter
+	{
+		statement := "add column t int, engine=innodb"
+		parser := NewAlterTableParser()
+		err := parser.ParseAlterStatement(statement)
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
+		test.S(t).ExpectFalse(parser.HasNonTrivialRenames())
+		test.S(t).ExpectFalse(parser.IsAutoIncrementDefined())
+	}
+	// single-quoted alter
+	{
+		statement := "add column t int, engine=innodb"
+		parser := NewAlterTableParser()
+		err := parser.ParseAlterStatement(fmt.Sprintf(`'%s'`, statement))
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
+	}
+	// single-quoted w/comment alter
+	{
+		statement := "add column t int 'single-quoted comment'"
+		parser := NewAlterTableParser()
+		err := parser.ParseAlterStatement(fmt.Sprintf(`'%s'`, statement))
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
+	}
+	// double-quoted alter
+	{
+		statement := "add column t int, engine=innodb"
+		parser := NewAlterTableParser()
+		err := parser.ParseAlterStatement(fmt.Sprintf(`"%s"`, statement))
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectEquals(parser.alterStatementOptions, statement)
+	}
 }
 
 func TestParseAlterStatementTrivialRename(t *testing.T) {

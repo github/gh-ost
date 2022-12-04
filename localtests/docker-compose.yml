@@ -1,0 +1,25 @@
+version: "3.6"
+services:
+  tests:
+    build:
+      context: "../"
+      dockerfile: "localtests/Dockerfile"
+    env_file: "mysql.env"
+    depends_on:
+      - "primary"
+      - "replica"
+  primary:
+    image: ${TEST_DOCKER_IMAGE}
+    command: "--bind-address=0.0.0.0 --enforce-gtid-consistency --gtid-mode=ON --event-scheduler=ON --log-bin --log-slave-updates --server-id=1"
+    env_file: "mysql.env"
+    volumes:
+      - "./init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro"
+  replica:
+    image: ${TEST_DOCKER_IMAGE}
+    command: "--bind-address=0.0.0.0 --enforce-gtid-consistency --gtid-mode=ON --log-bin --log-slave-updates --read-only=ON --server-id=2"
+    env_file: "mysql.env"
+    depends_on:
+      - "primary"
+    volumes:
+      - "./init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro"
+      - "./init-replica.sql:/docker-entrypoint-initdb.d/02-init-replica.sql:ro"
