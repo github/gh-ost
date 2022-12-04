@@ -148,7 +148,7 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 				return
 			default:
 				scanner := bufio.NewScanner(&stdout)
-				for scanner.Scan() {
+				if err := scanner.Scan(); err == nil {
 					fmt.Println(scanner.Text())
 				}
 			}
