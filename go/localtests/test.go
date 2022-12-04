@@ -130,6 +130,11 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 	cmd.Stderr = &output
 	cmd.Stdout = &output
 
+	errChan := make(chan error)
+	go func() {
+		errChan <- cmd.Run()
+	}()
+
 	// group stdout log lines if running in GitHub Actions
 	// https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#grouping-log-lines
 	if strings.TrimSpace(os.Getenv("GITHUB_ACTION")) != "" {
@@ -143,7 +148,8 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 		}(&output)
 	}
 
-	if err = cmd.Run(); err != nil {
+	err <- errChan
+	if err != nil {
 		if isExpectedFailureOutput(&output, test.ExpectedFailure) {
 			return nil
 		}
