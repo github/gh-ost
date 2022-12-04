@@ -144,7 +144,7 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 	}
 
 	if err = cmd.Run(); err != nil {
-		if isExpectedFailureOutput(&stderr, test.ExpectedFailure) {
+		if isExpectedFailureOutput(&output, test.ExpectedFailure) {
 			return nil
 		}
 		log.Printf("[%s] test failed", test.Name)
