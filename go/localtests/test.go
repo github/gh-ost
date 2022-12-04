@@ -134,7 +134,7 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 	// https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#grouping-log-lines
 	if strings.TrimSpace(os.Getenv("GITHUB_ACTION")) != "" {
 		go func(reader io.Reader) {
-			scanner := bufio.NewScanner(&output)
+			scanner := bufio.NewScanner(reader)
 			fmt.Printf("::group::%s stdout\n", test.Name)
 			for scanner.Scan() {
 				fmt.Println(scanner.Text())
