@@ -85,6 +85,10 @@ func isExpectedFailureOutput(output io.Reader, expectedFailure string) bool {
 	return false
 }
 
+func isGitHubActions() bool {
+	return os.Getenv("GITHUB_ACTION") != ""
+}
+
 func pingAndGetGTIDExecuted(db *sql.DB, timeout time.Duration) (*mysql.UUIDSet, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

@@ -6,14 +6,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
 	"sync"
 )
-
-func isGitHubActions() bool {
-	return os.Getenv("GITHUB_ACTION") != ""
-}
 
 // Test represents a single test.
 type Test struct {
@@ -138,18 +133,18 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 	}
 
 	var wg sync.WaitGroup
-	stop := make(chan bool)
+	stopStdout := make(chan bool)
 	go func() {
 		defer wg.Done()
-		//if isGitHubActions() {
-		fmt.Printf("::group::%s stdout\n", test.Name)
-		//}
+		if isGitHubActions() {
+			fmt.Printf("::group::%s stdout\n", test.Name)
+		}
 		for {
 			select {
-			case <-stop:
-				//if isGitHubActions() {
-				fmt.Println("::endgroup::")
-				//}
+			case <-stopStdout:
+				if isGitHubActions() {
+					fmt.Println("::endgroup::")
+				}
 				return
 			default:
 				scanner := bufio.NewScanner(&stdout)
@@ -162,7 +157,7 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 	wg.Add(1)
 
 	err = cmd.Wait()
-	stop <- true
+	stopStdout <- true
 	wg.Wait()
 
 	if err != nil {
