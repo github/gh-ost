@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
-	"strings"
+	"sync"
 )
+
+func isGitHubActions() bool {
+	return os.Getenv("GITHUB_ACTION") != ""
+}
 
 // Test represents a single test.
 type Test struct {
@@ -125,35 +128,48 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 
 	log.Printf("[%s] running gh-ost command with extra args: %+v", test.Name, test.ExtraArgs)
 
-	var output bytes.Buffer
+	var stderr, stdout bytes.Buffer
 	cmd := exec.Command(config.GhostBinary, flags...)
-	cmd.Stderr = &output
-	cmd.Stdout = &output
+	cmd.Stderr = &stderr
+	cmd.Stdout = &stdout
 
-	errChan := make(chan error)
-	go func() {
-		errChan <- cmd.Run()
-	}()
-
-	// group stdout log lines if running in GitHub Actions
-	// https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#grouping-log-lines
-	if strings.TrimSpace(os.Getenv("GITHUB_ACTION")) != "" {
-		go func(reader io.Reader) {
-			scanner := bufio.NewScanner(reader)
-			fmt.Printf("::group::%s stdout\n", test.Name)
-			for scanner.Scan() {
-				fmt.Println(scanner.Text())
-			}
-			fmt.Println("::endgroup::")
-		}(&output)
+	if err = cmd.Start(); err != nil {
+		return err
 	}
 
-	err = <-errChan
+	var wg sync.WaitGroup
+	stop := make(chan bool)
+	go func() {
+		defer wg.Done()
+		//if isGitHubActions() {
+		fmt.Printf("::group::%s stdout\n", test.Name)
+		//}
+		for {
+			select {
+			case <-stop:
+				//if isGitHubActions() {
+				fmt.Println("::endgroup::")
+				//}
+				return
+			default:
+				scanner := bufio.NewScanner(&stdout)
+				for scanner.Scan() {
+					fmt.Println(scanner.Text())
+				}
+			}
+		}
+	}()
+	wg.Add(1)
+
+	err = cmd.Wait()
+	stop <- true
+	wg.Wait()
+
 	if err != nil {
-		if isExpectedFailureOutput(&output, test.ExpectedFailure) {
+		if isExpectedFailureOutput(&stderr, test.ExpectedFailure) {
 			return nil
 		}
-		log.Printf("[%s] test failed", test.Name)
+		log.Printf("[%s] test failed: %+v", test.Name, stderr.String())
 	}
 	return err
 }
