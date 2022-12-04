@@ -1,11 +1,15 @@
 package localtests
 
 import (
+	"bufio"
 	"bytes"
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"os/exec"
+	"strings"
 )
 
 // Test represents a single test.
@@ -126,12 +130,22 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 	cmd.Stderr = &stderr
 	cmd.Stdout = &output
 
+	if strings.TrimSpace(os.Getenv("GITHUB_ACTION")) == "true" {
+		go func(reader io.Reader) {
+			scanner := bufio.NewScanner(output)
+			fmt.Printf("::group::%s stdout\n", test.Name)
+			for scanner.Scan() {
+				fmt.Println(scanner.Text())
+			}
+			fmt.Println("::endgroup::")
+		}(&output)
+	}
+
 	if err = cmd.Run(); err != nil {
 		if isExpectedFailureOutput(&stderr, test.ExpectedFailure) {
 			return nil
 		}
-		output.Write(stderr.Bytes())
-		log.Printf("[%s] test failed: %+v", test.Name, output.String())
+		log.Printf("[%s] test failed: %+v", test.Name, stderr.String())
 	}
 	return err
 }
