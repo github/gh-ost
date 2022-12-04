@@ -148,7 +148,7 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 		}(&output)
 	}
 
-	err <- errChan
+	err = <-errChan
 	if err != nil {
 		if isExpectedFailureOutput(&output, test.ExpectedFailure) {
 			return nil
