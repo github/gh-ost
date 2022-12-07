@@ -42,5 +42,5 @@ func TestFindP90(t *testing.T) {
 		1 * time.Second,
 		1 * time.Second,
 	}
-	test.S(t).ExpectEquals(findP90(times), 3*time.Second)
+	test.S(t).ExpectEquals(lazyFindP90(times), 3*time.Second)
 }

@@ -61,6 +61,12 @@ It is not reliable to parse the `ALTER` statement to determine if it is instant 
 
 `gh-ost` will automatically fallback to the normal DDL process if the attempt to use instant DDL is unsuccessful.
 
+### chunk-size
+
+Chunk size is the number of rows to copy in a single batch for copying data from the original table to the ghost table. The default value is 1000. Increasing the chunk-size can improve performance (via more batching) but also increases the risk of replica delay.
+
+See also: [`dynamic-chunking`](#dynamic-chunking)
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
@@ -121,6 +127,27 @@ The `--dml-batch-size` flag controls the size of the batched write. Allowed valu
 Why is this behavior configurable? Different workloads have different characteristics. Some workloads have very large writes, such that aggregating even `50` writes into a transaction makes for a significant transaction size. On other workloads write rate is high such that one just can't allow for a hundred more syncs to disk per second. The default value of `10` is a modest compromise that should probably work very well for most workloads. Your mileage may vary.
 
 Noteworthy is that setting `--dml-batch-size` to higher value _does not_ mean `gh-ost` blocks or waits on writes. The batch size is an upper limit on transaction size, not a minimal one. If `gh-ost` doesn't have "enough" events in the pipe, it does not wait on the binary log, it just writes what it already has. This conveniently suggests that if write load is light enough for `gh-ost` to only see a few events in the binary log at a given time, then it is also light enough for `gh-ost` to apply a fraction of the batch size.
+
+### dynamic-chunking
+
+Dynamic chunking (default: `OFF`) is a feature that allows `gh-ost` to automatically increase or decrease the `--chunk-size` up to 50x, based on the execution time of previous copy-row operations. The goal is to find the optimal batch size to reach `--dynamic-chunk-size-target-millis` (default: 50).
+
+For example, assume `--chunk-size=1000`, `--dynamic-chunking=true` and `--dynamic-chunk-size-target-millis=50`:
+
+- The actual "target" chunk size used will always be in the range of `[20,50000]` (within 50x the chunk size)
+- Approximately every 1 second, `gh-ost` will re-assess if the target chunk size is optimal based on the `p90` of recent executions.
+- Increases in target chunk size are scaled up by no more than 50% of the current target size at a time.
+- If any copy-row operations exceed 250ms (5x the target), the target chunk size is immediately reduced to 10% of its current value.
+
+Enabling dynamic chunk size can be more reliable than the static `--chunk-size=N`, because tables are not created equally. For a table with a very high number of columns and several indexes, `1000` rows may actually be too large of a chunk size. Similarly, for a table with very few columns and no indexes, the ideal batch size may be 20K+ rows (while still being under the 50ms target).
+
+See also: [`chunk-size`](#chunk-size), [`dynamic-chunk-size-target-millis`](#dynamic-chunk-size-target-millis)
+
+### dynamic-chunk-size-target-millis
+
+The target execution time for each copy-row operation when [`--dynamic-chunking`](#dynamic-chunking) (default: `OFF`) is enabled.
+
+The default value of `50` is a good starting point for most workloads. If you find that read-replicas are intermittently falling behind, you may want to decrease this value. Similarly, if you do not use read-replicas there may be a benefit from increasing this value slightly. The recommended range is `[10,10000]`. Values larger than this have limited added benefit and are not recommended.
 
 ### exact-rowcount
 

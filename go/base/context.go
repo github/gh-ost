@@ -162,7 +162,7 @@ type MigrationContext struct {
 	HooksHintToken                      string
 	HooksStatusIntervalSec              int64
 
-	DynamicChunkSize             bool
+	DynamicChunking              bool
 	DynamicChunkSizeTargetMillis int64
 	targetChunkSizeMutex         sync.Mutex
 	targetChunkFeedback          []time.Duration
@@ -309,7 +309,7 @@ func NewMigrationContext() *MigrationContext {
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
 		Log:                                 NewDefaultLogger(),
-		DynamicChunkSize:                    false,
+		DynamicChunking:                     false,
 	}
 }
 
@@ -583,28 +583,37 @@ func (this *MigrationContext) GetTotalRowsCopied() int64 {
 // in GetChunkSize(), however if the input value far exceeds what was expected (>5x)
 // we synchronously reduce the chunk size. If it was a one off, it's not an issue
 // because the next few samples will always scale the value back up.
-func (this *MigrationContext) ChunkDurationFeedback(d time.Duration) {
+func (this *MigrationContext) ChunkDurationFeedback(d time.Duration) (outOfRange bool) {
+	if !this.DynamicChunking {
+		return false
+	}
 	this.targetChunkSizeMutex.Lock()
 	defer this.targetChunkSizeMutex.Unlock()
 	if int64(d) > (this.DynamicChunkSizeTargetMillis * DynamicPanicFactor * int64(time.Millisecond)) {
 		this.targetChunkFeedback = []time.Duration{}
 		newTarget := float64(this.targetChunkSize) / float64(DynamicPanicFactor*2)
-		this.targetChunkSize = int64(newTarget)
+		this.targetChunkSize = this.boundaryCheckTargetChunkSize(newTarget)
+		return true // don't include in feedback
 	}
 	this.targetChunkFeedback = append(this.targetChunkFeedback, d)
+	return false
 }
 
 // calculateNewTargetChunkSize is called by GetChunkSize()
 // under a mutex. It's safe to read this.targetchunkFeedback.
 func (this *MigrationContext) calculateNewTargetChunkSize() int64 {
 	// We do all our math as float64 of time in ns
-	p90 := float64(findP90(this.targetChunkFeedback))
+	p90 := float64(lazyFindP90(this.targetChunkFeedback))
 	targetTime := float64(this.DynamicChunkSizeTargetMillis * int64(time.Millisecond))
 	newTargetRows := float64(this.targetChunkSize) * (targetTime / p90)
+	return this.boundaryCheckTargetChunkSize(newTargetRows)
+}
 
-	// Apply some final boundary checking:
-	// We are only allowed to scale up/down 50x from
-	// the original ("reference") chunk size.
+// boundaryCheckTargetChunkSize makes sure the new target is not
+// too large/small since we are only allowed to scale up/down 50x from
+// the original ("reference") chunk size, and only permitted to increase
+// by 50% at a time. This is called under a mutex.
+func (this *MigrationContext) boundaryCheckTargetChunkSize(newTargetRows float64) int64 {
 	referenceSize := float64(atomic.LoadInt64(&this.chunkSize))
 	if newTargetRows < (referenceSize / MaxDynamicScaleFactor) {
 		newTargetRows = referenceSize / MaxDynamicScaleFactor
@@ -612,14 +621,9 @@ func (this *MigrationContext) calculateNewTargetChunkSize() int64 {
 	if newTargetRows > (referenceSize * MaxDynamicScaleFactor) {
 		newTargetRows = referenceSize * MaxDynamicScaleFactor
 	}
-	// We only ever increase by 50% at a time.
-	// This ensures a gradual step up if there is some non-linear behavior.
-	// There's plenty of time to increase more.
 	if newTargetRows > float64(this.targetChunkSize)*MaxDynamicStepFactor {
 		newTargetRows = float64(this.targetChunkSize) * MaxDynamicStepFactor
 	}
-	// The newTargetRows must be at least 10,
-	// otherwise we're going too low
 	if newTargetRows < MinDynamicRowSize {
 		newTargetRows = MinDynamicRowSize
 	}
@@ -627,8 +631,8 @@ func (this *MigrationContext) calculateNewTargetChunkSize() int64 {
 }
 
 // GetChunkSize returns the number of rows to copy in a single chunk:
-//   - If DynamicChunkSize is disabled, it will return this.chunkSize.
-//   - If DynamicChunkSize is enabled, it will return a dynamic value that
+//   - If Dynamic Chunking is disabled, it will return this.chunkSize.
+//   - If Dynamic Chunking is enabled, it will return a value that
 //     automatically adjusts based on the duration of the last few
 //     copy-rows tasks.
 //
@@ -641,10 +645,10 @@ func (this *MigrationContext) calculateNewTargetChunkSize() int64 {
 // - Fow very narrow rows, it's not enough (leaving performance on the table).
 // - For very wide rows (or with many secondary indexes) 1000 might be too high!
 //
-// Dynamic chunk size addresses this by using row-size as a starting point,
+// Dynamic chunking addresses this by using row-size as a starting point,
 // *but* the main configurable is based on time (in ms).
 func (this *MigrationContext) GetChunkSize() int64 {
-	if !this.DynamicChunkSize {
+	if !this.DynamicChunking {
 		return atomic.LoadInt64(&this.chunkSize)
 	}
 	this.targetChunkSizeMutex.Lock()
@@ -657,7 +661,6 @@ func (this *MigrationContext) GetChunkSize() int64 {
 	if len(this.targetChunkFeedback) >= 10 {
 		this.targetChunkSize = this.calculateNewTargetChunkSize()
 		this.targetChunkFeedback = []time.Duration{} // reset
-		fmt.Printf("# Adjusting chunk size based on feedback: %d\n", this.targetChunkSize)
 	}
 	return this.targetChunkSize
 }

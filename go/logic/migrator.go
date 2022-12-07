@@ -1317,7 +1317,10 @@ func (this *Migrator) executeWriteFuncs() error {
 						}
 						// Send feedback to the chunker.
 						copyRowsDuration := time.Since(copyRowsStartTime)
-						this.migrationContext.ChunkDurationFeedback(copyRowsDuration)
+						outOfRange := this.migrationContext.ChunkDurationFeedback(copyRowsDuration)
+						if outOfRange {
+							this.migrationContext.Log.Warningf("Chunk duration took: %s, throttling copy-rows", copyRowsDuration)
+						}
 						if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
 							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
 							sleepTime := time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond
