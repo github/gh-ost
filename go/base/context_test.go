@@ -136,17 +136,17 @@ func TestDynamicChunker(t *testing.T) {
 
 	// Let's provide 10 pieces of feedback, and see the chunk size
 	// be adjusted based on the p90th value.
-	context.ChunkDurationFeedback(time.Duration(33 * time.Millisecond)) // 1st
-	context.ChunkDurationFeedback(time.Duration(33 * time.Millisecond)) // 2nd
-	context.ChunkDurationFeedback(time.Duration(32 * time.Millisecond)) // 3rd
-	context.ChunkDurationFeedback(time.Duration(40 * time.Millisecond))
-	context.ChunkDurationFeedback(time.Duration(61 * time.Millisecond))
-	context.ChunkDurationFeedback(time.Duration(37 * time.Millisecond))
-	context.ChunkDurationFeedback(time.Duration(38 * time.Millisecond))
-	context.ChunkDurationFeedback(time.Duration(35 * time.Millisecond))
-	context.ChunkDurationFeedback(time.Duration(29 * time.Millisecond))
-	test.S(t).ExpectEquals(context.GetChunkSize(), int64(100))          // 9th
-	context.ChunkDurationFeedback(time.Duration(38 * time.Millisecond)) // 10th
+	context.ChunkDurationFeedback(33 * time.Millisecond) // 1st
+	context.ChunkDurationFeedback(33 * time.Millisecond) // 2nd
+	context.ChunkDurationFeedback(32 * time.Millisecond) // 3rd
+	context.ChunkDurationFeedback(40 * time.Millisecond)
+	context.ChunkDurationFeedback(61 * time.Millisecond)
+	context.ChunkDurationFeedback(37 * time.Millisecond)
+	context.ChunkDurationFeedback(38 * time.Millisecond)
+	context.ChunkDurationFeedback(35 * time.Millisecond)
+	context.ChunkDurationFeedback(29 * time.Millisecond)
+	test.S(t).ExpectEquals(context.GetChunkSize(), int64(100)) // 9th
+	context.ChunkDurationFeedback(38 * time.Millisecond)       // 10th
 	// Because 10 items of feedback have been received,
 	// the chunk size is recalculated. The p90 is 40ms (below our target)
 	// so the adjusted chunk size increases 25% to 125
@@ -156,23 +156,23 @@ func TestDynamicChunker(t *testing.T) {
 	// We have boundary checking on the value which limits it to 50% greater
 	// than the previous chunk size.
 
-	context.ChunkDurationFeedback(time.Duration(400 * time.Microsecond))
-	context.ChunkDurationFeedback(time.Duration(450 * time.Microsecond))
-	context.ChunkDurationFeedback(time.Duration(470 * time.Microsecond))
-	context.ChunkDurationFeedback(time.Duration(520 * time.Microsecond))
-	context.ChunkDurationFeedback(time.Duration(500 * time.Microsecond))
-	context.ChunkDurationFeedback(time.Duration(490 * time.Microsecond))
-	context.ChunkDurationFeedback(time.Duration(300 * time.Microsecond))
-	context.ChunkDurationFeedback(time.Duration(450 * time.Microsecond))
-	context.ChunkDurationFeedback(time.Duration(460 * time.Microsecond))
-	context.ChunkDurationFeedback(time.Duration(480 * time.Microsecond))
+	context.ChunkDurationFeedback(400 * time.Microsecond)
+	context.ChunkDurationFeedback(450 * time.Microsecond)
+	context.ChunkDurationFeedback(470 * time.Microsecond)
+	context.ChunkDurationFeedback(520 * time.Microsecond)
+	context.ChunkDurationFeedback(500 * time.Microsecond)
+	context.ChunkDurationFeedback(490 * time.Microsecond)
+	context.ChunkDurationFeedback(300 * time.Microsecond)
+	context.ChunkDurationFeedback(450 * time.Microsecond)
+	context.ChunkDurationFeedback(460 * time.Microsecond)
+	context.ChunkDurationFeedback(480 * time.Microsecond)
 	test.S(t).ExpectEquals(context.GetChunkSize(), int64(187)) // very minor increase
 
 	// Test that the chunk size is not allowed to grow larger than 50x
 	// the original chunk size. Because of the gradual step up, we need to
 	// provide a lot of feedback first.
 	for i := 0; i < 1000; i++ {
-		context.ChunkDurationFeedback(time.Duration(480 * time.Microsecond))
+		context.ChunkDurationFeedback(480 * time.Microsecond)
 		context.GetChunkSize()
 	}
 	test.S(t).ExpectEquals(context.GetChunkSize(), int64(50000))
@@ -181,7 +181,7 @@ func TestDynamicChunker(t *testing.T) {
 	// The downscaling rule is /10 for values that immediately exceed 5x the target,
 	// so it usually scales down before the feedback re-evaluation kicks in.
 	for i := 0; i < 100; i++ {
-		context.ChunkDurationFeedback(time.Duration(10 * time.Second))
+		context.ChunkDurationFeedback(10 * time.Second)
 		context.GetChunkSize()
 	}
 	test.S(t).ExpectEquals(context.GetChunkSize(), int64(20))
@@ -190,7 +190,7 @@ func TestDynamicChunker(t *testing.T) {
 	// But there is a hard coded minimum of 10 rows for safety.
 	context.chunkSize = 100
 	for i := 0; i < 100; i++ {
-		context.ChunkDurationFeedback(time.Duration(10 * time.Second))
+		context.ChunkDurationFeedback(10 * time.Second)
 		context.GetChunkSize()
 	}
 	test.S(t).ExpectEquals(context.GetChunkSize(), int64(10))
