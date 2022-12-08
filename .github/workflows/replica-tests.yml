@@ -4,7 +4,6 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-20.04
     strategy:
       matrix:
@@ -25,13 +24,8 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: generate mysql environment file
-      env:
-        TEST_STORAGE_ENGINE: "${{ matrix.tests.engine }}"
-      run: localtests/mysql-env.sh
-
     - name: run localtests
       env:
         TEST_DOCKER_IMAGE: "${{ matrix.tests.image }}"
-      run: docker-compose -f localtests/docker-compose.yml up --abort-on-container-exit --no-log-prefix tests
-
+        TEST_STORAGE_ENGINE: "${{ matrix.tests.engine }}"
+      run: localtests/tests.sh

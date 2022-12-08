@@ -136,9 +136,11 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 	stopStdout := make(chan bool)
 	go func() {
 		defer wg.Done()
+
 		if isGitHubActions() {
 			fmt.Printf("::group::%s stdout\n", test.Name)
 		}
+
 		for {
 			select {
 			case <-stopStdout:

@@ -3,7 +3,6 @@ services:
   tests:
     build:
       context: "../"
-      dockerfile: "localtests/Dockerfile"
     env_file: "mysql.env"
     depends_on:
       - "primary"
