@@ -1,13 +1,13 @@
 package localtests
 
 import (
-	"bufio"
 	"bytes"
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"os/exec"
-	"sync"
 )
 
 // Test represents a single test.
@@ -39,6 +39,7 @@ func (test *Test) prepareDBPrimary(primary *sql.DB) (err error) {
 		}
 		log.Printf("[%s] sql_mode set to %q on primary", test.Name, *test.SQLMode)
 	}
+
 	return err
 }
 
@@ -123,44 +124,24 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 
 	log.Printf("[%s] running gh-ost command with extra args: %+v", test.Name, test.ExtraArgs)
 
-	var stderr, stdout bytes.Buffer
+	var stderr bytes.Buffer
 	cmd := exec.Command(config.GhostBinary, flags...)
-	cmd.Stderr = &stderr
-	cmd.Stdout = &stdout
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
+	cmd.Stdout = os.Stdout
+
+	if isGitHubActions() {
+		fmt.Printf("::group::%s gh-ost output\n", test.Name)
+	}
 
 	if err = cmd.Start(); err != nil {
 		return err
 	}
 
-	var wg sync.WaitGroup
-	stopStdout := make(chan bool)
-	go func() {
-		defer wg.Done()
-
-		if isGitHubActions() {
-			fmt.Printf("::group::%s stdout\n", test.Name)
-		}
-
-		for {
-			select {
-			case <-stopStdout:
-				if isGitHubActions() {
-					fmt.Println("::endgroup::")
-				}
-				return
-			default:
-				scanner := bufio.NewScanner(&stdout)
-				for scanner.Scan() {
-					fmt.Println(scanner.Text())
-				}
-			}
-		}
-	}()
-	wg.Add(1)
-
 	err = cmd.Wait()
-	stopStdout <- true
-	wg.Wait()
+
+	if isGitHubActions() {
+		fmt.Println("::endgroup::")
+	}
 
 	if err != nil {
 		if isExpectedFailureOutput(&stderr, test.ExpectedFailure) {

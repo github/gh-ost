@@ -3,7 +3,6 @@ package localtests
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
@@ -81,9 +80,7 @@ func (t *Tester) WaitForMySQLAvailable() error {
 				}
 
 				if !replicaGTIDExec.Contain(primaryGTIDExec) {
-					return fmt.Errorf("Replica/primary GTID not equal: %s != %s",
-						replicaGTIDExec.String(), primaryGTIDExec.String(),
-					)
+					return errors.New("replica/primary GTID not equal")
 				}
 				return nil
 			}(); err != nil {
@@ -91,7 +88,16 @@ func (t *Tester) WaitForMySQLAvailable() error {
 				continue
 			}
 
-			log.Printf("MySQL primary/replica is available %s", successEmoji)
+			if info, err := getMysqlHostInfo(t.primary); err == nil {
+				log.Printf("MySQL primary %s:%d, version %s (%s) available %s", info.Host, info.Port, info.Version,
+					info.VersionComment, successEmoji)
+			}
+
+			if info, err := getMysqlHostInfo(t.replica); err == nil {
+				log.Printf("MySQL replica %s:%d, version %s (%s) available %s", info.Host, info.Port, info.Version,
+					info.VersionComment, successEmoji)
+			}
+
 			return nil
 		}
 	}
