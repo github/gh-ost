@@ -2,9 +2,12 @@
 
 set -e
 
-export TEST_DOCKER_IMAGE=${1:-mysql:5.7}
-
 LOCALTESTS_DIR="$(readlink -f $(dirname $0))"
+
+if [ -z "$TEST_DOCKER_IMAGE" ]; then
+  echo "TEST_DOCKER_IMAGE env var must be set"
+  exit 1
+fi
 
 # generate mysql.env file for containers
 [ ! -z "$GITHUB_ACTION" ] && echo "::group::generate mysql env"
@@ -12,9 +15,7 @@ LOCALTESTS_DIR="$(readlink -f $(dirname $0))"
   echo "GITHUB_ACTION=${GITHUB_ACTION}"
   echo 'MYSQL_ALLOW_EMPTY_PASSWORD=true'
   echo "TEST_STORAGE_ENGINE=${TEST_STORAGE_ENGINE}"
-  if [ "$TEST_STORAGE_ENGINE" == "rocksdb" ]; then
-    echo 'INIT_ROCKSDB=true'
-  fi
+  [ "$TEST_STORAGE_ENGINE" == "rocksdb" ] && echo 'INIT_ROCKSDB=true'
 ) | tee $LOCALTESTS_DIR/mysql.env
 echo "Wrote env file to $LOCALTESTS_DIR/mysql.env"
 [ ! -z "$GITHUB_ACTION" ] && echo "::endgroup::"
@@ -31,7 +32,7 @@ fi
 
 # this will start the test container and the
 # mysql primary/replica w/docker-compose
-TEST_DOCKER_IMAGE=mysql:5.7 docker-compose -f localtests/docker-compose.yml up \
+docker-compose -f localtests/docker-compose.yml up \
   --abort-on-container-exit \
   --no-log-prefix \
   $EXTRA_UP_FLAGS \
