@@ -69,7 +69,7 @@ func (t *Tester) WaitForMySQLAvailable() error {
 		case <-time.After(5 * time.Minute):
 			return errors.New("timed out waiting for mysql")
 		case <-ticker.C:
-			if err := func() error {
+			err := func() error {
 				primaryGTIDExec, err := pingAndGetGTIDExecuted(t.primary, interval)
 				if err != nil {
 					return err
@@ -83,22 +83,23 @@ func (t *Tester) WaitForMySQLAvailable() error {
 					return errors.New("replica/primary GTID not equal")
 				}
 				return nil
-			}(); err != nil {
+			}()
+			if err != nil {
 				log.Printf("Waiting for MySQL primary/replica to init: %+v", err)
 				continue
 			}
 
-			if info, err := getMysqlHostInfo(t.primary); err == nil {
+			var info *MysqlInfo
+			if info, err = getMysqlHostInfo(t.primary); err == nil {
 				log.Printf("MySQL primary %s:%d, version %s (%s) available %s", info.Host, info.Port, info.Version,
 					info.VersionComment, successEmoji)
 			}
-
-			if info, err := getMysqlHostInfo(t.replica); err == nil {
+			if info, err = getMysqlHostInfo(t.replica); err == nil {
 				log.Printf("MySQL replica %s:%d, version %s (%s) available %s", info.Host, info.Port, info.Version,
 					info.VersionComment, successEmoji)
 			}
 
-			return nil
+			return err
 		}
 	}
 }
