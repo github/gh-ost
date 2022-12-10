@@ -5,7 +5,7 @@ COPY . /go/src/github.com/github/gh-ost
 WORKDIR /go/src/github.com/github/gh-ost
 
 RUN go build -o gh-ost go/cmd/gh-ost/main.go
-RUN go build -o gh-ost-localtests go/cmd/gh-ost-localtests/main.go
+RUN go build -o gh-ost-tester go/cmd/gh-ost-tester/main.go
 
 
 
@@ -16,7 +16,7 @@ RUN apt-get install -y default-mysql-client
 RUN rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /go/src/github.com/github/gh-ost/gh-ost /usr/local/bin/gh-ost
-COPY --from=build /go/src/github.com/github/gh-ost/gh-ost-localtests /usr/local/bin/gh-ost-localtests
+COPY --from=build /go/src/github.com/github/gh-ost/gh-ost-tester /usr/local/bin/gh-ost-tester
 COPY --from=build /go/src/github.com/github/gh-ost/localtests /etc/localtests
 
-ENTRYPOINT ["gh-ost-localtests"]
+ENTRYPOINT ["gh-ost-tester"]

@@ -8,6 +8,10 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
+	"sync"
+
+	"github.com/openark/golib/sqlutils"
 )
 
 // Test represents a single test.
@@ -133,11 +137,7 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 		fmt.Printf("::group::%s gh-ost output\n", test.Name)
 	}
 
-	if err = cmd.Start(); err != nil {
-		return err
-	}
-
-	err = cmd.Wait()
+	err = cmd.Run()
 
 	if isGitHubActions() {
 		fmt.Println("::endgroup::")
@@ -145,6 +145,7 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 
 	if err != nil {
 		if isExpectedFailureOutput(&stderr, test.ExpectedFailure) {
+			log.Printf("[%s] test got expected failure: %s", test.ExpectedFailure)
 			return nil
 		}
 		log.Printf("[%s] test failed: %+v", test.Name, stderr.String())
@@ -152,61 +153,61 @@ func (test *Test) Migrate(config Config, primary, replica *sql.DB) (err error) {
 	return err
 }
 
-/*
-func getPrimaryOrUniqueKey(db *sql.DB, database, table string) (string, error) {
+func getTablePrimaryKey(db *sql.DB, database, table string) (string, error) {
 	return "id", nil // TODO: fix this
 }
-*/
+
+type validationResult struct {
+	Source string
+	Rows   sqlutils.RowMap
+}
 
 // Validate performs a validation of the migration test results.
-func (test *Test) Validate(config Config, primary, replica *sql.DB) error {
+func (test *Test) Validate(config Config, db *sql.DB) error {
 	if len(test.ValidateColumns) == 0 || len(test.ValidateOrigColumns) == 0 {
 		return nil
 	}
 
-	/*
-		primaryKey, err := getPrimaryOrUniqueKey(replica, testDatabase, testTable)
-		if err != nil {
-			return err
-		}
+	primaryKey, err := getTablePrimaryKey(db, testDatabase, testTable)
+	if err != nil {
+		return err
+	}
 
-		var query string
-		var maxPrimaryKeyVal interface{}
-		if maxPrimaryKeyVal == nil {
-			query = fmt.Sprintf("select * from %s.%s limit 10", testDatabase, testTable)
-		} else {
-			query = fmt.Sprintf("select * from %s.%s where %s > %+v limit 10",
-				testDatabase, testTable, primaryKey, maxPrimaryKeyVal,
-			)
-		}
-		var rowMap sqlutils.RowMap
-		err = sqlutils.QueryRowsMap(replica, query, func(m sqlutils.RowMap) error {
-			for _, col := range test.ValidateColumns {
-				if val, found := m[col]; found {
-					rowMap[col] = val
-				}
+	limit := 10
+	orderBy := primaryKey
+	if test.ValidateOrderBy != "" {
+		orderBy = test.ValidateOrderBy
+	}
+
+	outChan := make(chan validationResult, 2)
+	getTableMap := func(wg *sync.WaitGroup, database, table string, columns []string, outChan chan validationResult) {
+		defer wg.Done()
+
+		query := fmt.Sprintf("select %s from %s.%s order by %s limit %d",
+			strings.Join(columns, ", "),
+			database, table,
+			orderBy, limit,
+		)
+		err := sqlutils.QueryRowsMap(db, query, func(m sqlutils.RowMap) error {
+			outChan <- validationResult{
+				Source: table,
+				Rows:   m,
 			}
+			return nil
 		})
-
-		values := make([]interface{}, 0)
-		for range test.ValidateOrigColumns {
-			var val interface{}
-			values = append(values, &val)
+		if err != nil {
+			log.Printf("[%s] failed to validate table %s: %+v", test.Name, table, err)
 		}
-		maxPrimaryKeyVal = values[0]
+	}
 
-		for rows.Next() {
-			if err = rows.Scan(values...); err != nil {
-				return err
-			}
-			for i, value := range values {
-				if value == nil {
-					continue
-				}
-				log.Printf("[%s] row value for %q col: %d", test.Name, test.ValidateOrigColumns[i], value)
-			}
-		}
-	*/
+	var wg sync.WaitGroup
+	go getTableMap(&wg, testDatabase, testTable, test.ValidateColumns, outChan)
+	go getTableMap(&wg, testDatabase, fmt.Sprintf("_%s_del", testTable), test.ValidateOrigColumns, outChan)
+	wg.Add(2)
+	wg.Wait()
 
+	for result := range outChan {
+		log.Printf("[%s] result for %s: %+v", test.Name, result.Source, result.Rows)
+	}
 	return nil
 }

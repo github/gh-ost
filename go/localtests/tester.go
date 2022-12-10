@@ -114,8 +114,10 @@ func (t *Tester) ReadTests(specificTestName string) (tests []Test, err error) {
 
 	for _, subdir := range subdirs {
 		test := Test{
-			Name: subdir.Name(),
-			Path: filepath.Join(t.config.TestsDir, subdir.Name()),
+			Name:                subdir.Name(),
+			Path:                filepath.Join(t.config.TestsDir, subdir.Name()),
+			ValidateColumns:     []string{"*"},
+			ValidateOrigColumns: []string{"*"},
 		}
 
 		stat, err := os.Stat(test.Path)
@@ -147,7 +149,9 @@ func (t *Tester) ReadTests(specificTestName string) (tests []Test, err error) {
 		}
 
 		orderByFile := filepath.Join(test.Path, "order_by")
-		test.ValidateOrderBy, _ = readTestFile(orderByFile)
+		if validateOrderBy, err := readTestFile(orderByFile); err == nil {
+			test.ValidateOrderBy = validateOrderBy
+		}
 
 		origColumnsFile := filepath.Join(test.Path, "orig_columns")
 		if origColumns, err := readTestFile(origColumnsFile); err == nil {
@@ -194,7 +198,7 @@ func (t *Tester) RunTest(test Test) (err error) {
 	}
 	log.Printf("[%s] successfully migrated test %s", test.Name, successEmoji)
 
-	if err = test.Validate(t.config, t.primary, t.replica); err != nil {
+	if err = test.Validate(t.config, t.replica); err != nil {
 		log.Printf("[%s] failed to validate test %s%s%s", test.Name, failedEmoji,
 			failedEmoji, failedEmoji)
 		return err
