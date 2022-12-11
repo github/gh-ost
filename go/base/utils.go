@@ -61,11 +61,10 @@ func StringContainsAll(s string, substrings ...string) bool {
 	return nonEmptyStringsFound
 }
 
-func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext, name string) (string, error) {
+func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext, name string) (version string, err error) {
 	query := `select @@global.version, @@global.port`
-	var version string
 	var port gosql.NullInt64
-	if err := db.QueryRow(query).Scan(&version, &port); err != nil {
+	if err = db.QueryRow(query).Scan(&version, &port); err != nil {
 		return "", err
 	}
 
@@ -79,7 +78,7 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	// Azure MySQL set users port to a different value by design, replace it by gh-ost param
 	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform || migrationContext.AzureMySQL {
 		port.Int64 = connectionConfig.Key.Port
-		port.Valid = true
+		port.Valid = connectionConfig.Key.Port > 0
 	}
 
 	if !port.Valid || extraPort == 0 {
@@ -89,5 +88,5 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	}
 
 	migrationContext.Log.Infof("%s connection validated on %+v", name, connectionConfig.Key)
-	return version, nil
+	return version, err
 }
