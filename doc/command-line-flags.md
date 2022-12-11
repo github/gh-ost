@@ -45,6 +45,22 @@ If you happen to _know_ your servers use RBR (Row Based Replication, i.e. `binlo
 Skipping this step means `gh-ost` would not need the `SUPER` privilege in order to operate.
 You may want to use this on Amazon RDS.
 
+### attempt-instant-ddl
+
+MySQL 8.0 supports "instant DDL" for some operations. If an alter statement can be completed with instant DDL, only a metadata change is required internally. Instant operations include:
+
+- Adding a column
+- Dropping a column
+- Dropping an index
+- Extending a varchar column
+- Adding a virtual generated column
+
+It is not reliable to parse the `ALTER` statement to determine if it is instant or not. This is because the table might be in an older row format, or have some other incompatibility that is difficult to identify.
+
+`--attempt-instant-ddl` is disabled by default, but the risks of enabling it are relatively minor: `gh-ost` may need to acquire a metadata lock at the start of the operation. This is not a problem for most scenarios, but it could be a problem for users that start the DDL during a period with long running transactions.
+
+`gh-ost` will automatically fallback to the normal DDL process if the attempt to use instant DDL is unsuccessful.
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
@@ -229,6 +245,18 @@ Allows `gh-ost` to connect to the MySQL servers using encrypted connections, but
 ### ssl-key
 
 `--ssl-key=/path/to/ssl-key.key`: SSL private key file (in PEM format).
+
+### storage-engine
+Default is `innodb`, and `rocksdb` support is currently experimental. InnoDB and RocksDB are both transactional engines, supporting both shared and exclusive row locks.
+
+But RocksDB currently lacks a few features support compared to InnoDB:
+- Gap Locks
+- Foreign Key
+- Generated Columns
+- Spatial
+- Geometry
+
+When `--storage-engine=rocksdb`, `gh-ost` will make some changes necessary (e.g. sets isolation level to `READ_COMMITTED`) to support RocksDB.
 
 ### test-on-replica
 

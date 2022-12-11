@@ -99,37 +99,37 @@ func TestTokenizeAlterStatement(t *testing.T) {
 	parser := NewAlterTableParser()
 	{
 		alterStatement := "add column t int"
-		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		tokens := parser.tokenizeAlterStatement(alterStatement)
 		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int"}))
 	}
 	{
 		alterStatement := "add column t int, change column i int"
-		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		tokens := parser.tokenizeAlterStatement(alterStatement)
 		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "change column i int"}))
 	}
 	{
 		alterStatement := "add column t int, change column i int 'some comment'"
-		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		tokens := parser.tokenizeAlterStatement(alterStatement)
 		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "change column i int 'some comment'"}))
 	}
 	{
 		alterStatement := "add column t int, change column i int 'some comment, with comma'"
-		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		tokens := parser.tokenizeAlterStatement(alterStatement)
 		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "change column i int 'some comment, with comma'"}))
 	}
 	{
 		alterStatement := "add column t int, add column d decimal(10,2)"
-		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		tokens := parser.tokenizeAlterStatement(alterStatement)
 		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "add column d decimal(10,2)"}))
 	}
 	{
 		alterStatement := "add column t int, add column e enum('a','b','c')"
-		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		tokens := parser.tokenizeAlterStatement(alterStatement)
 		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int", "add column e enum('a','b','c')"}))
 	}
 	{
 		alterStatement := "add column t int(11), add column e enum('a','b','c')"
-		tokens, _ := parser.tokenizeAlterStatement(alterStatement)
+		tokens := parser.tokenizeAlterStatement(alterStatement)
 		test.S(t).ExpectTrue(reflect.DeepEqual(tokens, []string{"add column t int(11)", "add column e enum('a','b','c')"}))
 	}
 }
