@@ -61,11 +61,14 @@ func StringContainsAll(s string, substrings ...string) bool {
 	return nonEmptyStringsFound
 }
 
+// ValidateConnection confirms the database connection matches the provided connection config. On success the
+// function returns the server version as a string, otherwise an empty string and an error is returned.
 func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext, name string) (version string, err error) {
 	var port, extraPort gosql.NullInt64
+	// port may be NULL on AliyunRDS and GCP
 	query := `select @@global.version, @@global.port`
 	if err = db.QueryRow(query).Scan(&version, &port); err != nil {
-		return "", err
+		return version, err
 	}
 
 	extraPortQuery := `select @@global.extra_port`
@@ -80,12 +83,11 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 		port.Valid = connectionConfig.Key.Port > 0
 	}
 
-	if !port.Valid && (!extraPort.Valid || extraPort.Int64 == 0) {
-		return "", fmt.Errorf("Unexpected database port reported: %+v", port.Int64)
+	if !port.Valid && !extraPort.Valid {
+		return version, fmt.Errorf("Unexpected database port reported: %+v", port.Int64)
 	} else if connectionConfig.Key.Port != port.Int64 && connectionConfig.Key.Port != extraPort.Int64 {
-		return "", fmt.Errorf("Unexpected database port reported: %+v / extra_port: %+v", port.Int64, extraPort.Int64)
+		return version, fmt.Errorf("Unexpected database port reported: %+v / extra_port: %+v", port.Int64, extraPort.Int64)
 	}
-
 	migrationContext.Log.Infof("%s connection validated on %+v", name, connectionConfig.Key)
 	return version, err
 }
