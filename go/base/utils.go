@@ -62,14 +62,13 @@ func StringContainsAll(s string, substrings ...string) bool {
 }
 
 func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext, name string) (version string, err error) {
+	var port, extraPort gosql.NullInt64
 	query := `select @@global.version, @@global.port`
-	var port gosql.NullInt64
 	if err = db.QueryRow(query).Scan(&version, &port); err != nil {
 		return "", err
 	}
 
 	extraPortQuery := `select @@global.extra_port`
-	var extraPort int64
 	// swallow possible error. not all servers support extra_port
 	_ = db.QueryRow(extraPortQuery).Scan(&extraPort)
 
@@ -81,10 +80,10 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 		port.Valid = connectionConfig.Key.Port > 0
 	}
 
-	if !port.Valid || extraPort == 0 {
+	if !port.Valid && (!extraPort.Valid || extraPort.Int64 == 0) {
 		return "", fmt.Errorf("Unexpected database port reported: %+v", port.Int64)
-	} else if connectionConfig.Key.Port != port.Int64 && (extraPort == 0 || connectionConfig.Key.Port != extraPort) {
-		return "", fmt.Errorf("Unexpected database port reported: %+v / extra_port: %+v", port.Int64, extraPort)
+	} else if connectionConfig.Key.Port != port.Int64 && connectionConfig.Key.Port != extraPort.Int64 {
+		return "", fmt.Errorf("Unexpected database port reported: %+v / extra_port: %+v", port.Int64, extraPort.Int64)
 	}
 
 	migrationContext.Log.Infof("%s connection validated on %+v", name, connectionConfig.Key)
