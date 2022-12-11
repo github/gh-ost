@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const DefaultInstancePort = 3306
+const DefaultInstancePort int64 = 3306
 
 var (
 	ipv4HostPortRegexp = regexp.MustCompile("^([^:]+):([0-9]+)$")

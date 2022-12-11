@@ -83,7 +83,7 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 
 	if !port.Valid || extraPort == 0 {
 		return "", fmt.Errorf("Unexpected database port reported: %+v", port.Int64)
-	} else if connectionConfig.Key.Port != port.Int64 || extraPort == 0 || connectionConfig.Key.Port != extraPort {
+	} else if connectionConfig.Key.Port != port.Int64 && (extraPort == 0 || connectionConfig.Key.Port != extraPort) {
 		return "", fmt.Errorf("Unexpected database port reported: %+v / extra_port: %+v", port.Int64, extraPort)
 	}
 
