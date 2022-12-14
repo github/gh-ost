@@ -813,11 +813,18 @@ func (this *Migrator) initiateStatus() {
 	this.printStatus(ForcePrintStatusAndHintRule)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var previousCount int64
 	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
 		go this.printStatus(HeuristicPrintStatusRule)
+		totalCopied := atomic.LoadInt64(&this.migrationContext.TotalRowsCopied)
+		if previousCount > 0 {
+			copiedThisLoop := totalCopied - previousCount
+			atomic.StoreInt64(&this.migrationContext.EtaRowsPerSecond, copiedThisLoop)
+		}
+		previousCount = totalCopied
 	}
 }
 
@@ -919,9 +926,20 @@ func (this *Migrator) getMigrationETA(rowsEstimate int64) (eta string, duration 
 		duration = 0
 	} else if progressPct >= 0.1 {
 		totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
-		elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
-		totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
-		etaSeconds := totalExpectedSeconds - elapsedRowCopySeconds
+		etaRowsPerSecond := atomic.LoadInt64(&this.migrationContext.EtaRowsPerSecond)
+		var etaSeconds float64
+		// If there is data available on our current row-copies-per-second rate, use it.
+		// Otherwise we can fallback to the total elapsed time and extrapolate.
+		// This is going to be less accurate on a longer copy as the insert rate
+		// will tend to slow down.
+		if etaRowsPerSecond > 0 {
+			remainingRows := float64(rowsEstimate) - float64(totalRowsCopied)
+			etaSeconds = remainingRows / float64(etaRowsPerSecond)
+		} else {
+			elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
+			totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
+			etaSeconds = totalExpectedSeconds - elapsedRowCopySeconds
+		}
 		if etaSeconds >= 0 {
 			duration = time.Duration(etaSeconds) * time.Second
 		} else {

@@ -210,6 +210,15 @@ func TestMigratorGetMigrationStateAndETA(t *testing.T) {
 		tests.S(t).ExpectEquals(etaDuration.String(), "4h29m44s")
 	}
 	{
+		// Test using rows-per-second added data.
+		migrationContext.TotalRowsCopied = 456
+		migrationContext.EtaRowsPerSecond = 100
+		state, eta, etaDuration := migrator.getMigrationStateAndETA(123456)
+		tests.S(t).ExpectEquals(state, "migrating")
+		tests.S(t).ExpectEquals(eta, "20m30s")
+		tests.S(t).ExpectEquals(etaDuration.String(), "20m30s")
+	}
+	{
 		migrationContext.TotalRowsCopied = 456
 		state, eta, etaDuration := migrator.getMigrationStateAndETA(456)
 		tests.S(t).ExpectEquals(state, "migrating")
@@ -238,6 +247,7 @@ func TestMigratorGetMigrationStateAndETA(t *testing.T) {
 		tests.S(t).ExpectEquals(eta, "due")
 		tests.S(t).ExpectEquals(etaDuration.String(), "0s")
 	}
+
 }
 
 func TestMigratorShouldPrintStatus(t *testing.T) {
