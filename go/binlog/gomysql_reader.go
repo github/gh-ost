@@ -44,6 +44,7 @@ func NewGoMySQLReader(migrationContext *base.MigrationContext) *GoMySQLReader {
 			Password:   connectionConfig.Password,
 			TLSConfig:  connectionConfig.TLSConfig(),
 			UseDecimal: true,
+			MaxReconnectAttempts: migrationContext.BinlogSyncerMaxReconnectAttempts,
 		}),
 	}
 }
