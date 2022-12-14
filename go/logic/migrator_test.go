@@ -247,7 +247,6 @@ func TestMigratorGetMigrationStateAndETA(t *testing.T) {
 		tests.S(t).ExpectEquals(eta, "due")
 		tests.S(t).ExpectEquals(etaDuration.String(), "0s")
 	}
-
 }
 
 func TestMigratorShouldPrintStatus(t *testing.T) {
