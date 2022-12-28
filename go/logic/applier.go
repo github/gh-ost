@@ -49,12 +49,12 @@ func newDmlBuildResultError(err error) *dmlBuildResult {
 	}
 }
 
-func (this *Applier) setOptimizerSwitch(tx *gosql.Tx) error {
+func (this *Applier) setOptimizerSwitch() error {
 	if this.migrationContext.OptimizerSwitch == "" {
 		return nil
 	}
 	optimizerString := fmt.Sprintf("SET SESSION optimizer_switch=%q", this.migrationContext.OptimizerSwitch)
-	_, err := tx.Query(optimizerString)
+	_, err := this.db.Query(optimizerString)
 	return err
 }
 
@@ -108,6 +108,10 @@ func (this *Applier) InitDBConnections() (err error) {
 		} else {
 			this.connectionConfig.ImpliedKey = impliedKey
 		}
+	}
+	err = this.setOptimizerSwitch()
+	if err != nil {
+		return err
 	}
 	if err := this.readTableColumns(); err != nil {
 		return err
@@ -555,11 +559,6 @@ func (this *Applier) ReadMigrationRangeValues() error {
 		return err
 	}
 	defer tx.Rollback()
-
-	err = this.setOptimizerSwitch(tx)
-	if err != nil {
-		return err
-	}
 
 	if err := this.readMigrationMinValues(tx, this.migrationContext.UniqueKey); err != nil {
 		return err
