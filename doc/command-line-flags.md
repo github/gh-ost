@@ -288,9 +288,9 @@ Makes the _old_ table include a timestamp value. The _old_ table is what the ori
 
 ### optimizer-switch
 
-Default is "", this allow to override a `SET GLOBAL optimizer_switch=key=value` by one set on the session with `SET SESSION optimizer_switch=key=value`.
+Default is "prefer_ordering_index=on", this allow to override a `SET GLOBAL optimizer_switch=key=value` by one set on the session with `SET SESSION optimizer_switch=key=value`.
 You can find values on https://dev.mysql.com/doc/refman/8.0/en/switchable-optimizations.html.
-Example: `--optimizer-switch="prefer_ordering_index=on"`.
+Example: `--optimizer-switch="prefer_ordering_index=off"`.
 
 ### tungsten
 
