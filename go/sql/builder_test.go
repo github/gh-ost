@@ -309,8 +309,8 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
-	columnList := NewColumnList([]string{"name", "position"})
-	uniqueKey := &UniqueKey{Name: "PRIMARY", Columns: *columnList}
+	uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+	uniqueKey := &UniqueKey{Name: "PRIMARY", Columns: *uniqueKeyColumns}
 	{
 		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKey)
 		test.S(t).ExpectNil(err)
