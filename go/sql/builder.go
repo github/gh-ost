@@ -352,24 +352,24 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 	return result, explodedArgs, nil
 }
 
-func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName, indexName string, uniqueKeyColumns *ColumnList) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, indexName, uniqueKeyColumns, "asc")
+func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKey *UniqueKey) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKey, "asc")
 }
 
-func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName, indexName string, uniqueKeyColumns *ColumnList) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, indexName, uniqueKeyColumns, "desc")
+func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, uniqueKey *UniqueKey) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKey, "desc")
 }
 
-func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, indexName string, uniqueKeyColumns *ColumnList, order string) (string, error) {
-	if uniqueKeyColumns.Len() == 0 {
+func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uniqueKey *UniqueKey, order string) (string, error) {
+	if uniqueKey.Columns.Len() == 0 {
 		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
-	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
+	uniqueKeyColumnNames := duplicateNames(uniqueKey.Columns.Names())
 	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumnNames))
-	for i, column := range uniqueKeyColumns.Columns() {
+	for i, column := range uniqueKey.Columns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
 			uniqueKeyColumnOrder[i] = fmt.Sprintf("concat(%s) %s", uniqueKeyColumnNames[i], order)
@@ -385,7 +385,7 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, indexName 
 			order by %s limit 1
 		`,
 		databaseName, tableName, strings.Join(uniqueKeyColumnNames, ", "),
-		databaseName, tableName, indexName,
+		databaseName, tableName, uniqueKey.Name,
 		strings.Join(uniqueKeyColumnOrder, ", "),
 	)
 	return query, nil

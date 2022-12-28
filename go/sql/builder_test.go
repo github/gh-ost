@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -309,10 +309,10 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
-	indexName := "PRIMARY"
-	uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+	columnList := NewColumnList([]string{"name", "position"})
+	uniqueKey := &UniqueKey{Name: "PRIMARY", Columns: *columnList}
 	{
-		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, indexName, uniqueKeyColumns)
+		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKey)
 		test.S(t).ExpectNil(err)
 		expected := `
 			select /* gh-ost mydb.tbl */ name, position
@@ -326,7 +326,7 @@ func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 	}
 	{
-		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, indexName, uniqueKeyColumns)
+		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, uniqueKey)
 		test.S(t).ExpectNil(err)
 		expected := `
 			select /* gh-ost mydb.tbl */ name, position
