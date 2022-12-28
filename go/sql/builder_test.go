@@ -309,14 +309,16 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
+	indexName := "PRIMARY"
 	uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 	{
-		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
+		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, indexName, uniqueKeyColumns)
 		test.S(t).ExpectNil(err)
 		expected := `
 			select /* gh-ost mydb.tbl */ name, position
 			  from
 			    mydb.tbl
+			  force index (PRIMARY)
 			  order by
 			    name asc, position asc
 			  limit 1
@@ -324,12 +326,13 @@ func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 	}
 	{
-		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
+		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, indexName, uniqueKeyColumns)
 		test.S(t).ExpectNil(err)
 		expected := `
 			select /* gh-ost mydb.tbl */ name, position
 			  from
 			    mydb.tbl
+			  force index (PRIMARY)
 			  order by
 			    name desc, position desc
 			  limit 1

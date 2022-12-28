@@ -352,15 +352,15 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 	return result, explodedArgs, nil
 }
 
-func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "asc")
+func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName, indexName string, uniqueKeyColumns *ColumnList) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, indexName, uniqueKeyColumns, "asc")
 }
 
-func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "desc")
+func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName, indexName string, uniqueKeyColumns *ColumnList) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, indexName, uniqueKeyColumns, "desc")
 }
 
-func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, order string) (string, error) {
+func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, indexName string, uniqueKeyColumns *ColumnList, order string) (string, error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
 	}
@@ -378,14 +378,14 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 		}
 	}
 	query := fmt.Sprintf(`
-      select /* gh-ost %s.%s */ %s
-				from
-					%s.%s
-				order by
-					%s
-				limit 1
-    `, databaseName, tableName, strings.Join(uniqueKeyColumnNames, ", "),
-		databaseName, tableName,
+		select /* gh-ost %s.%s */ %s
+			from
+				%s.%s
+			force index (%s)
+			order by %s limit 1
+		`,
+		databaseName, tableName, strings.Join(uniqueKeyColumnNames, ", "),
+		databaseName, tableName, indexName,
 		strings.Join(uniqueKeyColumnOrder, ", "),
 	)
 	return query, nil
