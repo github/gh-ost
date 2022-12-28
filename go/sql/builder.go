@@ -382,7 +382,8 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 			from
 				%s.%s
 			force index (%s)
-			order by %s limit 1
+			order by %s
+			limit 1
 		`,
 		databaseName, tableName, strings.Join(uniqueKeyColumnNames, ", "),
 		databaseName, tableName, uniqueKey.Name,
