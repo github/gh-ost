@@ -280,10 +280,11 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 	var chunkSize int64 = 500
 	{
 		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+		uniqueKey := UniqueKey{"PRIMARY", *uniqueKeyColumns, false, false}
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, &uniqueKey, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		test.S(t).ExpectNil(err)
 		expected := `
 				select /* gh-ost mydb.tbl test */ name, position
@@ -292,6 +293,7 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 				        name, position
 				      from
 				        mydb.tbl
+                      force index (PRIMARY)
 				      where ((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
 				      order by
 				        name asc, position asc

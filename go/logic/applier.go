@@ -574,7 +574,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		query, explodedArgs, err := buildFunc(
 			this.migrationContext.DatabaseName,
 			this.migrationContext.OriginalTableName,
-			&this.migrationContext.UniqueKey.Columns,
+			this.migrationContext.UniqueKey,
 			this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 			this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
 			atomic.LoadInt64(&this.migrationContext.ChunkSize),
