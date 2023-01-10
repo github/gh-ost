@@ -279,7 +279,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 						%s
 					from
 						%s.%s
-                    force index (%s)
+					force index (%s)
 					where %s and %s
 					order by
 						%s
@@ -338,7 +338,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 							%s
 						from
 							%s.%s
-                        force index (%s)
+						force index (%s)
 						where %s and %s
 						order by
 							%s
