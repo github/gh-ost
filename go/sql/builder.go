@@ -227,9 +227,13 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 			%s.%s
 			(%s)
 		(
-			select %s from %s.%s
+			select %s
+			from
+				%s.%s
 			force index (%s)
-			where (%s and %s) %s
+			where
+				(%s and %s)
+				%s
 		)`,
 		databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
@@ -283,7 +287,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 			%s
 		from
 			%s.%s
-		where %s and %s
+		where
+			%s and %s
 		order by
 			%s
 		limit 1
@@ -340,7 +345,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 				%s
 			from
 				%s.%s
-			where %s and %s
+			where
+				%s and %s
 			order by
 				%s
 			limit %d) select_osc_chunk

@@ -876,7 +876,7 @@ func (this *Applier) ExpectProcess(sessionId int64, stateHint, infoHint string) 
 			id != connection_id()
 			and ? in (0, id)
 			and state like concat('%', ?, '%')
-			and info  like concat('%', ?, '%')`
+			and info like concat('%', ?, '%')`
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		found = true
 		return nil
