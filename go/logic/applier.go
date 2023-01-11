@@ -393,7 +393,9 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 		explicitId = 3
 	}
 	query := fmt.Sprintf(`
-		insert /* gh-ost */ into %s.%s
+		insert /* gh-ost */
+		into
+			%s.%s
 			(id, hint, value)
 		values
 			(NULLIF(?, 0), ?, ?)
@@ -868,7 +870,8 @@ func (this *Applier) ExpectProcess(sessionId int64, stateHint, infoHint string) 
 	found := false
 	query := `
 		select /* gh-ost */ id
-			from information_schema.processlist
+		from
+			information_schema.processlist
 		where
 			id != connection_id()
 			and ? in (0, id)

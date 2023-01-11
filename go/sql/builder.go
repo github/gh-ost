@@ -222,7 +222,11 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		transactionalClause = "lock in share mode"
 	}
 	result = fmt.Sprintf(`
-		insert /* gh-ost %s.%s */ ignore into %s.%s (%s) (
+		insert /* gh-ost %s.%s */ ignore
+		into
+			%s.%s
+			(%s)
+		(
 			select %s from %s.%s
 			force index (%s)
 			where (%s and %s) %s
@@ -330,7 +334,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 		}
 	}
 	result = fmt.Sprintf(`
-		select /* gh-ost %s.%s %s */ %s	from (
+		select /* gh-ost %s.%s %s */ %s
+		from (
 			select
 				%s
 			from
@@ -377,7 +382,8 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 		}
 	}
 	query := fmt.Sprintf(`
-		select /* gh-ost %s.%s */ %s from
+		select /* gh-ost %s.%s */ %s
+		from
 			%s.%s
 		order by
 			%s
@@ -408,7 +414,8 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 		return result, uniqueKeyArgs, err
 	}
 	result = fmt.Sprintf(`
-		delete /* gh-ost %s.%s */ from
+		delete /* gh-ost %s.%s */
+		from
 			%s.%s
 		where
 			%s`,
@@ -445,7 +452,8 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
 
 	result = fmt.Sprintf(`
-		replace /* gh-ost %s.%s */ into
+		replace /* gh-ost %s.%s */
+		into
 			%s.%s
 			(%s)
 		values

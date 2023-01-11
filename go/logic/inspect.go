@@ -444,11 +444,14 @@ func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) erro
 		SELECT /* gh-ost */
 			SUM(REFERENCED_TABLE_NAME IS NOT NULL AND TABLE_SCHEMA=? AND TABLE_NAME=?) as num_child_side_fk,
 			SUM(REFERENCED_TABLE_NAME IS NOT NULL AND REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=?) as num_parent_side_fk
-		FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+		FROM
+			INFORMATION_SCHEMA.KEY_COLUMN_USAGE
 		WHERE
 			REFERENCED_TABLE_NAME IS NOT NULL
-			AND ((TABLE_SCHEMA=? AND TABLE_NAME=?)
-				OR (REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=?)
+			AND (
+				(TABLE_SCHEMA=? AND TABLE_NAME=?)
+				OR
+				(REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=?)
 			)`
 	numParentForeignKeys := 0
 	numChildForeignKeys := 0
@@ -487,7 +490,8 @@ func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) erro
 func (this *Inspector) validateTableTriggers() error {
 	query := `
 		SELECT /* gh-ost */ COUNT(*) AS num_triggers
-			FROM INFORMATION_SCHEMA.TRIGGERS
+		FROM
+			INFORMATION_SCHEMA.TRIGGERS
 		WHERE
 			TRIGGER_SCHEMA=?
 			AND EVENT_OBJECT_TABLE=?`
@@ -629,9 +633,9 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 // getAutoIncrementValue get's the original table's AUTO_INCREMENT value, if exists (0 value if not exists)
 func (this *Inspector) getAutoIncrementValue(tableName string) (autoIncrement uint64, err error) {
 	query := `
-		SELECT /* gh-ost */
-			AUTO_INCREMENT
-		FROM INFORMATION_SCHEMA.TABLES
+		SELECT /* gh-ost */ AUTO_INCREMENT
+		FROM
+			INFORMATION_SCHEMA.TABLES
 		WHERE
 			TABLES.TABLE_SCHEMA = ?
 			AND TABLES.TABLE_NAME = ?
@@ -647,61 +651,63 @@ func (this *Inspector) getAutoIncrementValue(tableName string) (autoIncrement ui
 // candidate for chunking
 func (this *Inspector) getCandidateUniqueKeys(tableName string) (uniqueKeys [](*sql.UniqueKey), err error) {
 	query := `
-	SELECT /* gh-ost */
-		COLUMNS.TABLE_SCHEMA,
-		COLUMNS.TABLE_NAME,
-		COLUMNS.COLUMN_NAME,
-		UNIQUES.INDEX_NAME,
-		UNIQUES.COLUMN_NAMES,
-		UNIQUES.COUNT_COLUMN_IN_INDEX,
-		COLUMNS.DATA_TYPE,
-		COLUMNS.CHARACTER_SET_NAME,
-		LOCATE('auto_increment', EXTRA) > 0 as is_auto_increment,
-		has_nullable
-	FROM INFORMATION_SCHEMA.COLUMNS INNER JOIN (
-		SELECT
-			TABLE_SCHEMA,
-			TABLE_NAME,
-			INDEX_NAME,
-			COUNT(*) AS COUNT_COLUMN_IN_INDEX,
-			GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX ASC) AS COLUMN_NAMES,
-			SUBSTRING_INDEX(GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX ASC), ',', 1) AS FIRST_COLUMN_NAME,
-			SUM(NULLABLE='YES') > 0 AS has_nullable
-		FROM INFORMATION_SCHEMA.STATISTICS
+		SELECT /* gh-ost */
+			COLUMNS.TABLE_SCHEMA,
+			COLUMNS.TABLE_NAME,
+			COLUMNS.COLUMN_NAME,
+			UNIQUES.INDEX_NAME,
+			UNIQUES.COLUMN_NAMES,
+			UNIQUES.COUNT_COLUMN_IN_INDEX,
+			COLUMNS.DATA_TYPE,
+			COLUMNS.CHARACTER_SET_NAME,
+			LOCATE('auto_increment', EXTRA) > 0 as is_auto_increment,
+			has_nullable
+		FROM
+			INFORMATION_SCHEMA.COLUMNS
+		INNER JOIN (
+			SELECT
+				TABLE_SCHEMA,
+				TABLE_NAME,
+				INDEX_NAME,
+				COUNT(*) AS COUNT_COLUMN_IN_INDEX,
+				GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX ASC) AS COLUMN_NAMES,
+				SUBSTRING_INDEX(GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX ASC), ',', 1) AS FIRST_COLUMN_NAME,
+				SUM(NULLABLE='YES') > 0 AS has_nullable
+			FROM INFORMATION_SCHEMA.STATISTICS
+			WHERE
+				NON_UNIQUE=0
+				AND TABLE_SCHEMA = ?
+				AND TABLE_NAME = ?
+			GROUP BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME
+		) AS UNIQUES
+		ON (
+			COLUMNS.COLUMN_NAME = UNIQUES.FIRST_COLUMN_NAME
+		)
 		WHERE
-			NON_UNIQUE=0
-			AND TABLE_SCHEMA = ?
-			AND TABLE_NAME = ?
-		GROUP BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME
-	) AS UNIQUES
-	ON (
-		COLUMNS.COLUMN_NAME = UNIQUES.FIRST_COLUMN_NAME
-	)
-	WHERE
-		COLUMNS.TABLE_SCHEMA = ?
-		AND COLUMNS.TABLE_NAME = ?
-	ORDER BY
-		COLUMNS.TABLE_SCHEMA, COLUMNS.TABLE_NAME,
-		CASE UNIQUES.INDEX_NAME
-			WHEN 'PRIMARY' THEN 0
-			ELSE 1
-		END,
-		CASE has_nullable
-			WHEN 0 THEN 0
-			ELSE 1
-		END,
-		CASE IFNULL(CHARACTER_SET_NAME, '')
-			WHEN '' THEN 0
-			ELSE 1
-		END,
-		CASE DATA_TYPE
-			WHEN 'tinyint' THEN 0
-			WHEN 'smallint' THEN 1
-			WHEN 'int' THEN 2
-			WHEN 'bigint' THEN 3
-			ELSE 100
-		END,
-		COUNT_COLUMN_IN_INDEX`
+			COLUMNS.TABLE_SCHEMA = ?
+			AND COLUMNS.TABLE_NAME = ?
+		ORDER BY
+			COLUMNS.TABLE_SCHEMA, COLUMNS.TABLE_NAME,
+			CASE UNIQUES.INDEX_NAME
+				WHEN 'PRIMARY' THEN 0
+				ELSE 1
+			END,
+			CASE has_nullable
+				WHEN 0 THEN 0
+				ELSE 1
+			END,
+			CASE IFNULL(CHARACTER_SET_NAME, '')
+				WHEN '' THEN 0
+				ELSE 1
+			END,
+			CASE DATA_TYPE
+				WHEN 'tinyint' THEN 0
+				WHEN 'smallint' THEN 1
+				WHEN 'int' THEN 2
+				WHEN 'bigint' THEN 3
+				ELSE 100
+			END,
+			COUNT_COLUMN_IN_INDEX`
 	err = sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		uniqueKey := &sql.UniqueKey{
 			Name:            m.GetString("INDEX_NAME"),
@@ -791,7 +797,9 @@ func (this *Inspector) showCreateTable(tableName string) (createTableStatement s
 // readChangelogState reads changelog hints
 func (this *Inspector) readChangelogState(hint string) (string, error) {
 	query := fmt.Sprintf(`
-		select /* gh-ost */ hint, value from %s.%s
+		select /* gh-ost */ hint, value
+		from
+			%s.%s
 		where
 			hint = ? and id <= 255`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
