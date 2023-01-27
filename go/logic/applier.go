@@ -134,6 +134,16 @@ func (this *Applier) generateSqlModeQuery() string {
 	return fmt.Sprintf("sql_mode = %s", sqlModeQuery)
 }
 
+// generateInstantDDLQuery returns the SQL for this ALTER operation
+// with an INSTANT assertion (requires MySQL 8.0+)
+func (this *Applier) generateInstantDDLQuery() string {
+	return fmt.Sprintf(`ALTER /* gh-ost */ TABLE %s.%s %s, ALGORITHM=INSTANT`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.OriginalTableName),
+		this.migrationContext.AlterStatementOptions,
+	)
+}
+
 // readTableColumns reads table columns on applier
 func (this *Applier) readTableColumns() (err error) {
 	this.migrationContext.Log.Infof("Examining table structure on applier")
@@ -185,6 +195,27 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 	}
 
 	return nil
+}
+
+// AttemptInstantDDL attempts to use instant DDL (from MySQL 8.0, and earlier in Aurora and some others).
+// If successful, the operation is only a meta-data change so a lot of time is saved!
+// The risk of attempting to instant DDL when not supported is that a metadata lock may be acquired.
+// This is minor, since gh-ost will eventually require a metadata lock anyway, but at the cut-over stage.
+// Instant operations include:
+// - Adding a column
+// - Dropping a column
+// - Dropping an index
+// - Extending a VARCHAR column
+// - Adding a virtual generated column
+// It is not reliable to parse the `alter` statement to determine if it is instant or not.
+// This is because the table might be in an older row format, or have some other incompatibility
+// that is difficult to identify.
+func (this *Applier) AttemptInstantDDL() error {
+	query := this.generateInstantDDLQuery()
+	this.migrationContext.Log.Infof("INSTANT DDL query is: %s", query)
+	// We don't need a trx, because for instant DDL the SQL mode doesn't matter.
+	_, err := this.db.Exec(query)
+	return err
 }
 
 // CreateGhostTable creates the ghost table on the applier host
