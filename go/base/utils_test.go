@@ -7,6 +7,7 @@ package base
 
 import (
 	"testing"
+	"time"
 
 	"github.com/openark/golib/log"
 	test "github.com/openark/golib/tests"
@@ -26,4 +27,20 @@ func TestStringContainsAll(t *testing.T) {
 	test.S(t).ExpectFalse(StringContainsAll(s, "insert", "drop"))
 	test.S(t).ExpectTrue(StringContainsAll(s, "insert", ""))
 	test.S(t).ExpectTrue(StringContainsAll(s, "insert", "update", "delete"))
+}
+
+func TestFindP90(t *testing.T) {
+	times := []time.Duration{
+		1 * time.Second,
+		2 * time.Second,
+		1 * time.Second,
+		3 * time.Second,
+		10 * time.Second,
+		1 * time.Second,
+		1 * time.Second,
+		1 * time.Second,
+		1 * time.Second,
+		1 * time.Second,
+	}
+	test.S(t).ExpectEquals(lazyFindP90(times), 3*time.Second)
 }
