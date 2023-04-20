@@ -7,11 +7,11 @@ package logic
 
 import (
 	gosql "database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
-	"errors"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -1130,7 +1130,7 @@ func (this *Applier) ValidateGhostTableLocked(renameSessionId int64) (err error)
 		this.migrationContext.Log.Warningf("Grabbing rename session acquire metadata lock error: %s, query:%s", err, query)
 	} else {
 		this.migrationContext.Log.Infof("Grabbing rename session acquire metadata lock is schema:%s, object:%s, state:%s, info: %s", schema, object, state, info)
-		if strings.ToLower(object) != strings.ToLower(this.migrationContext.OriginalTableName) {
+		if !strings.EqualFold(strings.ToLower(object), strings.ToLower(this.migrationContext.OriginalTableName)) {
 			return this.migrationContext.Log.Errorf("Expect rename session %d acquiring table metadata lock is %s.%s, but got %s.%s",
 				renameSessionId,
 				sql.EscapeName(this.migrationContext.DatabaseName),
