@@ -232,6 +232,8 @@ type MigrationContext struct {
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
+	AllowSetupMetadataLockInstruments bool
+
 	Log Logger
 }
 
