@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"errors"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -417,12 +418,12 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 }
 
 func (this *Applier) EnableMetadataLockInstrument() (err error) {
-	query := fmt.Sprintf(`select /*+ MAX_EXECUTION_TIME(300) */ ENABLED, TIMED from performance_schema.setup_instruments WHERE NAME = 'wait/lock/metadata/sql/mdl'`)
+	query := `select /*+ MAX_EXECUTION_TIME(300) */ ENABLED, TIMED from performance_schema.setup_instruments WHERE NAME = 'wait/lock/metadata/sql/mdl'`
 	var enabled, timed string
 	if err = this.db.QueryRow(query).Scan(&enabled, &timed); err != nil {
 		return this.migrationContext.Log.Errorf("query performance_schema.setup_instruments with name wait/lock/metadata/sql/mdl error: %s", err)
 	}
-	if enabled == "YES" && timed == "YES" {
+	if strings.EqualFold(enabled, "YES") && strings.EqualFold(timed, "YES") {
 		this.migrationContext.Log.Infof("instrument wait/lock/metadata/sql/mdl already has been enabled")
 		return nil
 	}
@@ -1027,7 +1028,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 	select {
 	case <-okToDropSentryTable:
 		this.migrationContext.Log.Infof("Receive drop magic table channel, drop table %s.%s now", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
-	case <-time.After(time.Duration(tableLockTimeoutSeconds)*time.Second - time.Now().Sub(this.migrationContext.LockTablesStartTime)):
+	case <-time.After(time.Duration(tableLockTimeoutSeconds)*time.Second - time.Since(this.migrationContext.LockTablesStartTime)):
 		this.migrationContext.Log.Warningf("Wait drop magic table channel timeout, drop table %s.%s forcefully now. Noteworthy, it is unreasonable, timeout was used for foolproof, but normally it should not be here.", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
 	}
 
@@ -1053,7 +1054,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 	select {
 	case <-okToUnlockTable:
 		this.migrationContext.Log.Infof("Receive unlock table channel, unlock tables now")
-	case <-time.After(time.Duration(tableLockTimeoutSeconds)*time.Second - time.Now().Sub(this.migrationContext.LockTablesStartTime)):
+	case <-time.After(time.Duration(tableLockTimeoutSeconds)*time.Second - time.Since(this.migrationContext.LockTablesStartTime)):
 		this.migrationContext.Log.Warningf("Wait unlock table channel timeout, unlock tables forcefully now. Noteworthy, it is unreasonable, timeout was used for foolproof, but normally it should not be here.")
 	}
 	// Tables still locked
@@ -1123,7 +1124,7 @@ func (this *Applier) ValidateGhostTableLocked(renameSessionId int64) (err error)
 	query := `select /*+ MAX_EXECUTION_TIME(300) */ ifnull(a.object_schema,''),a.object_name,b.PROCESSLIST_STATE,b.PROCESSLIST_INFO from performance_schema.metadata_locks a join performance_schema.threads b on a.owner_thread_id=b.thread_id where b.processlist_id=? and a.lock_status='PENDING';`
 	// Not strictly validate here
 	if err := this.db.QueryRow(query, renameSessionId).Scan(&schema, &object, &state, &info); err != nil {
-		if err == gosql.ErrNoRows {
+		if errors.Is(err, gosql.ErrNoRows) {
 			this.migrationContext.Log.Warningf("query metadata locks returns %s, perhaps instrument wait/lock/metadata/sql/mdl not enabled, enable it via -allow-setup-metadata-lock-instruments", err)
 		}
 		this.migrationContext.Log.Warningf("Grabbing rename session acquire metadata lock error: %s, query:%s", err, query)
