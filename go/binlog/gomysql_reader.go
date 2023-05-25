@@ -36,14 +36,15 @@ func NewGoMySQLReader(migrationContext *base.MigrationContext) *GoMySQLReader {
 		currentCoordinates:      mysql.BinlogCoordinates{},
 		currentCoordinatesMutex: &sync.Mutex{},
 		binlogSyncer: replication.NewBinlogSyncer(replication.BinlogSyncerConfig{
-			ServerID:   uint32(migrationContext.ReplicaServerId),
-			Flavor:     gomysql.MySQLFlavor,
-			Host:       connectionConfig.Key.Hostname,
-			Port:       uint16(connectionConfig.Key.Port),
-			User:       connectionConfig.User,
-			Password:   connectionConfig.Password,
-			TLSConfig:  connectionConfig.TLSConfig(),
-			UseDecimal: true,
+			ServerID:             uint32(migrationContext.ReplicaServerId),
+			Flavor:               gomysql.MySQLFlavor,
+			Host:                 connectionConfig.Key.Hostname,
+			Port:                 uint16(connectionConfig.Key.Port),
+			User:                 connectionConfig.User,
+			Password:             connectionConfig.Password,
+			TLSConfig:            connectionConfig.TLSConfig(),
+			UseDecimal:           true,
+			MaxReconnectAttempts: migrationContext.BinlogSyncerMaxReconnectAttempts,
 		}),
 	}
 }
