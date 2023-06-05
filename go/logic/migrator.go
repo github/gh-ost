@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -1244,10 +1245,11 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 
 		availableEvents := len(this.applyEventsQueue)
 		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
-		if availableEvents > batchSize-1 {
+		concurrencySize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchConcurrencySize))
+		if availableEvents > batchSize*concurrencySize-1 {
 			// The "- 1" is because we already consumed one event: the original event that led to this function getting called.
 			// So, if DMLBatchSize==1 we wish to not process any further events
-			availableEvents = batchSize - 1
+			availableEvents = batchSize * concurrencySize * -1
 		}
 		for i := 0; i < availableEvents; i++ {
 			additionalStruct := <-this.applyEventsQueue
@@ -1259,12 +1261,57 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
 		}
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
-		var applyEventFunc tableWriteFunc = func() error {
-			return this.applier.ApplyDMLEventQueries(dmlEvents)
+		// var applyEventFunc tableWriteFunc = func() error {
+		// 	return this.applier.ApplyDMLEventQueries(dmlEvents)
+		// }
+		// if err := this.retryOperation(applyEventFunc); err != nil {
+		// 	return this.migrationContext.Log.Errore(err)
+		// }
+
+		var dmlResultsMap map[string][]*dmlBuildResult
+		var buildEventFunc tableWriteFunc = func() (err error) {
+			dmlResultsMap, err = this.applier.BuildDMLEventQueryMap(dmlEvents)
+			return err
 		}
-		if err := this.retryOperation(applyEventFunc); err != nil {
+
+		if err := this.retryOperation(buildEventFunc); err != nil {
 			return this.migrationContext.Log.Errore(err)
 		}
+
+		var applyDMLResults []*dmlBuildResult
+		for _, dmlResults := range dmlResultsMap {
+			applyDMLResults = append(applyDMLResults, dmlResults[len(dmlResults)-1])
+		}
+
+		wg := sync.WaitGroup{}
+		errCh := make(chan error, len(applyDMLResults)/batchSize+1)
+		defer close(errCh)
+
+		for i := 0; i < len(applyDMLResults); i += batchSize {
+			end := i + batchSize
+			if end > len(applyDMLResults) {
+				end = len(applyDMLResults)
+			}
+			wg.Add(1)
+			go func(begin, end int) {
+				defer wg.Done()
+
+				var _func tableWriteFunc = func() error {
+					return this.applier.ApplyDMLQueries(applyDMLResults[begin:end])
+				}
+
+				if err := this.retryOperation(_func); err != nil {
+					errCh <- err
+				}
+			}(i, end)
+		}
+
+		wg.Wait()
+
+		if len(errCh) > 0 {
+			return <-errCh
+		}
+
 		if nonDmlStructToApply != nil {
 			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
 			// We need to handle it!

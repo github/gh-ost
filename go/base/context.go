@@ -49,9 +49,10 @@ const (
 )
 
 const (
-	HTTPStatusOK       = 200
-	MaxEventsBatchSize = 1000
-	ETAUnknown         = math.MinInt64
+	HTTPStatusOK                  = 200
+	MaxEventsBatchSize            = 1000
+	MaxEventsBatchConcurrencySize = 100
+	ETAUnknown                    = math.MinInt64
 )
 
 var (
@@ -195,6 +196,7 @@ type MigrationContext struct {
 	TotalRowsCopied                        int64
 	TotalDMLEventsApplied                  int64
 	DMLBatchSize                           int64
+	DMLBatchConcurrencySize                int64
 	isThrottled                            bool
 	throttleReason                         string
 	throttleReasonHint                     ThrottleReasonHint
@@ -275,6 +277,7 @@ func NewMigrationContext() *MigrationContext {
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
 		DMLBatchSize:                        10,
+		DMLBatchConcurrencySize:             1,
 		etaNanoseonds:                       ETAUnknown,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),
@@ -622,6 +625,16 @@ func (this *MigrationContext) SetDMLBatchSize(batchSize int64) {
 		batchSize = MaxEventsBatchSize
 	}
 	atomic.StoreInt64(&this.DMLBatchSize, batchSize)
+}
+
+func (this *MigrationContext) SetDMLBatchConcurrencySize(batchConcurrencySize int64) {
+	if batchConcurrencySize < 1 {
+		batchConcurrencySize = 1
+	}
+	if batchConcurrencySize > MaxEventsBatchConcurrencySize {
+		batchConcurrencySize = MaxEventsBatchConcurrencySize
+	}
+	atomic.StoreInt64(&this.DMLBatchConcurrencySize, batchConcurrencySize)
 }
 
 func (this *MigrationContext) SetThrottleGeneralCheckResult(checkResult *ThrottleCheckResult) *ThrottleCheckResult {

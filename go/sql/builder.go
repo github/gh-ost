@@ -422,16 +422,26 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 	return result, uniqueKeyArgs, nil
 }
 
-func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
+func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns, uniqueKeyColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, uniqueKeyArgs []interface{}, err error) {
 	if len(args) != tableColumns.Len() {
-		return result, args, fmt.Errorf("args count differs from table column count in BuildDMLInsertQuery")
+		return result, args, uniqueKeyArgs, fmt.Errorf("args count differs from table column count in BuildDMLInsertQuery")
 	}
 	if !sharedColumns.IsSubsetOf(tableColumns) {
-		return result, args, fmt.Errorf("shared columns is not a subset of table columns in BuildDMLInsertQuery")
+		return result, args, uniqueKeyArgs, fmt.Errorf("shared columns is not a subset of table columns in BuildDMLInsertQuery")
 	}
 	if sharedColumns.Len() == 0 {
-		return result, args, fmt.Errorf("No shared columns found in BuildDMLInsertQuery")
+		return result, args, uniqueKeyArgs, fmt.Errorf("No shared columns found in BuildDMLInsertQuery")
 	}
+
+	if uniqueKeyColumns.Len() == 0 {
+		return result, args, uniqueKeyArgs, fmt.Errorf("No unique key columns found in BuildDMLInsertQuery")
+	}
+	for _, column := range uniqueKeyColumns.Columns() {
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal], true)
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+	}
+
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
@@ -458,7 +468,7 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 		strings.Join(mappedSharedColumnNames, ", "),
 		strings.Join(preparedValues, ", "),
 	)
-	return result, sharedArgs, nil
+	return result, sharedArgs, uniqueKeyArgs, nil
 }
 
 func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns, uniqueKeyColumns *ColumnList, valueArgs, whereArgs []interface{}) (result string, sharedArgs, uniqueKeyArgs []interface{}, err error) {

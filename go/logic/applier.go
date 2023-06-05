@@ -27,18 +27,20 @@ const (
 )
 
 type dmlBuildResult struct {
-	query     string
-	args      []interface{}
-	rowsDelta int64
-	err       error
+	query        string
+	args         []interface{}
+	rowsDelta    int64
+	err          error
+	uniqueValues []interface{} // impact of DML operations on unique values
 }
 
-func newDmlBuildResult(query string, args []interface{}, rowsDelta int64, err error) *dmlBuildResult {
+func newDmlBuildResult(query string, args []interface{}, rowsDelta int64, uniqueValues []interface{}, err error) *dmlBuildResult {
 	return &dmlBuildResult{
-		query:     query,
-		args:      args,
-		rowsDelta: rowsDelta,
-		err:       err,
+		query:        query,
+		args:         args,
+		rowsDelta:    rowsDelta,
+		err:          err,
+		uniqueValues: uniqueValues,
 	}
 }
 
@@ -1109,12 +1111,12 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 	case binlog.DeleteDML:
 		{
 			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
-			return append(results, newDmlBuildResult(query, uniqueKeyArgs, -1, err))
+			return append(results, newDmlBuildResult(query, uniqueKeyArgs, -1, uniqueKeyArgs, err))
 		}
 	case binlog.InsertDML:
 		{
-			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
-			return append(results, newDmlBuildResult(query, sharedArgs, 1, err))
+			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues())
+			return append(results, newDmlBuildResult(query, sharedArgs, 1, uniqueKeyArgs, err))
 		}
 	case binlog.UpdateDML:
 		{
@@ -1129,7 +1131,7 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 			args := sqlutils.Args()
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
-			return append(results, newDmlBuildResult(query, args, 0, err))
+			return append(results, newDmlBuildResult(query, args, 0, uniqueKeyArgs, err))
 		}
 	}
 	return append(results, newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)))
@@ -1192,6 +1194,84 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, totalDelta)
 	}
 	this.migrationContext.Log.Debugf("ApplyDMLEventQueries() applied %d events in one transaction", len(dmlEvents))
+	return nil
+}
+
+func (this *Applier) BuildDMLEventQueryMap(dmlEvents []*binlog.BinlogDMLEvent) (resultMap map[string][]*dmlBuildResult, err error) {
+	resultMap = make(map[string][]*dmlBuildResult)
+	for _, dmlEvent := range dmlEvents {
+		for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
+			if buildResult.err != nil {
+				return nil, this.migrationContext.Log.Errore(buildResult.err)
+			}
+			resultMap[fmt.Sprintf("%v", buildResult.uniqueValues)] = append(resultMap[buildResult.query], buildResult)
+		}
+	}
+	return resultMap, nil
+}
+
+// ApplyDMLQueries concurrent applies multiple DML queries onto the _ghost_ table
+func (this *Applier) ApplyDMLQueries(dmlResults []*dmlBuildResult) error {
+	var totalDelta int64
+
+	if len(dmlResults) == 0 {
+		return nil
+	}
+
+	err := func() error {
+		tx, err := this.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		rollback := func(err error) error {
+			tx.Rollback()
+			return err
+		}
+
+		sessionQuery := "SET SESSION time_zone = '+00:00'"
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return rollback(err)
+		}
+		for _, buildResult := range dmlResults {
+			if buildResult.err != nil {
+				return rollback(buildResult.err)
+			}
+
+			log.Infof("exec sql: %s, args: %+v", buildResult.query, buildResult.args)
+
+			result, err := tx.Exec(buildResult.query, buildResult.args...)
+			if err != nil {
+				err = fmt.Errorf("%w; query=%s; args=%+v", err, buildResult.query, buildResult.args)
+				return rollback(err)
+			}
+
+			rowsAffected, err := result.RowsAffected()
+			if err != nil {
+				log.Warningf("error getting rows affected from DML event query: %s. i'm going to assume that the DML affected a single row, but this may result in inaccurate statistics", err)
+				rowsAffected = 1
+			}
+			// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
+			// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
+			totalDelta += buildResult.rowsDelta * rowsAffected
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return nil
+	}()
+
+	if err != nil {
+		return this.migrationContext.Log.Errore(err)
+	}
+	// no error
+	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, int64(len(dmlResults)))
+	if this.migrationContext.CountTableRows {
+		atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, totalDelta)
+	}
+	this.migrationContext.Log.Debugf("ApplyDMLEventQueries() applied %d events in one transaction", len(dmlResults))
 	return nil
 }
 
