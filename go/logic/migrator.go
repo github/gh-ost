@@ -1059,10 +1059,17 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 // initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
-	this.eventsStreamer = NewEventsStreamer(this.migrationContext)
-	if err := this.eventsStreamer.InitDBConnections(); err != nil {
+	streamer := NewEventsStreamer(this.migrationContext)
+	if err := streamer.InitDBConnections(); err != nil {
+		if streamer.db != nil {
+			// db is not null have to tear down
+			this.eventsStreamer = streamer
+		}
 		return err
 	}
+
+	// all is ok then set streamer or else no routine is up
+	this.eventsStreamer = streamer
 	this.eventsStreamer.AddListener(
 		false,
 		this.migrationContext.DatabaseName,
