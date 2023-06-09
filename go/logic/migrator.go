@@ -1061,9 +1061,12 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 func (this *Migrator) initiateStreaming() error {
 	streamer := NewEventsStreamer(this.migrationContext)
 	if err := streamer.InitDBConnections(); err != nil {
+		if streamer.binlogReader != nil {
+			streamer.binlogReader.Close()
+		}
 		if streamer.db != nil {
 			// db is not null have to tear down
-			this.eventsStreamer = streamer
+			streamer.db.Close()
 		}
 		return err
 	}
