@@ -1275,10 +1275,14 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		// Since update unique key dml is split into delete and insert dml,
 		// the applyDMLResults may be larger than batchSize * concurrencySize.
 		// When calculating the final concurrency, the size of len(applyDMLResults)/batchSize
-		// may be one more than concurrencySize. Therefore, the size of errCh here is increased
-		// by one more than concurrencySize.
-		errCh := make(chan error, len(applyDMLResults)/batchSize+1)
-		defer close(errCh)
+		// may be two times the concurrencySize. Therefore, the size of errCh is max concurrencySize.
+		errCh := make(chan error, len(applyDMLResults)/batchSize*2)
+		defer func() {
+			close(errCh)
+			for range errCh {
+				// drain errCh
+			}
+		}()
 
 		for i := 0; i < len(applyDMLResults); i += batchSize {
 			end := i + batchSize
