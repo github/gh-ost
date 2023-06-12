@@ -74,15 +74,22 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 }
 
 func (this *Applier) InitDBConnections() (err error) {
+	// apply dml events、create ghost table... use this.db
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
+	if int(this.migrationContext.DMLBatchConcurrencySize) > mysql.MaxDBPoolConnections {
+		this.db.SetMaxOpenConns(int(this.migrationContext.DMLBatchConcurrencySize))
+	}
+
+	// cut-over phase requires a singleton connection to the applier
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
 	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
 	}
 	this.singletonDB.SetMaxOpenConns(1)
+
 	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
 	if err != nil {
 		return err
@@ -1238,8 +1245,6 @@ func (this *Applier) ApplyDMLQueries(dmlResults []*dmlBuildResult) error {
 			if buildResult.err != nil {
 				return rollback(buildResult.err)
 			}
-
-			log.Infof("exec sql: %s, args: %+v", buildResult.query, buildResult.args)
 
 			result, err := tx.Exec(buildResult.query, buildResult.args...)
 			if err != nil {

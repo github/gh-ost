@@ -1227,6 +1227,9 @@ func (this *Migrator) iterateChunks() error {
 }
 
 func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
+	batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
+	concurrencySize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchConcurrencySize))
+
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
 		if eventStruct.writeFunc != nil {
 			if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
@@ -1235,39 +1238,20 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		}
 		return nil
 	}
-	if eventStruct.dmlEvent == nil {
-		return handleNonDMLEventStruct(eventStruct)
-	}
-	if eventStruct.dmlEvent != nil {
-		dmlEvents := [](*binlog.BinlogDMLEvent){}
-		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
-		var nonDmlStructToApply *applyEventStruct
 
-		availableEvents := len(this.applyEventsQueue)
-		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
-		concurrencySize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchConcurrencySize))
-		if availableEvents > batchSize*concurrencySize-1 {
-			// The "- 1" is because we already consumed one event: the original event that led to this function getting called.
-			// So, if DMLBatchSize==1 we wish to not process any further events
-			availableEvents = batchSize * concurrencySize * -1
-		}
-		for i := 0; i < availableEvents; i++ {
-			additionalStruct := <-this.applyEventsQueue
-			if additionalStruct.dmlEvent == nil {
-				// Not a DML. We don't group this, and we don't batch any further
-				nonDmlStructToApply = additionalStruct
-				break
-			}
-			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
-		}
+	handleSerialApplyDMLEvent := func(dmlEvents []*binlog.BinlogDMLEvent) error {
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
-		// var applyEventFunc tableWriteFunc = func() error {
-		// 	return this.applier.ApplyDMLEventQueries(dmlEvents)
-		// }
-		// if err := this.retryOperation(applyEventFunc); err != nil {
-		// 	return this.migrationContext.Log.Errore(err)
-		// }
+		var applyEventFunc tableWriteFunc = func() error {
+			return this.applier.ApplyDMLEventQueries(dmlEvents)
+		}
+		if err := this.retryOperation(applyEventFunc); err != nil {
+			return this.migrationContext.Log.Errore(err)
+		}
+		return nil
+	}
 
+	handleConcurrencyApplyDMLEvent := func(dmlEvents []*binlog.BinlogDMLEvent) error {
+		// map[uniqueKey]*[]dmlBuildResult, grouped by unique key and sorted in order of event sequence
 		var dmlResultsMap map[string][]*dmlBuildResult
 		var buildEventFunc tableWriteFunc = func() (err error) {
 			dmlResultsMap, err = this.applier.BuildDMLEventQueryMap(dmlEvents)
@@ -1280,10 +1264,19 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 
 		var applyDMLResults []*dmlBuildResult
 		for _, dmlResults := range dmlResultsMap {
+			// the same unique key, only apply the last dml result,
+			// because the previous dml results is overwritten by the last one
 			applyDMLResults = append(applyDMLResults, dmlResults[len(dmlResults)-1])
 		}
 
 		wg := sync.WaitGroup{}
+
+		// The number of dmlEvents obtained is batchSize * concurrencySize.
+		// Since update unique key dml is split into delete and insert dml,
+		// the applyDMLResults may be larger than batchSize * concurrencySize.
+		// When calculating the final concurrency, the size of len(applyDMLResults)/batchSize
+		// may be one more than concurrencySize. Therefore, the size of errCh here is increased
+		// by one more than concurrencySize.
 		errCh := make(chan error, len(applyDMLResults)/batchSize+1)
 		defer close(errCh)
 
@@ -1310,6 +1303,43 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 
 		if len(errCh) > 0 {
 			return <-errCh
+		}
+		return nil
+	}
+
+	if eventStruct.dmlEvent == nil {
+		return handleNonDMLEventStruct(eventStruct)
+	}
+	if eventStruct.dmlEvent != nil {
+		dmlEvents := [](*binlog.BinlogDMLEvent){}
+		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
+		var nonDmlStructToApply *applyEventStruct
+
+		availableEvents := len(this.applyEventsQueue)
+		if availableEvents > batchSize*concurrencySize-1 {
+			// The "- 1" is because we already consumed one event: the original event that led to this function getting called.
+			// So, if DMLBatchSize==1 we wish to not process any further events
+			availableEvents = batchSize*concurrencySize - 1
+		}
+		for i := 0; i < availableEvents; i++ {
+			additionalStruct := <-this.applyEventsQueue
+			if additionalStruct.dmlEvent == nil {
+				// Not a DML. We don't group this, and we don't batch any further
+				nonDmlStructToApply = additionalStruct
+				break
+			}
+			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
+		}
+
+		// Apply the DML events, if concurrencySize=1, serially. Otherwise, concurrently.
+		if concurrencySize == 1 {
+			if err := handleSerialApplyDMLEvent(dmlEvents); err != nil {
+				return this.migrationContext.Log.Errore(err)
+			}
+		} else {
+			if err := handleConcurrencyApplyDMLEvent(dmlEvents); err != nil {
+				return this.migrationContext.Log.Errore(err)
+			}
 		}
 
 		if nonDmlStructToApply != nil {

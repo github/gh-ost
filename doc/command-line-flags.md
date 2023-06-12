@@ -122,6 +122,12 @@ Why is this behavior configurable? Different workloads have different characteri
 
 Noteworthy is that setting `--dml-batch-size` to higher value _does not_ mean `gh-ost` blocks or waits on writes. The batch size is an upper limit on transaction size, not a minimal one. If `gh-ost` doesn't have "enough" events in the pipe, it does not wait on the binary log, it just writes what it already has. This conveniently suggests that if write load is light enough for `gh-ost` to only see a few events in the binary log at a given time, then it is also light enough for `gh-ost` to apply a fraction of the batch size.
 
+### dml-batch-concurrency-size
+
+`gh-ost` reads event and concurrently applies them onto the _ghost_ table.
+
+The `--dml-batch-concurrency-size` flag controls the number of concurrent workers that apply binlog dml event the batched writes, every worker apply dmlBatchSize event in a transaction. Allowed values are `1 - 100`. Default value is `1`.
+
 ### exact-rowcount
 
 A `gh-ost` execution need to copy whatever rows you have in your existing table onto the ghost table. This can and often will be, a large number. Exactly what that number is?
