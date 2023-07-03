@@ -66,7 +66,7 @@ func main() {
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
-	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
+	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory); Specify `Noop` to not change the table structure")
 	flag.BoolVar(&migrationContext.AttemptInstantDDL, "attempt-instant-ddl", false, "Attempt to use instant DDL for this migration first")
 	storageEngine := flag.String("storage-engine", "innodb", "Specify table storage engine (default: 'innodb'). When 'rocksdb': the session transaction isolation level is changed from REPEATABLE_READ to READ_COMMITTED.")
 
@@ -148,6 +148,8 @@ func main() {
 	version := flag.Bool("version", false, "Print version & exit")
 	checkFlag := flag.Bool("check-flag", false, "Check if another flag exists/supported. This allows for cross-version scripting. Exits with 0 when all additional provided flags exist, nonzero otherwise. You must provide (dummy) values for flags that require a value. Example: gh-ost --check-flag --cut-over-lock-timeout-seconds --nice-ratio 0")
 	flag.StringVar(&migrationContext.ForceTmpTableName, "force-table-names", "", "table name prefix to be used on the temporary tables")
+	flag.StringVar(&migrationContext.Where, "where-reserve-clause", "", "used for only copy where clause stmt values")
+	flag.BoolVar(&migrationContext.ForceQueryMigrationRangeValuesOnMaster, "force-query-migration-range-values-on-master", false, "if you use where-reserve-clause flag, by default, will query initial migration range values with corresponding where stmt on slave. Also you can specify this flag to true , it will query on master and not care where clause stmt like usual and the where clause would be used at copy rows to gho table")
 	flag.CommandLine.SetOutput(os.Stdout)
 
 	flag.Parse()

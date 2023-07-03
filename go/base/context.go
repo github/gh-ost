@@ -210,25 +210,27 @@ type MigrationContext struct {
 	InCutOverCriticalSectionFlag           int64
 	PanicAbort                             chan error
 
-	OriginalTableColumnsOnApplier    *sql.ColumnList
-	OriginalTableColumns             *sql.ColumnList
-	OriginalTableVirtualColumns      *sql.ColumnList
-	OriginalTableUniqueKeys          [](*sql.UniqueKey)
-	OriginalTableAutoIncrement       uint64
-	GhostTableColumns                *sql.ColumnList
-	GhostTableVirtualColumns         *sql.ColumnList
-	GhostTableUniqueKeys             [](*sql.UniqueKey)
-	UniqueKey                        *sql.UniqueKey
-	SharedColumns                    *sql.ColumnList
-	ColumnRenameMap                  map[string]string
-	DroppedColumnsMap                map[string]bool
-	MappedSharedColumns              *sql.ColumnList
-	MigrationRangeMinValues          *sql.ColumnValues
-	MigrationRangeMaxValues          *sql.ColumnValues
-	Iteration                        int64
-	MigrationIterationRangeMinValues *sql.ColumnValues
-	MigrationIterationRangeMaxValues *sql.ColumnValues
-	ForceTmpTableName                string
+	OriginalTableColumnsOnApplier          *sql.ColumnList
+	OriginalTableColumns                   *sql.ColumnList
+	OriginalTableVirtualColumns            *sql.ColumnList
+	OriginalTableUniqueKeys                [](*sql.UniqueKey)
+	OriginalTableAutoIncrement             uint64
+	GhostTableColumns                      *sql.ColumnList
+	GhostTableVirtualColumns               *sql.ColumnList
+	GhostTableUniqueKeys                   [](*sql.UniqueKey)
+	UniqueKey                              *sql.UniqueKey
+	SharedColumns                          *sql.ColumnList
+	ColumnRenameMap                        map[string]string
+	DroppedColumnsMap                      map[string]bool
+	MappedSharedColumns                    *sql.ColumnList
+	MigrationRangeMinValues                *sql.ColumnValues
+	MigrationRangeMaxValues                *sql.ColumnValues
+	Iteration                              int64
+	MigrationIterationRangeMinValues       *sql.ColumnValues
+	MigrationIterationRangeMaxValues       *sql.ColumnValues
+	ForceTmpTableName                      string
+	Where                                  string
+	ForceQueryMigrationRangeValuesOnMaster bool
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 

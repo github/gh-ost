@@ -18,7 +18,8 @@ import (
 
 func TestApplierGenerateSqlModeQuery(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
-	applier := NewApplier(migrationContext)
+	migrator := NewMigrator(migrationContext, "")
+	applier := NewApplier(migrationContext, migrator.inspector)
 
 	{
 		test.S(t).ExpectEquals(
@@ -62,8 +63,9 @@ func TestApplierUpdateModifiesUniqueKeyColumns(t *testing.T) {
 		Name:    t.Name(),
 		Columns: *columns,
 	}
+	migrator := NewMigrator(migrationContext, "")
 
-	applier := NewApplier(migrationContext)
+	applier := NewApplier(migrationContext, migrator.inspector)
 
 	t.Run("unmodified", func(t *testing.T) {
 		modifiedColumn, isModified := applier.updateModifiesUniqueKeyColumns(&binlog.BinlogDMLEvent{
@@ -101,8 +103,8 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 		Name:    t.Name(),
 		Columns: *columns,
 	}
-
-	applier := NewApplier(migrationContext)
+	migrator := NewMigrator(migrationContext, "")
+	applier := NewApplier(migrationContext, migrator.inspector)
 
 	t.Run("delete", func(t *testing.T) {
 		binlogEvent := &binlog.BinlogDMLEvent{
@@ -176,7 +178,8 @@ func TestApplierInstantDDL(t *testing.T) {
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "mytable"
 	migrationContext.AlterStatementOptions = "ADD INDEX (foo)"
-	applier := NewApplier(migrationContext)
+	migrator := NewMigrator(migrationContext, "")
+	applier := NewApplier(migrationContext, migrator.inspector)
 
 	t.Run("instantDDLstmt", func(t *testing.T) {
 		stmt := applier.generateInstantDDLQuery()

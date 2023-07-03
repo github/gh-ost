@@ -163,6 +163,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
 	ghostTableName := "ghost"
+	whereStmt := ""
 	sharedColumns := []string{"id", "name", "position"}
 	{
 		uniqueKey := "PRIMARY"
@@ -172,7 +173,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3}
 		rangeEndArgs := []interface{}{103}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, whereStmt, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -191,7 +192,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, whereStmt, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -208,6 +209,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
 	ghostTableName := "ghost"
+	whereStmt := ""
 	sharedColumns := []string{"id", "name", "position"}
 	mappedSharedColumns := []string{"id", "name", "location"}
 	{
@@ -218,7 +220,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeStartArgs := []interface{}{3}
 		rangeEndArgs := []interface{}{103}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, whereStmt, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, location)
@@ -237,7 +239,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, whereStmt, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, location)
@@ -254,6 +256,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
 	ghostTableName := "ghost"
+	whereStmt := ""
 	sharedColumns := []string{"id", "name", "position"}
 	{
 		uniqueKey := "name_position_uidx"
@@ -261,7 +264,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true, true)
+		query, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, whereStmt, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
@@ -309,9 +312,12 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
+	whereStmt := ""
 	uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+	forceOnMaster := false
+	runningOnMaster := true
 	{
-		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
+		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, whereStmt, uniqueKeyColumns, forceOnMaster, runningOnMaster)
 		test.S(t).ExpectNil(err)
 		expected := `
 			select /* gh-ost mydb.tbl */ name, position
@@ -324,7 +330,7 @@ func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 	}
 	{
-		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
+		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, whereStmt, uniqueKeyColumns, forceOnMaster, runningOnMaster)
 		test.S(t).ExpectNil(err)
 		expected := `
 			select /* gh-ost mydb.tbl */ name, position

@@ -7,6 +7,7 @@ package logic
 
 import (
 	gosql "database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 const (
 	GhostChangelogTableComment = "gh-ost changelog"
 	atomicCutOverMagicHint     = "ghost-cut-over-sentry"
+	masterPosWaitSec           = 360
 )
 
 type dmlBuildResult struct {
@@ -60,14 +62,16 @@ type Applier struct {
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
 	name              string
+	inspector         *Inspector
 }
 
-func NewApplier(migrationContext *base.MigrationContext) *Applier {
+func NewApplier(migrationContext *base.MigrationContext, i *Inspector) *Applier {
 	return &Applier{
 		connectionConfig:  migrationContext.ApplierConnectionConfig,
 		migrationContext:  migrationContext,
 		finishedMigrating: 0,
 		name:              "applier",
+		inspector:         i,
 	}
 }
 
@@ -272,6 +276,11 @@ func (this *Applier) AlterGhost() error {
 	)
 	this.migrationContext.Log.Debugf("ALTER statement: %s", query)
 
+	if strings.ToLower(this.migrationContext.AlterStatement) == "noop" {
+		log.Infof("Noop,Just rebuild the table and not change the table structure")
+		return nil
+	}
+
 	err := func() error {
 		tx, err := this.db.Begin()
 		if err != nil {
@@ -471,7 +480,7 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 // readMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.Where, &uniqueKey.Columns, this.migrationContext.ForceQueryMigrationRangeValuesOnMaster, this.migrationContext.AllowedRunningOnMaster)
 	if err != nil {
 		return err
 	}
@@ -496,7 +505,7 @@ func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 // readMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, this.migrationContext.Where, &uniqueKey.Columns, this.migrationContext.ForceQueryMigrationRangeValuesOnMaster, this.migrationContext.AllowedRunningOnMaster)
 	if err != nil {
 		return err
 	}
@@ -518,6 +527,12 @@ func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 	return rows.Err()
 }
 
+func (this *Applier) getMasterStatus() (binfile string, binpos int, err error) {
+	binfile, binpos, err = mysql.GetMasterStatus(this.db)
+
+	return binfile, binpos, err
+}
+
 // ReadMigrationRangeValues reads min/max values that will be used for rowcopy.
 // Before read min/max, write a changelog state into the ghc table to avoid lost data in mysql two-phase commit.
 /*
@@ -536,11 +551,42 @@ Detail description of the lost data in mysql two-phase commit issue by @Fanduzi:
 	newly inserted data, thus Avoiding data loss due to the above problem.
 */
 func (this *Applier) ReadMigrationRangeValues() error {
+	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster {
+		binFile, binPos, err := this.getMasterStatus()
+
+		if err != nil {
+			return err
+		}
+
+		for i := 0; i < masterPosWaitSec; i++ {
+			catched, err := this.inspector.SlaveCatchedUp(binFile, binPos)
+			if err != nil {
+				return err
+			}
+
+			if catched {
+				break
+			}
+			if i == masterPosWaitSec {
+				return errors.New("slave cannot catch up")
+			}
+			log.Infof("slave catching up ..")
+			time.Sleep(time.Second)
+		}
+	}
+
 	if _, err := this.WriteChangelogState(string(ReadMigrationRangeValues)); err != nil {
 		return err
 	}
 
-	tx, err := this.db.Begin()
+	var tx *gosql.Tx
+	var err error
+	if this.migrationContext.Where != "" && !this.migrationContext.ForceQueryMigrationRangeValuesOnMaster && !this.migrationContext.AllowedRunningOnMaster {
+		tx, err = this.inspector.db.Begin() // query migration range value on slave node with where-reserve clause
+	} else {
+		tx, err = this.db.Begin() // query on master like usual
+	}
+
 	if err != nil {
 		return err
 	}
@@ -619,6 +665,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.GetGhostTableName(),
+		this.migrationContext.Where,
 		this.migrationContext.SharedColumns.Names(),
 		this.migrationContext.MappedSharedColumns.Names(),
 		this.migrationContext.UniqueKey.Name,

@@ -76,6 +76,16 @@ func GetReplicationLagFromSlaveStatus(informationSchemaDb *gosql.DB) (replicatio
 	return replicationLag, err
 }
 
+func GetMasterStatus(informationSchemaDb *gosql.DB) (binfile string, binpos int, err error) {
+	err = sqlutils.QueryRowsMap(informationSchemaDb, `show master status`, func(m sqlutils.RowMap) error {
+		binfile = m.GetString("File")
+		binpos = m.GetInt("Position")
+		return nil
+	})
+
+	return binfile, binpos, err
+}
+
 func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
 	currentUri := connectionConfig.GetDBUri("information_schema")
 	// This function is only called once, okay to not have a cached connection pool
