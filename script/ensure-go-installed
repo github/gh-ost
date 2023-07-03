@@ -35,7 +35,7 @@ if [ -z "$(which go)" ] || [ -z "$(go version | grep "$SUPPORTED_GO_VERSIONS")" 
     curl -L -O https://dl.google.com/go/$GO_PKG_DARWIN
     shasum -a256 $GO_PKG_DARWIN | grep $GO_PKG_DARWIN_SHA
     xar -xf $GO_PKG_DARWIN
-    cpio -i < com.googlecode.go.pkg/Payload
+    cpio -i < org.golang.go.pkg/Payload
   else
     curl -L -O https://dl.google.com/go/$GO_PKG_LINUX
     shasum -a256 $GO_PKG_LINUX | grep $GO_PKG_LINUX_SHA
