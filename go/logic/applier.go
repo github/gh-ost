@@ -300,7 +300,7 @@ func (this *Applier) AlterGhost() error {
 	return err
 }
 
-// AlterGhostAutoIncrement alter `AUTO_INCREMENT` clause on ghost table
+// AlterGhostAutoIncrement alter the `AUTO_INCREMENT` clause on the ghost table
 func (this *Applier) AlterGhostAutoIncrement() error {
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s AUTO_INCREMENT=%d`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
