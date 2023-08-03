@@ -71,7 +71,7 @@ main() {
   find $buildpath/gh-ost* -type f -maxdepth 1
 
   echo "Checksums:"
-  (cd $buildpath && shasum -a256 gh-ost* 2>/dev/null)
+  (cd $buildpath && shasum -a256 gh-ost && shasum -a256 gh-ost-* && shasum -a256 gh-ost_* 2>/dev/null)
 }
 
 . script/bootstrap
