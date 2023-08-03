@@ -63,9 +63,9 @@ main() {
   mkdir -p ${buildpath}
   rm -rf ${buildpath:?}/*
   build GNU/Linux linux linux amd64
-  build GNU/Linux linux linux arm64
-  build macOS osx darwin amd64
-  build macOS osx darwin arm64
+#  build GNU/Linux linux linux arm64
+#  build macOS osx darwin amd64
+#  build macOS osx darwin arm64
 
   echo "Binaries found in:"
   find $buildpath/gh-ost* -type f -maxdepth 1
