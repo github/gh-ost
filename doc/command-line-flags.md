@@ -126,7 +126,7 @@ Noteworthy is that setting `--dml-batch-size` to higher value _does not_ mean `g
 
 `gh-ost` reads event and concurrently applies them onto the _ghost_ table.
 
-The `--dml-batch-concurrency-size` flag controls the number of concurrent workers that apply binlog dml event the batched writes, every worker apply dmlBatchSize event in a transaction. Allowed values are `1 - 100`. Default value is `1`.
+The `--dml-batch-concurrency-size` flag controls the number of concurrent workers that apply binlog dml event the batched writes, every worker apply dmlBatchSize event in a transaction. Allowed values are `1 - 100`. Default value is `1`. Concurrency in applying binlog is only allowed when the unique index column in the chunk is of int type. If there is a non-int column in the unique index, the concurrency is forced to be set to 1.
 
 ### exact-rowcount
 

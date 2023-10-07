@@ -49,6 +49,8 @@ type Column struct {
 	// https://github.com/github/gh-ost/issues/909
 	BinaryOctetLength uint
 	charsetConversion *CharacterSetConversion
+	// add IsInteger for ConcurrencyApplyDMLEvent, only Number is allowed to concurrency.
+	IsInteger bool
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {

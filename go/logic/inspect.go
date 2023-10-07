@@ -196,6 +196,12 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	}
 
 	for _, column := range this.migrationContext.UniqueKey.Columns.Columns() {
+		// As long as there is a column that is not numeric, set the concurrency of applying binlog to 1.
+		if this.migrationContext.DMLBatchConcurrencySize > 1 && !column.IsInteger {
+			this.migrationContext.Log.Warning("Detected that the column %s in the unique index of the chunk data is not of integer type, forcing the binlog concurrency to be set to 1.", column.Name)
+			this.migrationContext.SetDMLBatchConcurrencySize(1)
+		}
+
 		if this.migrationContext.GhostTableVirtualColumns.GetColumn(column.Name) != nil {
 			// this is a virtual column
 			continue
@@ -597,6 +603,9 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 
 			if strings.Contains(columnType, "unsigned") {
 				column.IsUnsigned = true
+			}
+			if strings.Contains(columnType, "int") {
+				column.IsInteger = true
 			}
 			if strings.Contains(columnType, "mediumint") {
 				column.Type = sql.MediumIntColumnType
