@@ -219,19 +219,6 @@ help                                 # This message
 				return ForcePrintStatusAndHintRule, nil
 			}
 		}
-	case "dml-batch-concurrency-size":
-		{
-			if argIsQuestion {
-				fmt.Fprintf(writer, "%+v\n", atomic.LoadInt64(&this.migrationContext.DMLBatchConcurrencySize))
-				return NoPrintStatusRule, nil
-			}
-			if dmlBatchConcurrencySize, err := strconv.Atoi(arg); err != nil {
-				return NoPrintStatusRule, err
-			} else {
-				this.migrationContext.SetDMLBatchSize(int64(dmlBatchConcurrencySize))
-				return ForcePrintStatusAndHintRule, nil
-			}
-		}
 	case "max-lag-millis":
 		{
 			if argIsQuestion {
