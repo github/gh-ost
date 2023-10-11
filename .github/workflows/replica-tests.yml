@@ -1,24 +1,31 @@
 name: migration tests
-
-on: [pull_request]
+on:
+  - pull_request
 
 jobs:
   build:
-
     runs-on: ubuntu-20.04
     strategy:
       matrix:
-        version: [mysql-5.7.25,mysql-8.0.16,PerconaServer-8.0.21]
+        tests:
+          - image: mysql:5.7
+            engine: innodb
+          - image: mysql:8.0
+            engine: innodb
+          - image: percona:5.7
+            engine: innodb
+          - image: percona:8.0
+            engine: innodb
+          - image: percona:5.7
+            engine: rocksdb
+          - image: percona:8.0
+            engine: rocksdb
 
     steps:
     - uses: actions/checkout@v2
 
-    - name: Set up Go
-      uses: actions/setup-go@v1
-      with:
-        go-version: 1.17
-
-    - name: migration tests
+    - name: run localtests
       env:
-        TEST_MYSQL_VERSION: ${{ matrix.version }}
-      run:  script/cibuild-gh-ost-replica-tests
+        TEST_DOCKER_IMAGE: "${{ matrix.tests.image }}"
+        TEST_STORAGE_ENGINE: "${{ matrix.tests.engine }}"
+      run: localtests/tests.sh

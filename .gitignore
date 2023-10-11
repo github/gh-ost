@@ -1,5 +1,6 @@
 /.gopath/
 /bin/
 /libexec/
+/localtests/tests.env
 /.vendor/
 .idea/
