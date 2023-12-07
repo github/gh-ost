@@ -217,18 +217,14 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		return "", explodedArgs, err
 	}
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
-	transactionalClause := ""
-	if transactionalTable {
-		transactionalClause = "lock in share mode"
-	}
 	result = fmt.Sprintf(`
       insert /* gh-ost %s.%s */ ignore into %s.%s (%s)
       (select %s from %s.%s force index (%s)
-        where (%s and %s) %s
+        where (%s and %s)
       )
     `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
-		rangeStartComparison, rangeEndComparison, transactionalClause)
+		rangeStartComparison, rangeEndComparison)
 	return result, explodedArgs, nil
 }
 
