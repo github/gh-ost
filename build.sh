@@ -52,7 +52,8 @@ main() {
     RELEASE_VERSION=$(git describe --abbrev=0 --tags | tr -d 'v')
   fi
   if [ -z "${RELEASE_VERSION}" ] ; then
-    RELEASE_VERSION=$(cat RELEASE_VERSION)
+    echo "RELEASE_VERSION must be set"
+    exit 1
   fi
 
   if [ -z "${GIT_COMMIT}" ]; then
