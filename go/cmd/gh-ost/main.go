@@ -165,7 +165,7 @@ func main() {
 		if appVersion == "" {
 			appVersion = "unversioned"
 		}
-		fmt.Printf("gh-ost version: %s, git commit: %s", appVersion, GitCommit)
+		fmt.Printf("%s (git commit: %s)", appVersion, GitCommit)
 		return
 	}
 
