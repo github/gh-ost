@@ -471,7 +471,7 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 // readMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey)
 	if err != nil {
 		return err
 	}
@@ -496,7 +496,7 @@ func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 // readMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey)
 	if err != nil {
 		return err
 	}
