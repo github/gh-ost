@@ -17,7 +17,7 @@ gh-ost \
 --master-user="master-user-name" \
 --master-password="master-password" \
 --assume-rbr \
-[-- other paramters you need]
+[-- other parameters you need]
 ```
 
 
