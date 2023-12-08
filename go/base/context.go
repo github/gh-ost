@@ -101,6 +101,7 @@ type MigrationContext struct {
 	AliyunRDS                bool
 	GoogleCloudPlatform      bool
 	AzureMySQL               bool
+	AttemptInstantDDL        bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -231,6 +232,8 @@ type MigrationContext struct {
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
+	BinlogSyncerMaxReconnectAttempts int
+
 	Log Logger
 }
 
@@ -287,6 +290,19 @@ func NewMigrationContext() *MigrationContext {
 		PanicAbort:                          make(chan error),
 		Log:                                 NewDefaultLogger(),
 	}
+}
+
+func (this *MigrationContext) SetConnectionConfig(storageEngine string) error {
+	var transactionIsolation string
+	switch storageEngine {
+	case "rocksdb":
+		transactionIsolation = "READ-COMMITTED"
+	default:
+		transactionIsolation = "REPEATABLE-READ"
+	}
+	this.InspectorConnectionConfig.TransactionIsolation = transactionIsolation
+	this.ApplierConnectionConfig.TransactionIsolation = transactionIsolation
+	return nil
 }
 
 func getSafeTableName(baseName string, suffix string) string {
@@ -424,6 +440,10 @@ func (this *MigrationContext) IsTransactionalTable() bool {
 			return true
 		}
 	case "tokudb":
+		{
+			return true
+		}
+	case "rocksdb":
 		{
 			return true
 		}

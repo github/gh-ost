@@ -7,9 +7,6 @@ create table gh_ost_test (
   primary key(id)
 ) auto_increment=1;
 
-insert into gh_ost_test values (null, 'átesting');
-
-
 insert into gh_ost_test values (null, 'Hello world, Καλημέρα κόσμε, コンニチハ', 'átesting0', 'initial');
 
 drop event if exists gh_ost_test;

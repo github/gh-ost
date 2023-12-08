@@ -13,7 +13,6 @@ import (
 	"math"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -360,6 +359,17 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.createFlagFiles(); err != nil {
 		return err
 	}
+	// In MySQL 8.0 (and possibly earlier) some DDL statements can be applied instantly.
+	// Attempt to do this if AttemptInstantDDL is set.
+	if this.migrationContext.AttemptInstantDDL {
+		this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
+		if err := this.applier.AttemptInstantDDL(); err == nil {
+			this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+			return nil
+		} else {
+			this.migrationContext.Log.Infof("ALGORITHM=INSTANT not supported for this operation, proceeding with original algorithm: %s", err)
+		}
+	}
 
 	initialLag, _ := this.inspector.getReplicationLag()
 	this.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
@@ -628,12 +638,8 @@ func (this *Migrator) atomicCutOver() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	okToUnlockTable := make(chan bool, 4)
-	var dropCutOverSentryTableOnce sync.Once
 	defer func() {
 		okToUnlockTable <- true
-		dropCutOverSentryTableOnce.Do(func() {
-			this.applier.DropAtomicCutOverSentryTableIfExists()
-		})
 	}()
 
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
@@ -642,7 +648,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	go func() {
-		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, &dropCutOverSentryTableOnce); err != nil {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
 			this.migrationContext.Log.Errore(err)
 		}
 	}()
@@ -1036,6 +1042,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
+	this.migrationContext.Log.Infof(status)
 
 	hooksStatusIntervalSec := this.migrationContext.HooksStatusIntervalSec
 	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {
