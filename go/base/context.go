@@ -233,7 +233,7 @@ type MigrationContext struct {
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
 	AllowSetupMetadataLockInstruments bool
-	BinlogSyncerMaxReconnectAttempts int
+	BinlogSyncerMaxReconnectAttempts  int
 
 	Log Logger
 }
