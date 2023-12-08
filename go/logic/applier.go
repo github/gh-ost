@@ -9,7 +9,6 @@ import (
 	gosql "database/sql"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -473,7 +472,7 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 // readMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey)
 	if err != nil {
 		return err
 	}
@@ -498,7 +497,7 @@ func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 // readMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey)
 	if err != nil {
 		return err
 	}
@@ -936,7 +935,7 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 }
 
 // AtomicCutOverMagicLock
-func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error, dropCutOverSentryTableOnce *sync.Once) error {
+func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
 	tx, err := this.db.Begin()
 	if err != nil {
 		tableLocked <- err
@@ -947,6 +946,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		tableLocked <- fmt.Errorf("Unexpected error in AtomicCutOverMagicLock(), injected to release blocking channel reads")
 		tableUnlocked <- fmt.Errorf("Unexpected error in AtomicCutOverMagicLock(), injected to release blocking channel reads")
 		tx.Rollback()
+		this.DropAtomicCutOverSentryTableIfExists()
 	}()
 
 	var sessionId int64
@@ -1015,12 +1015,10 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		sql.EscapeName(this.migrationContext.GetOldTableName()),
 	)
 
-	dropCutOverSentryTableOnce.Do(func() {
-		if _, err := tx.Exec(query); err != nil {
-			this.migrationContext.Log.Errore(err)
-			// We DO NOT return here because we must `UNLOCK TABLES`!
-		}
-	})
+	if _, err := tx.Exec(query); err != nil {
+		this.migrationContext.Log.Errore(err)
+		// We DO NOT return here because we must `UNLOCK TABLES`!
+	}
 
 	// Tables still locked
 	this.migrationContext.Log.Infof("Releasing lock from %s.%s, %s.%s",
