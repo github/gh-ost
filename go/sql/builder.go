@@ -391,6 +391,7 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 		select /* gh-ost %s.%s */ %s
 		from
 			%s.%s
+		force index (%s)
 		order by
 			%s
 		limit 1`,
