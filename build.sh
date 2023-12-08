@@ -56,10 +56,14 @@ main() {
     exit 1
   fi
 
+  if [ -z "${GIT_COMMIT}" ]; then
+    GIT_COMMIT=$(git rev-parse HEAD)
+  fi
+
   buildpath=/tmp/gh-ost-release
   target=gh-ost
   timestamp=$(date "+%Y%m%d%H%M%S")
-  ldflags="-X main.AppVersion=${RELEASE_VERSION}"
+  ldflags="-X main.AppVersion=${RELEASE_VERSION} -X main.GitCommit=${GIT_COMMIT}"
 
   mkdir -p ${buildpath}
   rm -rf ${buildpath:?}/*

@@ -22,7 +22,7 @@ import (
 	"golang.org/x/term"
 )
 
-var AppVersion string
+var AppVersion, GitCommit string
 
 // acceptSignals registers for OS signals
 func acceptSignals(migrationContext *base.MigrationContext) {
@@ -165,7 +165,7 @@ func main() {
 		if appVersion == "" {
 			appVersion = "unversioned"
 		}
-		fmt.Println(appVersion)
+		fmt.Printf("%s (git commit: %s)", appVersion, GitCommit)
 		return
 	}
 
@@ -308,7 +308,7 @@ func main() {
 		migrationContext.Log.Errore(err)
 	}
 
-	log.Infof("starting gh-ost %+v", AppVersion)
+	log.Infof("starting gh-ost %+v (git commit: %s)", AppVersion, GitCommit)
 	acceptSignals(migrationContext)
 
 	migrator := logic.NewMigrator(migrationContext, AppVersion)
