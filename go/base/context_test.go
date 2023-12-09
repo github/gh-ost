@@ -101,7 +101,7 @@ func TestReadConfigFile(t *testing.T) {
 		}
 	}
 	{
-		f, err := os.CreateFile("", t.Name())
+		f, err := os.CreateTemp("", t.Name())
 		if err != nil {
 			t.Fatalf("Failed to create tmp file: %v", err)
 		}
