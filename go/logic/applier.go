@@ -53,7 +53,7 @@ func (this *Applier) setOptimizerSwitch() error {
 		return nil
 	}
 	optimizerString := fmt.Sprintf("SET SESSION optimizer_switch=%q", this.migrationContext.OptimizerSwitch)
-	_, err := this.db.Query(optimizerString)
+	_, err := this.db.Exec(optimizerString)
 	return err
 }
 
