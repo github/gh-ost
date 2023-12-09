@@ -1,11 +1,6 @@
 FROM golang:1.21-bullseye
 LABEL maintainer="github@github.com"
 
-#Update stretch repositories
-RUN sed -i -e 's/deb.debian.org/archive.debian.org/g' \
-           -e 's|security.debian.org|archive.debian.org/|g' \
-           -e '/bullseye-updates/d' /etc/apt/sources.list
-
 RUN apt-get update
 RUN apt-get install -y lsb-release
 RUN rm -rf /var/lib/apt/lists/*
