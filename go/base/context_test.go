@@ -6,7 +6,6 @@
 package base
 
 import (
-	"io/ioutil"
 	"os"
 	"testing"
 	"time"
@@ -68,7 +67,7 @@ func TestReadConfigFile(t *testing.T) {
 		}
 	}
 	{
-		f, err := ioutil.TempFile("", t.Name())
+		f, err := os.CreateTemp("", t.Name())
 		if err != nil {
 			t.Fatalf("Failed to create tmp file: %v", err)
 		}
@@ -82,7 +81,7 @@ func TestReadConfigFile(t *testing.T) {
 		}
 	}
 	{
-		f, err := ioutil.TempFile("", t.Name())
+		f, err := os.CreateTemp("", t.Name())
 		if err != nil {
 			t.Fatalf("Failed to create tmp file: %v", err)
 		}
@@ -102,7 +101,7 @@ func TestReadConfigFile(t *testing.T) {
 		}
 	}
 	{
-		f, err := ioutil.TempFile("", t.Name())
+		f, err := os.CreateFile("", t.Name())
 		if err != nil {
 			t.Fatalf("Failed to create tmp file: %v", err)
 		}
