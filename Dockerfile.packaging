@@ -1,4 +1,4 @@
-FROM golang:1.17-stretch
+FROM golang:1.20-bullseye
 
 # Update stretch repositories
 RUN sed -i -e 's/deb.debian.org/archive.debian.org/g' \
