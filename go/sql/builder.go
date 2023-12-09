@@ -222,11 +222,20 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		transactionalClause = "lock in share mode"
 	}
 	result = fmt.Sprintf(`
-      insert /* gh-ost %s.%s */ ignore into %s.%s (%s)
-      (select %s from %s.%s force index (%s)
-        where (%s and %s) %s
-      )
-    `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
+		insert /* gh-ost %s.%s */ ignore
+		into
+			%s.%s
+			(%s)
+		(
+			select %s
+			from
+				%s.%s
+			force index (%s)
+			where
+				(%s and %s)
+				%s
+		)`,
+		databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
 		rangeStartComparison, rangeEndComparison, transactionalClause)
 	return result, explodedArgs, nil
@@ -274,16 +283,17 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 		}
 	}
 	result = fmt.Sprintf(`
-				select  /* gh-ost %s.%s %s */
-						%s
-					from
-						%s.%s
-					where %s and %s
-					order by
-						%s
-					limit 1
-					offset %d
-    `, databaseName, tableName, hint,
+		select /* gh-ost %s.%s %s */
+			%s
+		from
+			%s.%s
+		where
+			%s and %s
+		order by
+			%s
+		limit 1
+		offset %d`,
+		databaseName, tableName, hint,
 		strings.Join(uniqueKeyColumnNames, ", "),
 		databaseName, tableName,
 		rangeStartComparison, rangeEndComparison,
@@ -329,21 +339,21 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 		}
 	}
 	result = fmt.Sprintf(`
-      select /* gh-ost %s.%s %s */ %s
-				from (
-					select
-							%s
-						from
-							%s.%s
-						where %s and %s
-						order by
-							%s
-						limit %d
-				) select_osc_chunk
+		select /* gh-ost %s.%s %s */ %s
+		from (
+			select
+				%s
+			from
+				%s.%s
+			where
+				%s and %s
 			order by
 				%s
-			limit 1
-    `, databaseName, tableName, hint, strings.Join(uniqueKeyColumnNames, ", "),
+			limit %d) select_osc_chunk
+		order by
+			%s
+		limit 1`,
+		databaseName, tableName, hint, strings.Join(uniqueKeyColumnNames, ", "),
 		strings.Join(uniqueKeyColumnNames, ", "), databaseName, tableName,
 		rangeStartComparison, rangeEndComparison,
 		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
@@ -352,24 +362,24 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 	return result, explodedArgs, nil
 }
 
-func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "asc")
+func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKey *UniqueKey) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKey, "asc")
 }
 
-func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "desc")
+func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, uniqueKey *UniqueKey) (string, error) {
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKey, "desc")
 }
 
-func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, order string) (string, error) {
-	if uniqueKeyColumns.Len() == 0 {
+func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uniqueKey *UniqueKey, order string) (string, error) {
+	if uniqueKey.Columns.Len() == 0 {
 		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
-	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
+	uniqueKeyColumnNames := duplicateNames(uniqueKey.Columns.Names())
 	uniqueKeyColumnOrder := make([]string, len(uniqueKeyColumnNames))
-	for i, column := range uniqueKeyColumns.Columns() {
+	for i, column := range uniqueKey.Columns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
 			uniqueKeyColumnOrder[i] = fmt.Sprintf("concat(%s) %s", uniqueKeyColumnNames[i], order)
@@ -378,14 +388,15 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 		}
 	}
 	query := fmt.Sprintf(`
-      select /* gh-ost %s.%s */ %s
-				from
-					%s.%s
-				order by
-					%s
-				limit 1
-    `, databaseName, tableName, strings.Join(uniqueKeyColumnNames, ", "),
-		databaseName, tableName,
+		select /* gh-ost %s.%s */ %s
+		from
+			%s.%s
+		force index (%s)
+		order by
+			%s
+		limit 1`,
+		databaseName, tableName, strings.Join(uniqueKeyColumnNames, ", "),
+		databaseName, tableName, uniqueKey.Name,
 		strings.Join(uniqueKeyColumnOrder, ", "),
 	)
 	return query, nil
@@ -410,12 +421,12 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 		return result, uniqueKeyArgs, err
 	}
 	result = fmt.Sprintf(`
-			delete /* gh-ost %s.%s */
-				from
-					%s.%s
-				where
-					%s
-		`, databaseName, tableName,
+		delete /* gh-ost %s.%s */
+		from
+			%s.%s
+		where
+			%s`,
+		databaseName, tableName,
 		databaseName, tableName,
 		equalsComparison,
 	)
@@ -448,12 +459,13 @@ func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedCol
 	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
 
 	result = fmt.Sprintf(`
-			replace /* gh-ost %s.%s */ into
-				%s.%s
-					(%s)
-				values
-					(%s)
-		`, databaseName, tableName,
+		replace /* gh-ost %s.%s */
+		into
+			%s.%s
+			(%s)
+		values
+			(%s)`,
+		databaseName, tableName,
 		databaseName, tableName,
 		strings.Join(mappedSharedColumnNames, ", "),
 		strings.Join(preparedValues, ", "),
@@ -505,13 +517,13 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 		return "", sharedArgs, uniqueKeyArgs, err
 	}
 	result = fmt.Sprintf(`
-			update /* gh-ost %s.%s */
-					%s.%s
-				set
-					%s
-				where
-					%s
-		`, databaseName, tableName,
+		update /* gh-ost %s.%s */
+			%s.%s
+		set
+			%s
+		where
+			%s`,
+		databaseName, tableName,
 		databaseName, tableName,
 		setClause,
 		equalsComparison,
