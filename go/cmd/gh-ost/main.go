@@ -161,11 +161,13 @@ func main() {
 		return
 	}
 	if *version {
-		appVersion := AppVersion
-		if appVersion == "" {
-			appVersion = "unversioned"
+		if AppVersion == "" {
+			AppVersion = "unversioned"
 		}
-		fmt.Printf("%s (git commit: %s)", appVersion, GitCommit)
+		if GitCommit == "" {
+			GitCommit = "unknown"
+		}
+		fmt.Printf("%s (git commit: %s)\n", AppVersion, GitCommit)
 		return
 	}
 
