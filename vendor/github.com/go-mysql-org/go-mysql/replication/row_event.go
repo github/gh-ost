@@ -1,17 +1,16 @@
 package replication
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/shopspring/decimal"
-	"github.com/siddontang/go-log/log"
 	"github.com/siddontang/go/hack"
 
 	. "github.com/go-mysql-org/go-mysql/mysql"
@@ -38,11 +37,11 @@ type TableMapEvent struct {
 	NullBitmap []byte
 
 	/*
-		The followings are available only after MySQL-8.0.1 or MariaDB-10.5.0
+		The following are available only after MySQL-8.0.1 or MariaDB-10.5.0
+		By default MySQL and MariaDB do not log the full row metadata.
 		see:
 			- https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_row_metadata
-			- https://mysqlhighavailability.com/more-metadata-is-written-into-binary-log/
-			- https://jira.mariadb.org/browse/MDEV-20477
+			- https://mariadb.com/kb/en/replication-and-binary-log-system-variables/#binlog_row_metadata
 	*/
 
 	// SignednessBitmap stores signedness info for numeric columns.
@@ -197,13 +196,13 @@ func (e *TableMapEvent) decodeMeta(data []byte) error {
 	for i, t := range e.ColumnType {
 		switch t {
 		case MYSQL_TYPE_STRING:
-			var x uint16 = uint16(data[pos]) << 8 //real type
-			x += uint16(data[pos+1])              //pack or field length
+			var x = uint16(data[pos]) << 8 //real type
+			x += uint16(data[pos+1])       //pack or field length
 			e.ColumnMeta[i] = x
 			pos += 2
 		case MYSQL_TYPE_NEWDECIMAL:
-			var x uint16 = uint16(data[pos]) << 8 //precision
-			x += uint16(data[pos+1])              //decimals
+			var x = uint16(data[pos]) << 8 //precision
+			x += uint16(data[pos+1])       //decimals
 			e.ColumnMeta[i] = x
 			pos += 2
 		case MYSQL_TYPE_VAR_STRING,
@@ -830,6 +829,16 @@ type RowsEvent struct {
 
 	//lenenc_int
 	ColumnCount uint64
+
+	/*
+		By default MySQL and MariaDB log the full row image.
+		see
+			- https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_row_image
+			- https://mariadb.com/kb/en/replication-and-binary-log-system-variables/#binlog_row_image
+
+		ColumnBitmap1, ColumnBitmap2 and SkippedColumns are not set on the full row image.
+	*/
+
 	//len = (ColumnCount + 7) / 8
 	ColumnBitmap1 []byte
 
@@ -847,7 +856,7 @@ type RowsEvent struct {
 	ignoreJSONDecodeErr     bool
 }
 
-func (e *RowsEvent) Decode(data []byte) (err2 error) {
+func (e *RowsEvent) DecodeHeader(data []byte) (int, error) {
 	pos := 0
 	e.TableID = FixedLengthInt(data[0:e.tableIDSize])
 	pos += e.tableIDSize
@@ -880,20 +889,23 @@ func (e *RowsEvent) Decode(data []byte) (err2 error) {
 	e.Table, ok = e.tables[e.TableID]
 	if !ok {
 		if len(e.tables) > 0 {
-			return errors.Errorf("invalid table id %d, no corresponding table map event", e.TableID)
+			return 0, errors.Errorf("invalid table id %d, no corresponding table map event", e.TableID)
 		} else {
-			return errors.Annotatef(errMissingTableMapEvent, "table id %d", e.TableID)
+			return 0, errors.Annotatef(errMissingTableMapEvent, "table id %d", e.TableID)
 		}
 	}
+	return pos, nil
+}
 
-	var err error
-
+func (e *RowsEvent) DecodeData(pos int, data []byte) (err2 error) {
+	var (
+		n   int
+		err error
+	)
 	// ... repeat rows until event-end
 	defer func() {
 		if r := recover(); r != nil {
-			errStr := fmt.Sprintf("parse rows event panic %v, data %q, parsed rows %#v, table map %#v", r, data, e, e.Table)
-			log.Errorf("%s\n%s", errStr, Pstack())
-			err2 = errors.Trace(errors.New(errStr))
+			err2 = errors.Errorf("parse rows event panic %v, data %q, parsed rows %#v, table map %#v", r, data, e, e.Table)
 		}
 	}()
 
@@ -920,6 +932,14 @@ func (e *RowsEvent) Decode(data []byte) (err2 error) {
 	}
 
 	return nil
+}
+
+func (e *RowsEvent) Decode(data []byte) error {
+	pos, err := e.DecodeHeader(data)
+	if err != nil {
+		return err
+	}
+	return e.DecodeData(pos, data)
 }
 
 func isBitSet(bitmap []byte, i int) bool {
@@ -992,7 +1012,7 @@ func (e *RowsEvent) parseFracTime(t interface{}) interface{} {
 
 // see mysql sql/log_event.cc log_event_print_value
 func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{}, n int, err error) {
-	var length int = 0
+	var length = 0
 
 	if tp == MYSQL_TYPE_STRING {
 		if meta >= 256 {
@@ -1141,7 +1161,11 @@ func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{
 		// Refer: https://github.com/shyiko/mysql-binlog-connector-java/blob/master/src/main/java/com/github/shyiko/mysql/binlog/event/deserialization/AbstractRowsEventDataDeserializer.java#L404
 		length = int(FixedLengthInt(data[0:meta]))
 		n = length + int(meta)
-		v, err = e.decodeJsonBinary(data[meta:n])
+		var d []byte
+		d, err = e.decodeJsonBinary(data[meta:n])
+		if err == nil {
+			v = hack.String(d)
+		}
 	case MYSQL_TYPE_GEOMETRY:
 		// MySQL saves Geometry as Blob in binlog
 		// Seem that the binary format is SRID (4 bytes) + WKB, outer can use
@@ -1172,19 +1196,28 @@ func decodeString(data []byte, length int) (v string, n int) {
 	return
 }
 
+// ref: https://github.com/mysql/mysql-server/blob/a9b0c712de3509d8d08d3ba385d41a4df6348775/strings/decimal.c#L137
 const digitsPerInteger int = 9
 
 var compressedBytes = []int{0, 1, 1, 2, 2, 3, 3, 4, 4, 4}
 
 func decodeDecimalDecompressValue(compIndx int, data []byte, mask uint8) (size int, value uint32) {
 	size = compressedBytes[compIndx]
-	databuff := make([]byte, size)
-	for i := 0; i < size; i++ {
-		databuff[i] = data[i] ^ mask
+	switch size {
+	case 0:
+	case 1:
+		value = uint32(data[0] ^ mask)
+	case 2:
+		value = uint32(data[1]^mask) | uint32(data[0]^mask)<<8
+	case 3:
+		value = uint32(data[2]^mask) | uint32(data[1]^mask)<<8 | uint32(data[0]^mask)<<16
+	case 4:
+		value = uint32(data[3]^mask) | uint32(data[2]^mask)<<8 | uint32(data[1]^mask)<<16 | uint32(data[0]^mask)<<24
 	}
-	value = uint32(BFixedLengthInt(databuff))
 	return
 }
+
+var zeros = [digitsPerInteger]byte{48, 48, 48, 48, 48, 48, 48, 48, 48}
 
 func decodeDecimal(data []byte, precision int, decimals int, useDecimal bool) (interface{}, int, error) {
 	//see python mysql replication and https://github.com/jeremycole/mysql_binlog
@@ -1207,7 +1240,8 @@ func decodeDecimal(data []byte, precision int, decimals int, useDecimal bool) (i
 	// The sign is encoded in the high bit of the the byte
 	// But this bit can also be used in the value
 	value := uint32(data[0])
-	var res bytes.Buffer
+	var res strings.Builder
+	res.Grow(precision + 2)
 	var mask uint32 = 0
 	if value&0x80 == 0 {
 		mask = uint32((1 << 32) - 1)
@@ -1217,35 +1251,61 @@ func decodeDecimal(data []byte, precision int, decimals int, useDecimal bool) (i
 	//clear sign
 	data[0] ^= 0x80
 
+	zeroLeading := true
+
 	pos, value := decodeDecimalDecompressValue(compIntegral, data, uint8(mask))
-	res.WriteString(fmt.Sprintf("%d", value))
+	if value != 0 {
+		zeroLeading = false
+		res.WriteString(strconv.FormatUint(uint64(value), 10))
+	}
 
 	for i := 0; i < uncompIntegral; i++ {
 		value = binary.BigEndian.Uint32(data[pos:]) ^ mask
 		pos += 4
-		res.WriteString(fmt.Sprintf("%09d", value))
+		if zeroLeading {
+			if value != 0 {
+				zeroLeading = false
+				res.WriteString(strconv.FormatUint(uint64(value), 10))
+			}
+		} else {
+			toWrite := strconv.FormatUint(uint64(value), 10)
+			res.Write(zeros[:digitsPerInteger-len(toWrite)])
+			res.WriteString(toWrite)
+		}
 	}
 
-	res.WriteString(".")
-
-	for i := 0; i < uncompFractional; i++ {
-		value = binary.BigEndian.Uint32(data[pos:]) ^ mask
-		pos += 4
-		res.WriteString(fmt.Sprintf("%09d", value))
+	if zeroLeading {
+		res.WriteString("0")
 	}
 
-	if size, value := decodeDecimalDecompressValue(compFractional, data[pos:], uint8(mask)); size > 0 {
-		res.WriteString(fmt.Sprintf("%0*d", compFractional, value))
-		pos += size
+	if pos < len(data) {
+		res.WriteString(".")
+
+		for i := 0; i < uncompFractional; i++ {
+			value = binary.BigEndian.Uint32(data[pos:]) ^ mask
+			pos += 4
+			toWrite := strconv.FormatUint(uint64(value), 10)
+			res.Write(zeros[:digitsPerInteger-len(toWrite)])
+			res.WriteString(toWrite)
+		}
+
+		if size, value := decodeDecimalDecompressValue(compFractional, data[pos:], uint8(mask)); size > 0 {
+			toWrite := strconv.FormatUint(uint64(value), 10)
+			padding := compFractional - len(toWrite)
+			if padding > 0 {
+				res.Write(zeros[:padding])
+			}
+			res.WriteString(toWrite)
+			pos += size
+		}
 	}
 
 	if useDecimal {
-		f, err := decimal.NewFromString(hack.String(res.Bytes()))
+		f, err := decimal.NewFromString(res.String())
 		return f, pos, err
 	}
 
-	f, err := strconv.ParseFloat(hack.String(res.Bytes()), 64)
-	return f, pos, err
+	return res.String(), pos, nil
 }
 
 func decodeBit(data []byte, nbits int, length int) (value int64, err error) {
@@ -1378,7 +1438,7 @@ func decodeDatetime2(data []byte, dec uint16) (interface{}, int, error) {
 
 	second := int(hms % (1 << 6))
 	minute := int((hms >> 6) % (1 << 6))
-	hour := int((hms >> 12))
+	hour := int(hms >> 12)
 
 	// DATETIME encoding for nonfractional part after MySQL 5.6.4
 	// https://dev.mysql.com/doc/internals/en/date-and-time-data-type-representation.html
@@ -1410,11 +1470,10 @@ func decodeTime2(data []byte, dec uint16) (string, int, error) {
 	intPart := int64(0)
 	frac := int64(0)
 	switch dec {
-	case 1:
-	case 2:
+	case 1, 2:
 		intPart = int64(BFixedLengthInt(data[0:3])) - TIMEF_INT_OFS
 		frac = int64(data[3])
-		if intPart < 0 && frac > 0 {
+		if intPart < 0 && frac != 0 {
 			/*
 			   Negative values are stored with reverse fractional part order,
 			   for binary sort compatibility.
@@ -1436,11 +1495,10 @@ func decodeTime2(data []byte, dec uint16) (string, int, error) {
 			frac -= 0x100 /* -(0x100 - frac) */
 		}
 		tmp = intPart<<24 + frac*10000
-	case 3:
-	case 4:
+	case 3, 4:
 		intPart = int64(BFixedLengthInt(data[0:3])) - TIMEF_INT_OFS
 		frac = int64(binary.BigEndian.Uint16(data[3:5]))
-		if intPart < 0 && frac > 0 {
+		if intPart < 0 && frac != 0 {
 			/*
 			   Fix reverse fractional part order: "0x10000 - frac".
 			   See comments for FSP=1 and FSP=2 above.
@@ -1450,18 +1508,22 @@ func decodeTime2(data []byte, dec uint16) (string, int, error) {
 		}
 		tmp = intPart<<24 + frac*100
 
-	case 5:
-	case 6:
+	case 5, 6:
 		tmp = int64(BFixedLengthInt(data[0:6])) - TIMEF_OFS
+		return timeFormat(tmp, dec, n)
 	default:
 		intPart = int64(BFixedLengthInt(data[0:3])) - TIMEF_INT_OFS
 		tmp = intPart << 24
 	}
 
-	if intPart == 0 {
+	if intPart == 0 && frac == 0 {
 		return "00:00:00", n, nil
 	}
 
+	return timeFormat(tmp, dec, n)
+}
+
+func timeFormat(tmp int64, dec uint16, n int) (string, int, error) {
 	hms := int64(0)
 	sign := ""
 	if tmp < 0 {
@@ -1477,7 +1539,8 @@ func decodeTime2(data []byte, dec uint16) (string, int, error) {
 	secPart := tmp % (1 << 24)
 
 	if secPart != 0 {
-		return fmt.Sprintf("%s%02d:%02d:%02d.%06d", sign, hour, minute, second, secPart), n, nil
+		s := fmt.Sprintf("%s%02d:%02d:%02d.%06d", sign, hour, minute, second, secPart)
+		return s[0 : len(s)-(6-int(dec))], n, nil
 	}
 
 	return fmt.Sprintf("%s%02d:%02d:%02d", sign, hour, minute, second), n, nil

@@ -75,10 +75,10 @@ var (
 )
 
 // NewPool initializes new connection pool and uses params: addr, user, password, dbName and options.
-//     minAlive specifies the minimum number of open connections that the pool will try to maintain.
-//     maxAlive specifies the maximum number of open connections
-//       (for internal reasons, may be greater by 1 inside newConnectionProducer).
-//     maxIdle specifies the maximum number of idle connections (see DefaultIdleTimeout).
+// minAlive specifies the minimum number of open connections that the pool will try to maintain.
+// maxAlive specifies the maximum number of open connections (for internal reasons,
+// may be greater by 1 inside newConnectionProducer).
+// maxIdle specifies the maximum number of idle connections (see DefaultIdleTimeout).
 func NewPool(
 	logFunc LogFunc,
 	minAlive int,
@@ -466,11 +466,12 @@ func (pool *Pool) startNewConnections(count int) {
 
 func (pool *Pool) ping(conn *Conn) error {
 	deadline := time.Now().Add(100 * time.Millisecond)
-	_ = conn.SetWriteDeadline(deadline)
-	_ = conn.SetReadDeadline(deadline)
+	_ = conn.SetDeadline(deadline)
 	err := conn.Ping()
 	if err != nil {
 		pool.logFunc(`Pool: ping query fail: %s`, err.Error())
+	} else {
+		_ = conn.SetDeadline(time.Time{})
 	}
 	return err
 }

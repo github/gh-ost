@@ -141,11 +141,6 @@ func (e *GenericEvent) Decode(data []byte) error {
 // 	Seed2 uint64
 // }
 
-// type IntVarEvent struct {
-// 	Type  uint8
-// 	Value uint64
-// }
-
 // type UserVarEvent struct {
 // 	NameLength uint32
 // 	Name       []byte

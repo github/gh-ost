@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 
@@ -13,8 +14,9 @@ type Stmt struct {
 	conn *Conn
 	id   uint32
 
-	params  int
-	columns int
+	params   int
+	columns  int
+	warnings int
 }
 
 func (s *Stmt) ParamNum() int {
@@ -25,12 +27,24 @@ func (s *Stmt) ColumnNum() int {
 	return s.columns
 }
 
+func (s *Stmt) WarningsNum() int {
+	return s.warnings
+}
+
 func (s *Stmt) Execute(args ...interface{}) (*Result, error) {
 	if err := s.write(args...); err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	return s.conn.readResult(true)
+}
+
+func (s *Stmt) ExecuteSelectStreaming(result *Result, perRowCb SelectPerRowCallback, perResCb SelectPerResultCallback, args ...interface{}) error {
+	if err := s.write(args...); err != nil {
+		return errors.Trace(err)
+	}
+
+	return s.conn.readResultStreaming(true, result, perRowCb, perResCb)
 }
 
 func (s *Stmt) Close() error {
@@ -60,7 +74,7 @@ func (s *Stmt) write(args ...interface{}) error {
 
 	for i := range args {
 		if args[i] == nil {
-			nullBitmap[i/8] |= (1 << (uint(i) % 8))
+			nullBitmap[i/8] |= 1 << (uint(i) % 8)
 			paramTypes[i<<1] = MYSQL_TYPE_NULL
 			continue
 		}
@@ -120,6 +134,9 @@ func (s *Stmt) write(args ...interface{}) error {
 			paramTypes[i<<1] = MYSQL_TYPE_STRING
 			paramValues[i] = append(PutLengthEncodedInt(uint64(len(v))), v...)
 		case []byte:
+			paramTypes[i<<1] = MYSQL_TYPE_STRING
+			paramValues[i] = append(PutLengthEncodedInt(uint64(len(v))), v...)
+		case json.RawMessage:
 			paramTypes[i<<1] = MYSQL_TYPE_STRING
 			paramValues[i] = append(PutLengthEncodedInt(uint64(len(v))), v...)
 		default:
@@ -196,7 +213,8 @@ func (c *Conn) Prepare(query string) (*Stmt, error) {
 	pos += 2
 
 	//warnings
-	//warnings = binary.LittleEndian.Uint16(data[pos:])
+	s.warnings = int(binary.LittleEndian.Uint16(data[pos:]))
+	// pos += 2
 
 	if s.params > 0 {
 		if err := s.conn.readUntilEOF(); err != nil {

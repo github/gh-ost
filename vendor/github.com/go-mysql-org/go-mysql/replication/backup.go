@@ -92,6 +92,4 @@ func (b *BinlogSyncer) StartBackup(backupDir string, p Position, timeout time.Du
 			return errors.Trace(io.ErrShortWrite)
 		}
 	}
-
-	return nil
 }
