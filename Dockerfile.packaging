@@ -1,13 +1,8 @@
-FROM golang:1.17-stretch
-
-# Update stretch repositories
-RUN sed -i -e 's/deb.debian.org/archive.debian.org/g' \
-           -e 's|security.debian.org|archive.debian.org/|g' \
-           -e '/stretch-updates/d' /etc/apt/sources.list
+FROM golang:1.21-bullseye
 
 RUN apt-get update
 RUN apt-get install -y ruby ruby-dev rubygems build-essential
-RUN gem install --no-ri --no-rdoc fpm
+RUN gem install fpm
 ENV GOPATH=/tmp/go
 
 RUN apt-get install -y curl
