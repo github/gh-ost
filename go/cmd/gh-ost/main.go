@@ -160,13 +160,14 @@ func main() {
 		flag.PrintDefaults()
 		return
 	}
+
+	if AppVersion == "" {
+		AppVersion = "unversioned"
+	}
+	if GitCommit == "" {
+		GitCommit = "unknown"
+	}
 	if *version {
-		if AppVersion == "" {
-			AppVersion = "unversioned"
-		}
-		if GitCommit == "" {
-			GitCommit = "unknown"
-		}
 		fmt.Printf("%s (git commit: %s)\n", AppVersion, GitCommit)
 		return
 	}
