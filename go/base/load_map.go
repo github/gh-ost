@@ -23,7 +23,8 @@ func NewLoadMap() LoadMap {
 
 // NewLoadMap parses a `--*-load` flag (e.g. `--max-load`), which is in multiple
 // key-value format, such as:
-//   'Threads_running=100,Threads_connected=500'
+//
+//	'Threads_running=100,Threads_connected=500'
 func ParseLoadMap(loadList string) (LoadMap, error) {
 	result := NewLoadMap()
 	if loadList == "" {
