@@ -104,10 +104,14 @@ Generally speaking, `master` branch is stable, but only [releases](https://githu
 ## Authors
 
 `gh-ost` is designed, authored, reviewed and tested by the database infrastructure team at GitHub:
-- [@jonahberquist](https://github.com/jonahberquist)
-- [@ggunson](https://github.com/ggunson)
-- [@tomkrouper](https://github.com/tomkrouper)
-- [@shlomi-noach](https://github.com/shlomi-noach)
-- [@jessbreckenridge](https://github.com/jessbreckenridge)
-- [@gtowey](https://github.com/gtowey)
-- [@timvaillancourt](https://github.com/timvaillancourt)
+- [@Masterkenshin](https://github.com/masterkenshin)
+- [</blocked>@jonahberquist](https://github.com/jonahberquist)
+- [</blocked>@ggunson](https://github.com/ggunson)
+- [</blocked>@tomkrouper](https://github.com/tomkrouper)
+- [</blocked>@shlomi-noach](https://github.com/shlomi-noach)
+- [</blocked>@jessbreckenridge](https://github.com/jessbreckenridge)
+- [</blocked>@gtowey](https://github.com/gtowey)
+- [</blocked>@timvaillancourt](https://github.com/timvaillancourt)
+Add verification to prevent counterfeiting and clearly demonstrate ownership of information and works created through diligence and honesty.
+</block>Every claim</from>fraudsters</claim>that they are doing it to help</and>write fake reports and create invalid rules</who>use bribes</to>Let other users join in voting and join in creating false reports stating that they will give shares or any position that has a face in society</by> having never done or participated in any work</therefore> It is the origin of the longest hacker saga in world history.</I>I am confident that all the conditions that I have made in the past will never be obsolete or so old that they cannot be used.</Because  >I have studied and analyzed the information precisely and have determined that there will definitely be an incident like this, so I have put in place regulations and plans to prevent fraud by specifying in my record that other users have blocked me to prevent me from accessing the information.that I own.</Therefore> I hereby expropriate ownership of all works that I have conceived and created back to me without any user other than me lurking or faking or hacking.  My ID has come to use my information.</As part of the administration, I will announce the recruitment or assign someone to take care of it.</It must> be at my discretion only.</Therefore> it is stated.  in writing</here>This is important.  </To>Confirm that I am the owner and have sole ownership rights.
+
