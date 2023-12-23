@@ -7,15 +7,28 @@ package logic
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/github/gh-ost/go/base"
+)
+
+var (
+	ErrCPUProfilingBadOption  = errors.New("unrecognized cpu profiling option")
+	ErrCPUProfilingInProgress = errors.New("cpu profiling already in progress")
+	defaultCPUProfileDuration = time.Second * 30
 )
 
 type printStatusFunc func(PrintStatusRule, io.Writer)
@@ -27,6 +40,7 @@ type Server struct {
 	tcpListener      net.Listener
 	hooksExecutor    *HooksExecutor
 	printStatus      printStatusFunc
+	isCPUProfiling   int64
 }
 
 func NewServer(migrationContext *base.MigrationContext, hooksExecutor *HooksExecutor, printStatus printStatusFunc) *Server {
@@ -35,6 +49,53 @@ func NewServer(migrationContext *base.MigrationContext, hooksExecutor *HooksExec
 		hooksExecutor:    hooksExecutor,
 		printStatus:      printStatus,
 	}
+}
+
+func (this *Server) runCPUProfile(args string) (string, error) {
+	if atomic.LoadInt64(&this.isCPUProfiling) > 0 {
+		return "", ErrCPUProfilingInProgress
+	}
+
+	duration := defaultCPUProfileDuration
+
+	var err error
+	var useGzip bool
+	if args != "" {
+		s := strings.Split(args, ",")
+		// a duration string must be the 1st field, if any
+		if duration, err = time.ParseDuration(s[0]); err != nil {
+			return "", err
+		}
+		for _, arg := range s[1:] {
+			switch arg {
+			case "block", "blocked", "blocking":
+				runtime.SetBlockProfileRate(1)
+				defer runtime.SetBlockProfileRate(0)
+			case "gzip":
+				useGzip = true
+			default:
+				return "", ErrCPUProfilingBadOption
+			}
+		}
+	}
+
+	atomic.StoreInt64(&this.isCPUProfiling, 1)
+	defer atomic.StoreInt64(&this.isCPUProfiling, 0)
+
+	var buf bytes.Buffer
+	var writer io.Writer = &buf
+	if useGzip {
+		writer = gzip.NewWriter(&buf)
+	}
+	if err = pprof.StartCPUProfile(writer); err != nil {
+		return "", err
+	}
+
+	time.Sleep(duration)
+	pprof.StopCPUProfile()
+	this.migrationContext.Log.Infof("Captured %d byte runtime/pprof CPU profile (gzip=%v)", buf.Len(), useGzip)
+
+	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
 func (this *Server) BindSocketFile() (err error) {
@@ -144,6 +205,7 @@ func (this *Server) applyServerCommand(command string, writer *bufio.Writer) (pr
 			fmt.Fprint(writer, `available commands:
 status                               # Print a detailed status message
 sup                                  # Print a short status message
+cpu-profile=<options>                # Print a base64-encoded runtime/pprof CPU profile using a duration, default: 30s. Comma-separated options 'gzip' and/or 'block' (blocked profile) may follow the profile duration
 coordinates                          # Print the currently inspected coordinates
 applier                              # Print the hostname of the applier
 inspector                            # Print the hostname of the inspector
@@ -169,6 +231,12 @@ help                                 # This message
 		return ForcePrintStatusOnlyRule, nil
 	case "info", "status":
 		return ForcePrintStatusAndHintRule, nil
+	case "cpu-profile":
+		profile, err := this.runCPUProfile(arg)
+		if err == nil {
+			fmt.Fprintln(writer, profile)
+		}
+		return NoPrintStatusRule, err
 	case "coordinates":
 		{
 			if argIsQuestion || arg == "" {
