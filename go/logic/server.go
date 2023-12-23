@@ -59,7 +59,7 @@ func (this *Server) runCPUProfile(args string) (string, error) {
 	duration := defaultCPUProfileDuration
 
 	var err error
-	var useGzip bool
+	var blockProfile, useGzip bool
 	if args != "" {
 		s := strings.Split(args, ",")
 		// a duration string must be the 1st field, if any
@@ -69,8 +69,7 @@ func (this *Server) runCPUProfile(args string) (string, error) {
 		for _, arg := range s[1:] {
 			switch arg {
 			case "block", "blocked", "blocking":
-				runtime.SetBlockProfileRate(1)
-				defer runtime.SetBlockProfileRate(0)
+				blockProfile = true
 			case "gzip":
 				useGzip = true
 			default:
@@ -84,6 +83,10 @@ func (this *Server) runCPUProfile(args string) (string, error) {
 
 	var buf bytes.Buffer
 	var writer io.Writer = &buf
+	if blockProfile {
+		runtime.SetBlockProfileRate(1)
+		defer runtime.SetBlockProfileRate(0)
+	}
 	if useGzip {
 		writer = gzip.NewWriter(&buf)
 	}
