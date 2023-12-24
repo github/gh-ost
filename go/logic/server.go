@@ -87,7 +87,7 @@ func (this *Server) runCPUProfile(args string) (string, error) {
 		defer runtime.SetBlockProfileRate(0)
 	}
 	if useGzip {
-		writer = gzip.NewWriter(&buf)
+		writer = gzip.NewWriter(writer)
 	}
 	if err = pprof.StartCPUProfile(writer); err != nil {
 		return "", err
