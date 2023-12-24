@@ -2,7 +2,6 @@ package logic
 
 import (
 	"encoding/base64"
-	"fmt"
 	"testing"
 	"time"
 
@@ -43,8 +42,6 @@ func TestServerRunCPUProfile(t *testing.T) {
 		profile, err := s.runCPUProfile("")
 		tests.S(t).ExpectNil(err)
 		tests.S(t).ExpectNotEquals(profile, "")
-
-		fmt.Println(profile)
 
 		data, err := base64.StdEncoding.DecodeString(profile)
 		tests.S(t).ExpectNil(err)

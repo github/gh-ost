@@ -52,10 +52,6 @@ func NewServer(migrationContext *base.MigrationContext, hooksExecutor *HooksExec
 }
 
 func (this *Server) runCPUProfile(args string) (string, error) {
-	if atomic.LoadInt64(&this.isCPUProfiling) > 0 {
-		return "", ErrCPUProfilingInProgress
-	}
-
 	duration := defaultCPUProfileDuration
 
 	var err error
@@ -78,6 +74,9 @@ func (this *Server) runCPUProfile(args string) (string, error) {
 		}
 	}
 
+	if atomic.LoadInt64(&this.isCPUProfiling) > 0 {
+		return "", ErrCPUProfilingInProgress
+	}
 	atomic.StoreInt64(&this.isCPUProfiling, 1)
 	defer atomic.StoreInt64(&this.isCPUProfiling, 0)
 
