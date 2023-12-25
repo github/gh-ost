@@ -51,7 +51,7 @@ func NewServer(migrationContext *base.MigrationContext, hooksExecutor *HooksExec
 	}
 }
 
-func (this *Server) runCPUProfile(args string) (string, error) {
+func (this *Server) runCPUProfile(args string) (io.Reader, error) {
 	duration := defaultCPUProfileDuration
 
 	var err error
@@ -60,7 +60,7 @@ func (this *Server) runCPUProfile(args string) (string, error) {
 		s := strings.Split(args, ",")
 		// a duration string must be the 1st field, if any
 		if duration, err = time.ParseDuration(s[0]); err != nil {
-			return "", err
+			return nil, err
 		}
 		for _, arg := range s[1:] {
 			switch arg {
@@ -69,13 +69,13 @@ func (this *Server) runCPUProfile(args string) (string, error) {
 			case "gzip":
 				useGzip = true
 			default:
-				return "", ErrCPUProfilingBadOption
+				return nil, ErrCPUProfilingBadOption
 			}
 		}
 	}
 
 	if atomic.LoadInt64(&this.isCPUProfiling) > 0 {
-		return "", ErrCPUProfilingInProgress
+		return nil, ErrCPUProfilingInProgress
 	}
 	atomic.StoreInt64(&this.isCPUProfiling, 1)
 	defer atomic.StoreInt64(&this.isCPUProfiling, 0)
@@ -90,14 +90,13 @@ func (this *Server) runCPUProfile(args string) (string, error) {
 		writer = gzip.NewWriter(writer)
 	}
 	if err = pprof.StartCPUProfile(writer); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	time.Sleep(duration)
 	pprof.StopCPUProfile()
 	this.migrationContext.Log.Infof("Captured %d byte runtime/pprof CPU profile (gzip=%v)", buf.Len(), useGzip)
-
-	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+	return &buf, nil
 }
 
 func (this *Server) BindSocketFile() (err error) {
@@ -234,9 +233,9 @@ help                                 # This message
 	case "info", "status":
 		return ForcePrintStatusAndHintRule, nil
 	case "cpu-profile":
-		profile, err := this.runCPUProfile(arg)
+		cpuProfile, err := this.runCPUProfile(arg)
 		if err == nil {
-			fmt.Fprintln(writer, profile)
+			fmt.Fprint(base64.NewEncoder(base64.StdEncoding, writer), cpuProfile)
 		}
 		return NoPrintStatusRule, err
 	case "coordinates":
