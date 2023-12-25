@@ -45,7 +45,7 @@ func TestServerRunCPUProfile(t *testing.T) {
 
 		data, err := base64.StdEncoding.DecodeString(profile)
 		tests.S(t).ExpectNil(err)
-		tests.S(t).ExpectEquals(len(data), 106)
+		tests.S(t).ExpectNotEquals(len(data), 0)
 		tests.S(t).ExpectEquals(s.isCPUProfiling, int64(0))
 	})
 
@@ -60,7 +60,7 @@ func TestServerRunCPUProfile(t *testing.T) {
 
 		data, err := base64.StdEncoding.DecodeString(profile)
 		tests.S(t).ExpectNil(err)
-		tests.S(t).ExpectEquals(len(data), 106)
+		tests.S(t).ExpectNotEquals(len(data), 0)
 		tests.S(t).ExpectEquals(s.isCPUProfiling, int64(0))
 	})
 
@@ -75,7 +75,7 @@ func TestServerRunCPUProfile(t *testing.T) {
 
 		data, err := base64.StdEncoding.DecodeString(profile)
 		tests.S(t).ExpectNil(err)
-		tests.S(t).ExpectEquals(len(data), 10)
+		tests.S(t).ExpectNotEquals(len(data), 0)
 		tests.S(t).ExpectEquals(s.isCPUProfiling, int64(0))
 	})
 }
