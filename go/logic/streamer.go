@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2023 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -107,7 +107,8 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, EventsStreamerUri); err != nil {
 		return err
 	}
-	if _, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name); err != nil {
+	if err := base.ValidateConnection(this.migrationContext.InspectorServerInfo, this.connectionConfig,
+		this.migrationContext, this.name); err != nil {
 		return err
 	}
 	if err := this.readCurrentBinlogCoordinates(); err != nil {

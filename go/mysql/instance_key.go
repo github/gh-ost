@@ -1,6 +1,6 @@
 /*
    Copyright 2015 Shlomi Noach, courtesy Booking.com
-   Copyright 2022 GitHub Inc.
+   Copyright 2023 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const DefaultInstancePort = 3306
+const DefaultInstancePort int64 = 3306
 
 var (
 	ipv4HostPortRegexp = regexp.MustCompile("^([^:]+):([0-9]+)$")
@@ -28,7 +28,7 @@ var (
 // InstanceKey is an instance indicator, identified by hostname and port
 type InstanceKey struct {
 	Hostname string
-	Port     int
+	Port     int64
 }
 
 const detachHint = "//"
@@ -52,7 +52,7 @@ func NewRawInstanceKey(hostPort string) (*InstanceKey, error) {
 	instanceKey := &InstanceKey{Hostname: hostname, Port: DefaultInstancePort}
 	if port != "" {
 		var err error
-		if instanceKey.Port, err = strconv.Atoi(port); err != nil {
+		if instanceKey.Port, err = strconv.ParseInt(port, 10, 64); err != nil {
 			return instanceKey, fmt.Errorf("Invalid port: %s", port)
 		}
 	}

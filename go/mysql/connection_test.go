@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2023 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -24,9 +24,9 @@ func init() {
 func TestNewConnectionConfig(t *testing.T) {
 	c := NewConnectionConfig()
 	test.S(t).ExpectEquals(c.Key.Hostname, "")
-	test.S(t).ExpectEquals(c.Key.Port, 0)
+	test.S(t).ExpectEquals(c.Key.Port, int64(0))
 	test.S(t).ExpectEquals(c.ImpliedKey.Hostname, "")
-	test.S(t).ExpectEquals(c.ImpliedKey.Port, 0)
+	test.S(t).ExpectEquals(c.ImpliedKey.Port, int64(0))
 	test.S(t).ExpectEquals(c.User, "")
 	test.S(t).ExpectEquals(c.Password, "")
 	test.S(t).ExpectEquals(c.TransactionIsolation, "")
@@ -45,9 +45,9 @@ func TestDuplicateCredentials(t *testing.T) {
 
 	dup := c.DuplicateCredentials(InstanceKey{Hostname: "otherhost", Port: 3310})
 	test.S(t).ExpectEquals(dup.Key.Hostname, "otherhost")
-	test.S(t).ExpectEquals(dup.Key.Port, 3310)
+	test.S(t).ExpectEquals(dup.Key.Port, int64(3310))
 	test.S(t).ExpectEquals(dup.ImpliedKey.Hostname, "otherhost")
-	test.S(t).ExpectEquals(dup.ImpliedKey.Port, 3310)
+	test.S(t).ExpectEquals(dup.ImpliedKey.Port, int64(3310))
 	test.S(t).ExpectEquals(dup.User, "gromit")
 	test.S(t).ExpectEquals(dup.Password, "penguin")
 	test.S(t).ExpectEquals(dup.tlsConfig, c.tlsConfig)
@@ -63,9 +63,9 @@ func TestDuplicate(t *testing.T) {
 
 	dup := c.Duplicate()
 	test.S(t).ExpectEquals(dup.Key.Hostname, "myhost")
-	test.S(t).ExpectEquals(dup.Key.Port, 3306)
+	test.S(t).ExpectEquals(dup.Key.Port, int64(3306))
 	test.S(t).ExpectEquals(dup.ImpliedKey.Hostname, "myhost")
-	test.S(t).ExpectEquals(dup.ImpliedKey.Port, 3306)
+	test.S(t).ExpectEquals(dup.ImpliedKey.Port, int64(3306))
 	test.S(t).ExpectEquals(dup.User, "gromit")
 	test.S(t).ExpectEquals(dup.Password, "penguin")
 	test.S(t).ExpectEquals(dup.TransactionIsolation, transactionIsolation)
