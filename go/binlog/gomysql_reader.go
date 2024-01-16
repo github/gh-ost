@@ -141,6 +141,7 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			this.currentCoordinatesMutex.Lock()
 			defer this.currentCoordinatesMutex.Unlock()
 			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
+			this.currentCoordinates.Timestamp = int64(ev.Header.Timestamp)
 		}()
 
 		switch binlogEvent := ev.Event.(type) {
