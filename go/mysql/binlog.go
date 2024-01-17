@@ -14,9 +14,9 @@ import (
 
 // BinlogCoordinates described binary log coordinates in the form of log file & log position.
 type BinlogCoordinates struct {
-	Timestamp int64
 	LogFile   string
 	LogPos    int64
+	EventSize int64
 }
 
 // ParseInstanceKey will parse an InstanceKey from a string representation such as 127.0.0.1:3306
@@ -61,7 +61,7 @@ func (this *BinlogCoordinates) SmallerThan(other *BinlogCoordinates) bool {
 	if this.LogFile < other.LogFile {
 		return true
 	}
-	if this.LogFile == other.LogFile && this.LogPos < other.LogPos && this.Timestamp < other.Timestamp {
+	if this.LogFile == other.LogFile && this.LogPos < other.LogPos {
 		return true
 	}
 	return false
@@ -73,5 +73,5 @@ func (this *BinlogCoordinates) SmallerThanOrEquals(other *BinlogCoordinates) boo
 	if this.SmallerThan(other) {
 		return true
 	}
-	return this.LogFile == other.LogFile && this.LogPos == other.LogPos && this.Timestamp == other.Timestamp
+	return this.LogFile == other.LogFile && this.LogPos == other.LogPos
 }

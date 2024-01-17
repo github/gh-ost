@@ -78,6 +78,24 @@ func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinate
 
 // StreamEvents
 func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
+	if err := func() error {
+		if this.LastAppliedRowsEventHint.IsEmpty() {
+			return nil
+		}
+
+		if this.currentCoordinates.LogFile != this.LastAppliedRowsEventHint.LogFile {
+			return nil
+		}
+
+		if this.LastAppliedRowsEventHint.LogPos+this.currentCoordinates.EventSize >= 1<<32 {
+			// Unexpected rows event, the previous binlog log_pos + current binlog event_size is overflow 4 bytes
+			return fmt.Errorf("Unexpected rows event at %+v, event_size and log_pos check failed", this.currentCoordinates)
+		}
+		return nil
+	}(); err != nil {
+		return err
+	}
+
 	if this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
 		this.migrationContext.Log.Debugf("Skipping handled query at %+v", this.currentCoordinates)
 		return nil
@@ -141,7 +159,7 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			this.currentCoordinatesMutex.Lock()
 			defer this.currentCoordinatesMutex.Unlock()
 			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
-			this.currentCoordinates.Timestamp = int64(ev.Header.Timestamp)
+			this.currentCoordinates.EventSize = int64(ev.Header.EventSize)
 		}()
 
 		switch binlogEvent := ev.Event.(type) {
