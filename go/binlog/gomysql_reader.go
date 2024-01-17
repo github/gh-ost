@@ -89,7 +89,7 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 
 		if this.LastAppliedRowsEventHint.LogPos+this.currentCoordinates.EventSize >= 1<<32 {
 			// Unexpected rows event, the previous binlog log_pos + current binlog event_size is overflow 4 bytes
-			return fmt.Errorf("Unexpected rows event at %+v, event_size and log_pos check failed", this.currentCoordinates)
+			return fmt.Errorf("Unexpected rows event at %+v, the binlog end_log_pos is overflow 4 bytes", this.currentCoordinates)
 		}
 		return nil
 	}(); err != nil {
