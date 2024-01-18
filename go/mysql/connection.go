@@ -124,6 +124,11 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 	if this.tlsConfig != nil {
 		tlsOption = TLS_CONFIG_KEY
 	}
+
+	if this.Charset == "" {
+		this.Charset = "utf8mb4,utf8,latin1"
+	}
+
 	connectionParams := []string{
 		"autocommit=true",
 		"interpolateParams=true",
