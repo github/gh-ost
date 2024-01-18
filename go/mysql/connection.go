@@ -10,8 +10,8 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -78,7 +78,7 @@ func (this *ConnectionConfig) UseTLS(caCertificatePath, clientCertificate, clien
 		}
 	} else {
 		rootCertPool = x509.NewCertPool()
-		pem, err := ioutil.ReadFile(caCertificatePath)
+		pem, err := os.ReadFile(caCertificatePath)
 		if err != nil {
 			return err
 		}
