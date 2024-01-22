@@ -193,7 +193,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			} else {
 				successiveFailures = 0
 			}
-			if successiveFailures > this.migrationContext.MaxRetries() {
+			if successiveFailures >= this.migrationContext.MaxRetries() {
 				return fmt.Errorf("%d successive failures in streamer reconnect at coordinates %+v", successiveFailures, this.GetReconnectBinlogCoordinates())
 			}
 
