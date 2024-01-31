@@ -1042,7 +1042,14 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
-	this.migrationContext.Log.Infof(status)
+
+	// This "hack" is required here because the underlying logging library
+	// github.com/outbrain/golib/log provides two functions Info and Infof; but the arguments of
+	// both these functions are eventually redirected to the same function, which internally calls
+	// fmt.Sprintf. So, the argument of every function called on the DefaultLogger object
+	// migrationContext.Log will eventually pass through fmt.Sprintf, and thus the '%' character
+	// needs to be escaped.
+	this.migrationContext.Log.Info(strings.Replace(status, "%", "%%", 1))
 
 	hooksStatusIntervalSec := this.migrationContext.HooksStatusIntervalSec
 	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {
