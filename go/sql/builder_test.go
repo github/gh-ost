@@ -491,7 +491,8 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 	args := []interface{}{3, "testname", "first", 17, 23}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		uniqueKeyColumns := NewColumnList([]string{"position"})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, args)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -502,10 +503,12 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17}))
 	}
 	{
 		sharedColumns := NewColumnList([]string{"position", "name", "age", "id"})
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, args)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -516,15 +519,18 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{17, "testname", 23, 3}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17, "testname"}))
 	}
 	{
 		sharedColumns := NewColumnList([]string{"position", "name", "surprise", "id"})
-		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		uniqueKeyColumns := NewColumnList([]string{"id"})
+		_, _, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, args)
 		test.S(t).ExpectNotNil(err)
 	}
 	{
 		sharedColumns := NewColumnList([]string{})
-		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		uniqueKeyColumns := NewColumnList([]string{})
+		_, _, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, args)
 		test.S(t).ExpectNotNil(err)
 	}
 }
@@ -538,7 +544,8 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		// testing signed
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		uniqueKeyColumns := NewColumnList([]string{"position"})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, args)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -549,12 +556,14 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", int8(-1), 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{int8(-1)}))
 	}
 	{
 		// testing unsigned
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		sharedColumns.SetUnsigned("position")
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		uniqueKeyColumns := NewColumnList([]string{"position"})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, args)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -565,12 +574,14 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", uint8(255), 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{uint8(255)}))
 	}
 	{
 		// testing unsigned
 		args := []interface{}{3, "testname", "first", int32(-1), 23}
 		sharedColumns.SetUnsigned("position")
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		uniqueKeyColumns := NewColumnList([]string{"position"})
+		query, sharedArgs, uniqueKeyArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, args)
 		test.S(t).ExpectNil(err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -581,6 +592,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", uint32(4294967295), 23}))
+		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{uint32(4294967295)}))
 	}
 }
 

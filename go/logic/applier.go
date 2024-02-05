@@ -27,18 +27,22 @@ const (
 )
 
 type dmlBuildResult struct {
-	query     string
-	args      []interface{}
-	rowsDelta int64
-	err       error
+	dml          binlog.EventDML
+	query        string
+	args         []interface{}
+	uniqueValues []interface{}
+	rowsDelta    int64
+	err          error
 }
 
-func newDmlBuildResult(query string, args []interface{}, rowsDelta int64, err error) *dmlBuildResult {
+func newDmlBuildResult(dml binlog.EventDML, query string, args []interface{}, uniqueValues []interface{}, rowsDelta int64, err error) *dmlBuildResult {
 	return &dmlBuildResult{
-		query:     query,
-		args:      args,
-		rowsDelta: rowsDelta,
-		err:       err,
+		dml:          dml,
+		query:        query,
+		args:         args,
+		uniqueValues: uniqueValues,
+		rowsDelta:    rowsDelta,
+		err:          err,
 	}
 }
 
@@ -1110,12 +1114,22 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 	case binlog.DeleteDML:
 		{
 			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
-			return append(results, newDmlBuildResult(query, uniqueKeyArgs, -1, err))
+			if ignore, err := this.isIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs); err != nil {
+				return append(results, newDmlBuildResultError(fmt.Errorf("Check isIgnoreOverMaxChunkRangeEvent error: %+v", err)))
+			} else if ignore {
+				return results
+			}
+			return append(results, newDmlBuildResult(binlog.DeleteDML, query, uniqueKeyArgs, uniqueKeyArgs, -1, err))
 		}
 	case binlog.InsertDML:
 		{
-			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
-			return append(results, newDmlBuildResult(query, sharedArgs, 1, err))
+			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues())
+			if ignore, err := this.isIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs); err != nil {
+				return append(results, newDmlBuildResultError(fmt.Errorf("Check isIgnoreOverMaxChunkRangeEvent error: %+v", err)))
+			} else if ignore {
+				return results
+			}
+			return append(results, newDmlBuildResult(binlog.InsertDML, query, sharedArgs, uniqueKeyArgs, 1, err))
 		}
 	case binlog.UpdateDML:
 		{
@@ -1127,20 +1141,114 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (result
 				return results
 			}
 			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			if ignore, err := this.isIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs); err != nil {
+				return append(results, newDmlBuildResultError(fmt.Errorf("Check isIgnoreOverMaxChunkRangeEvent error: %+v", err)))
+			} else if ignore {
+				return results
+			}
 			args := sqlutils.Args()
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
-			return append(results, newDmlBuildResult(query, args, 0, err))
+			return append(results, newDmlBuildResult(binlog.UpdateDML, query, args, uniqueKeyArgs, 0, err))
 		}
 	}
 	return append(results, newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)))
 }
 
+func (this *Applier) generateDeleteQuery(uniqueKeyValuesList [][]string) string {
+	var stmt string
+	if len(uniqueKeyValuesList) == 0 {
+		return stmt
+	}
+
+	var whereClause string
+	for _, uniqueKeyValues := range uniqueKeyValuesList {
+		if uniqueKeyValues == nil || len(uniqueKeyValues) == 0 {
+			continue
+		}
+		_clause := ""
+		for _, val := range uniqueKeyValues {
+			if _clause == "" {
+				_clause = fmt.Sprintf("%v", val)
+				continue
+			}
+			_clause += fmt.Sprintf(", %v", val)
+		}
+
+		if whereClause == "" {
+			whereClause = fmt.Sprintf("(%s)", _clause)
+			continue
+		}
+		whereClause = fmt.Sprintf("%s, (%s)", whereClause, _clause)
+	}
+
+	stmt = fmt.Sprintf(`
+		DELETE /* gh-ost %s.%s */
+		FROM %s.%s 
+		WHERE (%s) IN (%s)`,
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		this.migrationContext.UniqueKey.Columns.EscapeString(),
+		whereClause,
+	)
+	return stmt
+}
+
+func (this *Applier) generateReplaceQuery(uniqueKeyValuesList [][]string) string {
+	var stmt string
+	if len(uniqueKeyValuesList) == 0 {
+		return stmt
+	}
+
+	var whereClause string
+	for _, uniqueKeyValues := range uniqueKeyValuesList {
+		if uniqueKeyValues == nil || len(uniqueKeyValues) == 0 {
+			continue
+		}
+		_clause := ""
+		for _, val := range uniqueKeyValues {
+			if _clause == "" {
+				_clause = fmt.Sprintf("%v", val)
+				continue
+			}
+			_clause += fmt.Sprintf(", %v", val)
+		}
+
+		if whereClause == "" {
+			whereClause = fmt.Sprintf(`(%s)`, _clause)
+			continue
+		}
+		whereClause = fmt.Sprintf(`%s, (%s)`, whereClause, _clause)
+	}
+
+	stmt = fmt.Sprintf(`
+		REPLACE /* gh-ost %s.%s */
+		INTO %s.%s (%s)
+		SELECT %s 
+		FROM %s.%s 
+		FORCE INDEX (%s) 
+		WHERE (%s) IN (%s)`,
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetGhostTableName()), this.migrationContext.SharedColumns.EscapeString(),
+		this.migrationContext.SharedColumns.EscapeString(),
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.UniqueKey.Name),
+		this.migrationContext.UniqueKey.Columns.EscapeString(),
+		whereClause,
+	)
+
+	return stmt
+}
+
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
 func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
 	var totalDelta int64
+	var dmlEventSize int64
+	var ignoredEventSize int64
 
-	err := func() error {
+	var err error
+
+	dbTxFunc := func(applyFunc func(*gosql.Tx) error) error {
 		tx, err := this.db.Begin()
 		if err != nil {
 			return err
@@ -1157,38 +1265,139 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return rollback(err)
 		}
-		for _, dmlEvent := range dmlEvents {
-			for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
-				if buildResult.err != nil {
-					return rollback(buildResult.err)
-				}
-				result, err := tx.Exec(buildResult.query, buildResult.args...)
-				if err != nil {
-					err = fmt.Errorf("%w; query=%s; args=%+v", err, buildResult.query, buildResult.args)
-					return rollback(err)
-				}
 
-				rowsAffected, err := result.RowsAffected()
-				if err != nil {
-					log.Warningf("error getting rows affected from DML event query: %s. i'm going to assume that the DML affected a single row, but this may result in inaccurate statistics", err)
-					rowsAffected = 1
-				}
-				// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
-				// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
-				totalDelta += buildResult.rowsDelta * rowsAffected
-			}
+		if err := applyFunc(tx); err != nil {
+			return rollback(err)
 		}
+
 		if err := tx.Commit(); err != nil {
 			return err
 		}
 		return nil
-	}()
+	}
+
+	resultFunc := func(result gosql.Result, delta int64) {
+		if result == nil {
+			return
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			log.Warningf("error getting rows affected from DML event query: %s. i'm going to assume that the DML affected a single row, but this may result in inaccurate statistics", err)
+			rowsAffected = 1
+		}
+		totalDelta += delta * rowsAffected
+	}
+
+	applyMapFunc := func(tx *gosql.Tx) error {
+		dmlMap := make(map[string]*dmlBuildResult)
+		const ValSep = "#gho#"
+		for _, dmlEvent := range dmlEvents {
+			buildResults := this.buildDMLEventQuery(dmlEvent)
+			if len(buildResults) == 0 {
+				ignoredEventSize++
+				continue
+			}
+			dmlEventSize++
+			for _, buildResult := range buildResults {
+				if buildResult.err != nil {
+					return buildResult.err
+				}
+
+				values, err := this.migrationContext.UniqueKey.FormatValues(buildResult.uniqueValues)
+				if err != nil {
+					return err
+				}
+				dmlMap[strings.Join(values, ValSep)] = buildResult
+			}
+		}
+		delArgs := make([][]string, 0)
+		uptArgs := make([][]string, 0)
+		insArgs := make([][]string, 0)
+		for key, buildResult := range dmlMap {
+			if buildResult == nil {
+				continue
+			}
+			values := strings.Split(key, ValSep)
+			switch buildResult.dml {
+			case binlog.DeleteDML:
+				delArgs = append(delArgs, values)
+			case binlog.InsertDML:
+				insArgs = append(insArgs, values)
+			case binlog.UpdateDML:
+				uptArgs = append(uptArgs, values)
+			default:
+				return fmt.Errorf("dost not support dml event %s", buildResult.dml)
+			}
+		}
+
+		if len(delArgs) > 0 {
+			query := this.generateDeleteQuery(delArgs)
+			result, err := tx.Exec(query)
+			if err != nil {
+				err = fmt.Errorf("%w; query=%s", err, query)
+				return err
+			}
+			resultFunc(result, -1)
+		}
+
+		if len(insArgs) > 0 {
+			query := this.generateReplaceQuery(insArgs)
+			result, err := tx.Exec(query)
+			if err != nil {
+				err = fmt.Errorf("%w; query=%s", err, query)
+				return err
+			}
+			resultFunc(result, 1)
+		}
+
+		if len(uptArgs) > 0 {
+			query := this.generateReplaceQuery(uptArgs)
+			_, err := tx.Exec(query)
+			if err != nil {
+				err = fmt.Errorf("%w; query=%s", err, query)
+				return err
+			}
+		}
+		return nil
+	}
+
+	applyAllFunc := func(tx *gosql.Tx) error {
+		for _, dmlEvent := range dmlEvents {
+			buildResults := this.buildDMLEventQuery(dmlEvent)
+			if len(buildResults) == 0 {
+				ignoredEventSize++
+				continue
+			}
+			dmlEventSize++
+			for _, buildResult := range buildResults {
+				if buildResult.err != nil {
+					return buildResult.err
+				}
+				result, err := tx.Exec(buildResult.query, buildResult.args...)
+				if err != nil {
+					err = fmt.Errorf("%w; query=%s; args=%+v", err, buildResult.query, buildResult.args)
+					return err
+				}
+
+				resultFunc(result, buildResult.rowsDelta)
+			}
+		}
+		return nil
+	}
+
+	if this.migrationContext.IsMergeDMLEvents && this.migrationContext.UniqueKey.IsMemoryComparable {
+		err = dbTxFunc(applyMapFunc)
+	} else {
+		err = dbTxFunc(applyAllFunc)
+	}
 
 	if err != nil {
 		return this.migrationContext.Log.Errore(err)
 	}
 	// no error
-	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, int64(len(dmlEvents)))
+	atomic.AddInt64(&this.migrationContext.TotalDMLEventsApplied, dmlEventSize)
+	atomic.AddInt64(&this.migrationContext.TotalDMLEventsIgnored, ignoredEventSize)
 	if this.migrationContext.CountTableRows {
 		atomic.AddInt64(&this.migrationContext.RowsDeltaEstimate, totalDelta)
 	}
@@ -1201,4 +1410,66 @@ func (this *Applier) Teardown() {
 	this.db.Close()
 	this.singletonDB.Close()
 	atomic.StoreInt64(&this.finishedMigrating, 1)
+}
+
+// isIgnoreOverMaxChunkRangeEvent returns true if this event should be ignored
+// min       rangeMax        max
+// the value > rangeMax and value < max, ignore = true
+// otherwise ignore = false
+func (this *Applier) isIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs []interface{}) (bool, error) {
+	if !this.migrationContext.IgnoreOverIterationRangeMaxBinlog {
+		return false, nil
+	}
+
+	// 比较是否大于等于最大边界值，如果是就不能忽略，需要应用对应的binlog
+	ignore, err := func() (bool, error) {
+		for order, uniqueKeyCol := range this.migrationContext.UniqueKey.Columns.Columns() {
+			if uniqueKeyCol.CompareValueFunc == nil {
+				return false, nil
+			}
+
+			than, err := uniqueKeyCol.CompareValueFunc(uniqueKeyArgs[order], this.migrationContext.MigrationRangeMaxValues.StringColumn(order))
+			if err != nil {
+				return false, err
+			}
+			if than < 0 {
+				return true, nil
+			} else if than > 0 {
+				return false, nil
+			}
+		}
+
+		// 等于边界值的时候，不能忽略
+		return false, nil
+	}()
+	if err != nil {
+		return false, err
+	}
+
+	if !ignore {
+		return false, nil
+	}
+
+	// 比较是否超过IterationRangeMax的边界值，如果大于可以忽略，小于就不能忽略
+	ignore, err = func() (bool, error) {
+		for order, uniqueKeyCol := range this.migrationContext.UniqueKey.Columns.Columns() {
+			than, err := uniqueKeyCol.CompareValueFunc(uniqueKeyArgs[order], this.migrationContext.MigrationIterationRangeMaxValues.StringColumn(order))
+			if err != nil {
+				return false, err
+			}
+			if than > 0 {
+				return true, nil
+			} else if than < 0 {
+				return false, nil
+			}
+		}
+
+		// 等于边界值的时候，不能忽略
+		return false, nil
+	}()
+	if err != nil {
+		return false, err
+	}
+
+	return ignore, nil
 }

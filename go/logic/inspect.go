@@ -10,6 +10,7 @@ import (
 	gosql "database/sql"
 	"errors"
 	"fmt"
+	"math/big"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -137,6 +138,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 	for i, sharedUniqueKey := range sharedUniqueKeys {
 		this.applyColumnTypes(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &sharedUniqueKey.Columns)
 		uniqueKeyIsValid := true
+		isMemoryComparable := true
 		for _, column := range sharedUniqueKey.Columns.Columns() {
 			switch column.Type {
 			case sql.FloatColumnType:
@@ -152,9 +154,15 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 					uniqueKeyIsValid = false
 				}
 			}
+			if isMemoryComparable && column.FormatValueFunc != nil {
+				isMemoryComparable = true
+			} else {
+				isMemoryComparable = false
+			}
 		}
 		if uniqueKeyIsValid {
 			this.migrationContext.UniqueKey = sharedUniqueKeys[i]
+			this.migrationContext.UniqueKey.IsMemoryComparable = isMemoryComparable
 			break
 		}
 	}
@@ -598,6 +606,23 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			if strings.Contains(columnType, "unsigned") {
 				column.IsUnsigned = true
 			}
+			if strings.Contains(columnType, "int") {
+				column.CompareValueFunc = func(a interface{}, b interface{}) (int, error) {
+					_a := new(big.Int)
+					if _a, _ = _a.SetString(fmt.Sprintf("%+v", a), 10); a == nil {
+						return 0, fmt.Errorf("CompareValueFunc err, %+v convert int is nil", a)
+					}
+					_b := new(big.Int)
+					if _b, _ = _b.SetString(fmt.Sprintf("%+v", b), 10); b == nil {
+						return 0, fmt.Errorf("CompareValueFunc err, %+v convert int is nil", b)
+					}
+					return _a.Cmp(_b), nil
+				}
+
+				column.FormatValueFunc = func(a interface{}) (string, error) {
+					return fmt.Sprintf("%+v", a), nil
+				}
+			}
 			if strings.Contains(columnType, "mediumint") {
 				column.Type = sql.MediumIntColumnType
 			}
@@ -612,6 +637,9 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			}
 			if strings.Contains(columnType, "float") {
 				column.Type = sql.FloatColumnType
+				column.FormatValueFunc = func(a interface{}) (string, error) {
+					return fmt.Sprintf("%+v", a), nil
+				}
 			}
 			if strings.HasPrefix(columnType, "enum") {
 				column.Type = sql.EnumColumnType
