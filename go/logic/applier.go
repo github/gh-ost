@@ -1421,7 +1421,7 @@ func (this *Applier) isIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs []interface{})
 		return false, nil
 	}
 
-	// 比较是否大于等于最大边界值，如果是就不能忽略，需要应用对应的binlog
+	// Compare whether it is greater than or equal to the maximum boundary value. If it is, it cannot be ignored and the corresponding binlog needs to be applied.
 	ignore, err := func() (bool, error) {
 		for order, uniqueKeyCol := range this.migrationContext.UniqueKey.Columns.Columns() {
 			if uniqueKeyCol.CompareValueFunc == nil {
@@ -1439,7 +1439,7 @@ func (this *Applier) isIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs []interface{})
 			}
 		}
 
-		// 等于边界值的时候，不能忽略
+		// When it is equal to the boundary value, it cannot be ignored.
 		return false, nil
 	}()
 	if err != nil {
@@ -1450,7 +1450,7 @@ func (this *Applier) isIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs []interface{})
 		return false, nil
 	}
 
-	// 比较是否超过IterationRangeMax的边界值，如果大于可以忽略，小于就不能忽略
+	// Compare whether it exceeds the boundary value of IterationRangeMax. If it is greater, it can be ignored, if it is less, it cannot be ignored.
 	ignore, err = func() (bool, error) {
 		for order, uniqueKeyCol := range this.migrationContext.UniqueKey.Columns.Columns() {
 			than, err := uniqueKeyCol.CompareValueFunc(uniqueKeyArgs[order], this.migrationContext.MigrationIterationRangeMaxValues.StringColumn(order))
@@ -1464,7 +1464,7 @@ func (this *Applier) isIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs []interface{})
 			}
 		}
 
-		// 等于边界值的时候，不能忽略
+		//When it is equal to the boundary value, it cannot be ignored.
 		return false, nil
 	}()
 	if err != nil {

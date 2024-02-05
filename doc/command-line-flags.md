@@ -129,6 +129,10 @@ Noteworthy is that setting `--dml-batch-size` to higher value _does not_ mean `g
 When binlog unique key value is over `MigrationIterationRangeMaxValues`, and less than `MigrationRangeMaxValues`, the binlog will be ignored. Because the data will be synced by copy chunk.
 When binlog unique key value is over `MigrationRangeMaxValues` or less than `MigrationIterationRangeMaxValues`, the binlog will be applied.
 
+### is-merge-dml-event
+When is-merge-dml-event is `true`, and the chunk unique key is int or float type. the sync binlog event while be merged into map, and the key is unique key value.
+Then traverse the map, merge all delete operations into one `delete sql`, merge all insert and update operations into `replace sql`, and then execute.
+
 ### exact-rowcount
 
 A `gh-ost` execution need to copy whatever rows you have in your existing table onto the ghost table. This can and often will be, a large number. Exactly what that number is?
