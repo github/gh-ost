@@ -6,6 +6,7 @@
 package mysql
 
 import (
+	"math"
 	"testing"
 
 	"github.com/openark/golib/log"
@@ -51,4 +52,47 @@ func TestBinlogCoordinatesAsKey(t *testing.T) {
 	m[c4] = true
 
 	test.S(t).ExpectEquals(len(m), 3)
+}
+
+func TestIsEndposOverflowBeyond4Bytes(t *testing.T) {
+	{
+		var preCoordinates *BinlogCoordinates
+		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 10321, EventSize: 1100}
+		test.S(t).ExpectFalse(curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
+	}
+	{
+		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 1100, EventSize: 1100}
+		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1100)), EventSize: 1100}
+		test.S(t).ExpectFalse(curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
+	}
+	{
+		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00016", LogPos: 1100, EventSize: 1100}
+		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1100)), EventSize: 1100}
+		test.S(t).ExpectFalse(curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
+	}
+	{
+		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32 - 1001, EventSize: 1000}
+		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
+		test.S(t).ExpectFalse(curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
+	}
+	{
+		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32 - 1000, EventSize: 1000}
+		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
+		test.S(t).ExpectFalse(curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
+	}
+	{
+		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32 - 999, EventSize: 1000}
+		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
+		test.S(t).ExpectTrue(curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
+	}
+	{
+		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(math.MaxUint32 - 500)), EventSize: 1000}
+		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
+		test.S(t).ExpectTrue(curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
+	}
+	{
+		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32, EventSize: 1000}
+		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
+		test.S(t).ExpectTrue(curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
+	}
 }

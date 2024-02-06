@@ -75,3 +75,23 @@ func (this *BinlogCoordinates) SmallerThanOrEquals(other *BinlogCoordinates) boo
 	}
 	return this.LogFile == other.LogFile && this.LogPos == other.LogPos
 }
+
+// IsLogPosOverflowBeyond4Bytes returns true if the coordinate endpos is overflow beyond 4 bytes.
+func (this *BinlogCoordinates) IsLogPosOverflowBeyond4Bytes(preCoordinate *BinlogCoordinates) bool {
+	if preCoordinate == nil {
+		return false
+	}
+	if preCoordinate.IsEmpty() {
+		return false
+	}
+
+	if this.LogFile != preCoordinate.LogFile {
+		return false
+	}
+
+	if preCoordinate.LogPos+this.EventSize >= 1<<32 {
+		// Unexpected rows event, the previous binlog log_pos + current binlog event_size is overflow 4 bytes
+		return true
+	}
+	return false
+}
