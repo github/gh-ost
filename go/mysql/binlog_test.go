@@ -54,7 +54,7 @@ func TestBinlogCoordinatesAsKey(t *testing.T) {
 	test.S(t).ExpectEquals(len(m), 3)
 }
 
-func TestIsEndposOverflowBeyond4Bytes(t *testing.T) {
+func TestIsLogPosOverflowBeyond4Bytes(t *testing.T) {
 	{
 		var preCoordinates *BinlogCoordinates
 		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 10321, EventSize: 1100}
