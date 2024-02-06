@@ -1261,9 +1261,6 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		}
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 		var applyEventFunc tableWriteFunc = func() error {
-			if this.migrationContext.UniqueKey.IsMemoryComparable {
-				return this.applier.ApplyDMLEventQueries(dmlEvents)
-			}
 			return this.applier.ApplyDMLEventQueries(dmlEvents)
 		}
 		if err := this.retryOperation(applyEventFunc); err != nil {
