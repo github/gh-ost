@@ -114,8 +114,9 @@ func TestMigratorOnChangelogEvent(t *testing.T) {
 func TestMigratorValidateStatement(t *testing.T) {
 	t.Run("add-column", func(t *testing.T) {
 		migrationContext := base.NewMigrationContext()
+		migrationContext.AlterStatement = `ALTER TABLE test ADD test_new VARCHAR(64) NOT NULL`
 		migrator := NewMigrator(migrationContext, "1.2.3")
-		tests.S(t).ExpectNil(migrator.parser.ParseAlterStatement(`ALTER TABLE test ADD test_new VARCHAR(64) NOT NULL`))
+		tests.S(t).ExpectNil(migrator.parser.ParseStatement())
 
 		tests.S(t).ExpectNil(migrator.validateAlterStatement())
 		tests.S(t).ExpectEquals(len(migrator.migrationContext.DroppedColumnsMap), 0)
@@ -123,8 +124,9 @@ func TestMigratorValidateStatement(t *testing.T) {
 
 	t.Run("drop-column", func(t *testing.T) {
 		migrationContext := base.NewMigrationContext()
+		migrationContext.AlterStatement = `ALTER TABLE test DROP abc`
 		migrator := NewMigrator(migrationContext, "1.2.3")
-		tests.S(t).ExpectNil(migrator.parser.ParseAlterStatement(`ALTER TABLE test DROP abc`))
+		tests.S(t).ExpectNil(migrator.parser.ParseStatement())
 
 		tests.S(t).ExpectNil(migrator.validateAlterStatement())
 		tests.S(t).ExpectEquals(len(migrator.migrationContext.DroppedColumnsMap), 1)
@@ -134,8 +136,9 @@ func TestMigratorValidateStatement(t *testing.T) {
 
 	t.Run("rename-column", func(t *testing.T) {
 		migrationContext := base.NewMigrationContext()
+		migrationContext.AlterStatement = `ALTER TABLE test CHANGE test123 test1234 bigint unsigned`
 		migrator := NewMigrator(migrationContext, "1.2.3")
-		tests.S(t).ExpectNil(migrator.parser.ParseAlterStatement(`ALTER TABLE test CHANGE test123 test1234 bigint unsigned`))
+		tests.S(t).ExpectNil(migrator.parser.ParseStatement())
 
 		err := migrator.validateAlterStatement()
 		tests.S(t).ExpectNotNil(err)
@@ -145,9 +148,10 @@ func TestMigratorValidateStatement(t *testing.T) {
 
 	t.Run("rename-column-approved", func(t *testing.T) {
 		migrationContext := base.NewMigrationContext()
+		migrationContext.AlterStatement = `ALTER TABLE test CHANGE test123 test1234 bigint unsigned`
 		migrator := NewMigrator(migrationContext, "1.2.3")
 		migrator.migrationContext.ApproveRenamedColumns = true
-		tests.S(t).ExpectNil(migrator.parser.ParseAlterStatement(`ALTER TABLE test CHANGE test123 test1234 bigint unsigned`))
+		tests.S(t).ExpectNil(migrator.parser.ParseStatement())
 
 		tests.S(t).ExpectNil(migrator.validateAlterStatement())
 		tests.S(t).ExpectEquals(len(migrator.migrationContext.DroppedColumnsMap), 0)
@@ -155,8 +159,9 @@ func TestMigratorValidateStatement(t *testing.T) {
 
 	t.Run("rename-table", func(t *testing.T) {
 		migrationContext := base.NewMigrationContext()
+		migrationContext.AlterStatement = `ALTER TABLE test RENAME TO test_new`
 		migrator := NewMigrator(migrationContext, "1.2.3")
-		tests.S(t).ExpectNil(migrator.parser.ParseAlterStatement(`ALTER TABLE test RENAME TO test_new`))
+		tests.S(t).ExpectNil(migrator.parser.ParseStatement())
 
 		err := migrator.validateAlterStatement()
 		tests.S(t).ExpectNotNil(err)

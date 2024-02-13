@@ -16,6 +16,7 @@ var (
 	renameColumnRegexp                   = regexp.MustCompile(`(?i)\bchange\s+(column\s+|)([\S]+)\s+([\S]+)\s+`)
 	dropColumnRegexp                     = regexp.MustCompile(`(?i)\bdrop\s+(column\s+|)([\S]+)$`)
 	renameTableRegexp                    = regexp.MustCompile(`(?i)\brename\s+(to|as)\s+`)
+	foreignKeyTableRegexp                = regexp.MustCompile(`(?i)\bforeign\s+key\s+`)
 	autoIncrementRegexp                  = regexp.MustCompile(`(?i)\bauto_increment[\s]*=[\s]*([0-9]+)`)
 	alterTableExplicitSchemaTableRegexps = []*regexp.Regexp{
 		// ALTER TABLE `scm`.`tbl` something
@@ -36,6 +37,25 @@ var (
 	enumValuesRegexp = regexp.MustCompile("^enum[(](.*)[)]$")
 )
 
+var (
+	createTableExplicitSchemaTableRegexps = []*regexp.Regexp{
+		// CREATE TABLE `scm`.`tbl` something
+		regexp.MustCompile(`(?i)\bcreate\s+table\s+` + "`" + `([^` + "`" + `]+)` + "`" + `[.]` + "`" + `([^` + "`" + `]+)` + "`" + `\s+(.*$)`),
+		// CREATE TABLE `scm`.tbl something
+		regexp.MustCompile(`(?i)\bcreate\s+table\s+` + "`" + `([^` + "`" + `]+)` + "`" + `[.]([\S]+)\s+(.*$)`),
+		// CREATE TABLE scm.`tbl` something
+		regexp.MustCompile(`(?i)\bcreate\s+table\s+([\S]+)[.]` + "`" + `([^` + "`" + `]+)` + "`" + `\s+(.*$)`),
+		// CREATE TABLE scm.tbl something
+		regexp.MustCompile(`(?i)\bcreate\s+table\s+([\S]+)[.]([\S]+)\s+(.*$)`),
+	}
+	createTableExplicitTableRegexps = []*regexp.Regexp{
+		// CREATE TABLE `tbl` something
+		regexp.MustCompile(`(?i)\bcreate\s+table\s+` + "`" + `([^` + "`" + `]+)` + "`" + `\s+(.*$)`),
+		// CREATE TABLE tbl something
+		regexp.MustCompile(`(?i)\bcreate\s+table\s+([\S]+)\s+(.*$)`),
+	}
+)
+
 type AlterTableParser struct {
 	columnRenameMap        map[string]string
 	droppedColumns         map[string]bool
@@ -49,20 +69,21 @@ type AlterTableParser struct {
 	explicitTable  string
 }
 
-func NewAlterTableParser() *AlterTableParser {
+func NewAlterTableParser(statement string) Parser {
 	return &AlterTableParser{
-		columnRenameMap: make(map[string]string),
-		droppedColumns:  make(map[string]bool),
+		alterStatementOptions: statement,
+		columnRenameMap:       make(map[string]string),
+		droppedColumns:        make(map[string]bool),
 	}
 }
 
-func NewParserFromAlterStatement(alterStatement string) *AlterTableParser {
-	parser := NewAlterTableParser()
-	parser.ParseAlterStatement(alterStatement)
+func NewParserFromAlterStatement(alterStatement string) Parser {
+	parser := NewAlterTableParser(alterStatement)
+	parser.ParseStatement()
 	return parser
 }
 
-func (this *AlterTableParser) tokenizeAlterStatement(alterStatement string) (tokens []string) {
+func tokenizeStatement(alterStatement string) (tokens []string) {
 	terminatingQuote := rune(0)
 	f := func(c rune) bool {
 		switch {
@@ -89,7 +110,7 @@ func (this *AlterTableParser) tokenizeAlterStatement(alterStatement string) (tok
 	return tokens
 }
 
-func (this *AlterTableParser) sanitizeQuotesFromAlterStatement(alterStatement string) (strippedStatement string) {
+func sanitizeQuotesFromToken(alterStatement string) (strippedStatement string) {
 	strippedStatement = alterStatement
 	strippedStatement = sanitizeQuotesRegexp.ReplaceAllString(strippedStatement, "''")
 	return strippedStatement
@@ -133,8 +154,7 @@ func (this *AlterTableParser) parseAlterToken(alterToken string) {
 	}
 }
 
-func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err error) {
-	this.alterStatementOptions = alterStatement
+func (this *AlterTableParser) ParseStatement() (err error) {
 	for _, alterTableRegexp := range alterTableExplicitSchemaTableRegexps {
 		if submatch := alterTableRegexp.FindStringSubmatch(this.alterStatementOptions); len(submatch) > 0 {
 			this.explicitSchema = submatch[1]
@@ -150,12 +170,16 @@ func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err er
 			break
 		}
 	}
-	for _, alterToken := range this.tokenizeAlterStatement(this.alterStatementOptions) {
-		alterToken = this.sanitizeQuotesFromAlterStatement(alterToken)
+	for _, alterToken := range tokenizeStatement(this.alterStatementOptions) {
+		alterToken = sanitizeQuotesFromToken(alterToken)
 		this.parseAlterToken(alterToken)
 		this.alterTokens = append(this.alterTokens, alterToken)
 	}
 	return nil
+}
+
+func (this *AlterTableParser) Type() ParserType {
+	return ParserTypeAlterTable
 }
 
 func (this *AlterTableParser) GetNonTrivialRenames() map[string]string {
@@ -200,8 +224,12 @@ func (this *AlterTableParser) HasExplicitTable() bool {
 	return this.GetExplicitTable() != ""
 }
 
-func (this *AlterTableParser) GetAlterStatementOptions() string {
+func (this *AlterTableParser) GetOptions() string {
 	return this.alterStatementOptions
+}
+
+func (this *AlterTableParser) HasForeignKeys() bool {
+	return false
 }
 
 func ParseEnumValues(enumColumnType string) string {

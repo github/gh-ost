@@ -183,3 +183,26 @@ func TestApplierInstantDDL(t *testing.T) {
 		test.S(t).ExpectEquals(stmt, "ALTER /* gh-ost */ TABLE `test`.`mytable` ADD INDEX (foo), ALGORITHM=INSTANT")
 	})
 }
+
+func TestApplierCreateGhostTable(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		migrationContext := base.NewMigrationContext()
+		migrationContext.DatabaseName = "test"
+		migrationContext.OriginalTableName = "mytable"
+		applier := NewApplier(migrationContext)
+
+		stmt := applier.generateCreateGhostTableQuery()
+		test.S(t).ExpectEquals(stmt, "create /* gh-ost */ table `test`.`_mytable_gho` like `test`.`mytable`")
+	})
+
+	t.Run("withCustomCreateTable", func(t *testing.T) {
+		migrationContext := base.NewMigrationContext()
+		migrationContext.DatabaseName = "test"
+		migrationContext.OriginalTableName = "mytable"
+		migrationContext.CreateTableStatementBody = "(id VARCHAR(24), PRIMARY KEY(id))"
+		applier := NewApplier(migrationContext)
+
+		stmt := applier.generateCreateGhostTableQuery()
+		test.S(t).ExpectEquals(stmt, "create /* gh-ost */ table `test`.`_mytable_gho` (id VARCHAR(24), PRIMARY KEY(id))")
+	})
+}

@@ -1,0 +1,2 @@
+--alter=""
+--create-table="(id int auto_increment, a int not null, b int not null, primary key(id), KEY new_index (a))"

@@ -23,7 +23,7 @@ const (
 )
 
 // EscapeName will escape a db/table/column/... name by wrapping with backticks.
-// It is not fool proof. I'm just trying to do the right thing here, not solving
+// It is not full proof. I'm just trying to do the right thing here, not solving
 // SQL injection issues, which should be irrelevant for this tool.
 func EscapeName(name string) string {
 	if unquoted, err := strconv.Unquote(name); err == nil {
