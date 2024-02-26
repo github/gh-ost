@@ -77,6 +77,9 @@ func (this *BinlogCoordinates) SmallerThanOrEquals(other *BinlogCoordinates) boo
 }
 
 // IsLogPosOverflowBeyond4Bytes returns true if the coordinate endpos is overflow beyond 4 bytes.
+// The binlog event end_log_pos field type is defined as uint32, 4 bytes. 
+// https://github.com/go-mysql-org/go-mysql/blob/master/replication/event.go
+// Issue: https://github.com/github/gh-ost/issues/1366
 func (this *BinlogCoordinates) IsLogPosOverflowBeyond4Bytes(preCoordinate *BinlogCoordinates) bool {
 	if preCoordinate == nil {
 		return false
