@@ -1386,7 +1386,8 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		return nil
 	}
 
-	if this.migrationContext.IsMergeDMLEvents && this.migrationContext.UniqueKey.IsMemoryComparable {
+	// IsMergeDMLEvents is enabled and unique key is memory comparable and unique key has only one column
+	if this.migrationContext.IsMergeDMLEvents && this.migrationContext.UniqueKey.IsMemoryComparable && this.migrationContext.UniqueKey.Len() == 1 {
 		err = dbTxFunc(applyMapFunc)
 	} else {
 		err = dbTxFunc(applyAllFunc)
