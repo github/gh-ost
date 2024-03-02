@@ -23,7 +23,8 @@ import (
 )
 
 var (
-	ErrMigratorUnsupportedRenameAlter = errors.New("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
+	ErrMigratorUnsupportedRenameAlter       = errors.New("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside of gh-ost.")
+	ErrMigratorUnsupportedRenameCreateTable = errors.New("CREATE TABLE statement seems to RENAME the table. This is not supported, and you should first run your RENAME outside of gh-ost.")
 )
 
 type ChangelogState string
@@ -69,7 +70,7 @@ const (
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
 	appVersion       string
-	parser           *sql.AlterTableParser
+	parser           sql.Parser
 	inspector        *Inspector
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
@@ -94,21 +95,27 @@ type Migrator struct {
 	finishedMigrating int64
 }
 
+func getParser(context *base.MigrationContext) sql.Parser {
+	if context.CreateTableStatement != "" {
+		return sql.NewCreateTableParser(context.CreateTableStatement)
+	}
+	return sql.NewAlterTableParser(context.AlterStatement)
+}
+
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 	migrator := &Migrator{
 		appVersion:                 appVersion,
 		hooksExecutor:              NewHooksExecutor(context),
 		migrationContext:           context,
-		parser:                     sql.NewAlterTableParser(),
+		parser:                     getParser(context),
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
 		allEventsUpToLockProcessed: make(chan string),
-
-		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
-		handledChangelogStates: make(map[string]bool),
-		finishedMigrating:      0,
+		copyRowsQueue:              make(chan tableWriteFunc),
+		applyEventsQueue:           make(chan *applyEventStruct, base.MaxEventsBatchSize),
+		handledChangelogStates:     make(map[string]bool),
+		finishedMigrating:          0,
 	}
 	return migrator
 }
@@ -258,7 +265,14 @@ func (this *Migrator) listenOnPanicAbort() {
 	this.migrationContext.Log.Fatale(err)
 }
 
-// validateAlterStatement validates the `alter` statement meets criteria.
+func (this *Migrator) validateStatement() error {
+	if this.parser.Type() == sql.ParserTypeAlterTable {
+		return this.validateAlterStatement()
+	}
+	return this.validateCreateTableStatement()
+}
+
+// validateAlterStatement validates that the `alter` statement meets criteria.
 // At this time this means:
 // - column renames are approved
 // - no table rename allowed
@@ -274,6 +288,23 @@ func (this *Migrator) validateAlterStatement() (err error) {
 		this.migrationContext.Log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", this.parser.GetNonTrivialRenames())
 	}
 	this.migrationContext.DroppedColumnsMap = this.parser.DroppedColumnsMap()
+	return nil
+}
+
+// validateCreateTableStatement validates that the `create table` statement meets criteria.
+// At this time this means:
+// - no table rename allowed
+// - no foreign keys
+func (this *Migrator) validateCreateTableStatement() (err error) {
+	if this.migrationContext.OriginalTableName != this.parser.GetExplicitTable() {
+		return ErrMigratorUnsupportedRenameCreateTable
+	}
+	if this.parser.HasForeignKeys() {
+		if this.migrationContext.DiscardForeignKeys {
+			return errors.New("CREATE TABLE includes FOREIGN KEYS but --discard-foreign-keys was set. You should instead remove the foreign keys from the table definition")
+		}
+		return errors.New("CREATE TABLE statement seems to FOREIGN KEYS on the table. Child-side foreign keys are not supported. Bailing out")
+	}
 	return nil
 }
 
@@ -336,15 +367,15 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onStartup(); err != nil {
 		return err
 	}
-	if err := this.parser.ParseAlterStatement(this.migrationContext.AlterStatement); err != nil {
+	if err := this.parser.ParseStatement(); err != nil {
 		return err
 	}
-	if err := this.validateAlterStatement(); err != nil {
+	if err := this.validateStatement(); err != nil {
 		return err
 	}
 
 	// After this point, we'll need to teardown anything that's been started
-	//   so we don't leave things hanging around
+	// so we don't leave things hanging around
 	defer this.teardown()
 
 	if err := this.initiateInspector(); err != nil {
@@ -1139,17 +1170,19 @@ func (this *Migrator) initiateApplier() error {
 		return err
 	}
 
-	if err := this.applier.AlterGhost(); err != nil {
-		this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
-		return err
-	}
-
-	if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
-		// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
-		// so we should copy AUTO_INCREMENT value onto our ghost table.
-		if err := this.applier.AlterGhostAutoIncrement(); err != nil {
-			this.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+	if this.parser.Type() == sql.ParserTypeAlterTable {
+		if err := this.applier.AlterGhost(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
 			return err
+		}
+
+		if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
+			// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
+			// so we should copy AUTO_INCREMENT value onto our ghost table.
+			if err := this.applier.AlterGhostAutoIncrement(); err != nil {
+				this.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+				return err
+			}
 		}
 	}
 	this.applier.WriteChangelogState(string(GhostTableMigrated))

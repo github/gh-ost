@@ -66,7 +66,8 @@ func main() {
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
-	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
+	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory if no '--create-table' statement provided)")
+	flag.StringVar(&migrationContext.CreateTableStatement, "create-table", "", "create table statement (mandatory if no '--alter' statement provided)")
 	flag.BoolVar(&migrationContext.AttemptInstantDDL, "attempt-instant-ddl", false, "Attempt to use instant DDL for this migration first")
 	storageEngine := flag.String("storage-engine", "innodb", "Specify table storage engine (default: 'innodb'). When 'rocksdb': the session transaction isolation level is changed from REPEATABLE_READ to READ_COMMITTED.")
 
@@ -191,17 +192,29 @@ func main() {
 		migrationContext.Log.Fatale(err)
 	}
 
-	if migrationContext.AlterStatement == "" {
-		log.Fatal("--alter must be provided and statement must not be empty")
+	if migrationContext.AlterStatement == "" && migrationContext.CreateTableStatement == "" {
+		log.Fatal("--alter or --create-table must be provided and statement must not be empty")
 	}
-	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
-	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
+
+	if migrationContext.AlterStatement != "" && migrationContext.CreateTableStatement != "" {
+		log.Fatal("--alter and --create-table cannot both be provided at the same time")
+	}
+
+	var parser sql.Parser
+	if migrationContext.CreateTableStatement != "" {
+		confirmNoAlterStatementFlags(migrationContext)
+		parser = sql.NewParserFromCreateTableStatement(migrationContext.AlterStatement)
+		migrationContext.CreateTableStatementBody = parser.GetOptions()
+	} else {
+		parser = sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
+		migrationContext.AlterStatementOptions = parser.GetOptions()
+	}
 
 	if migrationContext.DatabaseName == "" {
 		if parser.HasExplicitSchema() {
 			migrationContext.DatabaseName = parser.GetExplicitSchema()
 		} else {
-			log.Fatal("--database must be provided and database name must not be empty, or --alter must specify database name")
+			log.Fatal(fmt.Sprintf("--database must be provided and database name must not be empty, or --%v must specify database name", parser.Type().String()))
 		}
 	}
 
@@ -213,7 +226,7 @@ func main() {
 		if parser.HasExplicitTable() {
 			migrationContext.OriginalTableName = parser.GetExplicitTable()
 		} else {
-			log.Fatal("--table must be provided and table name must not be empty, or --alter must specify table name")
+			log.Fatal(fmt.Sprintf("--table must be provided and table name must not be empty, or --%v must specify table name", parser.Type().String()))
 		}
 	}
 	migrationContext.Noop = !(*executeFlag)
@@ -320,4 +333,22 @@ func main() {
 		migrationContext.Log.Fatale(err)
 	}
 	fmt.Fprintln(os.Stdout, "# Done")
+}
+
+func confirmNoAlterStatementFlags(migrationContext *base.MigrationContext) {
+	if migrationContext.AttemptInstantDDL {
+		migrationContext.Log.Fatal("--attempt-instant-ddl cannot be used with --create-table")
+	}
+	if migrationContext.ApproveRenamedColumns {
+		migrationContext.Log.Fatal("--approve-renamed-columns cannot be used with --create-table")
+	}
+	if migrationContext.SkipRenamedColumns {
+		migrationContext.Log.Fatal("--skip-renamed-columns cannot be used with --create-table")
+	}
+	if migrationContext.DiscardForeignKeys {
+		migrationContext.Log.Fatal("--discard-foreign-keys cannot be used with --create-table")
+	}
+	if migrationContext.SkipForeignKeyChecks {
+		migrationContext.Log.Fatal("--skip-foreign-key-checks cannot be used with --create-table")
+	}
 }

@@ -13,6 +13,41 @@ import (
 	"strings"
 )
 
+type ParserType int
+
+const (
+	ParserTypeUnknown ParserType = iota
+	ParserTypeAlterTable
+	ParserTypeCreateTable
+)
+
+func (t ParserType) String() string {
+	switch t {
+	case ParserTypeAlterTable:
+		return "alter"
+	case ParserTypeCreateTable:
+		return "create-table"
+	default:
+		return ""
+	}
+}
+
+type Parser interface {
+	Type() ParserType
+	ParseStatement() error
+	GetNonTrivialRenames() map[string]string
+	HasNonTrivialRenames() bool
+	DroppedColumnsMap() map[string]bool
+	IsRenameTable() bool
+	IsAutoIncrementDefined() bool
+	GetExplicitSchema() string
+	HasExplicitSchema() bool
+	GetExplicitTable() string
+	HasExplicitTable() bool
+	HasForeignKeys() bool
+	GetOptions() string
+}
+
 type ColumnType int
 
 const (

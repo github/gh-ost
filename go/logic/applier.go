@@ -218,14 +218,24 @@ func (this *Applier) AttemptInstantDDL() error {
 	return err
 }
 
+func (this *Applier) generateCreateGhostTableQuery() string {
+	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s `,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()))
+	if this.migrationContext.CreateTableStatementBody != "" {
+		query += this.migrationContext.CreateTableStatementBody
+	} else {
+		query += fmt.Sprintf(`like %s.%s`,
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.OriginalTableName),
+		)
+	}
+	return query
+}
+
 // CreateGhostTable creates the ghost table on the applier host
 func (this *Applier) CreateGhostTable() error {
-	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s like %s.%s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
+	query := this.generateCreateGhostTableQuery()
 	this.migrationContext.Log.Infof("Creating ghost table %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
@@ -261,6 +271,9 @@ func (this *Applier) CreateGhostTable() error {
 
 // AlterGhost applies `alter` statement on ghost table
 func (this *Applier) AlterGhost() error {
+	if this.migrationContext.AlterStatement == "" {
+		return nil
+	}
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s %s`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
