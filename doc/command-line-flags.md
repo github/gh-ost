@@ -190,6 +190,8 @@ When using [Connect to replica, migrate on master](cheatsheet.md#a-connect-to-re
 
 When [`--throttle-control-replicas`](#throttle-control-replicas) is provided, throttling also considers lag on specified hosts. Lag measurements on listed hosts is done by querying `gh-ost`'s _changelog_ table, where `gh-ost` injects a heartbeat.
 
+When using on master or when [--allow-on-master] is provided, max-lag-millis is also considered a threshold for starting the cutover stage of the migration. If the row copy is complete and the heartbeat lag is less than max-lag-millis cutover phase of the migration will start. 
+
 See also: [Sub-second replication lag throttling](subsecond-lag.md)
 
 ### max-load
