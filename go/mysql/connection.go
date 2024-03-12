@@ -30,6 +30,7 @@ type ConnectionConfig struct {
 	tlsConfig            *tls.Config
 	Timeout              float64
 	TransactionIsolation string
+	Charset              string
 }
 
 func NewConnectionConfig() *ConnectionConfig {
@@ -49,6 +50,7 @@ func (this *ConnectionConfig) DuplicateCredentials(key InstanceKey) *ConnectionC
 		tlsConfig:            this.tlsConfig,
 		Timeout:              this.Timeout,
 		TransactionIsolation: this.TransactionIsolation,
+		Charset:              this.Charset,
 	}
 	config.ImpliedKey = &config.Key
 	return config
@@ -122,10 +124,15 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 	if this.tlsConfig != nil {
 		tlsOption = TLS_CONFIG_KEY
 	}
+
+	if this.Charset == "" {
+		this.Charset = "utf8mb4,utf8,latin1"
+	}
+
 	connectionParams := []string{
 		"autocommit=true",
-		"charset=utf8mb4,utf8,latin1",
 		"interpolateParams=true",
+		fmt.Sprintf("charset=%s", this.Charset),
 		fmt.Sprintf("tls=%s", tlsOption),
 		fmt.Sprintf("transaction_isolation=%q", this.TransactionIsolation),
 		fmt.Sprintf("timeout=%fs", this.Timeout),
