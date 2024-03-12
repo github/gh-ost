@@ -146,7 +146,7 @@ func (f *Field) Dump() []byte {
 		f = &Field{}
 	}
 	if f.Data != nil {
-		return []byte(f.Data)
+		return f.Data
 	}
 
 	l := len(f.Schema) + len(f.Table) + len(f.OrgTable) + len(f.Name) + len(f.OrgName) + len(f.DefaultValue) + 48

@@ -27,7 +27,7 @@ var (
 	ErrOldProtocol       = errors.New("MySQL server does not support required protocol 41+")
 	ErrPktSync           = errors.New("commands out of sync. You can't run this command now")
 	ErrPktSyncMul        = errors.New("commands out of sync. Did you run multiple statements at once?")
-	ErrPktTooLarge       = errors.New("packet for query is too large. Try adjusting the 'max_allowed_packet' variable on the server")
+	ErrPktTooLarge       = errors.New("packet for query is too large. Try adjusting the `Config.MaxAllowedPacket`")
 	ErrBusyBuffer        = errors.New("busy buffer")
 
 	// errBadConnNoWrite is used for connection errors where nothing was sent to the database yet.
@@ -56,10 +56,22 @@ func SetLogger(logger Logger) error {
 
 // MySQLError is an error type which represents a single MySQL error
 type MySQLError struct {
-	Number  uint16
-	Message string
+	Number   uint16
+	SQLState [5]byte
+	Message  string
 }
 
 func (me *MySQLError) Error() string {
+	if me.SQLState != [5]byte{} {
+		return fmt.Sprintf("Error %d (%s): %s", me.Number, me.SQLState, me.Message)
+	}
+
 	return fmt.Sprintf("Error %d: %s", me.Number, me.Message)
+}
+
+func (me *MySQLError) Is(err error) bool {
+	if merr, ok := err.(*MySQLError); ok {
+		return merr.Number == me.Number
+	}
+	return false
 }
