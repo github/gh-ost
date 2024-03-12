@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -175,11 +175,19 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
-				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
-				(select id, name, position from mydb.tbl force index (PRIMARY)
-					where (((id > @v1s) or ((id = @v1s))) and ((id < @v1e) or ((id = @v1e))))
-				)
-		`
+			insert /* gh-ost mydb.tbl */ ignore
+			into
+				mydb.ghost
+				(id, name, position)
+			(
+				select id, name, position
+				from
+					mydb.tbl
+				force index (PRIMARY)
+				where
+					(((id > @v1s) or ((id = @v1s)))
+					and ((id < @v1e) or ((id = @v1e))))
+			)`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
 	}
@@ -194,11 +202,25 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
-				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
-				(select id, name, position from mydb.tbl force index (name_position_uidx)
-				  where (((name > @v1s) or (((name = @v1s)) AND (position > @v2s)) or ((name = @v1s) and (position = @v2s))) and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e)) or ((name = @v1e) and (position = @v2e))))
-				)
-		`
+			insert /* gh-ost mydb.tbl */ ignore
+			into
+				mydb.ghost
+				(id, name, position)
+			(
+				select id, name, position
+				from
+					mydb.tbl
+				force index (name_position_uidx)
+				where
+					(((name > @v1s) or (((name = @v1s))
+					AND (position > @v2s))
+					or ((name = @v1s)
+					and (position = @v2s)))
+					and ((name < @v1e)
+					or (((name = @v1e))
+					AND (position < @v2e))
+					or ((name = @v1e) and (position = @v2e))))
+			)`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
 	}
@@ -221,11 +243,20 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
-				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, location)
-				(select id, name, position from mydb.tbl force index (PRIMARY)
-					where (((id > @v1s) or ((id = @v1s))) and ((id < @v1e) or ((id = @v1e))))
-				)
-		`
+			insert /* gh-ost mydb.tbl */ ignore
+			into
+				mydb.ghost
+				(id, name, location)
+			( 
+				select id, name, position
+				from
+					mydb.tbl
+				force index (PRIMARY)
+				where
+					(((id > @v1s) or ((id = @v1s)))
+					and
+					((id < @v1e) or ((id = @v1e))))
+			)`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
 	}
@@ -240,11 +271,21 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
 		test.S(t).ExpectNil(err)
 		expected := `
-				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, location)
-				(select id, name, position from mydb.tbl force index (name_position_uidx)
-				  where (((name > @v1s) or (((name = @v1s)) AND (position > @v2s)) or ((name = @v1s) and (position = @v2s))) and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e)) or ((name = @v1e) and (position = @v2e))))
-				)
-		`
+			insert /* gh-ost mydb.tbl */ ignore
+			into
+				mydb.ghost
+				(id, name, location)
+			(
+				select id, name, position
+				from
+					mydb.tbl
+				force index (name_position_uidx)
+				where
+					(((name > @v1s) or (((name = @v1s))
+					AND (position > @v2s)) or ((name = @v1s) and (position = @v2s)))
+					and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e))
+					or ((name = @v1e) and (position = @v2e))))
+			)`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
 	}
@@ -264,11 +305,18 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 		query, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true, true)
 		test.S(t).ExpectNil(err)
 		expected := `
-				insert /* gh-ost mydb.tbl */ ignore into mydb.ghost (id, name, position)
-				(select id, name, position from mydb.tbl force index (name_position_uidx)
-				  where (((name > ?) or (((name = ?)) AND (position > ?)) or ((name = ?) and (position = ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?))))
-				lock in share mode )
-		`
+			insert /* gh-ost mydb.tbl */ ignore
+			into
+				mydb.ghost
+				(id, name, position)
+			(
+				select id, name, position
+				from
+					mydb.tbl
+				force index (name_position_uidx)
+				where (((name > ?) or (((name = ?)) AND (position > ?)) or ((name = ?) and (position = ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?))))
+				lock in share mode
+			)`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
 	}
@@ -286,21 +334,19 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		test.S(t).ExpectNil(err)
 		expected := `
-				select /* gh-ost mydb.tbl test */ name, position
-				  from (
-				    select
-				        name, position
-				      from
-				        mydb.tbl
-				      where ((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
-				      order by
-				        name asc, position asc
-				      limit 500
-				  ) select_osc_chunk
+			select /* gh-ost mydb.tbl test */ name, position
+			from ( 
+				select
+					name, position
+				from
+					mydb.tbl
+				where ((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
 				order by
-				  name desc, position desc
-				limit 1
-		`
+					name asc, position asc
+				limit 500) select_osc_chunk
+			order by
+				name desc, position desc
+			limit 1`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 103, 103, 117, 103, 117}))
 	}
@@ -310,13 +356,15 @@ func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
 	uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+	uniqueKey := &UniqueKey{Name: "PRIMARY", Columns: *uniqueKeyColumns}
 	{
-		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
+		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKey)
 		test.S(t).ExpectNil(err)
 		expected := `
 			select /* gh-ost mydb.tbl */ name, position
 			  from
 			    mydb.tbl
+			  force index (PRIMARY)
 			  order by
 			    name asc, position asc
 			  limit 1
@@ -324,12 +372,13 @@ func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 	}
 	{
-		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, uniqueKeyColumns)
+		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, uniqueKey)
 		test.S(t).ExpectNil(err)
 		expected := `
 			select /* gh-ost mydb.tbl */ name, position
 			  from
 			    mydb.tbl
+			  force index (PRIMARY)
 			  order by
 			    name desc, position desc
 			  limit 1

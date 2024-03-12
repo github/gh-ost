@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	uuid "github.com/satori/go.uuid"
+	uuid "github.com/google/uuid"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
@@ -232,6 +232,8 @@ type MigrationContext struct {
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
+	BinlogSyncerMaxReconnectAttempts int
+
 	Log Logger
 }
 
@@ -267,7 +269,7 @@ type ContextConfig struct {
 
 func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
-		Uuid:                                uuid.NewV4().String(),
+		Uuid:                                uuid.NewString(),
 		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
@@ -301,6 +303,15 @@ func (this *MigrationContext) SetConnectionConfig(storageEngine string) error {
 	this.InspectorConnectionConfig.TransactionIsolation = transactionIsolation
 	this.ApplierConnectionConfig.TransactionIsolation = transactionIsolation
 	return nil
+}
+
+func (this *MigrationContext) SetConnectionCharset(charset string) {
+	if charset == "" {
+		charset = "utf8mb4,utf8,latin1"
+	}
+
+	this.InspectorConnectionConfig.Charset = charset
+	this.ApplierConnectionConfig.Charset = charset
 }
 
 func getSafeTableName(baseName string, suffix string) string {

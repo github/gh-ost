@@ -13,7 +13,6 @@ import (
 	"math"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -639,12 +638,8 @@ func (this *Migrator) atomicCutOver() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	okToUnlockTable := make(chan bool, 4)
-	var dropCutOverSentryTableOnce sync.Once
 	defer func() {
 		okToUnlockTable <- true
-		dropCutOverSentryTableOnce.Do(func() {
-			this.applier.DropAtomicCutOverSentryTableIfExists()
-		})
 	}()
 
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
@@ -653,7 +648,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	go func() {
-		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, &dropCutOverSentryTableOnce); err != nil {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
 			this.migrationContext.Log.Errore(err)
 		}
 	}()
@@ -1047,7 +1042,14 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
-	this.migrationContext.Log.Infof(status)
+
+	// This "hack" is required here because the underlying logging library
+	// github.com/outbrain/golib/log provides two functions Info and Infof; but the arguments of
+	// both these functions are eventually redirected to the same function, which internally calls
+	// fmt.Sprintf. So, the argument of every function called on the DefaultLogger object
+	// migrationContext.Log will eventually pass through fmt.Sprintf, and thus the '%' character
+	// needs to be escaped.
+	this.migrationContext.Log.Info(strings.Replace(status, "%", "%%", 1))
 
 	hooksStatusIntervalSec := this.migrationContext.HooksStatusIntervalSec
 	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {
