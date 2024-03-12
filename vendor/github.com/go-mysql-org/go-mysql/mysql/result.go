@@ -1,7 +1,8 @@
 package mysql
 
 type Result struct {
-	Status uint16
+	Status   uint16
+	Warnings uint16
 
 	InsertId     uint64
 	AffectedRows uint64

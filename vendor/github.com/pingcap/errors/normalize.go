@@ -115,6 +115,9 @@ func (e *Error) Error() string {
 	if len(describe) == 0 {
 		describe = ErrCodeText(strconv.Itoa(int(e.code)))
 	}
+	if e.cause != nil {
+		return fmt.Sprintf("[%s]%s: %s", e.RFCCode(), e.GetMsg(), e.cause.Error())
+	}
 	return fmt.Sprintf("[%s]%s", e.RFCCode(), e.GetMsg())
 }
 
