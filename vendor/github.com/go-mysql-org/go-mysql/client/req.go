@@ -21,11 +21,11 @@ func (c *Conn) writeCommandBuf(command byte, arg []byte) error {
 
 	length := len(arg) + 1
 	data := utils.ByteSliceGet(length + 4)
-	data[4] = command
+	data.B[4] = command
 
-	copy(data[5:], arg)
+	copy(data.B[5:], arg)
 
-	err := c.WritePacket(data)
+	err := c.WritePacket(data.B)
 
 	utils.ByteSlicePut(data)
 

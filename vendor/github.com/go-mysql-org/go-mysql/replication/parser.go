@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+
+	"github.com/go-mysql-org/go-mysql/utils"
 )
 
 var (
@@ -38,6 +40,8 @@ type BinlogParser struct {
 	useDecimal          bool
 	ignoreJSONDecodeErr bool
 	verifyChecksum      bool
+
+	rowsEventDecodeFunc func(*RowsEvent, []byte) error
 }
 
 func NewBinlogParser() *BinlogParser {
@@ -110,8 +114,11 @@ func (p *BinlogParser) parseSingleEvent(r io.Reader, onEvent OnEventFunc) (bool,
 	var err error
 	var n int64
 
-	var buf bytes.Buffer
-	if n, err = io.CopyN(&buf, r, EventHeaderSize); err == io.EOF {
+	// Here we use `sync.Pool` to avoid allocate/destroy buffers frequently.
+	buf := utils.BytesBufferGet()
+	defer utils.BytesBufferPut(buf)
+
+	if n, err = io.CopyN(buf, r, EventHeaderSize); err == io.EOF {
 		return true, nil
 	} else if err != nil {
 		return false, errors.Errorf("get event header err %v, need %d but got %d", err, EventHeaderSize, n)
@@ -126,14 +133,15 @@ func (p *BinlogParser) parseSingleEvent(r io.Reader, onEvent OnEventFunc) (bool,
 	if h.EventSize < uint32(EventHeaderSize) {
 		return false, errors.Errorf("invalid event header, event size is %d, too small", h.EventSize)
 	}
-	if n, err = io.CopyN(&buf, r, int64(h.EventSize-EventHeaderSize)); err != nil {
+	if n, err = io.CopyN(buf, r, int64(h.EventSize-EventHeaderSize)); err != nil {
 		return false, errors.Errorf("get event err %v, need %d but got %d", err, h.EventSize, n)
 	}
 	if buf.Len() != int(h.EventSize) {
 		return false, errors.Errorf("invalid raw data size in event %s, need %d but got %d", h.EventType, h.EventSize, buf.Len())
 	}
 
-	rawData := buf.Bytes()
+	var rawData []byte
+	rawData = append(rawData, buf.Bytes()...)
 	bodyLen := int(h.EventSize) - EventHeaderSize
 	body := rawData[EventHeaderSize:]
 	if len(body) != bodyLen {
@@ -204,6 +212,10 @@ func (p *BinlogParser) SetVerifyChecksum(verify bool) {
 
 func (p *BinlogParser) SetFlavor(flavor string) {
 	p.flavor = flavor
+}
+
+func (p *BinlogParser) SetRowsEventDecodeFunc(rowsEventDecodeFunc func(*RowsEvent, []byte) error) {
+	p.rowsEventDecodeFunc = rowsEventDecodeFunc
 }
 
 func (p *BinlogParser) parseHeader(data []byte) (*EventHeader, error) {
@@ -281,6 +293,8 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 				e = ee
 			case PREVIOUS_GTIDS_EVENT:
 				e = &PreviousGTIDsEvent{}
+			case INTVAR_EVENT:
+				e = &IntVarEvent{}
 			default:
 				e = &GenericEvent{}
 			}
@@ -289,7 +303,13 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 		}
 	}
 
-	if err := e.Decode(data); err != nil {
+	var err error
+	if re, ok := e.(*RowsEvent); ok && p.rowsEventDecodeFunc != nil {
+		err = p.rowsEventDecodeFunc(re, data)
+	} else {
+		err = e.Decode(data)
+	}
+	if err != nil {
 		return nil, &EventError{h, err.Error(), data}
 	}
 

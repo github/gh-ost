@@ -1,14 +1,11 @@
+arch:
+  - amd64
+
 language: go
-go_import_path: github.com/pkg/errors
+go_import_path: github.com/pingcap/errors
 go:
-  - 1.4.x
-  - 1.5.x
-  - 1.6.x
-  - 1.7.x
-  - 1.8.x
-  - 1.9.x
-  - 1.10.x
-  - tip
+  - 1.13.x
+  - stable
 
 script:
   - go test -v ./...

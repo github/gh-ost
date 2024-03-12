@@ -26,8 +26,7 @@ func (p RowData) ParseText(f []*Field, dst []FieldValue) ([]FieldValue, error) {
 	var err error
 	var v []byte
 	var isNull bool
-	var pos int = 0
-	var n int = 0
+	var pos, n int
 
 	for i := range f {
 		v, isNull, n, err = LengthEncodedString(p[pos:])
@@ -177,7 +176,7 @@ func (p RowData) ParseBinary(f []*Field, dst []FieldValue) ([]FieldValue, error)
 		case MYSQL_TYPE_DECIMAL, MYSQL_TYPE_NEWDECIMAL, MYSQL_TYPE_VARCHAR,
 			MYSQL_TYPE_BIT, MYSQL_TYPE_ENUM, MYSQL_TYPE_SET, MYSQL_TYPE_TINY_BLOB,
 			MYSQL_TYPE_MEDIUM_BLOB, MYSQL_TYPE_LONG_BLOB, MYSQL_TYPE_BLOB,
-			MYSQL_TYPE_VAR_STRING, MYSQL_TYPE_STRING, MYSQL_TYPE_GEOMETRY:
+			MYSQL_TYPE_VAR_STRING, MYSQL_TYPE_STRING, MYSQL_TYPE_GEOMETRY, MYSQL_TYPE_JSON:
 			v, isNull, n, err = LengthEncodedString(p[pos:])
 			pos += n
 			if err != nil {
