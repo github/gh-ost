@@ -30,6 +30,7 @@ func TestNewConnectionConfig(t *testing.T) {
 	test.S(t).ExpectEquals(c.User, "")
 	test.S(t).ExpectEquals(c.Password, "")
 	test.S(t).ExpectEquals(c.TransactionIsolation, "")
+	test.S(t).ExpectEquals(c.Charset, "")
 }
 
 func TestDuplicateCredentials(t *testing.T) {
@@ -42,6 +43,7 @@ func TestDuplicateCredentials(t *testing.T) {
 		ServerName:         "feathers",
 	}
 	c.TransactionIsolation = transactionIsolation
+	c.Charset = "utf8mb4"
 
 	dup := c.DuplicateCredentials(InstanceKey{Hostname: "otherhost", Port: 3310})
 	test.S(t).ExpectEquals(dup.Key.Hostname, "otherhost")
@@ -52,6 +54,7 @@ func TestDuplicateCredentials(t *testing.T) {
 	test.S(t).ExpectEquals(dup.Password, "penguin")
 	test.S(t).ExpectEquals(dup.tlsConfig, c.tlsConfig)
 	test.S(t).ExpectEquals(dup.TransactionIsolation, c.TransactionIsolation)
+	test.S(t).ExpectEquals(dup.Charset, c.Charset)
 }
 
 func TestDuplicate(t *testing.T) {
@@ -60,6 +63,7 @@ func TestDuplicate(t *testing.T) {
 	c.User = "gromit"
 	c.Password = "penguin"
 	c.TransactionIsolation = transactionIsolation
+	c.Charset = "utf8mb4"
 
 	dup := c.Duplicate()
 	test.S(t).ExpectEquals(dup.Key.Hostname, "myhost")
@@ -69,6 +73,7 @@ func TestDuplicate(t *testing.T) {
 	test.S(t).ExpectEquals(dup.User, "gromit")
 	test.S(t).ExpectEquals(dup.Password, "penguin")
 	test.S(t).ExpectEquals(dup.TransactionIsolation, transactionIsolation)
+	test.S(t).ExpectEquals(dup.Charset, "utf8mb4")
 }
 
 func TestGetDBUri(t *testing.T) {
@@ -78,9 +83,10 @@ func TestGetDBUri(t *testing.T) {
 	c.Password = "penguin"
 	c.Timeout = 1.2345
 	c.TransactionIsolation = transactionIsolation
+	c.Charset = "utf8mb4,utf8,latin1"
 
 	uri := c.GetDBUri("test")
-	test.S(t).ExpectEquals(uri, `gromit:penguin@tcp(myhost:3306)/test?autocommit=true&charset=utf8mb4,utf8,latin1&interpolateParams=true&tls=false&transaction_isolation="REPEATABLE-READ"&timeout=1.234500s&readTimeout=1.234500s&writeTimeout=1.234500s`)
+	test.S(t).ExpectEquals(uri, `gromit:penguin@tcp(myhost:3306)/test?autocommit=true&interpolateParams=true&charset=utf8mb4,utf8,latin1&tls=false&transaction_isolation="REPEATABLE-READ"&timeout=1.234500s&readTimeout=1.234500s&writeTimeout=1.234500s`)
 }
 
 func TestGetDBUriWithTLSSetup(t *testing.T) {
@@ -91,7 +97,8 @@ func TestGetDBUriWithTLSSetup(t *testing.T) {
 	c.Timeout = 1.2345
 	c.tlsConfig = &tls.Config{}
 	c.TransactionIsolation = transactionIsolation
+	c.Charset = "utf8mb4_general_ci,utf8_general_ci,latin1"
 
 	uri := c.GetDBUri("test")
-	test.S(t).ExpectEquals(uri, `gromit:penguin@tcp(myhost:3306)/test?autocommit=true&charset=utf8mb4,utf8,latin1&interpolateParams=true&tls=ghost&transaction_isolation="REPEATABLE-READ"&timeout=1.234500s&readTimeout=1.234500s&writeTimeout=1.234500s`)
+	test.S(t).ExpectEquals(uri, `gromit:penguin@tcp(myhost:3306)/test?autocommit=true&interpolateParams=true&charset=utf8mb4_general_ci,utf8_general_ci,latin1&tls=ghost&transaction_isolation="REPEATABLE-READ"&timeout=1.234500s&readTimeout=1.234500s&writeTimeout=1.234500s`)
 }
