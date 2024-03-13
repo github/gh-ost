@@ -49,6 +49,9 @@ type Column struct {
 	// https://github.com/github/gh-ost/issues/909
 	BinaryOctetLength uint
 	charsetConversion *CharacterSetConversion
+	// compare a and b using this function, when a equal b, return 0, when a > b, return 1, when a < b, return -1
+	CompareValueFunc func(a interface{}, b interface{}) (int, error)
+	FormatValueFunc  func(a interface{}) (string, error)
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
@@ -225,6 +228,14 @@ func (this *ColumnList) String() string {
 	return strings.Join(this.Names(), ",")
 }
 
+func (this *ColumnList) EscapeString() string {
+	var cols []string
+	for _, col := range this.Names() {
+		cols = append(cols, fmt.Sprintf("`%s`", col))
+	}
+	return strings.Join(cols, ",")
+}
+
 func (this *ColumnList) Equals(other *ColumnList) bool {
 	return reflect.DeepEqual(this.Columns, other.Columns)
 }
@@ -252,12 +263,21 @@ func (this *ColumnList) SetCharsetConversion(columnName string, fromCharset stri
 	this.GetColumn(columnName).charsetConversion = &CharacterSetConversion{FromCharset: fromCharset, ToCharset: toCharset}
 }
 
+func (this *ColumnList) SetColumnCompareValueFunc(columnName string, f func(a interface{}, b interface{}) (int, error)) {
+	this.GetColumn(columnName).CompareValueFunc = f
+}
+
+func (this *ColumnList) GetColumnCompareValueFunc(columnName string) func(a interface{}, b interface{}) (int, error) {
+	return this.GetColumn(columnName).CompareValueFunc
+}
+
 // UniqueKey is the combination of a key's name and columns
 type UniqueKey struct {
-	Name            string
-	Columns         ColumnList
-	HasNullable     bool
-	IsAutoIncrement bool
+	Name               string
+	Columns            ColumnList
+	HasNullable        bool
+	IsAutoIncrement    bool
+	IsMemoryComparable bool
 }
 
 // IsPrimary checks if this unique key is primary
@@ -275,6 +295,21 @@ func (this *UniqueKey) String() string {
 		description = fmt.Sprintf("%s (auto_increment)", description)
 	}
 	return fmt.Sprintf("%s: %s; has nullable: %+v", description, this.Columns.Names(), this.HasNullable)
+}
+
+func (this *UniqueKey) FormatValues(args []interface{}) ([]string, error) {
+	var values []string
+	for i, column := range this.Columns.Columns() {
+		if column.FormatValueFunc == nil {
+			return nil, fmt.Errorf("column %s does not support format value", column.Name)
+		}
+		val, err := column.FormatValueFunc(args[i])
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, val)
+	}
+	return values, nil
 }
 
 type ColumnValues struct {
