@@ -1453,6 +1453,10 @@ func (this *Applier) isIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs []interface{})
 
 	// Compare whether it exceeds the boundary value of IterationRangeMax. If it is greater, it can be ignored, if it is less, it cannot be ignored.
 	ignore, err = func() (bool, error) {
+		if this.migrationContext.MigrationIterationRangeMaxValues == nil {
+			return true, nil
+		}
+
 		for order, uniqueKeyCol := range this.migrationContext.UniqueKey.Columns.Columns() {
 			than, err := uniqueKeyCol.CompareValueFunc(uniqueKeyArgs[order], this.migrationContext.MigrationIterationRangeMaxValues.StringColumn(order))
 			if err != nil {
