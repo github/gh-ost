@@ -1210,6 +1210,11 @@ func (this *Migrator) iterateChunks() error {
 						return err
 					}
 
+					if !iterationRangeValues.HasFurtherRange {
+						atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
+						return nil
+					}
+
 					// Copy task:
 					applyCopyRowsFunc := func() error {
 						if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
@@ -1236,9 +1241,6 @@ func (this *Migrator) iterateChunks() error {
 						return err
 					}
 
-					if !iterationRangeValues.HasFurtherRange {
-						atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
-					}
 					return nil
 				})
 			}
