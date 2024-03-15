@@ -561,11 +561,18 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and this done with copying row chunks)
-func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
-	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
-	if this.migrationContext.MigrationIterationRangeMinValues == nil {
-		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
+func (this *Applier) CalculateNextIterationRangeEndValues() (values *base.IterationRangeValues, err error) {
+	this.migrationContext.CalculateNextIterationRangeEndValuesLock.Lock()
+	defer this.migrationContext.CalculateNextIterationRangeEndValuesLock.Unlock()
+
+	iterationRangeValues := &base.IterationRangeValues{}
+
+	iterationRangeValues.Min = this.migrationContext.MigrationIterationRangeMaxValues
+	if iterationRangeValues.Min == nil {
+		iterationRangeValues.Min = this.migrationContext.MigrationRangeMinValues
+		iterationRangeValues.IsIncludeMinValues = true
 	}
+
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
@@ -575,46 +582,48 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			this.migrationContext.DatabaseName,
 			this.migrationContext.OriginalTableName,
 			&this.migrationContext.UniqueKey.Columns,
-			this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
+			iterationRangeValues.Min.AbstractValues(),
 			this.migrationContext.MigrationRangeMaxValues.AbstractValues(),
 			atomic.LoadInt64(&this.migrationContext.ChunkSize),
-			this.migrationContext.GetIteration() == 0,
+			iterationRangeValues.IsIncludeMinValues,
 			fmt.Sprintf("iteration:%d", this.migrationContext.GetIteration()),
 		)
 		if err != nil {
-			return hasFurtherRange, err
+			return iterationRangeValues, err
 		}
 
 		rows, err := this.db.Query(query, explodedArgs...)
 		if err != nil {
-			return hasFurtherRange, err
+			return iterationRangeValues, err
 		}
 		defer rows.Close()
 
 		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
-				return hasFurtherRange, err
+				return iterationRangeValues, err
 			}
-			hasFurtherRange = true
+			iterationRangeValues.HasFurtherRange = true
 		}
 		if err = rows.Err(); err != nil {
-			return hasFurtherRange, err
+			return iterationRangeValues, err
 		}
-		if hasFurtherRange {
-			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
-			return hasFurtherRange, nil
+		if iterationRangeValues.HasFurtherRange {
+			iterationRangeValues.Max = iterationRangeMaxValues
+			this.migrationContext.MigrationIterationRangeMinValues = iterationRangeValues.Min
+			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeValues.Max
+			return iterationRangeValues, nil
 		}
 	}
 	this.migrationContext.Log.Debugf("Iteration complete: no further range to iterate")
-	return hasFurtherRange, nil
+	return iterationRangeValues, nil
 }
 
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
 // data actually gets copied from original table.
-func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+func (this *Applier) ApplyIterationInsertQuery(iterationRangeValues *base.IterationRangeValues) (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
-	chunkSize = atomic.LoadInt64(&this.migrationContext.ChunkSize)
+	chunkSize = iterationRangeValues.Size
 
 	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
 		this.migrationContext.DatabaseName,
@@ -624,9 +633,9 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.MappedSharedColumns.Names(),
 		this.migrationContext.UniqueKey.Name,
 		&this.migrationContext.UniqueKey.Columns,
-		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
-		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
-		this.migrationContext.GetIteration() == 0,
+		iterationRangeValues.Min.AbstractValues(),
+		iterationRangeValues.Max.AbstractValues(),
+		iterationRangeValues.IsIncludeMinValues,
 		this.migrationContext.IsTransactionalTable(),
 	)
 	if err != nil {
@@ -663,8 +672,8 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	duration = time.Since(startTime)
 	this.migrationContext.Log.Debugf(
 		"Issued INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
-		this.migrationContext.MigrationIterationRangeMinValues,
-		this.migrationContext.MigrationIterationRangeMaxValues,
+		iterationRangeValues.Min,
+		iterationRangeValues.Max,
 		this.migrationContext.GetIteration(),
 		chunkSize)
 	return chunkSize, rowsAffected, duration, nil

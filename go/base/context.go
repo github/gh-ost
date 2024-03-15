@@ -72,6 +72,14 @@ func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleRea
 	}
 }
 
+type IterationRangeValues struct {
+	Min                *sql.ColumnValues
+	Max                *sql.ColumnValues
+	Size               int64
+	IsIncludeMinValues bool
+	HasFurtherRange    bool
+}
+
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
@@ -119,6 +127,7 @@ type MigrationContext struct {
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
 	ChunkSize                           int64
+	ChunkParallelSize                   int64
 	niceRatio                           float64
 	MaxLagMillisecondsThrottleThreshold int64
 	throttleControlReplicaKeys          *mysql.InstanceKeyMap
@@ -210,25 +219,26 @@ type MigrationContext struct {
 	InCutOverCriticalSectionFlag           int64
 	PanicAbort                             chan error
 
-	OriginalTableColumnsOnApplier    *sql.ColumnList
-	OriginalTableColumns             *sql.ColumnList
-	OriginalTableVirtualColumns      *sql.ColumnList
-	OriginalTableUniqueKeys          [](*sql.UniqueKey)
-	OriginalTableAutoIncrement       uint64
-	GhostTableColumns                *sql.ColumnList
-	GhostTableVirtualColumns         *sql.ColumnList
-	GhostTableUniqueKeys             [](*sql.UniqueKey)
-	UniqueKey                        *sql.UniqueKey
-	SharedColumns                    *sql.ColumnList
-	ColumnRenameMap                  map[string]string
-	DroppedColumnsMap                map[string]bool
-	MappedSharedColumns              *sql.ColumnList
-	MigrationRangeMinValues          *sql.ColumnValues
-	MigrationRangeMaxValues          *sql.ColumnValues
-	Iteration                        int64
-	MigrationIterationRangeMinValues *sql.ColumnValues
-	MigrationIterationRangeMaxValues *sql.ColumnValues
-	ForceTmpTableName                string
+	OriginalTableColumnsOnApplier            *sql.ColumnList
+	OriginalTableColumns                     *sql.ColumnList
+	OriginalTableVirtualColumns              *sql.ColumnList
+	OriginalTableUniqueKeys                  [](*sql.UniqueKey)
+	OriginalTableAutoIncrement               uint64
+	GhostTableColumns                        *sql.ColumnList
+	GhostTableVirtualColumns                 *sql.ColumnList
+	GhostTableUniqueKeys                     [](*sql.UniqueKey)
+	UniqueKey                                *sql.UniqueKey
+	SharedColumns                            *sql.ColumnList
+	ColumnRenameMap                          map[string]string
+	DroppedColumnsMap                        map[string]bool
+	MappedSharedColumns                      *sql.ColumnList
+	MigrationRangeMinValues                  *sql.ColumnValues
+	MigrationRangeMaxValues                  *sql.ColumnValues
+	Iteration                                int64
+	MigrationIterationRangeMinValues         *sql.ColumnValues
+	MigrationIterationRangeMaxValues         *sql.ColumnValues
+	CalculateNextIterationRangeEndValuesLock *sync.Mutex
+	ForceTmpTableName                        string
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
@@ -269,26 +279,27 @@ type ContextConfig struct {
 
 func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
-		Uuid:                                uuid.NewString(),
-		defaultNumRetries:                   60,
-		ChunkSize:                           1000,
-		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
-		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
-		MaxLagMillisecondsThrottleThreshold: 1500,
-		CutOverLockTimeoutSeconds:           3,
-		DMLBatchSize:                        10,
-		etaNanoseonds:                       ETAUnknown,
-		maxLoad:                             NewLoadMap(),
-		criticalLoad:                        NewLoadMap(),
-		throttleMutex:                       &sync.Mutex{},
-		throttleHTTPMutex:                   &sync.Mutex{},
-		throttleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
-		configMutex:                         &sync.Mutex{},
-		pointOfInterestTimeMutex:            &sync.Mutex{},
-		lastHeartbeatOnChangelogMutex:       &sync.Mutex{},
-		ColumnRenameMap:                     make(map[string]string),
-		PanicAbort:                          make(chan error),
-		Log:                                 NewDefaultLogger(),
+		Uuid:                                     uuid.NewString(),
+		defaultNumRetries:                        60,
+		ChunkSize:                                1000,
+		InspectorConnectionConfig:                mysql.NewConnectionConfig(),
+		ApplierConnectionConfig:                  mysql.NewConnectionConfig(),
+		MaxLagMillisecondsThrottleThreshold:      1500,
+		CutOverLockTimeoutSeconds:                3,
+		DMLBatchSize:                             10,
+		etaNanoseonds:                            ETAUnknown,
+		maxLoad:                                  NewLoadMap(),
+		criticalLoad:                             NewLoadMap(),
+		throttleMutex:                            &sync.Mutex{},
+		throttleHTTPMutex:                        &sync.Mutex{},
+		throttleControlReplicaKeys:               mysql.NewInstanceKeyMap(),
+		configMutex:                              &sync.Mutex{},
+		pointOfInterestTimeMutex:                 &sync.Mutex{},
+		lastHeartbeatOnChangelogMutex:            &sync.Mutex{},
+		CalculateNextIterationRangeEndValuesLock: &sync.Mutex{},
+		ColumnRenameMap:                          make(map[string]string),
+		PanicAbort:                               make(chan error),
+		Log:                                      NewDefaultLogger(),
 	}
 }
 
@@ -614,6 +625,16 @@ func (this *MigrationContext) SetChunkSize(chunkSize int64) {
 		chunkSize = 100000
 	}
 	atomic.StoreInt64(&this.ChunkSize, chunkSize)
+}
+
+func (this *MigrationContext) SetChunkParallelSize(chunkParallelSize int64) {
+	if chunkParallelSize < 1 {
+		chunkParallelSize = 1
+	}
+	if chunkParallelSize > 10 {
+		chunkParallelSize = 10
+	}
+	atomic.StoreInt64(&this.ChunkParallelSize, chunkParallelSize)
 }
 
 func (this *MigrationContext) SetDMLBatchSize(batchSize int64) {

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"math"
 	"os"
@@ -1190,41 +1191,66 @@ func (this *Migrator) iterateChunks() error {
 
 			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
 
-			hasFurtherRange := false
-			if err := this.retryOperation(func() (e error) {
-				hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
-				return e
-			}); err != nil {
+			parallelSize := atomic.LoadInt64(&this.migrationContext.ChunkParallelSize)
+			if parallelSize == 0 {
+				parallelSize = 1
+			}
+
+			g, _ := errgroup.WithContext(context.Background())
+			g.SetLimit(int(parallelSize))
+
+			for i := 0; i < int(parallelSize); i++ {
+				g.Go(func() error {
+					var iterationRangeValues *base.IterationRangeValues
+
+					if err := this.retryOperation(func() (e error) {
+						iterationRangeValues, e = this.applier.CalculateNextIterationRangeEndValues()
+						return e
+					}); err != nil {
+						return err
+					}
+
+					// Copy task:
+					applyCopyRowsFunc := func() error {
+						if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+							// No need for more writes.
+							// This is the de-facto place where we avoid writing in the event of completed cut-over.
+							// There could _still_ be a race condition, but that's as close as we can get.
+							// What about the race condition? Well, there's actually no data integrity issue.
+							// when rowCopyCompleteFlag==1 that means **guaranteed** all necessary rows have been copied.
+							// But some are still then collected at the binary log, and these are the ones we're trying to
+							// not apply here. If the race condition wins over us, then we just attempt to apply onto the
+							// _ghost_ table, which no longer exists. So, bothering error messages and all, but no damage.
+							return nil
+						}
+						_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery(iterationRangeValues)
+						if err != nil {
+							return err // wrapping call will retry
+						}
+						atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
+						atomic.AddInt64(&this.migrationContext.Iteration, 1)
+						return nil
+					}
+
+					if err := this.retryOperation(applyCopyRowsFunc); err != nil {
+						return err
+					}
+
+					if !iterationRangeValues.HasFurtherRange {
+						atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
+					}
+					return nil
+				})
+			}
+
+			if err := g.Wait(); err != nil {
 				return terminateRowIteration(err)
 			}
-			if !hasFurtherRange {
-				atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
+
+			if atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
 				return terminateRowIteration(nil)
 			}
-			// Copy task:
-			applyCopyRowsFunc := func() error {
-				if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
-					// No need for more writes.
-					// This is the de-facto place where we avoid writing in the event of completed cut-over.
-					// There could _still_ be a race condition, but that's as close as we can get.
-					// What about the race condition? Well, there's actually no data integrity issue.
-					// when rowCopyCompleteFlag==1 that means **guaranteed** all necessary rows have been copied.
-					// But some are still then collected at the binary log, and these are the ones we're trying to
-					// not apply here. If the race condition wins over us, then we just attempt to apply onto the
-					// _ghost_ table, which no longer exists. So, bothering error messages and all, but no damage.
-					return nil
-				}
-				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
-				if err != nil {
-					return err // wrapping call will retry
-				}
-				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
-				atomic.AddInt64(&this.migrationContext.Iteration, 1)
-				return nil
-			}
-			if err := this.retryOperation(applyCopyRowsFunc); err != nil {
-				return terminateRowIteration(err)
-			}
+
 			return nil
 		}
 		// Enqueue copy operation; to be executed by executeWriteFuncs()
