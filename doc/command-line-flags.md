@@ -64,6 +64,9 @@ It is not reliable to parse the `ALTER` statement to determine if it is instant 
 ### binlogsyncer-max-reconnect-attempts
 `--binlogsyncer-max-reconnect-attempts=0`, the maximum number of attempts to re-establish a broken inspector connection for sync binlog. `0` or `negative number` means infinite retry, default `0`
 
+### chunk-parallel-size
+`--chunk-parallel-size=1`, The number of goroutines to execute chunks concurrently in each copy time slot, default `1`, allowed range `0`-`10`.
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
