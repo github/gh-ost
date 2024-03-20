@@ -1191,15 +1191,15 @@ func (this *Migrator) iterateChunks() error {
 
 			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
 
-			parallelSize := atomic.LoadInt64(&this.migrationContext.ChunkParallelSize)
-			if parallelSize == 0 {
-				parallelSize = 1
+			concurrentSize := atomic.LoadInt64(&this.migrationContext.ChunkConcurrentSize)
+			if concurrentSize == 0 {
+				concurrentSize = 1
 			}
 
 			g, _ := errgroup.WithContext(context.Background())
-			g.SetLimit(int(parallelSize))
+			g.SetLimit(int(concurrentSize))
 
-			for i := 0; i < int(parallelSize); i++ {
+			for i := 0; i < int(concurrentSize); i++ {
 				g.Go(func() error {
 					var iterationRangeValues *base.IterationRangeValues
 

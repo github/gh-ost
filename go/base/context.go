@@ -127,7 +127,7 @@ type MigrationContext struct {
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
 	ChunkSize                           int64
-	ChunkParallelSize                   int64
+	ChunkConcurrentSize                 int64
 	niceRatio                           float64
 	MaxLagMillisecondsThrottleThreshold int64
 	throttleControlReplicaKeys          *mysql.InstanceKeyMap
@@ -627,14 +627,14 @@ func (this *MigrationContext) SetChunkSize(chunkSize int64) {
 	atomic.StoreInt64(&this.ChunkSize, chunkSize)
 }
 
-func (this *MigrationContext) SetChunkParallelSize(chunkParallelSize int64) {
-	if chunkParallelSize < 1 {
-		chunkParallelSize = 1
+func (this *MigrationContext) SetChunkConcurrentSize(chunkConcurrentSize int64) {
+	if chunkConcurrentSize < 1 {
+		chunkConcurrentSize = 1
 	}
-	if chunkParallelSize > 10 {
-		chunkParallelSize = 10
+	if chunkConcurrentSize > 100 {
+		chunkConcurrentSize = 100
 	}
-	atomic.StoreInt64(&this.ChunkParallelSize, chunkParallelSize)
+	atomic.StoreInt64(&this.ChunkConcurrentSize, chunkConcurrentSize)
 }
 
 func (this *MigrationContext) SetDMLBatchSize(batchSize int64) {

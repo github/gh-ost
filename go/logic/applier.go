@@ -76,9 +76,9 @@ func (this *Applier) InitDBConnections() (err error) {
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
-	chunkParallelSize := atomic.LoadInt64(&this.migrationContext.ChunkParallelSize)
-	if chunkParallelSize > mysql.MaxDBPoolConnections {
-		this.db.SetMaxOpenConns(int(chunkParallelSize))
+	concurrentSize := atomic.LoadInt64(&this.migrationContext.ChunkConcurrentSize)
+	if concurrentSize > mysql.MaxDBPoolConnections {
+		this.db.SetMaxOpenConns(int(concurrentSize))
 	}
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
 	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
