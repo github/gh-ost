@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2023 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -107,7 +107,7 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 
 		masterKey = &InstanceKey{
 			Hostname: rowMap.GetString("Master_Host"),
-			Port:     rowMap.GetInt("Master_Port"),
+			Port:     rowMap.GetInt64("Master_Port"),
 		}
 		return nil
 	})

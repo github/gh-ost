@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2023 GitHub Inc.
          See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -10,6 +10,8 @@ import (
 
 	test "github.com/openark/golib/tests"
 
+	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 )
 
@@ -28,4 +30,31 @@ func TestInspectGetSharedUniqueKeys(t *testing.T) {
 	test.S(t).ExpectEquals(len(sharedUniqKeys), 2)
 	test.S(t).ExpectEquals(sharedUniqKeys[0].Columns.String(), "id,item_id")
 	test.S(t).ExpectEquals(sharedUniqKeys[1].Columns.String(), "id,org_id")
+}
+
+func TestRequiresBinlogFormatChange(t *testing.T) {
+	migrationContext := &base.MigrationContext{
+		InspectorServerInfo: &mysql.ServerInfo{},
+	}
+	inspector := &Inspector{migrationContext: migrationContext}
+	{
+		migrationContext.InspectorServerInfo.BinlogFormat = "ROW"
+		test.S(t).ExpectFalse(inspector.RequiresBinlogFormatChange())
+	}
+	{
+		migrationContext.InspectorServerInfo.BinlogFormat = ""
+		test.S(t).ExpectTrue(inspector.RequiresBinlogFormatChange())
+	}
+	{
+		migrationContext.InspectorServerInfo.BinlogFormat = "MINIMAL"
+		test.S(t).ExpectTrue(inspector.RequiresBinlogFormatChange())
+	}
+	{
+		migrationContext.InspectorServerInfo.BinlogFormat = "MIXED"
+		test.S(t).ExpectTrue(inspector.RequiresBinlogFormatChange())
+	}
+	{
+		migrationContext.InspectorServerInfo = nil
+		test.S(t).ExpectTrue(inspector.RequiresBinlogFormatChange())
+	}
 }

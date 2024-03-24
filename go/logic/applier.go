@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2023 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -71,9 +71,16 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	}
 }
 
+func (this *Applier) ServerInfo() *mysql.ServerInfo {
+	return this.migrationContext.ApplierServerInfo
+}
+
 func (this *Applier) InitDBConnections() (err error) {
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
+		return err
+	}
+	if this.migrationContext.ApplierServerInfo, err = mysql.GetServerInfo(this.db); err != nil {
 		return err
 	}
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
@@ -81,15 +88,7 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	this.singletonDB.SetMaxOpenConns(1)
-	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
-	if err != nil {
-		return err
-	}
-	if _, err := base.ValidateConnection(this.singletonDB, this.connectionConfig, this.migrationContext, this.name); err != nil {
-		return err
-	}
-	this.migrationContext.ApplierMySQLVersion = version
-	if err := this.validateAndReadTimeZone(); err != nil {
+	if err = base.ValidateConnection(this.ServerInfo(), this.connectionConfig, this.migrationContext, this.name); err != nil {
 		return err
 	}
 	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
@@ -102,18 +101,8 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.readTableColumns(); err != nil {
 		return err
 	}
-	this.migrationContext.Log.Infof("Applier initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.ApplierMySQLVersion)
-	return nil
-}
-
-// validateAndReadTimeZone potentially reads server time-zone
-func (this *Applier) validateAndReadTimeZone() error {
-	query := `select /* gh-ost */ @@global.time_zone`
-	if err := this.db.QueryRow(query).Scan(&this.migrationContext.ApplierTimeZone); err != nil {
-		return err
-	}
-
-	this.migrationContext.Log.Infof("will use time_zone='%s' on applier", this.migrationContext.ApplierTimeZone)
+	this.migrationContext.Log.Infof("Applier initiated on %+v, version %+v (%+v)", this.connectionConfig.ImpliedKey,
+		this.ServerInfo().Version, this.ServerInfo().VersionComment)
 	return nil
 }
 
@@ -238,7 +227,7 @@ func (this *Applier) CreateGhostTable() error {
 		}
 		defer tx.Rollback()
 
-		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.ServerInfo().TimeZone)
 		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
 
 		if _, err := tx.Exec(sessionQuery); err != nil {
@@ -279,7 +268,7 @@ func (this *Applier) AlterGhost() error {
 		}
 		defer tx.Rollback()
 
-		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.ServerInfo().TimeZone)
 		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
 
 		if _, err := tx.Exec(sessionQuery); err != nil {
@@ -640,7 +629,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		}
 		defer tx.Rollback()
 
-		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.ServerInfo().TimeZone)
 		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
 
 		if _, err := tx.Exec(sessionQuery); err != nil {
