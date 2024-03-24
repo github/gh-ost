@@ -17,6 +17,7 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `help`: shows a brief list of available commands
 - `status`: returns a detailed status summary of migration progress and configuration
 - `sup`: returns a brief status summary of migration progress
+- `cpu-profile`: returns a base64-encoded [`runtime/pprof`](https://pkg.go.dev/runtime/pprof) CPU profile using a duration, default: `30s`. Comma-separated options `gzip` and/or `block` (blocked profile) may follow the profile duration
 - `coordinates`: returns recent (though not exactly up to date) binary log coordinates of the inspected server
 - `applier`: returns the hostname of the applier
 - `inspector`: returns the hostname of the inspector

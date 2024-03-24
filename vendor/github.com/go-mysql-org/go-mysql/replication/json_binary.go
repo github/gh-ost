@@ -391,8 +391,6 @@ func (d *jsonBinaryDecoder) decodeOpaque(data []byte) interface{} {
 	default:
 		return hack.String(data)
 	}
-
-	return nil
 }
 
 func (d *jsonBinaryDecoder) decodeDecimal(data []byte) interface{} {
@@ -446,7 +444,7 @@ func (d *jsonBinaryDecoder) decodeDateTime(data []byte) interface{} {
 	year := ym / 13
 	month := ym % 13
 	day := ymd % (1 << 5)
-	hour := (hms >> 12)
+	hour := hms >> 12
 	minute := (hms >> 6) % (1 << 6)
 	second := hms % (1 << 6)
 	frac := v % (1 << 24)

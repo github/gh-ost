@@ -302,6 +302,15 @@ func (this *MigrationContext) SetConnectionConfig(storageEngine string) error {
 	return nil
 }
 
+func (this *MigrationContext) SetConnectionCharset(charset string) {
+	if charset == "" {
+		charset = "utf8mb4,utf8,latin1"
+	}
+
+	this.InspectorConnectionConfig.Charset = charset
+	this.ApplierConnectionConfig.Charset = charset
+}
+
 func getSafeTableName(baseName string, suffix string) string {
 	name := fmt.Sprintf("_%s_%s", baseName, suffix)
 	if len(name) <= mysql.MaxTableNameLength {

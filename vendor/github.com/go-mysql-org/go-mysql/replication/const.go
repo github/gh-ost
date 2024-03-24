@@ -7,7 +7,7 @@ const (
 
 var (
 	//binlog header [ fe `bin` ]
-	BinLogFileHeader []byte = []byte{0xfe, 0x62, 0x69, 0x6e}
+	BinLogFileHeader = []byte{0xfe, 0x62, 0x69, 0x6e}
 
 	SemiSyncIndicator byte = 0xef
 )
@@ -216,4 +216,12 @@ const (
 	TABLE_MAP_OPT_META_PRIMARY_KEY_WITH_PREFIX
 	TABLE_MAP_OPT_META_ENUM_AND_SET_DEFAULT_CHARSET
 	TABLE_MAP_OPT_META_ENUM_AND_SET_COLUMN_CHARSET
+)
+
+type IntVarEventType byte
+
+const (
+	INVALID IntVarEventType = iota
+	LAST_INSERT_ID
+	INSERT_ID
 )

@@ -8,7 +8,7 @@ import (
 	"github.com/siddontang/go/hack"
 )
 
-func formatTextValue(value interface{}) ([]byte, error) {
+func FormatTextValue(value interface{}) ([]byte, error) {
 	switch v := value.(type) {
 	case int8:
 		return strconv.AppendInt(nil, int64(v), 10), nil
@@ -165,7 +165,7 @@ func BuildSimpleTextResultset(names []string, values [][]interface{}) (*Resultse
 					return nil, errors.Errorf("row types aren't consistent")
 				}
 			}
-			b, err = formatTextValue(value)
+			b, err = FormatTextValue(value)
 
 			if err != nil {
 				return nil, errors.Trace(err)
@@ -192,7 +192,7 @@ func BuildSimpleBinaryResultset(names []string, values [][]interface{}) (*Result
 
 	var b []byte
 
-	bitmapLen := ((len(names) + 7 + 2) >> 3)
+	bitmapLen := (len(names) + 7 + 2) >> 3
 
 	for i, vs := range values {
 		if len(vs) != len(r.Fields) {
@@ -220,7 +220,7 @@ func BuildSimpleBinaryResultset(names []string, values [][]interface{}) (*Result
 				}
 			}
 			if value == nil {
-				nullBitmap[(i+2)/8] |= (1 << (uint(i+2) % 8))
+				nullBitmap[(i+2)/8] |= 1 << (uint(i+2) % 8)
 				continue
 			}
 
