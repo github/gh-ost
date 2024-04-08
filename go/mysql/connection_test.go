@@ -82,6 +82,7 @@ func TestGetDBUri(t *testing.T) {
 	c.User = "gromit"
 	c.Password = "penguin"
 	c.Timeout = 1.2345
+	c.WaitTimeout = 0 // should be ignored
 	c.TransactionIsolation = transactionIsolation
 	c.Charset = "utf8mb4,utf8,latin1"
 
@@ -95,10 +96,11 @@ func TestGetDBUriWithTLSSetup(t *testing.T) {
 	c.User = "gromit"
 	c.Password = "penguin"
 	c.Timeout = 1.2345
+	c.WaitTimeout = 60
 	c.tlsConfig = &tls.Config{}
 	c.TransactionIsolation = transactionIsolation
 	c.Charset = "utf8mb4_general_ci,utf8_general_ci,latin1"
 
 	uri := c.GetDBUri("test")
-	test.S(t).ExpectEquals(uri, `gromit:penguin@tcp(myhost:3306)/test?autocommit=true&interpolateParams=true&charset=utf8mb4_general_ci,utf8_general_ci,latin1&tls=ghost&transaction_isolation="REPEATABLE-READ"&timeout=1.234500s&readTimeout=1.234500s&writeTimeout=1.234500s`)
+	test.S(t).ExpectEquals(uri, `gromit:penguin@tcp(myhost:3306)/test?autocommit=true&interpolateParams=true&charset=utf8mb4_general_ci,utf8_general_ci,latin1&tls=ghost&transaction_isolation="REPEATABLE-READ"&timeout=1.234500s&readTimeout=1.234500s&writeTimeout=1.234500s&wait_timeout=60.000000s`)
 }
