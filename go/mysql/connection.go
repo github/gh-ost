@@ -31,6 +31,7 @@ type ConnectionConfig struct {
 	Timeout              float64
 	TransactionIsolation string
 	Charset              string
+	WaitTimeout          float64
 }
 
 func NewConnectionConfig() *ConnectionConfig {
@@ -51,6 +52,7 @@ func (this *ConnectionConfig) DuplicateCredentials(key InstanceKey) *ConnectionC
 		Timeout:              this.Timeout,
 		TransactionIsolation: this.TransactionIsolation,
 		Charset:              this.Charset,
+		WaitTimeout:          this.WaitTimeout,
 	}
 	config.ImpliedKey = &config.Key
 	return config
@@ -138,6 +140,9 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 		fmt.Sprintf("timeout=%fs", this.Timeout),
 		fmt.Sprintf("readTimeout=%fs", this.Timeout),
 		fmt.Sprintf("writeTimeout=%fs", this.Timeout),
+	}
+	if this.WaitTimeout > 0 {
+		connectionParams = append(connectionParams, fmt.Sprintf("wait_timeout=%fs", this.WaitTimeout))
 	}
 
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s", this.User, this.Password, hostname, this.Key.Port, databaseName, strings.Join(connectionParams, "&"))
