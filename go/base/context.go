@@ -772,7 +772,7 @@ func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
 	return nil
 }
 
-// ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
+// ReadCriticalLoad parses the `--max-load` flag, which is in multiple key-value format,
 // such as: 'Threads_running=100,Threads_connected=500'
 // It only applies changes in case there's no parsing error.
 func (this *MigrationContext) ReadCriticalLoad(criticalLoadList string) error {
