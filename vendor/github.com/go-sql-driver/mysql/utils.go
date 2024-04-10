@@ -36,7 +36,7 @@ var (
 // registering it.
 //
 //	rootCertPool := x509.NewCertPool()
-//	pem, err := ioutil.ReadFile("/path/ca-cert.pem")
+//	pem, err := os.ReadFile("/path/ca-cert.pem")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -265,7 +265,11 @@ func parseBinaryDateTime(num uint64, data []byte, loc *time.Location) (driver.Va
 	return nil, fmt.Errorf("invalid DATETIME packet length %d", num)
 }
 
-func appendDateTime(buf []byte, t time.Time) ([]byte, error) {
+func appendDateTime(buf []byte, t time.Time, timeTruncate time.Duration) ([]byte, error) {
+	if timeTruncate > 0 {
+		t = t.Truncate(timeTruncate)
+	}
+
 	year, month, day := t.Date()
 	hour, min, sec := t.Clock()
 	nsec := t.Nanosecond()
@@ -614,6 +618,11 @@ func appendLengthEncodedInteger(b []byte, n uint64) []byte {
 	}
 	return append(b, 0xfe, byte(n), byte(n>>8), byte(n>>16), byte(n>>24),
 		byte(n>>32), byte(n>>40), byte(n>>48), byte(n>>56))
+}
+
+func appendLengthEncodedString(b []byte, s string) []byte {
+	b = appendLengthEncodedInteger(b, uint64(len(s)))
+	return append(b, s...)
 }
 
 // reserveBuffer checks cap(buf) and expand buffer to len(buf) + appendSize.
