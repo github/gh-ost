@@ -89,7 +89,7 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	this.migrationContext.ApplierMySQLVersion = version
-	if err := this.validateAndReadTimeZone(); err != nil {
+	if err := this.validateAndReadGlobalVariables(); err != nil {
 		return err
 	}
 	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
@@ -106,10 +106,13 @@ func (this *Applier) InitDBConnections() (err error) {
 	return nil
 }
 
-// validateAndReadTimeZone potentially reads server time-zone
-func (this *Applier) validateAndReadTimeZone() error {
-	query := `select /* gh-ost */ @@global.time_zone`
-	if err := this.db.QueryRow(query).Scan(&this.migrationContext.ApplierTimeZone); err != nil {
+// validateAndReadGlobalVariables potentially reads server global variables, such as the time_zone and wait_timeout.
+func (this *Applier) validateAndReadGlobalVariables() error {
+	query := `select /* gh-ost */ @@global.time_zone, @@global.wait_timeout`
+	if err := this.db.QueryRow(query).Scan(
+		&this.migrationContext.ApplierTimeZone,
+		&this.migrationContext.ApplierWaitTimeout,
+	); err != nil {
 		return err
 	}
 
@@ -973,6 +976,22 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		tableLocked <- err
 		return err
 	}
+
+	this.migrationContext.Log.Infof("Setting cut-over idle timeout as %d seconds", this.migrationContext.CutOverIdleTimeoutSeconds)
+	query = fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.CutOverIdleTimeoutSeconds)
+	if _, err := tx.Exec(query); err != nil {
+		tableLocked <- err
+		return err
+	}
+	defer func() {
+		this.migrationContext.Log.Infof("Restoring applier idle timeout as %d seconds", this.migrationContext.ApplierWaitTimeout)
+		query = fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.ApplierWaitTimeout)
+		if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+			this.migrationContext.Log.Errorf("Failed to restore applier wait_timeout to %d seconds: %v",
+				this.migrationContext.ApplierWaitTimeout, err,
+			)
+		}
+	}()
 
 	if err := this.CreateAtomicCutOverSentryTable(); err != nil {
 		tableLocked <- err

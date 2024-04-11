@@ -51,7 +51,6 @@ func main() {
 	flag.StringVar(&migrationContext.AssumeMasterHostname, "assume-master-host", "", "(optional) explicitly tell gh-ost the identity of the master. Format: some.host.com[:port] This is useful in master-master setups where you wish to pick an explicit master, or in a tungsten-replicator where gh-ost is unable to determine the master")
 	flag.IntVar(&migrationContext.InspectorConnectionConfig.Key.Port, "port", 3306, "MySQL port (preferably a replica, not the master)")
 	flag.Float64Var(&migrationContext.InspectorConnectionConfig.Timeout, "mysql-timeout", 0.0, "Connect, read and write timeout for MySQL")
-	flag.Float64Var(&migrationContext.InspectorConnectionConfig.WaitTimeout, "mysql-wait-timeout", 0.0, "wait_timeout for MySQL sessions")
 	flag.StringVar(&migrationContext.CliUser, "user", "", "MySQL user")
 	flag.StringVar(&migrationContext.CliPassword, "password", "", "MySQL password")
 	flag.StringVar(&migrationContext.CliMasterUser, "master-user", "", "MySQL user on master, if different from that on replica. Requires --assume-master-host")
@@ -109,6 +108,7 @@ func main() {
 	dmlBatchSize := flag.Int64("dml-batch-size", 10, "batch size for DML events to apply in a single transaction (range 1-100)")
 	defaultRetries := flag.Int64("default-retries", 60, "Default number of retries for various operations before panicking")
 	cutOverLockTimeoutSeconds := flag.Int64("cut-over-lock-timeout-seconds", 3, "Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout)")
+	flag.Int64Var(&migrationContext.CutOverIdleTimeoutSeconds, "cut-over-idle-timeout-seconds", *cutOverLockTimeoutSeconds*2, "the idle timeout in seconds for the cut-over operation. The MySQL session performing the cut-over uses this as a wait_timeout.")
 	niceRatio := flag.Float64("nice-ratio", 0, "force being 'nice', imply sleep time per chunk time; range: [0.0..100.0]. Example values: 0 is aggressive. 1: for every 1ms spent copying rows, sleep additional 1ms (effectively doubling runtime); 0.7: for every 10ms spend in a rowcopy chunk, spend 7ms sleeping immediately after")
 
 	maxLagMillis := flag.Int64("max-lag-millis", 1500, "replication lag at which to throttle operation")

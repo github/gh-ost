@@ -135,6 +135,7 @@ type MigrationContext struct {
 	CriticalLoadHibernateSeconds        int64
 	PostponeCutOverFlagFile             string
 	CutOverLockTimeoutSeconds           int64
+	CutOverIdleTimeoutSeconds           int64
 	CutOverExponentialBackoff           bool
 	ExponentialBackoffMaxInterval       int64
 	ForceNamedCutOverCommand            bool
@@ -164,6 +165,7 @@ type MigrationContext struct {
 	Hostname                               string
 	AssumeMasterHostname                   string
 	ApplierTimeZone                        string
+	ApplierWaitTimeout                     int64
 	TableEngine                            string
 	RowsEstimate                           int64
 	RowsDeltaEstimate                      int64
@@ -276,6 +278,7 @@ func NewMigrationContext() *MigrationContext {
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
+		CutOverIdleTimeoutSeconds:           6,
 		DMLBatchSize:                        10,
 		etaNanoseonds:                       ETAUnknown,
 		maxLoad:                             NewLoadMap(),
