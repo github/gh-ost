@@ -977,21 +977,23 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		return err
 	}
 
-	this.migrationContext.Log.Infof("Setting cut-over idle timeout as %d seconds", this.migrationContext.CutOverIdleTimeoutSeconds)
-	query = fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.CutOverIdleTimeoutSeconds)
-	if _, err := tx.Exec(query); err != nil {
-		tableLocked <- err
-		return err
-	}
-	defer func() {
-		this.migrationContext.Log.Infof("Restoring applier idle timeout as %d seconds", this.migrationContext.ApplierWaitTimeout)
-		query = fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.ApplierWaitTimeout)
-		if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
-			this.migrationContext.Log.Errorf("Failed to restore applier wait_timeout to %d seconds: %v",
-				this.migrationContext.ApplierWaitTimeout, err,
-			)
+	if this.migrationContext.CutOverIdleTimeoutSeconds > 0 {
+		this.migrationContext.Log.Infof("Setting cut-over idle timeout as %d seconds", this.migrationContext.CutOverIdleTimeoutSeconds)
+		query = fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.CutOverIdleTimeoutSeconds)
+		if _, err := tx.Exec(query); err != nil {
+			tableLocked <- err
+			return err
 		}
-	}()
+		defer func() {
+			this.migrationContext.Log.Infof("Restoring applier idle timeout as %d seconds", this.migrationContext.ApplierWaitTimeout)
+			query = fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.ApplierWaitTimeout)
+			if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+				this.migrationContext.Log.Errorf("Failed to restore applier wait_timeout to %d seconds: %v",
+					this.migrationContext.ApplierWaitTimeout, err,
+				)
+			}
+		}()
+	}
 
 	if err := this.CreateAtomicCutOverSentryTable(); err != nil {
 		tableLocked <- err
