@@ -949,7 +949,7 @@ func (this *Applier) WaitForAtomicCutOverRename(tx *gosql.Tx, okToUnlockTable <-
 			return
 		case <-ticker.C:
 			// keep connection alive as we wait for the RENAME.
-			if _, err := tx.Query(`select /* gh-ost */ 1`); err != nil {
+			if _, err := tx.Exec(`select /* gh-ost */ 1`); err != nil {
 				this.migrationContext.Log.Errorf("Failed to ping applier connection: %v", err)
 			}
 		}
