@@ -937,6 +937,42 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 	return nil
 }
 
+// WaitForAtomicCutOverRename waits for the cut-over RENAME operation while periodically
+// pinging the applier connection to avoid the connection becoming idle.
+func (this *Applier) WaitForAtomicCutOverRename(tx *gosql.Tx, okToUnlockTable <-chan bool) {
+	ticker := time.NewTicker(time.Millisecond * 500)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-okToUnlockTable:
+			this.migrationContext.Log.Infof("Will now proceed to drop magic table and unlock tables")
+			return
+		case <-ticker.C:
+			// keep connection alive as we wait for the RENAME.
+			if _, err := tx.Query(`select /* gh-ost */ 1`); err != nil {
+				this.migrationContext.Log.Errorf("Failed to ping applier connection: %v", err)
+			}
+		}
+	}
+}
+
+// InitAtomicCutOverIdleTimeout sets the cut-over session wait_timeout, returning a func() to rollback
+// to the original wait_timeout and an error, if any.
+func (this *Applier) InitAtomicCutOverIdleTimeout(tx *gosql.Tx) (restoreTimeoutFunc func(), err error) {
+	this.migrationContext.Log.Infof("Setting cut-over idle timeout as %d seconds", this.migrationContext.CutOverIdleTimeoutSeconds)
+	query := fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.CutOverIdleTimeoutSeconds)
+	_, err = tx.Exec(query)
+	return func() {
+		this.migrationContext.Log.Infof("Restoring applier idle timeout as %d seconds", this.migrationContext.ApplierWaitTimeout)
+		query = fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.ApplierWaitTimeout)
+		if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+			this.migrationContext.Log.Errorf("Failed to restore applier wait_timeout to %d seconds: %v",
+				this.migrationContext.ApplierWaitTimeout, err,
+			)
+		}
+	}, err
+}
+
 // AtomicCutOverMagicLock
 func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
 	tx, err := this.db.Begin()
@@ -977,22 +1013,13 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		return err
 	}
 
-	if this.migrationContext.CutOverIdleTimeoutSeconds > 0 {
-		this.migrationContext.Log.Infof("Setting cut-over idle timeout as %d seconds", this.migrationContext.CutOverIdleTimeoutSeconds)
-		query = fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.CutOverIdleTimeoutSeconds)
-		if _, err := tx.Exec(query); err != nil {
+	if this.migrationContext.CutOverIdleTimeoutSeconds >= 1 {
+		restoreIdleTimeoutFunc, err := this.InitAtomicCutOverIdleTimeout(tx)
+		if err != nil {
 			tableLocked <- err
 			return err
 		}
-		defer func() {
-			this.migrationContext.Log.Infof("Restoring applier idle timeout as %d seconds", this.migrationContext.ApplierWaitTimeout)
-			query = fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.ApplierWaitTimeout)
-			if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
-				this.migrationContext.Log.Errorf("Failed to restore applier wait_timeout to %d seconds: %v",
-					this.migrationContext.ApplierWaitTimeout, err,
-				)
-			}
-		}()
+		defer restoreIdleTimeoutFunc()
 	}
 
 	if err := this.CreateAtomicCutOverSentryTable(); err != nil {
@@ -1025,8 +1052,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 
 	// The cut-over phase will proceed to apply remaining backlog onto ghost table,
 	// and issue RENAME. We wait here until told to proceed.
-	<-okToUnlockTable
-	this.migrationContext.Log.Infof("Will now proceed to drop magic table and unlock tables")
+	this.WaitForAtomicCutOverRename(tx, okToUnlockTable)
 
 	// The magic table is here because we locked it. And we are the only ones allowed to drop it.
 	// And in fact, we will:
