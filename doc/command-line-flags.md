@@ -108,7 +108,7 @@ Default `3`.  Max number of seconds to hold locks on tables while attempting to 
 
 ### cut-over-wait-timeout-seconds
 
-When set to a value greater than zero, this flag causes `gh-ost` to set a [MySQL `wait_timeout`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_wait_timeout) for the MySQL session performing the cut-over, specified in seconds. This timeout is to ensure the locks held by the cut-over are released if the `gh-ost` process terminates or pauses mid-cut-over.
+When set to a value greater than zero, this flag causes `gh-ost` to set a [MySQL `wait_timeout`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_wait_timeout) for the MySQL session performing the cut-over, specified in seconds. This timeout is to ensure the locks held by the cut-over are released if the `gh-ost` process becomes unresponsive _(but still alive)_ mid-cut-over.
 
 ### discard-foreign-keys
 
