@@ -102,13 +102,13 @@ This is somewhat similar to a Nagios `n`-times test, where `n` in our case is al
 
 Optional. Default is `safe`. See more discussion in [`cut-over`](cut-over.md)
 
+### cut-over-idle-timeout-seconds
+
+When set to a value greater than zero, this flag causes `gh-ost` to set a [MySQL `wait_timeout`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_wait_timeout) for the MySQL session performing the cut-over, specified in seconds. This timeout is to ensure the locks held by the cut-over are released if the `gh-ost` process becomes unresponsive _(but still alive)_ mid-cut-over.
+
 ### cut-over-lock-timeout-seconds
 
 Default `3`.  Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout).
-
-### cut-over-wait-timeout-seconds
-
-When set to a value greater than zero, this flag causes `gh-ost` to set a [MySQL `wait_timeout`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_wait_timeout) for the MySQL session performing the cut-over, specified in seconds. This timeout is to ensure the locks held by the cut-over are released if the `gh-ost` process becomes unresponsive _(but still alive)_ mid-cut-over.
 
 ### discard-foreign-keys
 
