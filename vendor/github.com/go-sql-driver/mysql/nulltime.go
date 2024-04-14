@@ -38,7 +38,7 @@ type NullTime sql.NullTime
 // Scan implements the Scanner interface.
 // The value type must be time.Time or string / []byte (formatted time-string),
 // otherwise Scan fails.
-func (nt *NullTime) Scan(value interface{}) (err error) {
+func (nt *NullTime) Scan(value any) (err error) {
 	if value == nil {
 		nt.Time, nt.Valid = time.Time{}, false
 		return
@@ -59,7 +59,7 @@ func (nt *NullTime) Scan(value interface{}) (err error) {
 	}
 
 	nt.Valid = false
-	return fmt.Errorf("Can't convert %T to time.Time", value)
+	return fmt.Errorf("can't convert %T to time.Time", value)
 }
 
 // Value implements the driver Valuer interface.

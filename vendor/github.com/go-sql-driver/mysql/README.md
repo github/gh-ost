@@ -40,15 +40,23 @@ A MySQL-Driver for Go's [database/sql](https://golang.org/pkg/database/sql/) pac
   * Optional placeholder interpolation
 
 ## Requirements
-  * Go 1.13 or higher. We aim to support the 3 latest versions of Go.
-  * MySQL (4.1+), MariaDB, Percona Server, Google CloudSQL or Sphinx (2.2.3+)
+
+* Go 1.19 or higher. We aim to support the 3 latest versions of Go.
+* MySQL (5.7+) and MariaDB (10.3+) are supported.
+* [TiDB](https://github.com/pingcap/tidb) is supported by PingCAP.
+  * Do not ask questions about TiDB in our issue tracker or forum.
+  * [Document](https://docs.pingcap.com/tidb/v6.1/dev-guide-sample-application-golang)
+  * [Forum](https://ask.pingcap.com/)
+* go-mysql would work with Percona Server, Google CloudSQL or Sphinx (2.2.3+).
+  * Maintainers won't support them. Do not expect issues are investigated and resolved by maintainers.
+  * Investigate issues yourself and please send a pull request to fix it.
 
 ---------------------------------------
 
 ## Installation
 Simple install the package to your [$GOPATH](https://github.com/golang/go/wiki/GOPATH "GOPATH") with the [go tool](https://golang.org/cmd/go/ "go command") from shell:
 ```bash
-$ go get -u github.com/go-sql-driver/mysql
+go get -u github.com/go-sql-driver/mysql
 ```
 Make sure [Git is installed](https://git-scm.com/downloads) on your machine and in your system's `PATH`.
 
@@ -114,6 +122,12 @@ This has the same effect as an empty DSN string:
 
 ```
 
+`dbname` is escaped by [PathEscape()](https://pkg.go.dev/net/url#PathEscape) since v1.8.0. If your database name is `dbname/withslash`, it becomes:
+
+```
+/dbname%2Fwithslash
+```
+
 Alternatively, [Config.FormatDSN](https://godoc.org/github.com/go-sql-driver/mysql#Config.FormatDSN) can be used to create a DSN string by filling a struct.
 
 #### Password
@@ -121,7 +135,7 @@ Passwords can consist of any character. Escaping is **not** necessary.
 
 #### Protocol
 See [net.Dial](https://golang.org/pkg/net/#Dial) for more information which networks are available.
-In general you should use an Unix domain socket if available and TCP otherwise for best performance.
+In general you should use a Unix domain socket if available and TCP otherwise for best performance.
 
 #### Address
 For TCP and UDP networks, addresses have the form `host[:port]`.
@@ -145,7 +159,7 @@ Default:        false
 ```
 
 `allowAllFiles=true` disables the file allowlist for `LOAD DATA LOCAL INFILE` and allows *all* files.
-[*Might be insecure!*](http://dev.mysql.com/doc/refman/5.7/en/load-data-local.html)
+[*Might be insecure!*](https://dev.mysql.com/doc/refman/8.0/en/load-data.html#load-data-local)
 
 ##### `allowCleartextPasswords`
 
@@ -194,10 +208,9 @@ Valid Values:   <name>
 Default:        none
 ```
 
-Sets the charset used for client-server interaction (`"SET NAMES <value>"`). If multiple charsets are set (separated by a comma), the following charset is used if setting the charset failes. This enables for example support for `utf8mb4` ([introduced in MySQL 5.5.3](http://dev.mysql.com/doc/refman/5.5/en/charset-unicode-utf8mb4.html)) with fallback to `utf8` for older servers (`charset=utf8mb4,utf8`).
+Sets the charset used for client-server interaction (`"SET NAMES <value>"`). If multiple charsets are set (separated by a comma), the following charset is used if setting the charset fails. This enables for example support for `utf8mb4` ([introduced in MySQL 5.5.3](http://dev.mysql.com/doc/refman/5.5/en/charset-unicode-utf8mb4.html)) with fallback to `utf8` for older servers (`charset=utf8mb4,utf8`).
 
-Usage of the `charset` parameter is discouraged because it issues additional queries to the server.
-Unless you need the fallback behavior, please use `collation` instead.
+See also [Unicode Support](#unicode-support).
 
 ##### `checkConnLiveness`
 
@@ -226,6 +239,7 @@ The default collation (`utf8mb4_general_ci`) is supported from MySQL 5.5.  You s
 
 Collations for charset "ucs2", "utf16", "utf16le", and "utf32" can not be used ([ref](https://dev.mysql.com/doc/refman/5.7/en/charset-connection.html#charset-connection-impermissible-client-charset)).
 
+See also [Unicode Support](#unicode-support).
 
 ##### `clientFoundRows`
 
@@ -279,6 +293,15 @@ Note that this sets the location for time.Time values but does not change MySQL'
 
 Please keep in mind, that param values must be [url.QueryEscape](https://golang.org/pkg/net/url/#QueryEscape)'ed. Alternatively you can manually replace the `/` with `%2F`. For example `US/Pacific` would be `loc=US%2FPacific`.
 
+##### `timeTruncate`
+
+```
+Type:           duration
+Default:        0
+```
+
+[Truncate time values](https://pkg.go.dev/time#Duration.Truncate) to the specified duration. The value must be a decimal number with a unit suffix (*"ms"*, *"s"*, *"m"*, *"h"*), such as *"30s"*, *"0.5m"* or *"1m30s"*.
+
 ##### `maxAllowedPacket`
 ```
 Type:          decimal number
@@ -295,9 +318,25 @@ Valid Values:   true, false
 Default:        false
 ```
 
-Allow multiple statements in one query. While this allows batch queries, it also greatly increases the risk of SQL injections. Only the result of the first query is returned, all other results are silently discarded.
+Allow multiple statements in one query. This can be used to bach multiple queries. Use [Rows.NextResultSet()](https://pkg.go.dev/database/sql#Rows.NextResultSet) to get result of the second and subsequent queries.
 
-When `multiStatements` is used, `?` parameters must only be used in the first statement.
+When `multiStatements` is used, `?` parameters must only be used in the first statement. [interpolateParams](#interpolateparams) can be used to avoid this limitation unless prepared statement is used explicitly.
+
+It's possible to access the last inserted ID and number of affected rows for multiple statements by using `sql.Conn.Raw()` and the `mysql.Result`. For example:
+
+```go
+conn, _ := db.Conn(ctx)
+conn.Raw(func(conn any) error {
+  ex := conn.(driver.Execer)
+  res, err := ex.Exec(`
+  UPDATE point SET x = 1 WHERE y = 2;
+  UPDATE point SET x = 2 WHERE y = 3;
+  `, nil)
+  // Both slices have 2 elements.
+  log.Print(res.(mysql.Result).AllRowsAffected())
+  log.Print(res.(mysql.Result).AllLastInsertIds())
+})
+```
 
 ##### `parseTime`
 
@@ -393,6 +432,15 @@ Default:        0
 
 I/O write timeout. The value must be a decimal number with a unit suffix (*"ms"*, *"s"*, *"m"*, *"h"*), such as *"30s"*, *"0.5m"* or *"1m30s"*.
 
+##### `connectionAttributes`
+
+```
+Type:           comma-delimited string of user-defined "key:value" pairs
+Valid Values:   (<name1>:<value1>,<name2>:<value2>,...)
+Default:        none
+```
+
+[Connection attributes](https://dev.mysql.com/doc/refman/8.0/en/performance-schema-connection-attribute-tables.html) are key-value pairs that application programs can pass to the server at connect time.
 
 ##### System Variables
 
@@ -465,7 +513,7 @@ user:password@/
 The connection pool is managed by Go's database/sql package. For details on how to configure the size of the pool and how long connections stay in the pool see `*DB.SetMaxOpenConns`, `*DB.SetMaxIdleConns`, and `*DB.SetConnMaxLifetime` in the [database/sql documentation](https://golang.org/pkg/database/sql/). The read, write, and dial timeouts for each individual connection are configured with the DSN parameters [`readTimeout`](#readtimeout), [`writeTimeout`](#writetimeout), and [`timeout`](#timeout), respectively.
 
 ## `ColumnType` Support
-This driver supports the [`ColumnType` interface](https://golang.org/pkg/database/sql/#ColumnType) introduced in Go 1.8, with the exception of [`ColumnType.Length()`](https://golang.org/pkg/database/sql/#ColumnType.Length), which is currently not supported. All Unsigned database type names will be returned `UNSIGNED ` with `INT`, `TINYINT`, `SMALLINT`, `BIGINT`.
+This driver supports the [`ColumnType` interface](https://golang.org/pkg/database/sql/#ColumnType) introduced in Go 1.8, with the exception of [`ColumnType.Length()`](https://golang.org/pkg/database/sql/#ColumnType.Length), which is currently not supported. All Unsigned database type names will be returned `UNSIGNED ` with `INT`, `TINYINT`, `SMALLINT`, `MEDIUMINT`, `BIGINT`.
 
 ## `context.Context` Support
 Go 1.8 added `database/sql` support for `context.Context`. This driver supports query timeouts and cancellation via contexts.
@@ -478,7 +526,7 @@ For this feature you need direct access to the package. Therefore you must chang
 import "github.com/go-sql-driver/mysql"
 ```
 
-Files must be explicitly allowed by registering them with `mysql.RegisterLocalFile(filepath)` (recommended) or the allowlist check must be deactivated by using the DSN parameter `allowAllFiles=true` ([*Might be insecure!*](http://dev.mysql.com/doc/refman/5.7/en/load-data-local.html)).
+Files must be explicitly allowed by registering them with `mysql.RegisterLocalFile(filepath)` (recommended) or the allowlist check must be deactivated by using the DSN parameter `allowAllFiles=true` ([*Might be insecure!*](https://dev.mysql.com/doc/refman/8.0/en/load-data.html#load-data-local)).
 
 To use a `io.Reader` a handler function must be registered with `mysql.RegisterReaderHandler(name, handler)` which returns a `io.Reader` or `io.ReadCloser`. The Reader is available with the filepath `Reader::<name>` then. Choose different names for different handlers and `DeregisterReaderHandler` when you don't need it anymore.
 
@@ -496,9 +544,11 @@ However, many want to scan MySQL `DATE` and `DATETIME` values into `time.Time` v
 ### Unicode support
 Since version 1.5 Go-MySQL-Driver automatically uses the collation ` utf8mb4_general_ci` by default.
 
-Other collations / charsets can be set using the [`collation`](#collation) DSN parameter.
+Other charsets / collations can be set using the [`charset`](#charset) or [`collation`](#collation) DSN parameter.
 
-Version 1.0 of the driver recommended adding `&charset=utf8` (alias for `SET NAMES utf8`) to the DSN to enable proper UTF-8 support. This is not necessary anymore. The [`collation`](#collation) parameter should be preferred to set another collation / charset than the default.
+- When only the `charset` is specified, the `SET NAMES <charset>` query is sent and the server's default collation is used.
+- When both the `charset` and `collation` are specified, the `SET NAMES <charset> COLLATE <collation>` query is sent.
+- When only the `collation` is specified, the collation is specified in the protocol handshake and the `SET NAMES` query is not sent. This can save one roundtrip, but note that the server may ignore the specified collation silently and use the server's default charset/collation instead.
 
 See http://dev.mysql.com/doc/refman/8.0/en/charset-unicode.html for more details on MySQL's Unicode support.
 
