@@ -284,7 +284,7 @@ func (this *Throttler) criticalLoadIsMet() (met bool, variableName string, value
 	return false, variableName, value, threshold, nil
 }
 
-// collectReplicationLag reads the latest changelog heartbeat value
+// collectThrottleHTTPStatus reads the latest changelog heartbeat value
 func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<- bool) {
 	collectFunc := func() (sleep bool, err error) {
 		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {

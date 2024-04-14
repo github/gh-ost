@@ -796,7 +796,7 @@ func (this *Applier) StartSlaveIOThread() error {
 	return nil
 }
 
-// StartSlaveSQLThread is applicable with --test-on-replica
+// StopSlaveSQLThread is applicable with --test-on-replica
 func (this *Applier) StopSlaveSQLThread() error {
 	query := `stop /* gh-ost */ slave sql_thread`
 	this.migrationContext.Log.Infof("Verifying SQL thread is stopped")
