@@ -220,7 +220,7 @@ func BuildSimpleBinaryResultset(names []string, values [][]interface{}) (*Result
 				}
 			}
 			if value == nil {
-				nullBitmap[(i+2)/8] |= 1 << (uint(i+2) % 8)
+				nullBitmap[(j+2)/8] |= 1 << (uint(j+2) % 8)
 				continue
 			}
 
