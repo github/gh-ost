@@ -160,6 +160,10 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			if err := this.handleRowsEvent(ev, binlogEvent, entriesChannel); err != nil {
 				return err
 			}
+		case *replication.TransactionPayloadEvent:
+			if err := this.handleTransactionPayloadEvent(binlogEvent, entriesChannel); err != nil {
+				return err
+			}
 		}
 	}
 	this.migrationContext.Log.Debugf("done streaming events")
@@ -170,4 +174,17 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 func (this *GoMySQLReader) Close() error {
 	this.binlogSyncer.Close()
 	return nil
+}
+
+// handleLoadQueryEvent
+func (this *GoMySQLReader) handleTransactionPayloadEvent(rowsEvent *replication.TransactionPayloadEvent, entriesChannel chan<- *BinlogEntry) (err error) {
+	for _, ev := range rowsEvent.Events {
+		switch binlogEvent := ev.Event.(type) {
+		case *replication.RowsEvent:
+			if err := this.handleRowsEvent(ev, binlogEvent, entriesChannel); err != nil {
+				return err
+			}
+		}
+	}
+	return
 }
