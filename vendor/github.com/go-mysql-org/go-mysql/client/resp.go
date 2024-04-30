@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/pem"
+	"fmt"
 
 	"github.com/pingcap/errors"
 	"github.com/siddontang/go/hack"
@@ -60,9 +61,9 @@ func (c *Conn) handleOKPacket(data []byte) (*Result, error) {
 		// pos += 2
 	}
 
-	//new ok package will check CLIENT_SESSION_TRACK too, but I don't support it now.
+	// new ok package will check CLIENT_SESSION_TRACK too, but I don't support it now.
 
-	//skip info
+	// skip info
 	return r, nil
 }
 
@@ -75,7 +76,7 @@ func (c *Conn) handleErrorPacket(data []byte) error {
 	pos += 2
 
 	if c.capability&CLIENT_PROTOCOL_41 > 0 {
-		//skip '#'
+		// skip '#'
 		pos++
 		e.State = hack.String(data[pos : pos+5])
 		pos += 5
@@ -89,11 +90,11 @@ func (c *Conn) handleErrorPacket(data []byte) error {
 func (c *Conn) handleAuthResult() error {
 	data, switchToPlugin, err := c.readAuthResult()
 	if err != nil {
-		return err
+		return fmt.Errorf("readAuthResult: %w", err)
 	}
 	// handle auth switch, only support 'sha256_password', and 'caching_sha2_password'
 	if switchToPlugin != "" {
-		//fmt.Printf("now switching auth plugin to '%s'\n", switchToPlugin)
+		// fmt.Printf("now switching auth plugin to '%s'\n", switchToPlugin)
 		if data == nil {
 			data = c.salt
 		} else {
@@ -168,7 +169,7 @@ func (c *Conn) handleAuthResult() error {
 func (c *Conn) readAuthResult() ([]byte, string, error) {
 	data, err := c.ReadPacket()
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("ReadPacket: %w", err)
 	}
 
 	// see: https://insidemysql.com/preparing-your-community-connector-for-mysql-8-part-2-sha256/
@@ -343,7 +344,7 @@ func (c *Conn) readResultColumns(result *Result) (err error) {
 		rawPkgLen := len(result.RawPkg)
 		result.RawPkg, err = c.ReadPacketReuseMem(result.RawPkg)
 		if err != nil {
-			return
+			return err
 		}
 		data = result.RawPkg[rawPkgLen:]
 
@@ -351,7 +352,7 @@ func (c *Conn) readResultColumns(result *Result) (err error) {
 		if c.isEOFPacket(data) {
 			if c.capability&CLIENT_PROTOCOL_41 > 0 {
 				result.Warnings = binary.LittleEndian.Uint16(data[1:])
-				//todo add strict_mode, warning will be treat as error
+				// todo add strict_mode, warning will be treat as error
 				result.Status = binary.LittleEndian.Uint16(data[3:])
 				c.status = result.Status
 			}
@@ -360,7 +361,7 @@ func (c *Conn) readResultColumns(result *Result) (err error) {
 				err = ErrMalformPacket
 			}
 
-			return
+			return err
 		}
 
 		if result.Fields[i] == nil {
@@ -368,7 +369,7 @@ func (c *Conn) readResultColumns(result *Result) (err error) {
 		}
 		err = result.Fields[i].Parse(data)
 		if err != nil {
-			return
+			return err
 		}
 
 		result.FieldNames[hack.String(result.Fields[i].Name)] = i
@@ -384,7 +385,7 @@ func (c *Conn) readResultRows(result *Result, isBinary bool) (err error) {
 		rawPkgLen := len(result.RawPkg)
 		result.RawPkg, err = c.ReadPacketReuseMem(result.RawPkg)
 		if err != nil {
-			return
+			return err
 		}
 		data = result.RawPkg[rawPkgLen:]
 
@@ -392,7 +393,7 @@ func (c *Conn) readResultRows(result *Result, isBinary bool) (err error) {
 		if c.isEOFPacket(data) {
 			if c.capability&CLIENT_PROTOCOL_41 > 0 {
 				result.Warnings = binary.LittleEndian.Uint16(data[1:])
-				//todo add strict_mode, warning will be treat as error
+				// todo add strict_mode, warning will be treat as error
 				result.Status = binary.LittleEndian.Uint16(data[3:])
 				c.status = result.Status
 			}
@@ -433,7 +434,7 @@ func (c *Conn) readResultRowsStreaming(result *Result, isBinary bool, perRowCb S
 	for {
 		data, err = c.ReadPacketReuseMem(data[:0])
 		if err != nil {
-			return
+			return err
 		}
 
 		// EOF Packet

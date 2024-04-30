@@ -33,7 +33,7 @@ type TableMapEvent struct {
 	ColumnType  []byte
 	ColumnMeta  []uint16
 
-	//len = (ColumnCount + 7) / 8
+	// len = (ColumnCount + 7) / 8
 	NullBitmap []byte
 
 	/*
@@ -81,6 +81,11 @@ type TableMapEvent struct {
 	// EnumSetDefaultCharset/EnumSetColumnCharset is similar to DefaultCharset/ColumnCharset but for enum/set columns.
 	EnumSetDefaultCharset []uint64
 	EnumSetColumnCharset  []uint64
+
+	// VisibilityBitmap stores bits that are set if corresponding column is not invisible (MySQL 8.0.23+)
+	VisibilityBitmap []byte
+
+	optionalMetaDecodeFunc func(data []byte) (err error)
 }
 
 func (e *TableMapEvent) Decode(data []byte) error {
@@ -97,7 +102,7 @@ func (e *TableMapEvent) Decode(data []byte) error {
 	e.Schema = data[pos : pos+int(schemaLength)]
 	pos += int(schemaLength)
 
-	//skip 0x00
+	// skip 0x00
 	pos++
 
 	tableLength := data[pos]
@@ -106,7 +111,7 @@ func (e *TableMapEvent) Decode(data []byte) error {
 	e.Table = data[pos : pos+int(tableLength)]
 	pos += int(tableLength)
 
-	//skip 0x00
+	// skip 0x00
 	pos++
 
 	var n int
@@ -137,8 +142,14 @@ func (e *TableMapEvent) Decode(data []byte) error {
 
 	pos += nullBitmapSize
 
-	if err = e.decodeOptionalMeta(data[pos:]); err != nil {
-		return err
+	if e.optionalMetaDecodeFunc != nil {
+		if err = e.optionalMetaDecodeFunc(data[pos:]); err != nil {
+			return err
+		}
+	} else {
+		if err = e.decodeOptionalMeta(data[pos:]); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -196,13 +207,13 @@ func (e *TableMapEvent) decodeMeta(data []byte) error {
 	for i, t := range e.ColumnType {
 		switch t {
 		case MYSQL_TYPE_STRING:
-			var x = uint16(data[pos]) << 8 //real type
-			x += uint16(data[pos+1])       //pack or field length
+			var x = uint16(data[pos]) << 8 // real type
+			x += uint16(data[pos+1])       // pack or field length
 			e.ColumnMeta[i] = x
 			pos += 2
 		case MYSQL_TYPE_NEWDECIMAL:
-			var x = uint16(data[pos]) << 8 //precision
-			x += uint16(data[pos+1])       //decimals
+			var x = uint16(data[pos]) << 8 // precision
+			x += uint16(data[pos+1])       // decimals
 			e.ColumnMeta[i] = x
 			pos += 2
 		case MYSQL_TYPE_VAR_STRING,
@@ -311,6 +322,9 @@ func (e *TableMapEvent) decodeOptionalMeta(data []byte) (err error) {
 			if err != nil {
 				return err
 			}
+
+		case TABLE_MAP_OPT_META_COLUMN_VISIBILITY:
+			e.VisibilityBitmap = v
 
 		default:
 			// Ignore for future extension
@@ -421,6 +435,7 @@ func (e *TableMapEvent) Dump(w io.Writer) {
 	fmt.Fprintf(w, "Primary key prefix: %v\n", e.PrimaryKeyPrefix)
 	fmt.Fprintf(w, "Enum/set default charset: %v\n", e.EnumSetDefaultCharset)
 	fmt.Fprintf(w, "Enum/set column charset: %v\n", e.EnumSetColumnCharset)
+	fmt.Fprintf(w, "Invisible Column bitmap: \n%s", hex.Dump(e.VisibilityBitmap))
 
 	unsignedMap := e.UnsignedMap()
 	fmt.Fprintf(w, "UnsignedMap: %#v\n", unsignedMap)
@@ -439,6 +454,9 @@ func (e *TableMapEvent) Dump(w io.Writer) {
 
 	geometryTypeMap := e.GeometryTypeMap()
 	fmt.Fprintf(w, "GeometryTypeMap: %#v\n", geometryTypeMap)
+
+	visibilityMap := e.VisibilityMap()
+	fmt.Fprintf(w, "VisibilityMap: %#v\n", visibilityMap)
 
 	nameMaxLen := 0
 	for _, name := range e.ColumnName {
@@ -552,12 +570,9 @@ func (e *TableMapEvent) SetStrValueString() [][]string {
 		if len(e.SetStrValue) == 0 {
 			return nil
 		}
-		e.setStrValueString = make([][]string, 0, len(e.SetStrValue))
-		for _, vals := range e.SetStrValue {
-			e.setStrValueString = append(
-				e.setStrValueString,
-				e.bytesSlice2StrSlice(vals),
-			)
+		e.setStrValueString = make([][]string, len(e.SetStrValue))
+		for i, vals := range e.SetStrValue {
+			e.setStrValueString[i] = e.bytesSlice2StrSlice(vals)
 		}
 	}
 	return e.setStrValueString
@@ -570,12 +585,9 @@ func (e *TableMapEvent) EnumStrValueString() [][]string {
 		if len(e.EnumStrValue) == 0 {
 			return nil
 		}
-		e.enumStrValueString = make([][]string, 0, len(e.EnumStrValue))
-		for _, vals := range e.EnumStrValue {
-			e.enumStrValueString = append(
-				e.enumStrValueString,
-				e.bytesSlice2StrSlice(vals),
-			)
+		e.enumStrValueString = make([][]string, len(e.EnumStrValue))
+		for i, vals := range e.EnumStrValue {
+			e.enumStrValueString[i] = e.bytesSlice2StrSlice(vals)
 		}
 	}
 	return e.enumStrValueString
@@ -594,9 +606,9 @@ func (e *TableMapEvent) bytesSlice2StrSlice(src [][]byte) []string {
 	if src == nil {
 		return nil
 	}
-	ret := make([]string, 0, len(src))
-	for _, item := range src {
-		ret = append(ret, string(item))
+	ret := make([]string, len(src))
+	for i, item := range src {
+		ret[i] = string(item)
 	}
 	return ret
 }
@@ -608,14 +620,19 @@ func (e *TableMapEvent) UnsignedMap() map[int]bool {
 	if len(e.SignednessBitmap) == 0 {
 		return nil
 	}
-	p := 0
 	ret := make(map[int]bool)
-	for i := 0; i < int(e.ColumnCount); i++ {
-		if !e.IsNumericColumn(i) {
-			continue
+	i := 0
+	for _, field := range e.SignednessBitmap {
+		for c := 0x80; c != 0; {
+			if e.IsNumericColumn(i) {
+				ret[i] = field&byte(c) != 0
+				c >>= 1
+			}
+			i++
+			if i >= int(e.ColumnCount) {
+				return ret
+			}
 		}
-		ret[i] = e.SignednessBitmap[p/8]&(1<<uint(7-p%8)) != 0
-		p++
 	}
 	return ret
 }
@@ -730,6 +747,27 @@ func (e *TableMapEvent) GeometryTypeMap() map[int]uint64 {
 	return ret
 }
 
+// VisibilityMap returns a map: column index -> visiblity.
+// Invisible column was introduced in MySQL 8.0.23
+// nil is returned if not available.
+func (e *TableMapEvent) VisibilityMap() map[int]bool {
+	if len(e.VisibilityBitmap) == 0 {
+		return nil
+	}
+	ret := make(map[int]bool)
+	i := 0
+	for _, field := range e.VisibilityBitmap {
+		for c := 0x80; c != 0; c >>= 1 {
+			ret[i] = field&byte(c) != 0
+			i++
+			if uint64(i) >= e.ColumnCount {
+				return ret
+			}
+		}
+	}
+	return ret
+}
+
 // Below realType and IsXXXColumn are base from:
 //   table_def::type in sql/rpl_utility.h
 //   Table_map_log_event::print_columns in mysql-8.0/sql/log_event.cc and mariadb-10.5/sql/log_event_client.cc
@@ -807,16 +845,63 @@ func (e *TableMapEvent) IsEnumOrSetColumn(i int) bool {
 	return rtyp == MYSQL_TYPE_ENUM || rtyp == MYSQL_TYPE_SET
 }
 
+// JsonColumnCount returns the number of JSON columns in this table
+func (e *TableMapEvent) JsonColumnCount() uint64 {
+	count := uint64(0)
+	for _, t := range e.ColumnType {
+		if t == MYSQL_TYPE_JSON {
+			count++
+		}
+	}
+
+	return count
+}
+
 // RowsEventStmtEndFlag is set in the end of the statement.
 const RowsEventStmtEndFlag = 0x01
 
+// RowsEvent represents a MySQL rows event like DELETE_ROWS_EVENT,
+// UPDATE_ROWS_EVENT, etc.
+// RowsEvent.Rows saves the rows data, and the MySQL type to golang type mapping
+// is
+// - MYSQL_TYPE_NULL: nil
+// - MYSQL_TYPE_LONG: int32
+// - MYSQL_TYPE_TINY: int8
+// - MYSQL_TYPE_SHORT: int16
+// - MYSQL_TYPE_INT24: int32
+// - MYSQL_TYPE_LONGLONG: int64
+// - MYSQL_TYPE_NEWDECIMAL: string / "github.com/shopspring/decimal".Decimal
+// - MYSQL_TYPE_FLOAT: float32
+// - MYSQL_TYPE_DOUBLE: float64
+// - MYSQL_TYPE_BIT: int64
+// - MYSQL_TYPE_TIMESTAMP: string / time.Time
+// - MYSQL_TYPE_TIMESTAMP2: string / time.Time
+// - MYSQL_TYPE_DATETIME: string / time.Time
+// - MYSQL_TYPE_DATETIME2: string / time.Time
+// - MYSQL_TYPE_TIME: string
+// - MYSQL_TYPE_TIME2: string
+// - MYSQL_TYPE_DATE: string
+// - MYSQL_TYPE_YEAR: int
+// - MYSQL_TYPE_ENUM: int64
+// - MYSQL_TYPE_SET: int64
+// - MYSQL_TYPE_BLOB: []byte
+// - MYSQL_TYPE_VARCHAR: string
+// - MYSQL_TYPE_VAR_STRING: string
+// - MYSQL_TYPE_STRING: string
+// - MYSQL_TYPE_JSON: []byte / *replication.JsonDiff
+// - MYSQL_TYPE_GEOMETRY: []byte
 type RowsEvent struct {
-	//0, 1, 2
+	// 0, 1, 2
 	Version int
 
 	tableIDSize int
 	tables      map[uint64]*TableMapEvent
 	needBitmap2 bool
+
+	// for mariadb *_COMPRESSED_EVENT_V1
+	compressed bool
+
+	eventType EventType
 
 	Table *TableMapEvent
 
@@ -824,10 +909,15 @@ type RowsEvent struct {
 
 	Flags uint16
 
-	//if version == 2
-	ExtraData []byte
+	// if version == 2
+	// Use when DataLen value is greater than 2
+	NdbFormat byte
+	NdbData   []byte
 
-	//lenenc_int
+	PartitionId       uint16
+	SourcePartitionId uint16
+
+	// lenenc_int
 	ColumnCount uint64
 
 	/*
@@ -839,14 +929,14 @@ type RowsEvent struct {
 		ColumnBitmap1, ColumnBitmap2 and SkippedColumns are not set on the full row image.
 	*/
 
-	//len = (ColumnCount + 7) / 8
+	// len = (ColumnCount + 7) / 8
 	ColumnBitmap1 []byte
 
-	//if UPDATE_ROWS_EVENTv1 or v2
-	//len = (ColumnCount + 7) / 8
+	// if UPDATE_ROWS_EVENTv1 or v2, or PARTIAL_UPDATE_ROWS_EVENT
+	// len = (ColumnCount + 7) / 8
 	ColumnBitmap2 []byte
 
-	//rows: invalid: int64, float64, bool, []byte, string
+	// rows: all return types from RowsEvent.decodeValue()
 	Rows           [][]interface{}
 	SkippedColumns [][]int
 
@@ -855,6 +945,41 @@ type RowsEvent struct {
 	useDecimal              bool
 	ignoreJSONDecodeErr     bool
 }
+
+// EnumRowImageType is allowed types for every row in mysql binlog.
+// See https://github.com/mysql/mysql-server/blob/1bfe02bdad6604d54913c62614bde57a055c8332/sql/rpl_record.h#L39
+// enum class enum_row_image_type { WRITE_AI, UPDATE_BI, UPDATE_AI, DELETE_BI };
+type EnumRowImageType byte
+
+const (
+	EnumRowImageTypeWriteAI = EnumRowImageType(iota)
+	EnumRowImageTypeUpdateBI
+	EnumRowImageTypeUpdateAI
+	EnumRowImageTypeDeleteBI
+)
+
+func (t EnumRowImageType) String() string {
+	switch t {
+	case EnumRowImageTypeWriteAI:
+		return "WriteAI"
+	case EnumRowImageTypeUpdateBI:
+		return "UpdateBI"
+	case EnumRowImageTypeUpdateAI:
+		return "UpdateAI"
+	case EnumRowImageTypeDeleteBI:
+		return "DeleteBI"
+	default:
+		return fmt.Sprintf("(%d)", t)
+	}
+}
+
+// Bits for binlog_row_value_options sysvar
+type EnumBinlogRowValueOptions byte
+
+const (
+	// Store JSON updates in partial form
+	EnumBinlogRowValueOptionsPartialJsonUpdates = EnumBinlogRowValueOptions(iota + 1)
+)
 
 func (e *RowsEvent) DecodeHeader(data []byte) (int, error) {
 	pos := 0
@@ -867,8 +992,12 @@ func (e *RowsEvent) DecodeHeader(data []byte) (int, error) {
 	if e.Version == 2 {
 		dataLen := binary.LittleEndian.Uint16(data[pos:])
 		pos += 2
-
-		e.ExtraData = data[pos : pos+int(dataLen-2)]
+		if dataLen > 2 {
+			err := e.decodeExtraData(data[pos:])
+			if err != nil {
+				return 0, err
+			}
+		}
 		pos += int(dataLen - 2)
 	}
 
@@ -897,7 +1026,40 @@ func (e *RowsEvent) DecodeHeader(data []byte) (int, error) {
 	return pos, nil
 }
 
+func (e *RowsEvent) decodeExtraData(data []byte) (err2 error) {
+	pos := 0
+	extraDataType := data[pos]
+	pos += 1
+	switch extraDataType {
+	case ENUM_EXTRA_ROW_INFO_TYPECODE_NDB:
+		var ndbLength int = int(data[pos])
+		pos += 1
+		e.NdbFormat = data[pos]
+		pos += 1
+		e.NdbData = data[pos : pos+ndbLength-2]
+	case ENUM_EXTRA_ROW_INFO_TYPECODE_PARTITION:
+		if e.eventType == UPDATE_ROWS_EVENTv1 || e.eventType == UPDATE_ROWS_EVENTv2 || e.eventType == PARTIAL_UPDATE_ROWS_EVENT {
+			e.PartitionId = binary.LittleEndian.Uint16(data[pos:])
+			pos += 2
+			e.SourcePartitionId = binary.LittleEndian.Uint16(data[pos:])
+		} else {
+			e.PartitionId = binary.LittleEndian.Uint16(data[pos:])
+		}
+	}
+	return nil
+}
+
 func (e *RowsEvent) DecodeData(pos int, data []byte) (err2 error) {
+	if e.compressed {
+		data, err2 = DecompressMariadbData(data[pos:])
+		if err2 != nil {
+			//nolint:nakedret
+			return
+		}
+	}
+
+	// Rows_log_event::print_verbose()
+
 	var (
 		n   int
 		err error
@@ -909,22 +1071,34 @@ func (e *RowsEvent) DecodeData(pos int, data []byte) (err2 error) {
 		}
 	}()
 
-	// Pre-allocate memory for rows.
-	rowsLen := e.ColumnCount
+	// Pre-allocate memory for rows: before image + (optional) after image
+	rowsLen := 1
 	if e.needBitmap2 {
-		rowsLen += e.ColumnCount
+		rowsLen++
 	}
 	e.SkippedColumns = make([][]int, 0, rowsLen)
 	e.Rows = make([][]interface{}, 0, rowsLen)
 
+	var rowImageType EnumRowImageType
+	switch e.eventType {
+	case WRITE_ROWS_EVENTv0, WRITE_ROWS_EVENTv1, WRITE_ROWS_EVENTv2, MARIADB_WRITE_ROWS_COMPRESSED_EVENT_V1:
+		rowImageType = EnumRowImageTypeWriteAI
+	case DELETE_ROWS_EVENTv0, DELETE_ROWS_EVENTv1, DELETE_ROWS_EVENTv2, MARIADB_DELETE_ROWS_COMPRESSED_EVENT_V1:
+		rowImageType = EnumRowImageTypeDeleteBI
+	default:
+		rowImageType = EnumRowImageTypeUpdateBI
+	}
+
 	for pos < len(data) {
-		if n, err = e.decodeRows(data[pos:], e.Table, e.ColumnBitmap1); err != nil {
+		// Parse the first image
+		if n, err = e.decodeImage(data[pos:], e.ColumnBitmap1, rowImageType); err != nil {
 			return errors.Trace(err)
 		}
 		pos += n
 
+		// Parse the second image (for UPDATE only)
 		if e.needBitmap2 {
-			if n, err = e.decodeRows(data[pos:], e.Table, e.ColumnBitmap2); err != nil {
+			if n, err = e.decodeImage(data[pos:], e.ColumnBitmap2, EnumRowImageTypeUpdateAI); err != nil {
 				return errors.Trace(err)
 			}
 			pos += n
@@ -946,11 +1120,33 @@ func isBitSet(bitmap []byte, i int) bool {
 	return bitmap[i>>3]&(1<<(uint(i)&7)) > 0
 }
 
-func (e *RowsEvent) decodeRows(data []byte, table *TableMapEvent, bitmap []byte) (int, error) {
-	row := make([]interface{}, e.ColumnCount)
-	skips := make([]int, 0)
+func isBitSetIncr(bitmap []byte, i *int) bool {
+	v := isBitSet(bitmap, *i)
+	*i++
+	return v
+}
+
+func (e *RowsEvent) decodeImage(data []byte, bitmap []byte, rowImageType EnumRowImageType) (int, error) {
+	// Rows_log_event::print_verbose_one_row()
 
 	pos := 0
+
+	var isPartialJsonUpdate bool
+
+	var partialBitmap []byte
+	if e.eventType == PARTIAL_UPDATE_ROWS_EVENT && rowImageType == EnumRowImageTypeUpdateAI {
+		binlogRowValueOptions, _, n := LengthEncodedInt(data[pos:]) // binlog_row_value_options
+		pos += n
+		isPartialJsonUpdate = EnumBinlogRowValueOptions(binlogRowValueOptions)&EnumBinlogRowValueOptionsPartialJsonUpdates != 0
+		if isPartialJsonUpdate {
+			byteCount := bitmapByteSize(int(e.Table.JsonColumnCount()))
+			partialBitmap = data[pos : pos+byteCount]
+			pos += byteCount
+		}
+	}
+
+	row := make([]interface{}, e.ColumnCount)
+	skips := make([]int, 0)
 
 	// refer: https://github.com/alibaba/canal/blob/c3e38e50e269adafdd38a48c63a1740cde304c67/dbsync/src/main/java/com/taobao/tddl/dbsync/binlog/event/RowsLogBuffer.java#L63
 	count := 0
@@ -959,30 +1155,38 @@ func (e *RowsEvent) decodeRows(data []byte, table *TableMapEvent, bitmap []byte)
 			count++
 		}
 	}
-	count = (count + 7) / 8
+	count = bitmapByteSize(count)
 
 	nullBitmap := data[pos : pos+count]
 	pos += count
 
-	nullbitIndex := 0
+	partialBitmapIndex := 0
+	nullBitmapIndex := 0
 
-	var n int
-	var err error
 	for i := 0; i < int(e.ColumnCount); i++ {
+		/*
+		   Note: need to read partial bit before reading cols_bitmap, since
+		   the partial_bits bitmap has a bit for every JSON column
+		   regardless of whether it is included in the bitmap or not.
+		*/
+		isPartial := isPartialJsonUpdate &&
+			(rowImageType == EnumRowImageTypeUpdateAI) &&
+			(e.Table.ColumnType[i] == MYSQL_TYPE_JSON) &&
+			isBitSetIncr(partialBitmap, &partialBitmapIndex)
+
 		if !isBitSet(bitmap, i) {
 			skips = append(skips, i)
 			continue
 		}
 
-		isNull := (uint32(nullBitmap[nullbitIndex/8]) >> uint32(nullbitIndex%8)) & 0x01
-		nullbitIndex++
-
-		if isNull > 0 {
+		if isBitSetIncr(nullBitmap, &nullBitmapIndex) {
 			row[i] = nil
 			continue
 		}
 
-		row[i], n, err = e.decodeValue(data[pos:], table.ColumnType[i], table.ColumnMeta[i])
+		var n int
+		var err error
+		row[i], n, err = e.decodeValue(data[pos:], e.Table.ColumnType[i], e.Table.ColumnMeta[i], isPartial)
 
 		if err != nil {
 			return 0, err
@@ -1011,7 +1215,7 @@ func (e *RowsEvent) parseFracTime(t interface{}) interface{} {
 }
 
 // see mysql sql/log_event.cc log_event_print_value
-func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{}, n int, err error) {
+func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16, isPartial bool) (v interface{}, n int, err error) {
 	var length = 0
 
 	if tp == MYSQL_TYPE_STRING {
@@ -1063,7 +1267,7 @@ func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{
 		nbits := ((meta >> 8) * 8) + (meta & 0xFF)
 		n = int(nbits+7) / 8
 
-		//use int64 for bit
+		// use int64 for bit
 		v, err = decodeBit(data, int(nbits), n)
 	case MYSQL_TYPE_TIMESTAMP:
 		n = 4
@@ -1161,10 +1365,37 @@ func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{
 		// Refer: https://github.com/shyiko/mysql-binlog-connector-java/blob/master/src/main/java/com/github/shyiko/mysql/binlog/event/deserialization/AbstractRowsEventDataDeserializer.java#L404
 		length = int(FixedLengthInt(data[0:meta]))
 		n = length + int(meta)
-		var d []byte
-		d, err = e.decodeJsonBinary(data[meta:n])
-		if err == nil {
-			v = hack.String(d)
+
+		/*
+		   See https://github.com/mysql/mysql-server/blob/7b6fb0753b428537410f5b1b8dc60e5ccabc9f70/sql-common/json_binary.cc#L1077
+
+		   Each document should start with a one-byte type specifier, so an
+		   empty document is invalid according to the format specification.
+		   Empty documents may appear due to inserts using the IGNORE keyword
+		   or with non-strict SQL mode, which will insert an empty string if
+		   the value NULL is inserted into a NOT NULL column. We choose to
+		   interpret empty values as the JSON null literal.
+
+		   In our implementation (go-mysql) for backward compatibility we prefer return empty slice.
+		*/
+		if length == 0 {
+			v = []byte{}
+		} else {
+			if isPartial {
+				var diff *JsonDiff
+				diff, err = e.decodeJsonPartialBinary(data[meta:n])
+				if err == nil {
+					v = diff
+				} else {
+					fmt.Printf("decodeJsonPartialBinary(%q) fail: %s\n", data[meta:n], err)
+				}
+			} else {
+				var d []byte
+				d, err = e.decodeJsonBinary(data[meta:n])
+				if err == nil {
+					v = hack.String(d)
+				}
+			}
 		}
 	case MYSQL_TYPE_GEOMETRY:
 		// MySQL saves Geometry as Blob in binlog
@@ -1220,7 +1451,7 @@ func decodeDecimalDecompressValue(compIndx int, data []byte, mask uint8) (size i
 var zeros = [digitsPerInteger]byte{48, 48, 48, 48, 48, 48, 48, 48, 48}
 
 func decodeDecimal(data []byte, precision int, decimals int, useDecimal bool) (interface{}, int, error) {
-	//see python mysql replication and https://github.com/jeremycole/mysql_binlog
+	// see python mysql replication and https://github.com/jeremycole/mysql_binlog
 	integral := precision - decimals
 	uncompIntegral := integral / digitsPerInteger
 	uncompFractional := decimals / digitsPerInteger
@@ -1233,7 +1464,7 @@ func decodeDecimal(data []byte, precision int, decimals int, useDecimal bool) (i
 	buf := make([]byte, binSize)
 	copy(buf, data[:binSize])
 
-	//must copy the data for later change
+	// must copy the data for later change
 	data = buf
 
 	// Support negative
@@ -1248,7 +1479,7 @@ func decodeDecimal(data []byte, precision int, decimals int, useDecimal bool) (i
 		res.WriteString("-")
 	}
 
-	//clear sign
+	// clear sign
 	data[0] ^= 0x80
 
 	zeroLeading := true
@@ -1373,7 +1604,7 @@ func littleDecodeBit(data []byte, nbits int, length int) (value int64, err error
 }
 
 func decodeTimestamp2(data []byte, dec uint16, timestampStringLocation *time.Location) (interface{}, int, error) {
-	//get timestamp binary length
+	// get timestamp binary length
 	n := int(4 + (dec+1)/2)
 	sec := int64(binary.BigEndian.Uint32(data[0:4]))
 	usec := int64(0)
@@ -1400,7 +1631,7 @@ func decodeTimestamp2(data []byte, dec uint16, timestampStringLocation *time.Loc
 const DATETIMEF_INT_OFS int64 = 0x8000000000
 
 func decodeDatetime2(data []byte, dec uint16) (interface{}, int, error) {
-	//get datetime binary length
+	// get datetime binary length
 	n := int(5 + (dec+1)/2)
 
 	intPart := int64(BFixedLengthInt(data[0:5])) - DATETIMEF_INT_OFS
@@ -1420,7 +1651,7 @@ func decodeDatetime2(data []byte, dec uint16) (interface{}, int, error) {
 	}
 
 	tmp := intPart<<24 + frac
-	//handle sign???
+	// handle sign???
 	if tmp < 0 {
 		tmp = -tmp
 	}
@@ -1463,7 +1694,7 @@ const TIMEF_OFS int64 = 0x800000000000
 const TIMEF_INT_OFS int64 = 0x800000
 
 func decodeTime2(data []byte, dec uint16) (string, int, error) {
-	//time  binary length
+	// time  binary length
 	n := int(3 + (dec+1)/2)
 
 	tmp := int64(0)
@@ -1576,14 +1807,18 @@ func (e *RowsEvent) Dump(w io.Writer) {
 	fmt.Fprintf(w, "TableID: %d\n", e.TableID)
 	fmt.Fprintf(w, "Flags: %d\n", e.Flags)
 	fmt.Fprintf(w, "Column count: %d\n", e.ColumnCount)
+	fmt.Fprintf(w, "NDB data: %s\n", e.NdbData)
 
 	fmt.Fprintf(w, "Values:\n")
 	for _, rows := range e.Rows {
 		fmt.Fprintf(w, "--\n")
 		for j, d := range rows {
-			if _, ok := d.([]byte); ok {
-				fmt.Fprintf(w, "%d:%q\n", j, d)
-			} else {
+			switch dt := d.(type) {
+			case []byte:
+				fmt.Fprintf(w, "%d:%q\n", j, dt)
+			case *JsonDiff:
+				fmt.Fprintf(w, "%d:%s\n", j, dt)
+			default:
 				fmt.Fprintf(w, "%d:%#v\n", j, d)
 			}
 		}
@@ -1596,7 +1831,7 @@ type RowsQueryEvent struct {
 }
 
 func (e *RowsQueryEvent) Decode(data []byte) error {
-	//ignore length byte 1
+	// ignore length byte 1
 	e.Query = data[1:]
 	return nil
 }

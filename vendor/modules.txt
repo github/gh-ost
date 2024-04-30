@@ -2,11 +2,14 @@
 ## explicit; go 1.20
 filippo.io/edwards25519
 filippo.io/edwards25519/field
+# github.com/Masterminds/semver v1.5.0
+## explicit
+github.com/Masterminds/semver
 # github.com/go-ini/ini v1.67.0
 ## explicit
 github.com/go-ini/ini
-# github.com/go-mysql-org/go-mysql v1.7.0
-## explicit; go 1.16
+# github.com/go-mysql-org/go-mysql v1.7.1-0.20240422142108-7c31dc4e4e5b
+## explicit; go 1.18
 github.com/go-mysql-org/go-mysql/client
 github.com/go-mysql-org/go-mysql/mysql
 github.com/go-mysql-org/go-mysql/packet
@@ -15,19 +18,39 @@ github.com/go-mysql-org/go-mysql/utils
 # github.com/go-sql-driver/mysql v1.8.1
 ## explicit; go 1.18
 github.com/go-sql-driver/mysql
+# github.com/goccy/go-json v0.10.2
+## explicit; go 1.12
+github.com/goccy/go-json
+github.com/goccy/go-json/internal/decoder
+github.com/goccy/go-json/internal/encoder
+github.com/goccy/go-json/internal/encoder/vm
+github.com/goccy/go-json/internal/encoder/vm_color
+github.com/goccy/go-json/internal/encoder/vm_color_indent
+github.com/goccy/go-json/internal/encoder/vm_indent
+github.com/goccy/go-json/internal/errors
+github.com/goccy/go-json/internal/runtime
 # github.com/google/uuid v1.6.0
 ## explicit
 github.com/google/uuid
+# github.com/klauspost/compress v1.17.1
+## explicit; go 1.18
+github.com/klauspost/compress
+github.com/klauspost/compress/fse
+github.com/klauspost/compress/huff0
+github.com/klauspost/compress/internal/cpuinfo
+github.com/klauspost/compress/internal/snapref
+github.com/klauspost/compress/zstd
+github.com/klauspost/compress/zstd/internal/xxhash
 # github.com/openark/golib v0.0.0-20210531070646-355f37940af8
 ## explicit; go 1.16
 github.com/openark/golib/log
 github.com/openark/golib/sqlutils
 github.com/openark/golib/tests
-# github.com/pingcap/errors v0.11.5-0.20210425183316-da1aaba5fb63
+# github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 ## explicit; go 1.14
 github.com/pingcap/errors
-# github.com/shopspring/decimal v0.0.0-20180709203117-cd690d0c9e24
-## explicit
+# github.com/shopspring/decimal v1.2.0
+## explicit; go 1.13
 github.com/shopspring/decimal
 # github.com/siddontang/go v0.0.0-20180604090527-bdc77568d726
 ## explicit
@@ -36,8 +59,8 @@ github.com/siddontang/go/hack
 ## explicit
 github.com/siddontang/go-log/log
 github.com/siddontang/go-log/loggers
-# go.uber.org/atomic v1.7.0
-## explicit; go 1.13
+# go.uber.org/atomic v1.11.0
+## explicit; go 1.18
 go.uber.org/atomic
 # golang.org/x/net v0.24.0
 ## explicit; go 1.18
