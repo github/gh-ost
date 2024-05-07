@@ -636,17 +636,12 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	}
 
 	sqlResult, err := func() (gosql.Result, error) {
-		/*tx, err := this.db.Begin()*/
 		var conn *gosql.Conn
 		conn, err = this.db.Conn(context.Background())
 		if (conn == nil || err != nil) {
 		    fmt.Sprintf("failed to get connection")
 		    return nil, err
 		}
-// 		if _, err := conn.ExecContext(context.Background(), "SET @@SESSION.sql_log_bin=0"); err != nil {
-// 		    fmt.Sprintf("failed to disable binary logs")
-// 		    return nil, err
-// 		}
 		tx, err := conn.BeginTx(context.Background(), nil)
 		if err != nil {
 			return nil, err
@@ -666,10 +661,6 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
-// 		if _, err := conn.ExecContext(context.Background(), "SET @@SESSION.sql_log_bin=1"); err != nil {
-// 		    fmt.Sprintf("failed to enable binary logs")
-// 		    return nil, err
-// 		}
 		conn.Close()
 		return result, nil
 	}()
