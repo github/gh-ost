@@ -643,10 +643,10 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		    fmt.Sprintf("failed to get connection")
 		    return nil, err
 		}
-		if _, err := conn.ExecContext(context.Background(), "SET @@SESSION.sql_log_bin=0"); err != nil {
-		    fmt.Sprintf("failed to disable binary logs")
-		    return nil, err
-		}
+// 		if _, err := conn.ExecContext(context.Background(), "SET @@SESSION.sql_log_bin=0"); err != nil {
+// 		    fmt.Sprintf("failed to disable binary logs")
+// 		    return nil, err
+// 		}
 		tx, err := conn.BeginTx(context.Background(), nil)
 		if err != nil {
 			return nil, err
@@ -666,10 +666,10 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
-		if _, err := conn.ExecContext(context.Background(), "SET @@SESSION.sql_log_bin=1"); err != nil {
-		    fmt.Sprintf("failed to enable binary logs")
-		    return nil, err
-		}
+// 		if _, err := conn.ExecContext(context.Background(), "SET @@SESSION.sql_log_bin=1"); err != nil {
+// 		    fmt.Sprintf("failed to enable binary logs")
+// 		    return nil, err
+// 		}
 		conn.Close()
 		return result, nil
 	}()
