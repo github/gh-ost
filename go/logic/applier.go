@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"context"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -634,7 +635,18 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	}
 
 	sqlResult, err := func() (gosql.Result, error) {
-		tx, err := this.db.Begin()
+		/*tx, err := this.db.Begin()*/
+		var conn *gosql.Conn
+		conn, err = this.db.Conn(context.Background())
+		if (conn == nil || err != nil) {
+		    fmt.Sprintf("failed to get connection")
+		    return nil, err
+		}
+		if _, err := conn.ExecContext(context.Background(), "SET @@SESSION.sql_log_bin=0"); err != nil {
+		    fmt.Sprintf("failed to disable binary logs")
+		    return nil, err
+		}
+		tx, err := conn.BeginTx(context.Background(), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -643,16 +655,21 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
 		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
 
-		if _, err := tx.Exec(sessionQuery); err != nil {
+		if _, err := tx.ExecContext(context.Background(), sessionQuery); err != nil {
 			return nil, err
 		}
-		result, err := tx.Exec(query, explodedArgs...)
+		result, err := tx.ExecContext(context.Background(), query, explodedArgs...)
 		if err != nil {
 			return nil, err
 		}
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
+		if _, err := conn.ExecContext(context.Background(), "SET @@SESSION.sql_log_bin=1"); err != nil {
+		    fmt.Sprintf("failed to enable binary logs")
+		    return nil, err
+		}
+		conn.Close()
 		return result, nil
 	}()
 
