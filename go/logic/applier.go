@@ -629,6 +629,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
 		this.migrationContext.GetIteration() == 0,
 		this.migrationContext.IsTransactionalTable(),
+		this.migrationContext.GetWhereClause(),
 	)
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
