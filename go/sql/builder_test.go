@@ -227,6 +227,98 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 	}
 }
 
+
+func TestBuildRangeInsertQueryWhereClauseFiltering(t *testing.T) {
+	databaseName := "mydb"
+	originalTableName := "tbl"
+	ghostTableName := "ghost"
+	sharedColumns := []string{"id", "name", "position"}
+	{
+		uniqueKey := "PRIMARY"
+		uniqueKeyColumns := NewColumnList([]string{"id"})
+		rangeStartValues := []string{"@v1s"}
+		rangeEndValues := []string{"@v1e"}
+		rangeStartArgs := []interface{}{3}
+		rangeEndArgs := []interface{}{103}
+	    whereClause := "id = 1"
+
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false, whereClause)
+		test.S(t).ExpectNil(err)
+		expected := `
+			insert /* gh-ost mydb.tbl */ ignore
+			into
+				mydb.ghost
+				(id, name, position)
+			(
+				select id, name, position
+				from
+					mydb.tbl
+				force index (PRIMARY)
+				where
+					(((id > @v1s) or ((id = @v1s)))
+					and ((id < @v1e) or ((id = @v1e))) and id = 1)
+			)`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
+	}
+	{
+		uniqueKey := "PRIMARY"
+		uniqueKeyColumns := NewColumnList([]string{"id"})
+		rangeStartValues := []string{"@v1s"}
+		rangeEndValues := []string{"@v1e"}
+		rangeStartArgs := []interface{}{3}
+		rangeEndArgs := []interface{}{103}
+	    whereClause := "id not in (1,2,3)"
+
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false, whereClause)
+		test.S(t).ExpectNil(err)
+		expected := `
+			insert /* gh-ost mydb.tbl */ ignore
+			into
+				mydb.ghost
+				(id, name, position)
+			(
+				select id, name, position
+				from
+					mydb.tbl
+				force index (PRIMARY)
+				where
+					(((id > @v1s) or ((id = @v1s)))
+					and ((id < @v1e) or ((id = @v1e))) and id not in (1,2,3))
+			)`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
+	}
+	{
+		uniqueKey := "PRIMARY"
+		uniqueKeyColumns := NewColumnList([]string{"id"})
+		rangeStartValues := []string{"@v1s"}
+		rangeEndValues := []string{"@v1e"}
+		rangeStartArgs := []interface{}{3}
+		rangeEndArgs := []interface{}{103}
+	    whereClause := "id in (select id from ids)"
+
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false, whereClause)
+		test.S(t).ExpectNil(err)
+		expected := `
+			insert /* gh-ost mydb.tbl */ ignore
+			into
+				mydb.ghost
+				(id, name, position)
+			(
+				select id, name, position
+				from
+					mydb.tbl
+				force index (PRIMARY)
+				where
+					(((id > @v1s) or ((id = @v1s)))
+					and ((id < @v1e) or ((id = @v1e))) and id in (select id from ids))
+			)`
+		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
+	}
+}
+
 func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
