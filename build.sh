@@ -2,8 +2,8 @@
 #
 #
 
-RELEASE_VERSION=
-buildpath=
+RELEASE_VERSION=2
+buildpath=/tmp
 
 function setuptree() {
   b=$( mktemp -d $buildpath/gh-ostXXXXXX ) || return 1
