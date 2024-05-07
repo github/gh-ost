@@ -232,7 +232,7 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 				%s.%s
 			force index (%s)
 			where
-				((%s and %s) and (%s))
+				(%s and %s and %s)
 				%s
 		)`,
 		databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
