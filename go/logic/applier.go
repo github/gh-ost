@@ -631,6 +631,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.IsTransactionalTable(),
 		this.migrationContext.GetWhereClause(),
 	)
+	this.migrationContext.Log.Debugf("query = %s", query)
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
 	}
