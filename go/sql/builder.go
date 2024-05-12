@@ -238,6 +238,7 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
 		rangeStartComparison, rangeEndComparison, whereClause, transactionalClause)
+		fmt.Sprintf("the query: ", result)
 	return result, explodedArgs, nil
 }
 
