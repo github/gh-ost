@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2023 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -163,18 +163,15 @@ type MigrationContext struct {
 
 	Hostname                               string
 	AssumeMasterHostname                   string
-	ApplierTimeZone                        string
 	TableEngine                            string
 	RowsEstimate                           int64
 	RowsDeltaEstimate                      int64
 	UsedRowsEstimateMethod                 RowsEstimateMethod
 	HasSuperPrivilege                      bool
-	OriginalBinlogFormat                   string
-	OriginalBinlogRowImage                 string
 	InspectorConnectionConfig              *mysql.ConnectionConfig
-	InspectorMySQLVersion                  string
+	InspectorServerInfo                    *mysql.ServerInfo
 	ApplierConnectionConfig                *mysql.ConnectionConfig
-	ApplierMySQLVersion                    string
+	ApplierServerInfo                      *mysql.ServerInfo
 	StartTime                              time.Time
 	RowCopyStartTime                       time.Time
 	RowCopyEndTime                         time.Time
@@ -366,11 +363,6 @@ func (this *MigrationContext) GetChangelogTableName() string {
 // the swap-tables process.
 func (this *MigrationContext) GetVoluntaryLockName() string {
 	return fmt.Sprintf("%s.%s.lock", this.DatabaseName, this.OriginalTableName)
-}
-
-// RequiresBinlogFormatChange is `true` when the original binlog format isn't `ROW`
-func (this *MigrationContext) RequiresBinlogFormatChange() bool {
-	return this.OriginalBinlogFormat != "ROW"
 }
 
 // GetApplierHostname is a safe access method to the applier hostname

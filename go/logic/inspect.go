@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2023 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -42,6 +42,10 @@ func NewInspector(migrationContext *base.MigrationContext) *Inspector {
 	}
 }
 
+func (this *Inspector) ServerInfo() *mysql.ServerInfo {
+	return this.migrationContext.InspectorServerInfo
+}
+
 func (this *Inspector) InitDBConnections() (err error) {
 	inspectorUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, inspectorUri); err != nil {
@@ -72,8 +76,17 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.applyBinlogFormat(); err != nil {
 		return err
 	}
-	this.migrationContext.Log.Infof("Inspector initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.InspectorMySQLVersion)
+	this.migrationContext.Log.Infof("Inspector initiated on %+v, version %+v (%+v)", this.connectionConfig.ImpliedKey,
+		this.ServerInfo().Version, this.ServerInfo().VersionComment)
 	return nil
+}
+
+// RequiresBinlogFormatChange is `true` when the original binlog format isn't `ROW`
+func (this *Inspector) RequiresBinlogFormatChange() bool {
+	if this.ServerInfo() == nil {
+		return true
+	}
+	return this.ServerInfo().BinlogFormat != "ROW"
 }
 
 func (this *Inspector) ValidateOriginalTable() (err error) {
@@ -184,7 +197,7 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		column := this.migrationContext.SharedColumns.Columns()[i]
 		mappedColumn := this.migrationContext.MappedSharedColumns.Columns()[i]
 		if column.Name == mappedColumn.Name && column.Type == sql.DateTimeColumnType && mappedColumn.Type == sql.TimestampColumnType {
-			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.migrationContext.ApplierTimeZone)
+			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.ServerInfo().TimeZone)
 		}
 		if column.Name == mappedColumn.Name && column.Type == sql.EnumColumnType && mappedColumn.Charset != "" {
 			this.migrationContext.MappedSharedColumns.SetEnumToTextConversion(column.Name)
@@ -209,14 +222,16 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 }
 
 // validateConnection issues a simple can-connect to MySQL
-func (this *Inspector) validateConnection() error {
+func (this *Inspector) validateConnection() (err error) {
 	if len(this.connectionConfig.Password) > mysql.MaxReplicationPasswordLength {
 		return fmt.Errorf("MySQL replication length limited to 32 characters. See https://dev.mysql.com/doc/refman/5.7/en/assigning-passwords.html")
 	}
 
-	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
-	this.migrationContext.InspectorMySQLVersion = version
-	return err
+	if this.migrationContext.InspectorServerInfo, err = mysql.GetServerInfo(this.db); err != nil {
+		return err
+	}
+
+	return base.ValidateConnection(this.ServerInfo(), this.connectionConfig, this.migrationContext, this.name)
 }
 
 // validateGrants verifies the user by which we're executing has necessary grants
@@ -311,9 +326,10 @@ func (this *Inspector) restartReplication() error {
 // applyBinlogFormat sets ROW binlog format and restarts replication to make
 // the replication thread apply it.
 func (this *Inspector) applyBinlogFormat() error {
-	if this.migrationContext.RequiresBinlogFormatChange() {
+	if this.RequiresBinlogFormatChange() {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
-			return fmt.Errorf("Existing binlog_format is %s. Am not switching it to ROW unless you specify --switch-to-rbr", this.migrationContext.OriginalBinlogFormat)
+			return fmt.Errorf("Existing binlog_format is %s. Am not switching it to ROW unless you specify --switch-to-rbr",
+				this.ServerInfo().BinlogFormat)
 		}
 		if _, err := sqlutils.ExecNoPrepare(this.db, `set global binlog_format='ROW'`); err != nil {
 			return err
@@ -338,15 +354,11 @@ func (this *Inspector) applyBinlogFormat() error {
 
 // validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
-	query := `select /* gh-ost */ @@global.log_bin, @@global.binlog_format`
-	var hasBinaryLogs bool
-	if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat); err != nil {
-		return err
-	}
-	if !hasBinaryLogs {
+	if !this.ServerInfo().LogBin {
 		return fmt.Errorf("%s must have binary logs enabled", this.connectionConfig.Key.String())
 	}
-	if this.migrationContext.RequiresBinlogFormatChange() {
+
+	if this.RequiresBinlogFormatChange() {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
 			return fmt.Errorf("You must be using ROW binlog format. I can switch it for you, provided --switch-to-rbr and that %s doesn't have replicas", this.connectionConfig.Key.String())
 		}
@@ -360,17 +372,13 @@ func (this *Inspector) validateBinlogs() error {
 			return err
 		}
 		if countReplicas > 0 {
-			return fmt.Errorf("%s has %s binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.String(), this.migrationContext.OriginalBinlogFormat)
+			return fmt.Errorf("%s has %s binlog_format, but I'm too scared to change it to ROW because it has replicas. Bailing out", this.connectionConfig.Key.String(), this.ServerInfo().BinlogFormat)
 		}
-		this.migrationContext.Log.Infof("%s has %s binlog_format. I will change it to ROW, and will NOT change it back, even in the event of failure.", this.connectionConfig.Key.String(), this.migrationContext.OriginalBinlogFormat)
+		this.migrationContext.Log.Infof("%s has %s binlog_format. I will change it to ROW, and will NOT change it back, even in the event of failure.", this.connectionConfig.Key.String(), this.ServerInfo().BinlogFormat)
 	}
-	query = `select /* gh-ost */ @@global.binlog_row_image`
-	if err := this.db.QueryRow(query).Scan(&this.migrationContext.OriginalBinlogRowImage); err != nil {
-		return err
-	}
-	this.migrationContext.OriginalBinlogRowImage = strings.ToUpper(this.migrationContext.OriginalBinlogRowImage)
-	if this.migrationContext.OriginalBinlogRowImage != "FULL" {
-		return fmt.Errorf("%s has '%s' binlog_row_image, and only 'FULL' is supported. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again", this.connectionConfig.Key.String(), this.migrationContext.OriginalBinlogRowImage)
+
+	if strings.ToUpper(this.ServerInfo().BinlogRowImage) != "FULL" {
+		return fmt.Errorf("%s has '%s' binlog_row_image, and only 'FULL' is supported. This operation cannot proceed. You may `set global binlog_row_image='full'` and try again", this.connectionConfig.Key.String(), this.ServerInfo().BinlogRowImage)
 	}
 
 	this.migrationContext.Log.Infof("binary logs validated on %s", this.connectionConfig.Key.String())
@@ -379,13 +387,7 @@ func (this *Inspector) validateBinlogs() error {
 
 // validateLogSlaveUpdates checks that binary log log_slave_updates is set. This test is not required when migrating on replica or when migrating directly on master
 func (this *Inspector) validateLogSlaveUpdates() error {
-	query := `select /* gh-ost */ @@global.log_slave_updates`
-	var logSlaveUpdates bool
-	if err := this.db.QueryRow(query).Scan(&logSlaveUpdates); err != nil {
-		return err
-	}
-
-	if logSlaveUpdates {
+	if this.ServerInfo().LogSlaveUpdates {
 		this.migrationContext.Log.Infof("log_slave_updates validated on %s", this.connectionConfig.Key.String())
 		return nil
 	}

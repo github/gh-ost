@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2023 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -247,18 +247,22 @@ help                                 # This message
 			return NoPrintStatusRule, fmt.Errorf("coordinates are read-only")
 		}
 	case "applier":
-		if this.migrationContext.ApplierConnectionConfig != nil && this.migrationContext.ApplierConnectionConfig.ImpliedKey != nil {
-			fmt.Fprintf(writer, "Host: %s, Version: %s\n",
+		if this.migrationContext.ApplierConnectionConfig != nil && this.migrationContext.ApplierConnectionConfig.ImpliedKey != nil &&
+			this.migrationContext.ApplierServerInfo != nil {
+			fmt.Fprintf(writer, "Host: %s, Version: %s (%s)\n",
 				this.migrationContext.ApplierConnectionConfig.ImpliedKey.String(),
-				this.migrationContext.ApplierMySQLVersion,
+				this.migrationContext.ApplierServerInfo.Version,
+				this.migrationContext.ApplierServerInfo.VersionComment,
 			)
 		}
 		return NoPrintStatusRule, nil
 	case "inspector":
-		if this.migrationContext.InspectorConnectionConfig != nil && this.migrationContext.InspectorConnectionConfig.ImpliedKey != nil {
-			fmt.Fprintf(writer, "Host: %s, Version: %s\n",
+		if this.migrationContext.InspectorConnectionConfig != nil && this.migrationContext.InspectorConnectionConfig.ImpliedKey != nil &&
+			this.migrationContext.InspectorServerInfo != nil {
+			fmt.Fprintf(writer, "Host: %s, Version: %s (%s)\n",
 				this.migrationContext.InspectorConnectionConfig.ImpliedKey.String(),
-				this.migrationContext.InspectorMySQLVersion,
+				this.migrationContext.InspectorServerInfo.Version,
+				this.migrationContext.InspectorServerInfo.VersionComment,
 			)
 		}
 		return NoPrintStatusRule, nil
