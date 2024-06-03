@@ -6,6 +6,8 @@
 package logic
 
 import (
+	"fmt"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -181,5 +183,180 @@ func TestApplierInstantDDL(t *testing.T) {
 	t.Run("instantDDLstmt", func(t *testing.T) {
 		stmt := applier.generateInstantDDLQuery()
 		test.S(t).ExpectEquals(stmt, "ALTER /* gh-ost */ TABLE `test`.`mytable` ADD INDEX (foo), ALGORITHM=INSTANT")
+	})
+}
+
+func TestGenerateQuery(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrationContext.DatabaseName = "test"
+	migrationContext.OriginalTableName = "mytable"
+	uniqueColumns := sql.NewColumnList([]string{"id", "order_id"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "PRIMARY KEY",
+		Columns: *uniqueColumns,
+	}
+	sharedColumns := sql.NewColumnList([]string{"id", "order_id", "name", "age"})
+	migrationContext.SharedColumns = sharedColumns
+
+	applier := NewApplier(migrationContext)
+
+	t.Run("generateDeleteQuery1", func(t *testing.T) {
+		stmt := applier.generateDeleteQuery([][]string{{"1", "2"}})
+		test.S(t).ExpectEquals(stmt, `
+		DELETE /* gh-ost `+"`test`.`mytable`"+` */
+		FROM `+"`test`.`_mytable_gho`"+` 
+		WHERE `+"(`id`,`order_id`)"+` IN ((1, 2))`)
+	})
+	t.Run("generateDeleteQuery2", func(t *testing.T) {
+		stmt := applier.generateDeleteQuery([][]string{{"'1'", "'2'"}})
+		test.S(t).ExpectEquals(stmt, `
+		DELETE /* gh-ost `+"`test`.`mytable`"+` */
+		FROM `+"`test`.`_mytable_gho`"+` 
+		WHERE `+"(`id`,`order_id`)"+` IN (('1', '2'))`)
+	})
+	t.Run("generateDeleteQuery3", func(t *testing.T) {
+		stmt := applier.generateDeleteQuery([][]string{{"'1'", "'2'"}, {"1", "23"}})
+		test.S(t).ExpectEquals(stmt, `
+		DELETE /* gh-ost `+"`test`.`mytable`"+` */
+		FROM `+"`test`.`_mytable_gho`"+` 
+		WHERE `+"(`id`,`order_id`)"+` IN (('1', '2'), (1, 23))`)
+	})
+	t.Run("generateReplaceQuery1", func(t *testing.T) {
+		stmt := applier.generateReplaceQuery([][]string{{"1", "2"}})
+		test.S(t).ExpectEquals(stmt, `
+		REPLACE /* gh-ost `+"`test`.`mytable`"+` */
+		INTO `+"`test`.`_mytable_gho` (`id`,`order_id`,`name`,`age`)"+`
+		SELECT `+"`id`,`order_id`,`name`,`age`"+` 
+		FROM `+"`test`.`mytable`"+` 
+		FORCE INDEX `+"(`PRIMARY KEY`)"+` 
+		WHERE (`+"`id`,`order_id`"+`) IN ((1, 2))`)
+	})
+	t.Run("generateReplaceQuery2", func(t *testing.T) {
+		stmt := applier.generateReplaceQuery([][]string{{"'1'", "'2'"}})
+		test.S(t).ExpectEquals(stmt, `
+		REPLACE /* gh-ost `+"`test`.`mytable`"+` */
+		INTO `+"`test`.`_mytable_gho` (`id`,`order_id`,`name`,`age`)"+`
+		SELECT `+"`id`,`order_id`,`name`,`age`"+` 
+		FROM `+"`test`.`mytable`"+` 
+		FORCE INDEX `+"(`PRIMARY KEY`)"+` 
+		WHERE (`+"`id`,`order_id`"+`) IN (('1', '2'))`)
+	})
+	t.Run("generateReplaceQuery3", func(t *testing.T) {
+		stmt := applier.generateReplaceQuery([][]string{{"'1'", "'2'"}, {"1", "23"}})
+		test.S(t).ExpectEquals(stmt, `
+		REPLACE /* gh-ost `+"`test`.`mytable`"+` */
+		INTO `+"`test`.`_mytable_gho` (`id`,`order_id`,`name`,`age`)"+`
+		SELECT `+"`id`,`order_id`,`name`,`age`"+` 
+		FROM `+"`test`.`mytable`"+` 
+		FORCE INDEX `+"(`PRIMARY KEY`)"+` 
+		WHERE (`+"`id`,`order_id`"+`) IN (('1', '2'), (1, 23))`)
+	})
+}
+
+func TestIsIgnoreOverMaxChunkRangeEvent(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	uniqueColumns := sql.NewColumnList([]string{"id", "date"})
+	uniqueColumns.SetColumnCompareValueFunc("id", func(a interface{}, b interface{}) (int, error) {
+		_a := new(big.Int)
+		if _a, _ = _a.SetString(fmt.Sprintf("%+v", a), 10); a == nil {
+			return 0, fmt.Errorf("CompareValueFunc err, %+v convert int is nil", a)
+		}
+		_b := new(big.Int)
+		if _b, _ = _b.SetString(fmt.Sprintf("%+v", b), 10); b == nil {
+			return 0, fmt.Errorf("CompareValueFunc err, %+v convert int is nil", b)
+		}
+		return _a.Cmp(_b), nil
+	})
+
+	uniqueColumns.SetColumnCompareValueFunc("date", func(a interface{}, b interface{}) (int, error) {
+		_a := new(big.Int)
+		if _a, _ = _a.SetString(fmt.Sprintf("%+v", a), 10); a == nil {
+			return 0, fmt.Errorf("CompareValueFunc err, %+v convert int is nil", a)
+		}
+		_b := new(big.Int)
+		if _b, _ = _b.SetString(fmt.Sprintf("%+v", b), 10); b == nil {
+			return 0, fmt.Errorf("CompareValueFunc err, %+v convert int is nil", b)
+		}
+		return _a.Cmp(_b), nil
+	})
+
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "PRIMARY KEY",
+		Columns: *uniqueColumns,
+	}
+	migrationContext.MigrationRangeMinValues = sql.ToColumnValues([]interface{}{10, 20240110})
+	migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{123456, 20240205})
+	migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{11111, 20240103})
+
+	applier := NewApplier(migrationContext)
+
+	t.Run("setFalse", func(t *testing.T) {
+		migrationContext.IgnoreOverIterationRangeMaxBinlog = false
+		isIgnore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{1, 20240101})
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectFalse(isIgnore)
+	})
+
+	t.Run("lessRangeMaxValue1", func(t *testing.T) {
+		migrationContext.IgnoreOverIterationRangeMaxBinlog = true
+		isIgnore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{100, 20240101})
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectFalse(isIgnore)
+	})
+
+	t.Run("lessRangeMaxValue2", func(t *testing.T) {
+		migrationContext.IgnoreOverIterationRangeMaxBinlog = true
+		isIgnore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{11111, 20240101})
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectFalse(isIgnore)
+	})
+
+	t.Run("equalRangeMaxValue", func(t *testing.T) {
+		migrationContext.IgnoreOverIterationRangeMaxBinlog = true
+		isIgnore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{11111, 20240103})
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectFalse(isIgnore)
+	})
+
+	t.Run("greatRangeMaxValue1", func(t *testing.T) {
+		migrationContext.IgnoreOverIterationRangeMaxBinlog = true
+		isIgnore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{11111, 20240104})
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectTrue(isIgnore)
+	})
+
+	t.Run("greatRangeMaxValue2", func(t *testing.T) {
+		migrationContext.IgnoreOverIterationRangeMaxBinlog = true
+		isIgnore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{11112, 20240103})
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectTrue(isIgnore)
+	})
+
+	t.Run("lessMaxValue1", func(t *testing.T) {
+		migrationContext.IgnoreOverIterationRangeMaxBinlog = true
+		isIgnore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{123456, 20240204})
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectTrue(isIgnore)
+	})
+
+	t.Run("equalMaxValue", func(t *testing.T) {
+		migrationContext.IgnoreOverIterationRangeMaxBinlog = true
+		isIgnore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{123456, 20240205})
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectFalse(isIgnore)
+	})
+
+	t.Run("greatMaxValue1", func(t *testing.T) {
+		migrationContext.IgnoreOverIterationRangeMaxBinlog = true
+		isIgnore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{123456, 20240207})
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectFalse(isIgnore)
+	})
+
+	t.Run("greatMaxValue2", func(t *testing.T) {
+		migrationContext.IgnoreOverIterationRangeMaxBinlog = true
+		isIgnore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{123457, 20240204})
+		test.S(t).ExpectNil(err)
+		test.S(t).ExpectFalse(isIgnore)
 	})
 }
