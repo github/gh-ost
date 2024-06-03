@@ -102,6 +102,10 @@ This is somewhat similar to a Nagios `n`-times test, where `n` in our case is al
 
 Optional. Default is `safe`. See more discussion in [`cut-over`](cut-over.md)
 
+### cut-over-idle-timeout-seconds
+
+When set to a value greater than zero, this flag causes `gh-ost` to set a [MySQL `wait_timeout`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_wait_timeout) for the MySQL session performing the cut-over, specified in seconds. This timeout is to ensure the locks held by the cut-over are released if the `gh-ost` process becomes unresponsive _(but still alive)_ mid-cut-over.
+
 ### cut-over-lock-timeout-seconds
 
 Default `3`.  Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout).
@@ -201,10 +205,6 @@ List of metrics and threshold values; topping the threshold of any will cause th
 ### migrate-on-replica
 
 Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but otherwise will make no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
-
-### mysql-wait-timeout
-
-If set to a value greater than zero, causes `gh-ost` to set a provided [MySQL `wait_timeout`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_wait_timeout) for MySQL sessions opened by `gh-ost`, specified in seconds.
 
 ### postpone-cut-over-flag-file
 
