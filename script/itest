@@ -1,0 +1,8 @@
+#!/bin/sh
+#
+# Wrapper for running integration tests in docker.
+
+./script/dock pkg $(pwd)/bin
+
+docker build -t itest -f Dockerfile.itest .
+docker run --rm itest
