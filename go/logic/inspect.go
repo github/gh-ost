@@ -22,7 +22,7 @@ import (
 	"github.com/openark/golib/sqlutils"
 )
 
-const startSlavePostWaitMilliseconds = 500 * time.Millisecond
+const startSlavePostWaitMilliseconds = 1000 * time.Millisecond
 
 // Inspector reads data from the read-MySQL-server (typically a replica, but can be the master)
 // It is used for gaining initial status and structure, and later also follow up on progress and changelog
