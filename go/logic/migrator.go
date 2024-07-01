@@ -200,6 +200,11 @@ func (this *Migrator) canStopStreaming() bool {
 
 // onChangelogEvent is called when a binlog event operation on the changelog table is intercepted.
 func (this *Migrator) onChangelogEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+	if dmlEvent.NewColumnValues == nil {
+		// for some compatible systems, such as OceanBase Binlog Service, UPSERT is transferred to
+		// DELETE + INSERT, we need to skip DELETE events here.
+		return nil
+	}
 	// Hey, I created the changelog table, I know the type of columns it has!
 	switch hint := dmlEvent.NewColumnValues.StringColumn(2); hint {
 	case "state":
