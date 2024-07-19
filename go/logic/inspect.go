@@ -60,7 +60,7 @@ func (this *Inspector) InitDBConnections() (err error) {
 	}
 	this.dbVersion = this.migrationContext.InspectorMySQLVersion
 
-	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL && !this.migrationContext.OceanBase {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {

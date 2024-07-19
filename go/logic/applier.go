@@ -100,7 +100,7 @@ func (this *Applier) InitDBConnections() (err error) {
 	if err := this.validateAndReadGlobalVariables(); err != nil {
 		return err
 	}
-	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
+	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL && !this.migrationContext.OceanBase {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
 		} else {
@@ -773,22 +773,26 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	return chunkSize, rowsAffected, duration, nil
 }
 
-// LockOriginalTable places a write lock on the original table
-func (this *Applier) LockOriginalTable() error {
-	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
-	this.migrationContext.Log.Infof("Locking %s.%s",
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-	)
+// lockTable places a write lock on the specific table
+func (this *Applier) lockTable(databaseName, tableName string) error {
+	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`, databaseName, tableName)
+	this.migrationContext.Log.Infof("Locking %s.%s", databaseName, tableName)
 	this.migrationContext.LockTablesStartTime = time.Now()
 	if _, err := sqlutils.ExecNoPrepare(this.singletonDB, query); err != nil {
 		return err
 	}
-	this.migrationContext.Log.Infof("Table locked")
+	this.migrationContext.Log.Infof("Table %s.%s locked", databaseName, tableName)
 	return nil
+}
+
+// LockOriginalTable places a write lock on the original table
+func (this *Applier) LockOriginalTable() error {
+	return this.lockTable(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
+}
+
+// LockGhostTable places a write lock on the ghost table
+func (this *Applier) LockGhostTable() error {
+	return this.lockTable(this.migrationContext.DatabaseName, this.migrationContext.GetGhostTableName())
 }
 
 // UnlockTables makes tea. No wait, it unlocks tables.
@@ -1096,7 +1100,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 
 	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
 	this.migrationContext.Log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
-	query = fmt.Sprintf(`set /* gh-ost */ session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
+	query = fmt.Sprintf(`set /* gh-ost */ session lock_wait_timeout=%d`, tableLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
 		tableLocked <- err
 		return err
@@ -1171,25 +1175,31 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 	return nil
 }
 
-// AtomicCutoverRename
-func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed chan<- error) error {
-	tx, err := this.db.Begin()
+func (this *Applier) atomicCutoverRename(db *gosql.DB, sessionIdChan chan int64, tablesRenamed chan<- error) error {
+	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer func() {
 		tx.Rollback()
-		sessionIdChan <- -1
-		tablesRenamed <- fmt.Errorf("Unexpected error in AtomicCutoverRename(), injected to release blocking channel reads")
+		if sessionIdChan != nil {
+			sessionIdChan <- -1
+		}
+		if tablesRenamed != nil {
+			tablesRenamed <- fmt.Errorf("Unexpected error in AtomicCutoverRename(), injected to release blocking channel reads")
+		}
 	}()
-	var sessionId int64
-	if err := tx.QueryRow(`select /* gh-ost */ connection_id()`).Scan(&sessionId); err != nil {
-		return err
+
+	if sessionIdChan != nil {
+		var sessionId int64
+		if err := tx.QueryRow(`select /* gh-ost */ connection_id()`).Scan(&sessionId); err != nil {
+			return err
+		}
+		sessionIdChan <- sessionId
 	}
-	sessionIdChan <- sessionId
 
 	this.migrationContext.Log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.CutOverLockTimeoutSeconds)
-	query := fmt.Sprintf(`set /* gh-ost */ session lock_wait_timeout:=%d`, this.migrationContext.CutOverLockTimeoutSeconds)
+	query := fmt.Sprintf(`set /* gh-ost */ session lock_wait_timeout=%d`, this.migrationContext.CutOverLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
 		return err
 	}
@@ -1206,12 +1216,26 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 	)
 	this.migrationContext.Log.Infof("Issuing and expecting this to block: %s", query)
 	if _, err := tx.Exec(query); err != nil {
-		tablesRenamed <- err
+		if tablesRenamed != nil {
+			tablesRenamed <- err
+		}
 		return this.migrationContext.Log.Errore(err)
 	}
-	tablesRenamed <- nil
+	if tablesRenamed != nil {
+		tablesRenamed <- nil
+	}
 	this.migrationContext.Log.Infof("Tables renamed")
 	return nil
+}
+
+// AtomicCutoverRename renames tables for atomic cut over in non lock session
+func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed chan<- error) error {
+	return this.atomicCutoverRename(this.db, sessionIdChan, tablesRenamed)
+}
+
+// AtomicCutoverRenameWithLock renames tables for atomic cut over in the lock session
+func (this *Applier) AtomicCutoverRenameWithLock() error {
+	return this.atomicCutoverRename(this.singletonDB, nil, nil)
 }
 
 func (this *Applier) ShowStatusVariable(variableName string) (result int64, err error) {

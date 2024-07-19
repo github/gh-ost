@@ -6,6 +6,7 @@
 package base
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -62,6 +63,10 @@ func StringContainsAll(s string, substrings ...string) bool {
 }
 
 func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext, name string) (string, error) {
+	if err := validateOceanBaseConnection(db, migrationContext); err != nil {
+		return "", err
+	}
+
 	versionQuery := `select @@global.version`
 
 	var version string
@@ -84,7 +89,7 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	// GCP set users port to "NULL", replace it by gh-ost param
 	// Azure MySQL set users port to a different value by design, replace it by gh-ost para
 	var port int
-	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform || migrationContext.AzureMySQL {
+	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform || migrationContext.AzureMySQL || migrationContext.OceanBase {
 		port = connectionConfig.Key.Port
 	} else {
 		portQuery := `select @@global.port`
@@ -101,4 +106,28 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	} else {
 		return "", fmt.Errorf("Unexpected database port reported: %+v / extra_port: %+v", port, extraPort)
 	}
+}
+
+func validateOceanBaseConnection(db *gosql.DB, migrationContext *MigrationContext) error {
+	versionCommentQuery := `select @@global.version_comment`
+	var versionComment string
+	if err := db.QueryRow(versionCommentQuery).Scan(&versionComment); err != nil {
+		return nil
+	}
+	if !strings.Contains(versionComment, "OceanBase") {
+		return nil
+	}
+
+	migrationContext.Log.Infof("OceanBase connection identified, version_comment: %v", versionComment)
+	migrationContext.OceanBase = true
+
+	enableLockPriorityQuery := `select value from oceanbase.GV$OB_PARAMETERS where name='enable_lock_priority'`
+	var enableLockPriority bool
+	if err := db.QueryRow(enableLockPriorityQuery).Scan(&enableLockPriority); err != nil {
+		return err
+	}
+	if !enableLockPriority {
+		return errors.New("system parameter 'enable_lock_priority' should be true to support cut-over")
+	}
+	return nil
 }
