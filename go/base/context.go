@@ -164,6 +164,7 @@ type MigrationContext struct {
 	Hostname                               string
 	AssumeMasterHostname                   string
 	ApplierTimeZone                        string
+	ApplierWaitTimeout                     int64
 	TableEngine                            string
 	RowsEstimate                           int64
 	RowsDeltaEstimate                      int64
