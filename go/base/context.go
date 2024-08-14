@@ -6,6 +6,7 @@
 package base
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -292,13 +293,16 @@ func NewMigrationContext() *MigrationContext {
 	}
 }
 
-func (this *MigrationContext) SetConnectionConfig(storageEngine string) error {
-	var transactionIsolation string
+func (this *MigrationContext) SetConnectionConfig(storageEngine, transactionIsolation string) error {
 	switch storageEngine {
 	case "rocksdb":
 		transactionIsolation = "READ-COMMITTED"
 	default:
-		transactionIsolation = "REPEATABLE-READ"
+		switch transactionIsolation {
+		case "READ-COMMITTED", "REPEATABLE-READ":
+		default:
+			return errors.New("unsupported transaction isolation level")
+		}
 	}
 	this.InspectorConnectionConfig.TransactionIsolation = transactionIsolation
 	this.ApplierConnectionConfig.TransactionIsolation = transactionIsolation
