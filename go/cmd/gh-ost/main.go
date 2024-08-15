@@ -109,7 +109,7 @@ func main() {
 	dmlBatchSize := flag.Int64("dml-batch-size", 10, "batch size for DML events to apply in a single transaction (range 1-100)")
 	defaultRetries := flag.Int64("default-retries", 60, "Default number of retries for various operations before panicking")
 	cutOverLockTimeoutSeconds := flag.Int64("cut-over-lock-timeout-seconds", 3, "Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout)")
-	transactionIsolation := flag.String("transaction-isolation", "REPEATABLE-READ", "transaction isolation level to be used by the applier and inspector. Possible options: REPEATABLE-READ or READ-COMMITTED")
+	transactionIsolation := flag.String("transaction-isolation", "REPEATABLE-READ", "transaction isolation level to be used by the applier and inspector. Possible values: REPEATABLE-READ or READ-COMMITTED")
 	niceRatio := flag.Float64("nice-ratio", 0, "force being 'nice', imply sleep time per chunk time; range: [0.0..100.0]. Example values: 0 is aggressive. 1: for every 1ms spent copying rows, sleep additional 1ms (effectively doubling runtime); 0.7: for every 10ms spend in a rowcopy chunk, spend 7ms sleeping immediately after")
 
 	maxLagMillis := flag.Int64("max-lag-millis", 1500, "replication lag at which to throttle operation")

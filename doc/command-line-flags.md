@@ -300,7 +300,7 @@ Makes the _old_ table include a timestamp value. The _old_ table is what the ori
 
 ### transaction-isolation
 
-Defaults to REPEATABLE-READ. Configures the session-level transaction isolation level used for applier and inspector connections.
+Defaults to `REPEATABLE-READ`. Configures the session-level transaction isolation level used for applier and inspector connections. Possible values: `REPEATABLE-READ` or `READ-COMMITTED`.
 
 ### tungsten
 
