@@ -362,12 +362,16 @@ func (this *Migrator) Migrate() (err error) {
 	// In MySQL 8.0 (and possibly earlier) some DDL statements can be applied instantly.
 	// Attempt to do this if AttemptInstantDDL is set.
 	if this.migrationContext.AttemptInstantDDL {
-		this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
-		if err := this.applier.AttemptInstantDDL(); err == nil {
-			this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
-			return nil
+		if this.migrationContext.Noop {
+			this.migrationContext.Log.Debugf("Noop operation; not really attempting instant DDL")
 		} else {
-			this.migrationContext.Log.Infof("ALGORITHM=INSTANT not supported for this operation, proceeding with original algorithm: %s", err)
+			this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
+			if err := this.applier.AttemptInstantDDL(); err == nil {
+				this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+				return nil
+			} else {
+				this.migrationContext.Log.Infof("ALGORITHM=INSTANT not supported for this operation, proceeding with original algorithm: %s", err)
+			}
 		}
 	}
 
