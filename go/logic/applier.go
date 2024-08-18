@@ -90,7 +90,7 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	this.migrationContext.ApplierMySQLVersion = version
-	if err := this.validateAndReadTimeZone(); err != nil {
+	if err := this.validateAndReadGlobalVariables(); err != nil {
 		return err
 	}
 	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
@@ -107,10 +107,13 @@ func (this *Applier) InitDBConnections() (err error) {
 	return nil
 }
 
-// validateAndReadTimeZone potentially reads server time-zone
-func (this *Applier) validateAndReadTimeZone() error {
-	query := `select /* gh-ost */ @@global.time_zone`
-	if err := this.db.QueryRow(query).Scan(&this.migrationContext.ApplierTimeZone); err != nil {
+// validateAndReadGlobalVariables potentially reads server global variables, such as the time_zone and wait_timeout.
+func (this *Applier) validateAndReadGlobalVariables() error {
+	query := `select /* gh-ost */ @@global.time_zone, @@global.wait_timeout`
+	if err := this.db.QueryRow(query).Scan(
+		&this.migrationContext.ApplierTimeZone,
+		&this.migrationContext.ApplierWaitTimeout,
+	); err != nil {
 		return err
 	}
 
@@ -943,6 +946,27 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 	return nil
 }
 
+// InitAtomicCutOverWaitTimeout sets the cut-over session wait_timeout in order to reduce the
+// time an unresponsive (but still connected) gh-ost process can hold the cut-over lock.
+func (this *Applier) InitAtomicCutOverWaitTimeout(tx *gosql.Tx) error {
+	cutOverWaitTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 3
+	this.migrationContext.Log.Infof("Setting cut-over idle timeout as %d seconds", cutOverWaitTimeoutSeconds)
+	query := fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, cutOverWaitTimeoutSeconds)
+	_, err := tx.Exec(query)
+	return err
+}
+
+// RevertAtomicCutOverWaitTimeout restores the original wait_timeout for the applier session post-cut-over.
+func (this *Applier) RevertAtomicCutOverWaitTimeout() {
+	this.migrationContext.Log.Infof("Reverting cut-over idle timeout to %d seconds", this.migrationContext.ApplierWaitTimeout)
+	query := fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.ApplierWaitTimeout)
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		this.migrationContext.Log.Errorf("Failed to restore applier wait_timeout to %d seconds: %v",
+			this.migrationContext.ApplierWaitTimeout, err,
+		)
+	}
+}
+
 // AtomicCutOverMagicLock
 func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
 	tx, err := this.db.Begin()
@@ -987,6 +1011,12 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		tableLocked <- err
 		return err
 	}
+
+	if err := this.InitAtomicCutOverWaitTimeout(tx); err != nil {
+		tableLocked <- err
+		return err
+	}
+	defer this.RevertAtomicCutOverWaitTimeout()
 
 	query = fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write, %s.%s write`,
 		sql.EscapeName(this.migrationContext.DatabaseName),

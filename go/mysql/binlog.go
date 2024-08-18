@@ -19,7 +19,7 @@ type BinlogCoordinates struct {
 	EventSize int64
 }
 
-// ParseInstanceKey will parse an InstanceKey from a string representation such as 127.0.0.1:3306
+// ParseBinlogCoordinates will parse an InstanceKey from a string representation such as 127.0.0.1:3306
 func ParseBinlogCoordinates(logFileLogPos string) (*BinlogCoordinates, error) {
 	tokens := strings.SplitN(logFileLogPos, ":", 2)
 	if len(tokens) != 2 {
