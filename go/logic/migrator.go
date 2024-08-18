@@ -842,13 +842,14 @@ func (this *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	)
 	maxLoad := this.migrationContext.GetMaxLoad()
 	criticalLoad := this.migrationContext.GetCriticalLoad()
-	fmt.Fprintf(w, "# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f\n",
+	fmt.Fprintf(w, "# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f; where-clause: %s\n",
 		atomic.LoadInt64(&this.migrationContext.ChunkSize),
 		atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold),
 		atomic.LoadInt64(&this.migrationContext.DMLBatchSize),
 		maxLoad.String(),
 		criticalLoad.String(),
 		this.migrationContext.GetNiceRatio(),
+		this.migrationContext.GetWhereClause(),
 	)
 	if this.migrationContext.ThrottleFlagFile != "" {
 		setIndicator := ""
