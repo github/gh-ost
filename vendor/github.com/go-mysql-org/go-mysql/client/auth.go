@@ -9,6 +9,7 @@ import (
 	. "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/packet"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/tidb/pkg/parser/charset"
 )
 
 const defaultAuthPluginName = AUTH_NATIVE_PASSWORD
@@ -268,8 +269,21 @@ func (c *Conn) writeAuthHandshake() error {
 	data[11] = 0x00
 
 	// Charset [1 byte]
-	// use default collation id 33 here, is utf-8
-	data[12] = DEFAULT_COLLATION_ID
+	// use default collation id 33 here, is `utf8mb3_general_ci`
+	collationName := c.collation
+	if len(collationName) == 0 {
+		collationName = DEFAULT_COLLATION_NAME
+	}
+	collation, err := charset.GetCollationByName(collationName)
+	if err != nil {
+		return fmt.Errorf("invalid collation name %s", collationName)
+	}
+
+	// the MySQL protocol calls for the collation id to be sent as 1, where only the
+	// lower 8 bits are used in this field. But wireshark shows that the first byte of
+	// the 23 bytes of filler is used to send the right middle 8 bits of the collation id.
+	// see https://github.com/mysql/mysql-server/pull/541
+	data[12] = byte(collation.ID & 0xff)
 
 	// SSL Connection Request Packet
 	// http://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::SSLRequest

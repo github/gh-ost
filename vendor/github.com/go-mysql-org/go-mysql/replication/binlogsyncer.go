@@ -900,6 +900,9 @@ func (b *BinlogSyncer) newConnection(ctx context.Context) (*client.Conn, error) 
 		"", b.cfg.Dialer, func(c *client.Conn) {
 			c.SetTLSConfig(b.cfg.TLSConfig)
 			c.SetAttributes(map[string]string{"_client_role": "binary_log_listener"})
+			if b.cfg.ReadTimeout > 0 {
+				_ = c.SetReadDeadline(time.Now().Add(b.cfg.ReadTimeout))
+			}
 		})
 }
 

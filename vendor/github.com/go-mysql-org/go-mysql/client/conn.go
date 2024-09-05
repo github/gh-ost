@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/tidb/pkg/parser/charset"
 
 	. "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/packet"
@@ -37,6 +38,8 @@ type Conn struct {
 	status uint16
 
 	charset string
+	// sets the collation to be set on the auth handshake, this does not issue a 'set names' command
+	collation string
 
 	salt           []byte
 	authPluginName string
@@ -67,15 +70,19 @@ func Connect(addr string, user string, password string, dbName string, options .
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	dialer := &net.Dialer{}
+	return ConnectWithContext(ctx, addr, user, password, dbName, options...)
+}
 
+// ConnectWithContext to a MySQL addr using the provided context.
+func ConnectWithContext(ctx context.Context, addr string, user string, password string, dbName string, options ...func(*Conn)) (*Conn, error) {
+	dialer := &net.Dialer{}
 	return ConnectWithDialer(ctx, "", addr, user, password, dbName, dialer.DialContext, options...)
 }
 
 // Dialer connects to the address on the named network using the provided context.
 type Dialer func(ctx context.Context, network, address string) (net.Conn, error)
 
-// Connect to a MySQL server using the given Dialer.
+// ConnectWithDialer to a MySQL server using the given Dialer.
 func ConnectWithDialer(ctx context.Context, network string, addr string, user string, password string, dbName string, dialer Dialer, options ...func(*Conn)) (*Conn, error) {
 	c := new(Conn)
 
@@ -125,6 +132,21 @@ func ConnectWithDialer(ctx context.Context, network string, addr string, user st
 		c.Conn.Compression = MYSQL_COMPRESS_ZLIB
 	} else if c.ccaps&CLIENT_ZSTD_COMPRESSION_ALGORITHM > 0 {
 		c.Conn.Compression = MYSQL_COMPRESS_ZSTD
+	}
+
+	// if a collation was set with a ID of > 255, then we need to call SET NAMES ...
+	// since the auth handshake response only support collations with 1-byte ids
+	if len(c.collation) != 0 {
+		collation, err := charset.GetCollationByName(c.collation)
+		if err != nil {
+			return nil, errors.Trace(fmt.Errorf("invalid collation name %s", c.collation))
+		}
+
+		if collation.ID > 255 {
+			if _, err := c.exec(fmt.Sprintf("SET NAMES %s COLLATE %s", c.charset, c.collation)); err != nil {
+				return nil, errors.Trace(err)
+			}
+		}
 	}
 
 	return c, nil
@@ -355,6 +377,19 @@ func (c *Conn) SetCharset(charset string) error {
 		c.charset = charset
 		return nil
 	}
+}
+
+func (c *Conn) SetCollation(collation string) error {
+	if len(c.serverVersion) != 0 {
+		return errors.Trace(errors.Errorf("cannot set collation after connection is established"))
+	}
+
+	c.collation = collation
+	return nil
+}
+
+func (c *Conn) GetCollation() string {
+	return c.collation
 }
 
 func (c *Conn) FieldList(table string, wildcard string) ([]*Field, error) {
