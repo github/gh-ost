@@ -434,7 +434,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 	return setThrottle(false, "", base.NoThrottleReasonHint)
 }
 
-// initiateThrottlerMetrics initiates the various processes that collect measurements
+// initiateThrottlerCollection initiates the various processes that collect measurements
 // that may affect throttling. There are several components, all running independently,
 // that collect such metrics.
 func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan<- bool) {
