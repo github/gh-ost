@@ -63,7 +63,16 @@ func (c *Coordinator) SubmitJob(job *Job) {
 
 	c.wg.Add(1)
 
-	if job.sequenceNumber <= c.lowWaterMark || job.lastCommitted == 0 {
+	// If the job is ready to be scheduled, schedule it.
+	//
+	// A job can be scheduled if:
+	// * The last committed job is less than or equal to the low water mark. This
+	//   means that all jobs up to the low water mark have been completed.
+	// * The job has no dependencies (i.e. it is the first job in the binlog).
+	// * The low water mark is 0 and the queue is empty. This means that
+	//   this is the first job we received, but the job is coming from somewhere
+	//   in the middle of the binlog.
+	if job.lastCommitted <= c.lowWaterMark || job.sequenceNumber == 0 || (c.lowWaterMark == 0 && len(c.queue) == 0) {
 		fmt.Printf("Scheduling job: %d\n", job.sequenceNumber)
 		c.queue <- job
 	} else {
@@ -96,11 +105,15 @@ func (c *Coordinator) markJobCompleted(job *Job) {
 	fmt.Printf("Low water mark after update: %d\n", c.lowWaterMark)
 
 	// Schedule any jobs that were waiting for this job to complete
-	for _, waitingJob := range c.waitingJobs[job.sequenceNumber] {
-		fmt.Printf("Scheduling previously waiting job: %d\n", waitingJob.sequenceNumber)
-		c.queue <- waitingJob
+	for lastCommitted, jobs := range c.waitingJobs {
+		if lastCommitted <= c.lowWaterMark {
+			for _, waitingJob := range jobs {
+				fmt.Printf("Scheduling previously waiting job: %d\n", waitingJob.sequenceNumber)
+				c.queue <- waitingJob
+			}
+			delete(c.waitingJobs, lastCommitted)
+		}
 	}
-	delete(c.waitingJobs, job.sequenceNumber)
 }
 
 func (w *Worker) processJob(job *Job) error {
