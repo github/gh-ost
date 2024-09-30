@@ -43,8 +43,8 @@ func NewCoordinator() *Coordinator {
 	}
 }
 
-func (c *Coordinator) StartWorkers() {
-	for i := 0; i < 10; i++ {
+func (c *Coordinator) StartWorkers(count int) {
+	for i := 0; i < count; i++ {
 		go func() {
 			w := Worker{}
 			c.workers = append(c.workers, &w)
@@ -127,7 +127,7 @@ func (w *Worker) processJob(job *Job) error {
 
 func TestMultiThreadedApplier(t *testing.T) {
 	coordinator := NewCoordinator()
-	coordinator.StartWorkers()
+	coordinator.StartWorkers(16)
 
 	for i := 1; i < 101; i++ {
 		coordinator.SubmitJob(&Job{sequenceNumber: i, lastCommitted: i - 1})
@@ -142,10 +142,25 @@ func TestMultiThreadedApplier(t *testing.T) {
 
 func TestMultiThreadedApplierWithDependentJobs(t *testing.T) {
 	coordinator := NewCoordinator()
-	coordinator.StartWorkers()
+	coordinator.StartWorkers(16)
 
 	for i := 1; i < 101; i++ {
 		coordinator.SubmitJob(&Job{sequenceNumber: i, lastCommitted: ((i - 1) / 10) * 10})
+	}
+
+	coordinator.wg.Wait()
+
+	for i, w := range coordinator.workers {
+		fmt.Printf("Worker %d executed %d jobs\n", i, w.executedJobs)
+	}
+}
+
+func TestMultiThreadedApplierWithVaryingDependentJobs(t *testing.T) {
+	coordinator := NewCoordinator()
+	coordinator.StartWorkers(16)
+
+	for i := 1; i < 101; i++ {
+		coordinator.SubmitJob(&Job{sequenceNumber: i, lastCommitted: rand.Intn(i)})
 	}
 
 	coordinator.wg.Wait()
