@@ -21,11 +21,12 @@ type Coordinator struct {
 
 	queue chan *Job
 
+	wg sync.WaitGroup
+
+	mu            sync.Mutex
 	completedJobs map[int]bool
 	waitingJobs   map[int][]*Job
-	mu            sync.Mutex
-
-	wg sync.WaitGroup
+	firstJob      bool
 
 	workers []*Worker
 }
@@ -37,6 +38,7 @@ type Worker struct {
 func NewCoordinator() *Coordinator {
 	return &Coordinator{
 		lowWaterMark:  0,
+		firstJob:      true,
 		completedJobs: make(map[int]bool),
 		waitingJobs:   make(map[int][]*Job),
 		queue:         make(chan *Job, 100),
@@ -66,13 +68,14 @@ func (c *Coordinator) SubmitJob(job *Job) {
 	// If the job is ready to be scheduled, schedule it.
 	//
 	// A job can be scheduled if:
+	// * This is the very first job.
 	// * The last committed job is less than or equal to the low water mark. This
 	//   means that all jobs up to the low water mark have been completed.
-	// * The job has no dependencies (i.e. it is the first job in the binlog).
-	// * The low water mark is 0 and the queue is empty. This means that
-	//   this is the first job we received, but the job is coming from somewhere
-	//   in the middle of the binlog.
-	if job.lastCommitted <= c.lowWaterMark || job.sequenceNumber == 0 || (c.lowWaterMark == 0 && len(c.queue) == 0) {
+	if c.firstJob {
+		fmt.Printf("Scheduling first job: %d\n", job.sequenceNumber)
+		c.queue <- job
+		c.firstJob = false
+	} else if job.lastCommitted <= c.lowWaterMark {
 		fmt.Printf("Scheduling job: %d\n", job.sequenceNumber)
 		c.queue <- job
 	} else {
@@ -117,7 +120,7 @@ func (c *Coordinator) markJobCompleted(job *Job) {
 }
 
 func (w *Worker) processJob(job *Job) error {
-	// sleep random time between 1 and 200 ms to simulate work
+	// sleep random time between 1 and 100 ms to simulate work
 	time.Sleep(time.Duration(rand.Intn(100)+1) * time.Millisecond)
 
 	w.executedJobs++
@@ -146,6 +149,21 @@ func TestMultiThreadedApplierWithDependentJobs(t *testing.T) {
 
 	for i := 1; i < 101; i++ {
 		coordinator.SubmitJob(&Job{sequenceNumber: i, lastCommitted: ((i - 1) / 10) * 10})
+	}
+
+	coordinator.wg.Wait()
+
+	for i, w := range coordinator.workers {
+		fmt.Printf("Worker %d executed %d jobs\n", i, w.executedJobs)
+	}
+}
+
+func TestMultiThreadedApplierWithManyDependentJobs(t *testing.T) {
+	coordinator := NewCoordinator()
+	coordinator.StartWorkers(16)
+
+	for i := 1; i < 101; i++ {
+		coordinator.SubmitJob(&Job{sequenceNumber: i, lastCommitted: 1})
 	}
 
 	coordinator.wg.Wait()
