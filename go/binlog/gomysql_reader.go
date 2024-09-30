@@ -6,6 +6,7 @@
 package binlog
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 
@@ -126,6 +127,160 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 	}
 	this.LastAppliedRowsEventHint = this.currentCoordinates
 	return nil
+}
+
+type transaction struct {
+	SequenceNumber int64
+	LastCommitted  int64
+	Changes        chan<- *replication.RowsEvent
+}
+
+func (this *GoMySQLReader) StreamTransactions(ctx context.Context, transactionsChannel chan<- *transaction) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	previousSequenceNumber := int64(0)
+
+groups:
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		ev, err := this.binlogStreamer.GetEvent(ctx)
+		if err != nil {
+			return err
+		}
+		func() {
+			this.currentCoordinatesMutex.Lock()
+			defer this.currentCoordinatesMutex.Unlock()
+			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
+			this.currentCoordinates.EventSize = int64(ev.Header.EventSize)
+		}()
+
+		fmt.Printf("Event: %s\n", ev.Header.EventType)
+
+		// Read each event and do something with it
+		//
+		// First, ignore all events until we find the next GTID event so that we can start
+		// at a transaction boundary.
+		//
+		// Once we find a GTID event, we can start an event group,
+		// and then process all events in that group.
+		// An event group is defined as all events that are part of the same transaction,
+		// which is defined as all events between the GTID event, a `QueryEvent` containing a `BEGIN` query and ends with
+		// either a XIDEvent or a `QueryEvent` containing a `COMMIT` or `ROLLBACK` query.
+		//
+		// Each group is a struct containing the SequenceNumber, LastCommitted, and a channel of events.
+		//
+		// Once the group has ended, we can start looking for the next GTID event.
+
+		var group transaction
+		switch binlogEvent := ev.Event.(type) {
+		case *replication.GTIDEvent:
+			this.migrationContext.Log.Infof("GTIDEvent: %+v", binlogEvent)
+
+			// Bail out if we find a gap in the sequence numbers
+			if previousSequenceNumber != 0 && binlogEvent.SequenceNumber != previousSequenceNumber+1 {
+				return fmt.Errorf("unexpected sequence number: %d, expected %d", binlogEvent.SequenceNumber, previousSequenceNumber+1)
+			}
+
+			group = transaction{
+				SequenceNumber: binlogEvent.SequenceNumber,
+				LastCommitted:  binlogEvent.LastCommitted,
+				Changes:        make(chan *replication.RowsEvent, 1000),
+			}
+
+			previousSequenceNumber = binlogEvent.SequenceNumber
+
+		default:
+			this.migrationContext.Log.Infof("Ignoring Event: %+v", ev.Event)
+			continue
+		}
+
+		// Next event should be a query event
+
+		ev, err = this.binlogStreamer.GetEvent(ctx)
+		if err != nil {
+			close(group.Changes)
+			return err
+		}
+		this.migrationContext.Log.Infof("1 - Event: %s", ev.Header.EventType)
+
+		switch binlogEvent := ev.Event.(type) {
+		case *replication.QueryEvent:
+			if bytes.Equal([]byte("BEGIN"), binlogEvent.Query) {
+				this.migrationContext.Log.Infof("BEGIN for transaction in schema %s", binlogEvent.Schema)
+			} else {
+				this.migrationContext.Log.Infof("QueryEvent: %+v", binlogEvent)
+				this.migrationContext.Log.Infof("Query: %s", binlogEvent.Query)
+
+				// wait for the next event group
+				continue groups
+			}
+		default:
+			this.migrationContext.Log.Infof("unexpected Event: %+v", ev.Event)
+			close(group.Changes)
+
+			// TODO: handle the group - we want to make sure we process the group's LastCommitted and SequenceNumber
+
+			// wait for the next event group
+			continue groups
+		}
+
+		// Next event should be a table map event
+
+		ev, err = this.binlogStreamer.GetEvent(ctx)
+		if err != nil {
+			close(group.Changes)
+			return err
+		}
+		this.migrationContext.Log.Infof("2 - Event: %s", ev.Header.EventType)
+
+		switch ev.Event.(type) {
+		case *replication.TableMapEvent:
+			// TODO: Can we be smart here and short circuit processing groups for tables that don't match the table in the migration context?
+
+			// ignore the TableMapEvent
+		default:
+			this.migrationContext.Log.Infof("unexpected Event: %+v", ev.Event)
+
+			close(group.Changes)
+
+			// TODO: handle the group - we want to make sure we process the group's LastCommitted and SequenceNumber
+
+			continue groups
+		}
+
+	events:
+		// Now we can start processing the group
+		for {
+			ev, err = this.binlogStreamer.GetEvent(ctx)
+			if err != nil {
+				close(group.Changes)
+				return err
+			}
+			this.migrationContext.Log.Infof("3 - Event: %s", ev.Header.EventType)
+
+			switch binlogEvent := ev.Event.(type) {
+			case *replication.RowsEvent:
+				group.Changes <- binlogEvent
+			case *replication.XIDEvent:
+				this.migrationContext.Log.Infof("XIDEvent: %+v", binlogEvent)
+				this.migrationContext.Log.Infof("COMMIT for transaction")
+				break events
+			default:
+				close(group.Changes)
+				this.migrationContext.Log.Infof("unexpected Event: %+v", ev.Event)
+				return fmt.Errorf("unexpected Event: %+v", ev.Event)
+			}
+		}
+
+		close(group.Changes)
+
+		this.migrationContext.Log.Infof("done processing group - %d events", len(group.Changes))
+	}
 }
 
 // StreamEvents
