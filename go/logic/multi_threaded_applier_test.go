@@ -18,6 +18,9 @@ type Job struct {
 	// channel that's closed once the job's dependencies are met
 	// `nil` if the job's dependencies are already met when the job is submitted
 	waitChannel chan struct{}
+
+	// Data for the job
+	changes chan struct{}
 }
 
 type Coordinator struct {
@@ -71,6 +74,8 @@ func (c *Coordinator) StartWorkers(count int) {
 			for job := range c.queue {
 				// fmt.Printf("Worker processing job: %d\n", job.sequenceNumber)
 
+				// If `waitChannel` is set, we need to wait for a signal so that we know the job
+				// can be processed.
 				if job.waitChannel != nil {
 					// fmt.Printf("Worker waiting for job: %d\n", job.sequenceNumber)
 					<-job.waitChannel
@@ -94,10 +99,10 @@ func (c *Coordinator) SubmitJob(job *Job) {
 	// `waitChannel` to signal that the job's dependencies are met.
 	//
 	// We can short-circuit this if:
-	// * This is the first job we're processing
-	// * The job's last committed sequence number is less than or equal to the low water mark,
+	// * this is the first job we're processing
+	// * the job's last committed sequence number is less than or equal to the low water mark,
 	//   thus we know that the job's dependencies are already met.
-	// * The job's dependency has completed, but the lowWaterMark has not been updated yet because
+	// * the job's dependency has completed, but the lowWaterMark has not been updated yet because
 	//   a job with a lower sequence number is still being processed.
 	//
 	// When short-circuiting, we don't assign a `waitChannel` to the job, thus signaling that the
@@ -116,7 +121,7 @@ func (c *Coordinator) SubmitJob(job *Job) {
 
 	c.mu.Unlock()
 
-	// Add the job to the queue. This will block if no worker is available to pick this job up.
+	// Add the job to the queue. This will block until a worker picks up this job.
 	c.queue <- job
 }
 
@@ -163,6 +168,11 @@ func (w *Worker) processJob(job *Job) error {
 	// Simulate `BEGIN`
 	time.Sleep(100 * time.Microsecond)
 
+	for range job.changes {
+		// Simulate processing a change
+		time.Sleep(100 * time.Microsecond)
+	}
+
 	// Simulate `COMMIT`
 	time.Sleep(100 * time.Microsecond)
 
@@ -175,8 +185,13 @@ func TestMultiThreadedApplier(t *testing.T) {
 	coordinator := NewCoordinator()
 	coordinator.StartWorkers(16)
 
-	for i := int64(1); i < 3000; i++ {
-		coordinator.SubmitJob(&Job{sequenceNumber: i, lastCommitted: i - 1})
+	for i := int64(1); i < 300; i++ {
+		job := &Job{sequenceNumber: i, lastCommitted: i - 1, changes: make(chan struct{}, 1000)}
+		coordinator.SubmitJob(job)
+		for j := 0; j < 10; j++ {
+			job.changes <- struct{}{}
+		}
+		close(job.changes)
 	}
 
 	coordinator.wg.Wait()
@@ -190,8 +205,13 @@ func TestMultiThreadedApplierWithDependentJobs(t *testing.T) {
 	coordinator := NewCoordinator()
 	coordinator.StartWorkers(16)
 
-	for i := int64(1); i < 3000; i++ {
-		coordinator.SubmitJob(&Job{sequenceNumber: i, lastCommitted: ((i - 1) / 10) * 10})
+	for i := int64(1); i < 300; i++ {
+		job := &Job{sequenceNumber: i, lastCommitted: ((i - 1) / 10) * 10, changes: make(chan struct{}, 1000)}
+		coordinator.SubmitJob(job)
+		for j := 0; j < 10; j++ {
+			job.changes <- struct{}{}
+		}
+		close(job.changes)
 	}
 
 	coordinator.wg.Wait()
@@ -205,8 +225,13 @@ func TestMultiThreadedApplierWithManyDependentJobs(t *testing.T) {
 	coordinator := NewCoordinator()
 	coordinator.StartWorkers(16)
 
-	for i := int64(1); i < 3000; i++ {
-		coordinator.SubmitJob(&Job{sequenceNumber: i, lastCommitted: 1})
+	for i := int64(1); i < 300; i++ {
+		job := &Job{sequenceNumber: i, lastCommitted: 1, changes: make(chan struct{}, 1000)}
+		coordinator.SubmitJob(job)
+		for j := 0; j < 10; j++ {
+			job.changes <- struct{}{}
+		}
+		close(job.changes)
 	}
 
 	coordinator.wg.Wait()
@@ -220,8 +245,13 @@ func TestMultiThreadedApplierWithVaryingDependentJobs(t *testing.T) {
 	coordinator := NewCoordinator()
 	coordinator.StartWorkers(16)
 
-	for i := int64(1); i < 3000; i++ {
-		coordinator.SubmitJob(&Job{sequenceNumber: i, lastCommitted: rand.Int63n(i)})
+	for i := int64(1); i < 300; i++ {
+		job := &Job{sequenceNumber: i, lastCommitted: rand.Int63n(i), changes: make(chan struct{}, 1000)}
+		coordinator.SubmitJob(job)
+		for j := 0; j < 10; j++ {
+			job.changes <- struct{}{}
+		}
+		close(job.changes)
 	}
 
 	coordinator.wg.Wait()
