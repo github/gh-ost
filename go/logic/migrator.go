@@ -44,6 +44,7 @@ type tableWriteFunc func() error
 type applyEventStruct struct {
 	writeFunc *tableWriteFunc
 	dmlEvent  *binlog.BinlogDMLEvent
+	trxEvent  *binlog.Transaction
 }
 
 func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
@@ -54,6 +55,10 @@ func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
 func newApplyEventStructByDML(dmlEvent *binlog.BinlogDMLEvent) *applyEventStruct {
 	result := &applyEventStruct{dmlEvent: dmlEvent}
 	return result
+}
+
+func newApplyEventStructFromTrx(trxEvent *binlog.Transaction) *applyEventStruct {
+	return &applyEventStruct{trxEvent: trxEvent}
 }
 
 type PrintStatusRule int
@@ -92,6 +97,7 @@ type Migrator struct {
 	handledChangelogStates map[string]bool
 
 	finishedMigrating int64
+	trxCoordinator    *Coordinator
 }
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
@@ -109,6 +115,7 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
 		handledChangelogStates: make(map[string]bool),
 		finishedMigrating:      0,
+		trxCoordinator:         NewCoordinator(),
 	}
 	return migrator
 }
@@ -399,9 +406,14 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.countTableRows(); err != nil {
 		return err
 	}
-	if err := this.addDMLEventsListener(); err != nil {
+	// if err := this.addDMLEventsListener(); err != nil {
+	// 	return err
+	// }
+
+	if err := this.addTrxListener(); err != nil {
 		return err
 	}
+
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
@@ -411,6 +423,10 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
+
+	// TODO: configure workers
+	numApplierWorkers := 4
+	go this.trxCoordinator.StartWorkers(numApplierWorkers)
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
@@ -1075,10 +1091,11 @@ func (this *Migrator) initiateStreaming() error {
 			return this.onChangelogEvent(dmlEvent)
 		},
 	)
-
+	ctx := context.Background()
 	go func() {
 		this.migrationContext.Log.Debugf("Beginning streaming")
-		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
+		//err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
+		err := this.eventsStreamer.StreamTransactions(ctx, this.canStopStreaming)
 		if err != nil {
 			this.migrationContext.PanicAbort <- err
 		}
@@ -1111,6 +1128,18 @@ func (this *Migrator) addDMLEventsListener() error {
 		},
 	)
 	return err
+}
+
+func (m *Migrator) addTrxListener() error {
+	return m.eventsStreamer.AddTransactionListener(
+		false,
+		m.migrationContext.DatabaseName,
+		m.migrationContext.OriginalTableName,
+		func(trx *binlog.Transaction) error {
+			m.applyEventsQueue <- newApplyEventStructFromTrx(trx)
+			return nil
+		},
+	)
 }
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
@@ -1248,7 +1277,40 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 	if eventStruct.dmlEvent == nil {
 		return handleNonDMLEventStruct(eventStruct)
 	}
-	if eventStruct.dmlEvent != nil {
+	if eventStruct.trxEvent != nil {
+		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
+
+		processTrxFunc := func() error {
+			// process rows events from the transaction in batches
+			for {
+				dmlEvents := make([]*binlog.BinlogDMLEvent, 0, batchSize)
+				for i := 0; i < batchSize; i++ {
+					binlogEntry, ok := <-eventStruct.trxEvent.Changes
+					if !ok {
+						if i > 0 {
+							// transaction ended with < batchSize rowsEvents
+							break
+						} else {
+							// no more rows to apply
+							return nil
+						}
+					}
+					dmlEvents = append(dmlEvents, binlogEntry.DmlEvent)
+					if err := this.applier.ApplyDMLEventQueries(dmlEvents); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		job := &Job{
+			LastCommitted:  eventStruct.trxEvent.LastCommitted,
+			SequenceNumber: eventStruct.trxEvent.SequenceNumber,
+			Do:             processTrxFunc,
+		}
+		this.trxCoordinator.SubmitJob(job)
+
+	} else if eventStruct.dmlEvent != nil {
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
 		var nonDmlStructToApply *applyEventStruct

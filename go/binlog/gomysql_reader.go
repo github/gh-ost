@@ -77,7 +77,7 @@ func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinate
 	return &returnCoordinates
 }
 
-// StreamEvents
+// handleRowsEvents processes a RowEvent from the binlog and sends the DML event to the entriesChannel.
 func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
 	if this.currentCoordinates.IsLogPosOverflowBeyond4Bytes(&this.LastAppliedRowsEventHint) {
 		return fmt.Errorf("Unexpected rows event at %+v, the binlog end_log_pos is overflow 4 bytes", this.currentCoordinates)
@@ -129,13 +129,54 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 	return nil
 }
 
-type transaction struct {
-	SequenceNumber int64
-	LastCommitted  int64
-	Changes        chan<- *replication.RowsEvent
+
+// rowsEventToBinlogEntry processes MySQL RowsEvent into our BinlogEntry for later application.
+// copied from handleRowEvents
+func rowsEventToBinlogEntry(eventType replication.EventType, rowsEvent *replication.RowsEvent, binlogCoords mysql.BinlogCoordinates) (*BinlogEntry, error){
+	dml := ToEventDML(eventType.String())
+	if dml == NotDML {
+		return nil, fmt.Errorf("Unknown DML type: %s", eventType.String())
+	}
+	binlogEntry := NewBinlogEntryAt(binlogCoords)
+	for i, row := range rowsEvent.Rows {
+		if dml == UpdateDML && i%2 == 1 {
+			// An update has two rows (WHERE+SET)
+			// We do both at the same time
+			continue
+		}
+		binlogEntry.DmlEvent = NewBinlogDMLEvent(
+			string(rowsEvent.Table.Schema),
+			string(rowsEvent.Table.Table),
+			dml,
+		)
+		switch dml {
+		case InsertDML:
+			{
+				binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(row)
+			}
+		case UpdateDML:
+			{
+				binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+				binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(rowsEvent.Rows[i+1])
+			}
+		case DeleteDML:
+			{
+				binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+			}
+		}
+	}
+	return binlogEntry, nil
 }
 
-func (this *GoMySQLReader) StreamTransactions(ctx context.Context, transactionsChannel chan<- *transaction) error {
+type Transaction struct {
+	DatabaseName   string
+	TableName      string
+	SequenceNumber int64
+	LastCommitted  int64
+	Changes        chan *BinlogEntry
+}
+
+func (this *GoMySQLReader) StreamTransactions(ctx context.Context, transactionsChannel chan<- *Transaction) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -176,7 +217,7 @@ groups:
 		//
 		// Once the group has ended, we can start looking for the next GTID event.
 
-		var group transaction
+		var group *Transaction
 		switch binlogEvent := ev.Event.(type) {
 		case *replication.GTIDEvent:
 			this.migrationContext.Log.Infof("GTIDEvent: %+v", binlogEvent)
@@ -186,10 +227,13 @@ groups:
 				return fmt.Errorf("unexpected sequence number: %d, expected %d", binlogEvent.SequenceNumber, previousSequenceNumber+1)
 			}
 
-			group = transaction{
+			group = &Transaction{
 				SequenceNumber: binlogEvent.SequenceNumber,
 				LastCommitted:  binlogEvent.LastCommitted,
-				Changes:        make(chan *replication.RowsEvent, 1000),
+				Changes:        make(chan *BinlogEntry, 1000),
+				// Table and Schema aren't known until the following TableMapEvent
+				DatabaseName: "",
+				TableName:    "",
 			}
 
 			previousSequenceNumber = binlogEvent.SequenceNumber
@@ -238,11 +282,14 @@ groups:
 		}
 		this.migrationContext.Log.Infof("2 - Event: %s", ev.Header.EventType)
 
-		switch ev.Event.(type) {
+		switch binlogEvent := ev.Event.(type) {
 		case *replication.TableMapEvent:
 			// TODO: Can we be smart here and short circuit processing groups for tables that don't match the table in the migration context?
 
-			// ignore the TableMapEvent
+			group.TableName = string(binlogEvent.Table)
+			group.DatabaseName = string(binlogEvent.Schema)
+			// we are good to send the transaction, the transaction events arrive async
+			transactionsChannel <- group
 		default:
 			this.migrationContext.Log.Infof("unexpected Event: %+v", ev.Event)
 
@@ -265,7 +312,12 @@ groups:
 
 			switch binlogEvent := ev.Event.(type) {
 			case *replication.RowsEvent:
-				group.Changes <- binlogEvent
+				binlogEntry, err := rowsEventToBinlogEntry(ev.Header.EventType, binlogEvent, this.currentCoordinates)
+				if err != nil {
+					close(group.Changes)
+					return err
+				}
+				group.Changes <- binlogEntry
 			case *replication.XIDEvent:
 				this.migrationContext.Log.Infof("XIDEvent: %+v", binlogEvent)
 				this.migrationContext.Log.Infof("COMMIT for transaction")

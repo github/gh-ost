@@ -16,14 +16,22 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 
+	"context"
+	"errors"
+
 	"github.com/openark/golib/sqlutils"
 )
 
+var (
+	EventListenerIsNil = errors.New("DML event listener is nil")
+)
+
 type BinlogEventListener struct {
-	async        bool
-	databaseName string
-	tableName    string
-	onDmlEvent   func(event *binlog.BinlogDMLEvent) error
+	async         bool
+	databaseName  string
+	tableName     string
+	onDmlEvent    func(event *binlog.BinlogDMLEvent) error
+	onTrxEvent    func(trx *binlog.Transaction) error
 }
 
 const (
@@ -41,6 +49,7 @@ type EventsStreamer struct {
 	listeners                [](*BinlogEventListener)
 	listenersMutex           *sync.Mutex
 	eventsChannel            chan *binlog.BinlogEntry
+	trxChannel               chan *binlog.Transaction
 	binlogReader             *binlog.GoMySQLReader
 	name                     string
 }
@@ -52,6 +61,7 @@ func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer 
 		listeners:        [](*BinlogEventListener){},
 		listenersMutex:   &sync.Mutex{},
 		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
+		trxChannel:       make(chan *binlog.Transaction, EventsChannelBufferSize),
 		name:             "streamer",
 	}
 }
@@ -68,13 +78,42 @@ func (this *EventsStreamer) AddListener(
 	if tableName == "" {
 		return fmt.Errorf("Empty table name in AddListener")
 	}
+	dummyOnTrxEvent := func(trx *binlog.Transaction) error {
+		return nil
+	}
 	listener := &BinlogEventListener{
 		async:        async,
 		databaseName: databaseName,
 		tableName:    tableName,
 		onDmlEvent:   onDmlEvent,
+		onTrxEvent:   dummyOnTrxEvent,
 	}
 	this.listeners = append(this.listeners, listener)
+	return nil
+}
+
+func (evs *EventsStreamer) AddTransactionListener(
+	async bool, databaseName string, tableName string, onTrxEvent func(trx *binlog.Transaction) error,
+) error {
+	evs.listenersMutex.Lock()
+	defer evs.listenersMutex.Unlock()
+	if databaseName == "" {
+		return fmt.Errorf("Empty database name in AddTransactionListener")
+	}
+	if tableName == "" {
+		return fmt.Errorf("Empty table name in AddTransactionListener")
+	}
+	dummyOnDmlEvent := func(event *binlog.BinlogDMLEvent) error {
+		return nil
+	}
+	listener := &BinlogEventListener{
+		async:        async,
+		databaseName: databaseName,
+		tableName:    tableName,
+		onTrxEvent:   onTrxEvent,
+		onDmlEvent:   dummyOnDmlEvent,
+	}
+	evs.listeners = append(evs.listeners, listener)
 	return nil
 }
 
@@ -159,6 +198,46 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	}
 	this.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", *this.initialBinlogCoordinates)
 	return nil
+}
+
+func (evs *EventsStreamer) StreamTransactions(ctx context.Context, canStopStreaming func() bool) error {
+	trxChan := make(chan *binlog.Transaction, 1000)
+	go func() {
+		for trx := range trxChan {
+			evs.notifyTransactionListeners(trx)
+		}
+	}()
+	for {
+		if canStopStreaming() {
+			return nil
+		}
+		// TODO: handle retry/reconnect
+		if err := evs.binlogReader.StreamTransactions(ctx, trxChan); err != nil {
+			return err
+		}
+	}
+}
+
+func (this *EventsStreamer) notifyTransactionListeners(trx *binlog.Transaction) {
+	this.listenersMutex.Lock()
+	defer this.listenersMutex.Unlock()
+
+	for _, listener := range this.listeners {
+		listener := listener
+		if !strings.EqualFold(listener.databaseName, trx.DatabaseName) {
+			continue
+		}
+		if !strings.EqualFold(listener.tableName, trx.TableName) {
+			continue
+		}
+		if listener.async {
+			go func() {
+				listener.onTrxEvent(trx)
+			}()
+		} else {
+			listener.onTrxEvent(trx)
+		}
+	}
 }
 
 // StreamEvents will begin streaming events. It will be blocking, so should be
