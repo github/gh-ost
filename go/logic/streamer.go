@@ -27,11 +27,11 @@ var (
 )
 
 type BinlogEventListener struct {
-	async         bool
-	databaseName  string
-	tableName     string
-	onDmlEvent    func(event *binlog.BinlogDMLEvent) error
-	onTrxEvent    func(trx *binlog.Transaction) error
+	async        bool
+	databaseName string
+	tableName    string
+	onDmlEvent   func(event *binlog.BinlogDMLEvent) error
+	onTrxEvent   func(trx *binlog.Transaction) error
 }
 
 const (
@@ -208,11 +208,12 @@ func (evs *EventsStreamer) StreamTransactions(ctx context.Context, canStopStream
 		}
 	}()
 	for {
-		if canStopStreaming() {
-			return nil
-		}
-		// TODO: handle retry/reconnect
+		// TODO(meiji163): handle retry/reconnect
 		if err := evs.binlogReader.StreamTransactions(ctx, trxChan); err != nil {
+			if canStopStreaming() {
+				return nil
+			}
+			close(trxChan)
 			return err
 		}
 	}

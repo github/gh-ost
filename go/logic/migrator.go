@@ -11,10 +11,11 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"os"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -424,8 +425,9 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
-	// TODO: configure workers
-	numApplierWorkers := 4
+	// TODO(meiji163): configure workers
+	numApplierWorkers := 5
+	this.migrationContext.Log.Info("starting applier workers")
 	go this.trxCoordinator.StartWorkers(numApplierWorkers)
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
@@ -1083,14 +1085,30 @@ func (this *Migrator) initiateStreaming() error {
 	if err := this.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
-	this.eventsStreamer.AddListener(
+	// this.eventsStreamer.AddListener(
+	// 	false,
+	// 	this.migrationContext.DatabaseName,
+	// 	this.migrationContext.GetChangelogTableName(),
+	// 	func(dmlEvent *binlog.BinlogDMLEvent) error {
+	// 		return this.onChangelogEvent(dmlEvent)
+	// 	},
+	// )
+
+	handleChangeLogTrx := func(trx *binlog.Transaction) error {
+		for rowEvent := range trx.Changes {
+			if err := this.onChangelogEvent(rowEvent.DmlEvent); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	this.eventsStreamer.AddTransactionListener(
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.GetChangelogTableName(),
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			return this.onChangelogEvent(dmlEvent)
-		},
+		handleChangeLogTrx,
 	)
+
 	ctx := context.Background()
 	go func() {
 		this.migrationContext.Log.Debugf("Beginning streaming")
@@ -1266,6 +1284,7 @@ func (this *Migrator) iterateChunks() error {
 }
 
 func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
+	this.migrationContext.Log.Infof("onApplyEventStruct: %+v", eventStruct)
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
 		if eventStruct.writeFunc != nil {
 			if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
@@ -1274,14 +1293,16 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		}
 		return nil
 	}
-	if eventStruct.dmlEvent == nil {
-		return handleNonDMLEventStruct(eventStruct)
-	}
+	// if eventStruct.dmlEvent == nil {
+	// 	return handleNonDMLEventStruct(eventStruct)
+	// }
 	if eventStruct.trxEvent != nil {
+		this.migrationContext.Log.Infof("got transaction: %+v", eventStruct.trxEvent)
 		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
 
 		processTrxFunc := func() error {
 			// process rows events from the transaction in batches
+			this.migrationContext.Log.Info("starting process transaction job")
 			for {
 				dmlEvents := make([]*binlog.BinlogDMLEvent, 0, batchSize)
 				for i := 0; i < batchSize; i++ {
@@ -1296,9 +1317,10 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 						}
 					}
 					dmlEvents = append(dmlEvents, binlogEntry.DmlEvent)
-					if err := this.applier.ApplyDMLEventQueries(dmlEvents); err != nil {
-						return err
-					}
+				}
+				//this.migrationContext.Log.Infof("received dmlEvents: %+v", dmlEvents)
+				if err := this.applier.ApplyDMLEventQueries(dmlEvents); err != nil {
+					return err
 				}
 			}
 		}
@@ -1308,6 +1330,7 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 			SequenceNumber: eventStruct.trxEvent.SequenceNumber,
 			Do:             processTrxFunc,
 		}
+		this.migrationContext.Log.Infof("submitting job: %+v", job)
 		this.trxCoordinator.SubmitJob(job)
 
 	} else if eventStruct.dmlEvent != nil {

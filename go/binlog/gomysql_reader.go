@@ -106,6 +106,7 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 		)
 		switch dml {
 		case InsertDML:
+
 			{
 				binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(row)
 			}
@@ -285,6 +286,8 @@ groups:
 		switch binlogEvent := ev.Event.(type) {
 		case *replication.TableMapEvent:
 			// TODO: Can we be smart here and short circuit processing groups for tables that don't match the table in the migration context?
+
+			this.migrationContext.Log.Infof("sending transaction: %d %d", group.SequenceNumber, group.LastCommitted)
 
 			group.TableName = string(binlogEvent.Table)
 			group.DatabaseName = string(binlogEvent.Schema)
