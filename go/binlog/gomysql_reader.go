@@ -130,10 +130,9 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 	return nil
 }
 
-
 // rowsEventToBinlogEntry processes MySQL RowsEvent into our BinlogEntry for later application.
 // copied from handleRowEvents
-func rowsEventToBinlogEntry(eventType replication.EventType, rowsEvent *replication.RowsEvent, binlogCoords mysql.BinlogCoordinates) (*BinlogEntry, error){
+func rowsEventToBinlogEntry(eventType replication.EventType, rowsEvent *replication.RowsEvent, binlogCoords mysql.BinlogCoordinates) (*BinlogEntry, error) {
 	dml := ToEventDML(eventType.String())
 	if dml == NotDML {
 		return nil, fmt.Errorf("Unknown DML type: %s", eventType.String())

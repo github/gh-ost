@@ -1,8 +1,8 @@
 package logic
 
 import (
-	"sync"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -68,21 +68,21 @@ func NewCoordinator() *Coordinator {
 
 func (c *Coordinator) StartWorkers(count int) {
 	jobTimeout := 10 * time.Second
-	for i := 0; i< count; i++ {
-		go func(){
+	for i := 0; i < count; i++ {
+		go func() {
 			for job := range c.queue {
 				if job.waitChannel != nil {
 					fmt.Printf("Coordinator: Job %d is waiting for job %d to complete\n", job.SequenceNumber, job.LastCommitted)
 					select {
 					case <-job.waitChannel:
 						break
-					case <- time.After(jobTimeout):
+					case <-time.After(jobTimeout):
 						// TODO: something problably went wrong here
 						fmt.Printf("Coordinator: Job %d timed out waiting for job %d\n", job.SequenceNumber, job.LastCommitted)
 						panic("worker timeout")
 					}
 					// fmt.Printf("Worker received signal for job: %d\n", job.sequenceNumber)
- 				}
+				}
 
 				if err := job.Do(); err != nil {
 					// TODO(meiji163) handle error
@@ -138,7 +138,6 @@ func (c *Coordinator) markJobCompleted(job *Job) {
 	// Mark the job as completed
 	c.completedJobs[job.SequenceNumber] = true
 
-
 	// Then, update the low water mark if possible
 
 	// TODO: this won't work because the intermediate sequence numbers
@@ -152,16 +151,9 @@ func (c *Coordinator) markJobCompleted(job *Job) {
 		}
 	}
 
-	jobsToNotify := make([]*Job, 0)
-
-	// TODO: fix this
 	// Schedule any jobs that were waiting for this job to complete
-	for lastCommitted, jobs := range c.waitingJobs {
-		if lastCommitted <= c.lowWaterMark {
-			jobsToNotify = append(jobsToNotify, jobs...)
-			delete(c.waitingJobs, lastCommitted)
-		}
-	}
+	jobsToNotify := c.waitingJobs[job.SequenceNumber]
+	delete(c.waitingJobs, job.SequenceNumber)
 
 	c.mu.Unlock()
 
