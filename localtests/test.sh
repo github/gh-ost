@@ -23,15 +23,18 @@ master_port=
 replica_host=
 replica_port=
 original_sql_mode=
+docker=false
 
 OPTIND=1
-while getopts "b:s:" OPTION
+while getopts "b:s:d" OPTION
 do
   case $OPTION in
     b)
       ghost_binary="$OPTARG";;
     s)
       storage_engine="$OPTARG";;
+    d)
+      docker=true;;
   esac
 done
 shift $((OPTIND-1))
@@ -94,19 +97,16 @@ start_replication() {
   done
 }
 
-test_single_docker() {
-  #docker compose setup
-  master_host="0.0.0.0"
-  master_port="3307"
-  replica_host="0.0.0.0"
-  replica_port="3308"
-
-  test_single "$1"
-}
-
 test_single() {
   local test_name
   test_name="$1"
+
+  if [ "$docker" = true ]; then
+    master_host="0.0.0.0"
+    master_port="3307"
+    replica_host="0.0.0.0"
+    replica_port="3308"
+  fi
 
   if [ -f $tests_path/$test_name/ignore_versions ] ; then
     ignore_versions=$(cat $tests_path/$test_name/ignore_versions)

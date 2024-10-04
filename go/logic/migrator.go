@@ -1293,9 +1293,9 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		}
 		return nil
 	}
-	// if eventStruct.dmlEvent == nil {
-	// 	return handleNonDMLEventStruct(eventStruct)
-	// }
+	if eventStruct.writeFunc != nil {
+		return handleNonDMLEventStruct(eventStruct)
+	}
 	if eventStruct.trxEvent != nil {
 		this.migrationContext.Log.Infof("got transaction: %+v", eventStruct.trxEvent)
 		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))

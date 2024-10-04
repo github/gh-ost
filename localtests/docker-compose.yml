@@ -2,9 +2,9 @@ services:
   mysql-primary:
     image: mysql:8.0.39
     container_name: mysql-primary
-    command: --server-id=1 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON
-    volumes:
-      - /var/lib/mysql
+    command: --server-id=1 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON
+    # volumes:
+    #   - /var/lib/mysql
     environment:
       MYSQL_ROOT_PASSWORD: opensesame
       MYSQL_DATABASE: test
@@ -18,9 +18,9 @@ services:
   mysql-replica:
     image: mysql:8.0.39
     container_name: mysql-replica
-    command: --server-id=2 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON
-    volumes:
-      - /var/lib/mysql
+    command: --server-id=2 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON
+    # volumes:
+    #   - /var/lib/mysql
     environment:
       MYSQL_ROOT_PASSWORD: opensesame
       MYSQL_DATABASE: test

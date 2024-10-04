@@ -1,6 +1,7 @@
 #!/bin/bash
 
 verbose=true
+# execute from gh-ost repo root directory
 root_dir="$PWD"
 
 container_exec() {
@@ -8,14 +9,6 @@ container_exec() {
         echo "$1: $2"
     fi
     docker exec "$1" bash -c "MYSQL_PWD=opensesame mysql -uroot -Ne \"$2\" test"
-}
-
-primary_exec() {
-    container_exec "mysql-primary" "$1"
-}
-
-replica_exec() {
-    container_exec "mysql-replica" "$1"
 }
 
 poll_container() {
@@ -37,11 +30,16 @@ setup() {
     poll_container "mysql-primary"
     poll_container "mysql-replica"
 
-    primary_exec "alter user 'repl'@'%' identified with 'mysql_native_password' by 'repl';"
-    primary_exec "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
-    primary_exec "show master status;" | read logfile logpos
-    replica_exec "change replication source to source_host='mysql-primary', source_port=3307, source_user='repl', source_password='repl', source_log_file='$logfile', source_log_pos=$logpos;"
-    replica_exec "start replica;"
+    export PATH="$PATH:$root_dir/script"
+
+    gh-ost-test-mysql-master -e "alter user 'repl'@'%' identified with 'mysql_native_password' by 'repl';"
+    gh-ost-test-mysql-master -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
+    gh-ost-test-mysql-master -e "create user if not exists 'gh-ost'@'%' identified by 'gh-ost'"
+    gh-ost-test-mysql-master -e "grant all on *.* to 'gh-ost'@'%'"
+
+    gh-ost-test-mysql-replica -e "flush privileges;"
+    gh-ost-test-mysql-replica -e "change replication source to source_host='mysql-primary', source_port=3307, source_user='repl', source_password='repl', source_auto_position=1;"
+    gh-ost-test-mysql-replica -e "start replica;"
 }
 
-#setup
+setup
