@@ -17,13 +17,8 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 
 	"context"
-	"errors"
 
 	"github.com/openark/golib/sqlutils"
-)
-
-var (
-	EventListenerIsNil = errors.New("DML event listener is nil")
 )
 
 type BinlogEventListener struct {
@@ -78,15 +73,11 @@ func (this *EventsStreamer) AddListener(
 	if tableName == "" {
 		return fmt.Errorf("Empty table name in AddListener")
 	}
-	dummyOnTrxEvent := func(trx *binlog.Transaction) error {
-		return nil
-	}
 	listener := &BinlogEventListener{
 		async:        async,
 		databaseName: databaseName,
 		tableName:    tableName,
 		onDmlEvent:   onDmlEvent,
-		onTrxEvent:   dummyOnTrxEvent,
 	}
 	this.listeners = append(this.listeners, listener)
 	return nil
@@ -103,15 +94,11 @@ func (evs *EventsStreamer) AddTransactionListener(
 	if tableName == "" {
 		return fmt.Errorf("Empty table name in AddTransactionListener")
 	}
-	dummyOnDmlEvent := func(event *binlog.BinlogDMLEvent) error {
-		return nil
-	}
 	listener := &BinlogEventListener{
 		async:        async,
 		databaseName: databaseName,
 		tableName:    tableName,
 		onTrxEvent:   onTrxEvent,
-		onDmlEvent:   dummyOnDmlEvent,
 	}
 	evs.listeners = append(evs.listeners, listener)
 	return nil

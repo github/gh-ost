@@ -94,6 +94,16 @@ start_replication() {
   done
 }
 
+test_single_docker() {
+  #docker compose setup
+  master_host="0.0.0.0"
+  master_port="3307"
+  replica_host="0.0.0.0"
+  replica_port="3308"
+
+  test_single "$1"
+}
+
 test_single() {
   local test_name
   test_name="$1"

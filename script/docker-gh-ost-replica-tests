@@ -1,0 +1,47 @@
+#!/bin/bash
+
+verbose=true
+root_dir="$PWD"
+
+container_exec() {
+    if [ "$verbose" = true ]; then
+        echo "$1: $2"
+    fi
+    docker exec "$1" bash -c "MYSQL_PWD=opensesame mysql -uroot -Ne \"$2\" test"
+}
+
+primary_exec() {
+    container_exec "mysql-primary" "$1"
+}
+
+replica_exec() {
+    container_exec "mysql-replica" "$1"
+}
+
+poll_container() {
+    CTR=0
+    while ! container_exec "$1" "select 1;" 2>&1 | grep -q "1"
+    do
+        sleep 1
+        CTR=$((CTR + 1))
+        if [ $CTR -gt 30 ]; then
+            echo "failed to start MySQL on $1"
+            exit 1
+        fi
+    done
+    echo "started MySQL on $1"
+}
+
+setup() {
+    docker compose -f "$root_dir/localtests/docker-compose.yml" up -d
+    poll_container "mysql-primary"
+    poll_container "mysql-replica"
+
+    primary_exec "alter user 'repl'@'%' identified with 'mysql_native_password' by 'repl';"
+    primary_exec "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
+    primary_exec "show master status;" | read logfile logpos
+    replica_exec "change replication source to source_host='mysql-primary', source_port=3307, source_user='repl', source_password='repl', source_log_file='$logfile', source_log_pos=$logpos;"
+    replica_exec "start replica;"
+}
+
+#setup
