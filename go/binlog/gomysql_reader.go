@@ -169,8 +169,6 @@ func rowsEventToBinlogEntry(eventType replication.EventType, rowsEvent *replicat
 }
 
 type Transaction struct {
-	DatabaseName   string
-	TableName      string
 	SequenceNumber int64
 	LastCommitted  int64
 	Changes        chan *BinlogEntry
@@ -231,13 +229,13 @@ groups:
 				SequenceNumber: binlogEvent.SequenceNumber,
 				LastCommitted:  binlogEvent.LastCommitted,
 				Changes:        make(chan *BinlogEntry, 1000),
-				// Table and Schema aren't known until the following TableMapEvent
-				DatabaseName: "",
-				TableName:    "",
 			}
 
 			previousSequenceNumber = binlogEvent.SequenceNumber
 
+			// We are good to send the transaction, the transaction events arrive async
+			this.migrationContext.Log.Infof("sending transaction: %d %d", group.SequenceNumber, group.LastCommitted)
+			transactionsChannel <- group
 		default:
 			this.migrationContext.Log.Infof("Ignoring Event: %+v", ev.Event)
 			continue
@@ -260,6 +258,8 @@ groups:
 				this.migrationContext.Log.Infof("QueryEvent: %+v", binlogEvent)
 				this.migrationContext.Log.Infof("Query: %s", binlogEvent.Query)
 
+				close(group.Changes)
+
 				// wait for the next event group
 				continue groups
 			}
@@ -275,33 +275,6 @@ groups:
 
 		// Next event should be a table map event
 
-		ev, err = this.binlogStreamer.GetEvent(ctx)
-		if err != nil {
-			close(group.Changes)
-			return err
-		}
-		this.migrationContext.Log.Infof("2 - Event: %s", ev.Header.EventType)
-
-		switch binlogEvent := ev.Event.(type) {
-		case *replication.TableMapEvent:
-			// TODO: Can we be smart here and short circuit processing groups for tables that don't match the table in the migration context?
-
-			this.migrationContext.Log.Infof("sending transaction: %d %d", group.SequenceNumber, group.LastCommitted)
-
-			group.TableName = string(binlogEvent.Table)
-			group.DatabaseName = string(binlogEvent.Schema)
-			// we are good to send the transaction, the transaction events arrive async
-			transactionsChannel <- group
-		default:
-			this.migrationContext.Log.Infof("unexpected Event: %+v", ev.Event)
-
-			close(group.Changes)
-
-			// TODO: handle the group - we want to make sure we process the group's LastCommitted and SequenceNumber
-
-			continue groups
-		}
-
 	events:
 		// Now we can start processing the group
 		for {
@@ -313,6 +286,8 @@ groups:
 			this.migrationContext.Log.Infof("3 - Event: %s", ev.Header.EventType)
 
 			switch binlogEvent := ev.Event.(type) {
+			case *replication.TableMapEvent:
+				this.migrationContext.Log.Infof("TableMapEvent for %s.%s: %+v", binlogEvent.Schema, binlogEvent.Table, binlogEvent)
 			case *replication.RowsEvent:
 				binlogEntry, err := rowsEventToBinlogEntry(ev.Header.EventType, binlogEvent, this.currentCoordinates)
 				if err != nil {
