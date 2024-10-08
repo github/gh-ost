@@ -1,12 +1,5 @@
 package logic
 
-// import (
-// 	"fmt"
-// 	"math/rand"
-// 	"testing"
-// 	"time"
-// )
-
 // func (c *Coordinator) startWorkers(count int) {
 // 	for i := 0; i < count; i++ {
 // 		w := Worker{}
@@ -36,7 +29,7 @@ package logic
 // 	// Simulate `BEGIN`
 // 	time.Sleep(100 * time.Microsecond)
 
-// 	for range job.changes {
+// 	for range job.Changes {
 // 		// Simulate processing a change
 // 		time.Sleep(100 * time.Microsecond)
 // 	}
@@ -51,15 +44,15 @@ package logic
 
 // func TestMultiThreadedApplier(t *testing.T) {
 // 	coordinator := NewCoordinator()
-// 	coordinator.startWorkers(16)
+// 	coordinator.StartWorkers(16)
 
 // 	for i := int64(1); i < 300; i++ {
-// 		job := &Job{sequenceNumber: i, lastCommitted: i - 1, changes: make(chan struct{}, 1000)}
+// 		job := &Job{SequenceNumber: i, LastCommitted: i - 1, Changes: make(chan *binlog.BinlogEntry, 1000)}
 // 		coordinator.SubmitJob(job)
 // 		for j := 0; j < 10; j++ {
-// 			job.changes <- struct{}{}
+// 			job.Changes <- &binlog.BinlogEntry{}
 // 		}
-// 		close(job.changes)
+// 		close(job.Changes)
 // 	}
 
 // 	coordinator.wg.Wait()
@@ -71,15 +64,15 @@ package logic
 
 // func TestMultiThreadedApplierWithDependentJobs(t *testing.T) {
 // 	coordinator := NewCoordinator()
-// 	coordinator.startWorkers(16)
+// 	coordinator.StartWorkers(16)
 
 // 	for i := int64(1); i < 300; i++ {
-// 		job := &Job{sequenceNumber: i, lastCommitted: ((i - 1) / 10) * 10, changes: make(chan struct{}, 1000)}
+// 		job := &Job{SequenceNumber: i, LastCommitted: ((i - 1) / 10) * 10, Changes: make(chan *binlog.BinlogEntry, 1000)}
 // 		coordinator.SubmitJob(job)
 // 		for j := 0; j < 10; j++ {
-// 			job.changes <- struct{}{}
+// 			job.Changes <- &binlog.BinlogEntry{}
 // 		}
-// 		close(job.changes)
+// 		close(job.Changes)
 // 	}
 
 // 	coordinator.wg.Wait()
@@ -91,15 +84,15 @@ package logic
 
 // func TestMultiThreadedApplierWithManyDependentJobs(t *testing.T) {
 // 	coordinator := NewCoordinator()
-// 	coordinator.startWorkers(16)
+// 	coordinator.StartWorkers(16)
 
 // 	for i := int64(1); i < 300; i++ {
-// 		job := &Job{sequenceNumber: i, lastCommitted: 1, changes: make(chan struct{}, 1000)}
+// 		job := &Job{SequenceNumber: i, LastCommitted: 1, Changes: make(chan *binlog.BinlogEntry, 1000)}
 // 		coordinator.SubmitJob(job)
 // 		for j := 0; j < 10; j++ {
-// 			job.changes <- struct{}{}
+// 			job.Changes <- &binlog.BinlogEntry{}
 // 		}
-// 		close(job.changes)
+// 		close(job.Changes)
 // 	}
 
 // 	coordinator.wg.Wait()
@@ -111,15 +104,15 @@ package logic
 
 // func TestMultiThreadedApplierWithVaryingDependentJobs(t *testing.T) {
 // 	coordinator := NewCoordinator()
-// 	coordinator.startWorkers(16)
+// 	coordinator.StartWorkers(16)
 
 // 	for i := int64(1); i < 300; i++ {
-// 		job := &Job{sequenceNumber: i, lastCommitted: rand.Int63n(i), changes: make(chan struct{}, 1000)}
+// 		job := &Job{SequenceNumber: i, LastCommitted: rand.Int63n(i), Changes: make(chan *binlog.BinlogEntry, 1000)}
 // 		coordinator.SubmitJob(job)
 // 		for j := 0; j < 10; j++ {
-// 			job.changes <- struct{}{}
+// 			job.Changes <- &binlog.BinlogEntry{}
 // 		}
-// 		close(job.changes)
+// 		close(job.Changes)
 // 	}
 
 // 	coordinator.wg.Wait()

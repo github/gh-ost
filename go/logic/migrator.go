@@ -116,7 +116,6 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
 		handledChangelogStates: make(map[string]bool),
 		finishedMigrating:      0,
-		trxCoordinator:         NewCoordinator(),
 	}
 	return migrator
 }
@@ -364,6 +363,9 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateApplier(); err != nil {
 		return err
 	}
+
+	this.trxCoordinator = NewCoordinator(this.migrationContext, this.applier, this.onChangelogEvent)
+
 	if err := this.createFlagFiles(); err != nil {
 		return err
 	}
@@ -428,7 +430,7 @@ func (this *Migrator) Migrate() (err error) {
 	// TODO(meiji163): configure workers
 	numApplierWorkers := 5
 	this.migrationContext.Log.Info("starting applier workers")
-	go this.trxCoordinator.StartWorkers(numApplierWorkers)
+	go this.trxCoordinator.InitializeWorkers(numApplierWorkers)
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
@@ -1094,8 +1096,18 @@ func (this *Migrator) initiateStreaming() error {
 	// 	},
 	// )
 
+	databaseName := this.migrationContext.DatabaseName
+	tableName := this.migrationContext.GetChangelogTableName()
+
 	handleChangeLogTrx := func(trx *binlog.Transaction) error {
 		for rowEvent := range trx.Changes {
+			if !strings.EqualFold(databaseName, rowEvent.DmlEvent.DatabaseName) {
+				continue
+			}
+			if !strings.EqualFold(tableName, rowEvent.DmlEvent.TableName) {
+				continue
+			}
+
 			if err := this.onChangelogEvent(rowEvent.DmlEvent); err != nil {
 				return err
 			}
@@ -1293,46 +1305,54 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		}
 		return nil
 	}
+
+	// Handle non-DML events
 	if eventStruct.writeFunc != nil {
 		return handleNonDMLEventStruct(eventStruct)
 	}
-	if eventStruct.trxEvent != nil {
-		this.migrationContext.Log.Infof("got transaction: %+v", eventStruct.trxEvent)
-		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
 
-		processTrxFunc := func() error {
-			// process rows events from the transaction in batches
-			this.migrationContext.Log.Info("starting process transaction job")
-			for {
-				dmlEvents := make([]*binlog.BinlogDMLEvent, 0, batchSize)
-				for i := 0; i < batchSize; i++ {
-					binlogEntry, ok := <-eventStruct.trxEvent.Changes
-					if !ok {
-						if i > 0 {
-							// transaction ended with < batchSize rowsEvents
-							break
-						} else {
-							// no more rows to apply
-							return nil
-						}
-					}
-					dmlEvents = append(dmlEvents, binlogEntry.DmlEvent)
-				}
-				//this.migrationContext.Log.Infof("received dmlEvents: %+v", dmlEvents)
-				if err := this.applier.ApplyDMLEventQueries(dmlEvents); err != nil {
-					return err
-				}
+	if eventStruct.trxEvent != nil {
+		var nonDmlStructToApply *applyEventStruct
+
+		trxEvents := [](*binlog.Transaction){}
+		trxEvents = append(trxEvents, eventStruct.trxEvent)
+
+		// Are more events available?
+		availableEvents := len(this.applyEventsQueue)
+		for i := 0; i < availableEvents; i++ {
+			additionalStruct := <-this.applyEventsQueue
+			if additionalStruct.trxEvent == nil {
+				// Not a transaction. We don't group this, and we don't batch any further
+				nonDmlStructToApply = additionalStruct
+				break
+			}
+
+			trxEvents = append(trxEvents, additionalStruct.trxEvent)
+		}
+
+		this.migrationContext.Log.Infof("got %d transactions", len(trxEvents))
+
+		for _, trxEvent := range trxEvents {
+			job := &Job{
+				LastCommitted:  trxEvent.LastCommitted,
+				SequenceNumber: trxEvent.SequenceNumber,
+				Changes:        trxEvent.Changes,
+			}
+			this.migrationContext.Log.Infof("submitting job: %+v", job)
+		}
+
+		// Wait for all pending jobs we submitted to finish
+		this.trxCoordinator.WaitForPendingJobs()
+
+		this.migrationContext.Log.Infof("all pending jobs finished")
+
+		if nonDmlStructToApply != nil {
+			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
+			// We need to handle it!
+			if err := handleNonDMLEventStruct(nonDmlStructToApply); err != nil {
+				return this.migrationContext.Log.Errore(err)
 			}
 		}
-
-		job := &Job{
-			LastCommitted:  eventStruct.trxEvent.LastCommitted,
-			SequenceNumber: eventStruct.trxEvent.SequenceNumber,
-			Do:             processTrxFunc,
-		}
-		this.migrationContext.Log.Infof("submitting job: %+v", job)
-		this.trxCoordinator.SubmitJob(job)
-
 	} else if eventStruct.dmlEvent != nil {
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)

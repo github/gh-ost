@@ -130,9 +130,9 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 	return nil
 }
 
-// rowsEventToBinlogEntry processes MySQL RowsEvent into our BinlogEntry for later application.
+// RowsEventToBinlogEntry processes MySQL RowsEvent into our BinlogEntry for later application.
 // copied from handleRowEvents
-func rowsEventToBinlogEntry(eventType replication.EventType, rowsEvent *replication.RowsEvent, binlogCoords mysql.BinlogCoordinates) (*BinlogEntry, error) {
+func RowsEventToBinlogEntry(eventType replication.EventType, rowsEvent *replication.RowsEvent, binlogCoords mysql.BinlogCoordinates) (*BinlogEntry, error) {
 	dml := ToEventDML(eventType.String())
 	if dml == NotDML {
 		return nil, fmt.Errorf("Unknown DML type: %s", eventType.String())
@@ -289,12 +289,14 @@ groups:
 			case *replication.TableMapEvent:
 				this.migrationContext.Log.Infof("TableMapEvent for %s.%s: %+v", binlogEvent.Schema, binlogEvent.Table, binlogEvent)
 			case *replication.RowsEvent:
-				binlogEntry, err := rowsEventToBinlogEntry(ev.Header.EventType, binlogEvent, this.currentCoordinates)
+				binlogEntry, err := RowsEventToBinlogEntry(ev.Header.EventType, binlogEvent, this.currentCoordinates)
 				if err != nil {
 					close(group.Changes)
 					return err
 				}
+				this.migrationContext.Log.Infof("RowsEvent: %v", binlogEvent)
 				group.Changes <- binlogEntry
+				this.migrationContext.Log.Infof("Length of group.Changes: %d", len(group.Changes))
 			case *replication.XIDEvent:
 				this.migrationContext.Log.Infof("XIDEvent: %+v", binlogEvent)
 				this.migrationContext.Log.Infof("COMMIT for transaction")

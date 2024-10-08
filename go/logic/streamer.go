@@ -212,12 +212,6 @@ func (this *EventsStreamer) notifyTransactionListeners(trx *binlog.Transaction) 
 
 	for _, listener := range this.listeners {
 		listener := listener
-		if !strings.EqualFold(listener.databaseName, trx.DatabaseName) {
-			continue
-		}
-		if !strings.EqualFold(listener.tableName, trx.TableName) {
-			continue
-		}
 		if listener.async {
 			go func() {
 				listener.onTrxEvent(trx)

@@ -80,7 +80,7 @@ func (this *Applier) InitDBConnections() (err error) {
 	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
 	}
-	this.singletonDB.SetMaxOpenConns(1)
+	this.singletonDB.SetMaxOpenConns(16)
 	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
 	if err != nil {
 		return err
