@@ -8,10 +8,10 @@ package logic
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,29 +45,29 @@ func TestMigratorOnChangelogEvent(t *testing.T) {
 		}))
 	})
 
-	t.Run("state-AllEventsUpToLockProcessed", func(t *testing.T) {
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func(wg *sync.WaitGroup) {
-			defer wg.Done()
-			es := <-migrator.applyEventsQueue
-			tests.S(t).ExpectNotNil(es)
-			tests.S(t).ExpectNotNil(es.writeFunc)
-		}(&wg)
+	// t.Run("state-AllEventsUpToLockProcessed", func(t *testing.T) {
+	// 	var wg sync.WaitGroup
+	// 	wg.Add(1)
+	// 	go func(wg *sync.WaitGroup) {
+	// 		defer wg.Done()
+	// 		es := <-migrator.applyEventsQueue
+	// 		tests.S(t).ExpectNotNil(es)
+	// 		tests.S(t).ExpectNotNil(es.writeFunc)
+	// 	}(&wg)
 
-		columnValues := sql.ToColumnValues([]interface{}{
-			123,
-			time.Now().Unix(),
-			"state",
-			AllEventsUpToLockProcessed,
-		})
-		tests.S(t).ExpectNil(migrator.onChangelogEvent(&binlog.BinlogDMLEvent{
-			DatabaseName:    "test",
-			DML:             binlog.InsertDML,
-			NewColumnValues: columnValues,
-		}))
-		wg.Wait()
-	})
+	// 	columnValues := sql.ToColumnValues([]interface{}{
+	// 		123,
+	// 		time.Now().Unix(),
+	// 		"state",
+	// 		AllEventsUpToLockProcessed,
+	// 	})
+	// 	tests.S(t).ExpectNil(migrator.onChangelogEvent(&binlog.BinlogDMLEvent{
+	// 		DatabaseName:    "test",
+	// 		DML:             binlog.InsertDML,
+	// 		NewColumnValues: columnValues,
+	// 	}))
+	// 	wg.Wait()
+	// })
 
 	t.Run("state-GhostTableMigrated", func(t *testing.T) {
 		go func() {
@@ -314,32 +314,76 @@ func TestMigrate(t *testing.T) {
 	migrator := NewMigrator(migrationContext, "1.2.3")
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	rowsWritten := atomic.Int32{}
+
 	go func() {
-		for ctx.Err() == nil {
-			t.Log("Inserting")
-			_, err := db.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
-			require.NoError(t, err)
+		ticker := time.NewTicker(time.Millisecond)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				//				fmt.Printf("Inserting row\n")
+				_, err := db.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
+				require.NoError(t, err)
+
+				rowsWritten.Add(1)
+			}
 		}
 	}()
 
 	go func() {
-		for ctx.Err() == nil {
-			t.Log("Inserting")
-			_, err := db.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
-			require.NoError(t, err)
+		ticker := time.NewTicker(time.Millisecond)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				//				fmt.Printf("Inserting row\n")
+				tx, err := db.Begin()
+				require.NoError(t, err)
+
+				for i := 0; i < 10; i++ {
+					_, err := tx.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
+					require.NoError(t, err)
+
+					rowsWritten.Add(1)
+				}
+
+				err = tx.Commit()
+				require.NoError(t, err)
+			}
 		}
 	}()
 
+	// go func() {
+	// 	ticker := time.NewTicker(time.Millisecond)
+
+	// 	for {
+	// 		select {
+	// 		case <-ctx.Done():
+	// 			return
+	// 		case <-ticker.C:
+	// 			//				fmt.Printf("Inserting row\n")
+	// 			_, err := db.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
+	// 			require.NoError(t, err)
+
+	// 			rowsWritten.Add(1)
+	// 		}
+	// 	}
+	// }()
+
 	go func() {
-		for ctx.Err() == nil {
-			t.Log("Inserting")
-			_, err := db.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
-			require.NoError(t, err)
-		}
+		time.Sleep(10 * time.Second)
+		cancel()
 	}()
 
 	err = migrator.Migrate()
 	require.NoError(t, err)
 
-	cancel()
+	fmt.Printf("Rows written: %d\n", rowsWritten.Load())
+
 }

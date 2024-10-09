@@ -1193,6 +1193,10 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 					return rollback(buildResult.err)
 				}
 				result, err := tx.Exec(buildResult.query, buildResult.args...)
+
+				// Simulate network latency
+				time.Sleep(100 * time.Microsecond)
+
 				if err != nil {
 					err = fmt.Errorf("%w; query=%s; args=%+v", err, buildResult.query, buildResult.args)
 					return rollback(err)

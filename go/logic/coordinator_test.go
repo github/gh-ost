@@ -79,9 +79,9 @@ func TestCoordinator(t *testing.T) {
 	err = applier.CreateChangelogTable()
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// 	ctx, cancel := context.WithCancel(context.Background())
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 100; i++ {
 		tx, err := db.Begin()
 		require.NoError(t, err)
 
@@ -103,18 +103,37 @@ func TestCoordinator(t *testing.T) {
 	_, err = applier.WriteChangelogState("completed")
 	require.NoError(t, err)
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	coord := NewCoordinator(migrationContext, applier, func(dmlEvent *binlog.BinlogDMLEvent) error {
 		fmt.Printf("Received Changelog DML event: %+v\n", dmlEvent)
+		fmt.Printf("Rowdata: %v - %v\n", dmlEvent.NewColumnValues, dmlEvent.WhereColumnValues)
+
 		cancel()
+
 		return nil
 	})
 	coord.applier = applier
-	coord.InitializeWorkers(1)
+	coord.InitializeWorkers(8)
+
+	go func() {
+		err = coord.StartStreaming()
+		require.NoError(t, err)
+	}()
+
+	// Give streamer some time to start
+	time.Sleep(1 * time.Second)
 
 	startAt := time.Now()
 
-	err = coord.ProcessEvents(ctx)
-	require.Equal(t, context.Canceled, err)
+	for {
+		if ctx.Err() != nil {
+			break
+		}
+
+		err = coord.ProcessEventsUntilDrained()
+		require.NoError(t, err)
+	}
 
 	fmt.Printf("Time taken: %s\n", time.Since(startAt))
 }

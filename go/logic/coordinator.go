@@ -18,17 +18,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/replication"
 )
 
-type Job struct {
-	// The sequence number of the job
-	SequenceNumber int64
-
-	// The sequence number of the job this job depends on
-	LastCommitted int64
-
-	// Data for the job
-	Changes chan *binlog.BinlogEntry
-}
-
 type Coordinator struct {
 	migrationContext *base.MigrationContext
 
@@ -39,8 +28,6 @@ type Coordinator struct {
 	onChangelogEvent func(dmlEvent *binlog.BinlogDMLEvent) error
 
 	applier *Applier
-
-	wg sync.WaitGroup
 
 	// List of workers
 	workers []*Worker
@@ -59,9 +46,7 @@ type Coordinator struct {
 	// They are indexed by the sequence number of the job they are waiting for.
 	waitingJobs map[int64][]chan struct{}
 
-	// Is this the first job we're processing? If yes, we can schedule it even if the last committed
-	// sequence number is greater than the low water mark.
-	firstJob bool
+	events chan *replication.BinlogEvent
 
 	workerQueue chan *Worker
 }
@@ -97,7 +82,7 @@ func (w *Worker) ProcessEvents() error {
 			t := time.Now()
 			<-waitChannel
 			timeWaited := time.Since(t)
-			fmt.Printf("Worker %d waited for transaction for %d: %d\n", w.id, gtidEvent.LastCommitted, timeWaited)
+			fmt.Printf("Worker %d waited for transaction %d for: %d\n", w.id, gtidEvent.LastCommitted, timeWaited)
 		}
 
 		// Process the transaction
@@ -227,15 +212,18 @@ func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, o
 		}),
 
 		lowWaterMark:  0,
-		firstJob:      true,
 		completedJobs: make(map[int64]bool),
 		waitingJobs:   make(map[int64][]chan struct{}),
+
+		events: make(chan *replication.BinlogEvent, 1000),
 
 		workerQueue: make(chan *Worker, 16),
 	}
 }
 
-func (c *Coordinator) ProcessEvents(ctx context.Context) error {
+func (c *Coordinator) StartStreaming() error {
+	ctx := context.TODO()
+
 	streamer, err := c.binlogSyncer.StartSync(gomysql.Position{
 		Name: c.currentCoordinates.LogFile,
 		Pos:  uint32(c.currentCoordinates.LogPos),
@@ -245,75 +233,135 @@ func (c *Coordinator) ProcessEvents(ctx context.Context) error {
 		return err
 	}
 
-	firstjob := true
-
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-
-		// Read events from the binlog and submit them to the next worker
 		ev, err := streamer.GetEvent(ctx)
 		if err != nil {
 			return err
 		}
 
-		// c.migrationContext.Log.Infof("Received event: %T - %+v", ev.Event, ev.Event)
+		c.events <- ev
+	}
+}
 
+func (c *Coordinator) ProcessEventsUntilNextChangelogEvent() (*binlog.BinlogDMLEvent, error) {
+	databaseName := c.migrationContext.DatabaseName
+	changelogTableName := c.migrationContext.GetChangelogTableName()
+
+	for ev := range c.events {
 		switch binlogEvent := ev.Event.(type) {
-		case *replication.GTIDEvent:
-			if firstjob {
-				if binlogEvent.SequenceNumber > 0 {
-					c.lowWaterMark = binlogEvent.SequenceNumber - 1
-				}
-				firstjob = false
+		case *replication.RowsEvent:
+			dml := binlog.ToEventDML(ev.Header.EventType.String())
+			if dml == binlog.NotDML {
+				return nil, fmt.Errorf("unknown DML type: %s", ev.Header.EventType.String())
 			}
-		default: // ignore all other events
-			continue
-		}
 
-		worker := <-c.workerQueue
-
-		c.migrationContext.Log.Infof("Submitting job %d to worker", ev.Event.(*replication.GTIDEvent).SequenceNumber)
-		worker.eventQueue <- ev
-
-		ev, err = streamer.GetEvent(ctx)
-		if err != nil {
-			return err
-		}
-
-		// c.migrationContext.Log.Infof("Received event: %T - %+v", ev.Event, ev.Event)
-
-		switch binlogEvent := ev.Event.(type) {
-		case *replication.QueryEvent:
-			if bytes.Equal([]byte("BEGIN"), binlogEvent.Query) {
-				c.migrationContext.Log.Infof("BEGIN for transaction in schema %s", binlogEvent.Schema)
-			} else {
-				worker.eventQueue <- nil
+			if !strings.EqualFold(databaseName, string(binlogEvent.Table.Schema)) {
 				continue
 			}
-		default:
-			worker.eventQueue <- nil
-			continue
-		}
 
-	events:
-		for {
-			ev, err = streamer.GetEvent(ctx)
-			if err != nil {
-				return err
+			if !strings.EqualFold(changelogTableName, string(binlogEvent.Table.Table)) {
+				continue
 			}
 
-			// c.migrationContext.Log.Infof("Received event: %T - %+v", ev.Event, ev.Event)
+			for i, row := range binlogEvent.Rows {
+				if dml == binlog.UpdateDML && i%2 == 1 {
+					// An update has two rows (WHERE+SET)
+					// We do both at the same time
+					continue
+				}
+				dmlEvent := binlog.NewBinlogDMLEvent(
+					string(binlogEvent.Table.Schema),
+					string(binlogEvent.Table.Table),
+					dml,
+				)
+				switch dml {
+				case binlog.InsertDML:
+					{
+						dmlEvent.NewColumnValues = sql.ToColumnValues(row)
+					}
+				case binlog.UpdateDML:
+					{
+						dmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+						dmlEvent.NewColumnValues = sql.ToColumnValues(binlogEvent.Rows[i+1])
+					}
+				case binlog.DeleteDML:
+					{
+						dmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+					}
+				}
 
-			switch ev.Event.(type) {
-			case *replication.RowsEvent:
-				worker.eventQueue <- ev
-			case *replication.XIDEvent:
+				return dmlEvent, nil
+			}
+		}
+	}
+
+	return nil, nil
+}
+
+func (c *Coordinator) ProcessEventsUntilDrained() error {
+	for {
+		select {
+		// Read events from the binlog and submit them to the next worker
+		case ev := <-c.events:
+			{
+				//				c.migrationContext.Log.Infof("Received event: %T - %+v", ev.Event, ev.Event)
+
+				switch binlogEvent := ev.Event.(type) {
+				case *replication.GTIDEvent:
+					if c.lowWaterMark == 0 && binlogEvent.SequenceNumber > 0 {
+						c.lowWaterMark = binlogEvent.SequenceNumber - 1
+					}
+				default: // ignore all other events
+					continue
+				}
+
+				worker := <-c.workerQueue
+
+				// c.migrationContext.Log.Infof("Submitting job %d to worker", ev.Event.(*replication.GTIDEvent).SequenceNumber)
 				worker.eventQueue <- ev
 
-				// We're done with this transaction
-				break events
+				ev = <-c.events
+
+				// c.migrationContext.Log.Infof("Received event: %T - %+v", ev.Event, ev.Event)
+
+				switch binlogEvent := ev.Event.(type) {
+				case *replication.QueryEvent:
+					if bytes.Equal([]byte("BEGIN"), binlogEvent.Query) {
+						// c.migrationContext.Log.Infof("BEGIN for transaction in schema %s", binlogEvent.Schema)
+					} else {
+						worker.eventQueue <- nil
+						continue
+					}
+				default:
+					worker.eventQueue <- nil
+					continue
+				}
+
+			events:
+				for {
+					ev = <-c.events
+
+					// c.migrationContext.Log.Infof("Received event: %T - %+v", ev.Event, ev.Event)
+
+					switch ev.Event.(type) {
+					case *replication.RowsEvent:
+						worker.eventQueue <- ev
+					case *replication.XIDEvent:
+						worker.eventQueue <- ev
+
+						// We're done with this transaction
+						break events
+					}
+				}
+			}
+
+		// No events in the queue. Check if all workers are sleeping now
+		default:
+			{
+				if len(c.workerQueue) == cap(c.workerQueue) {
+					// All workers are sleeping. We're done.
+					return nil
+				}
 			}
 		}
 	}
@@ -326,11 +374,6 @@ func (c *Coordinator) InitializeWorkers(count int) {
 		c.workerQueue <- w
 		go w.ProcessEvents()
 	}
-}
-
-// WaitForPendingJobs waits for all pending jobs to complete.
-func (c *Coordinator) WaitForPendingJobs() {
-	c.wg.Wait()
 }
 
 func (c *Coordinator) WaitForTransaction(lastCommitted int64) chan struct{} {
@@ -361,30 +404,43 @@ func (c *Coordinator) HandleChangeLogEvent(event *binlog.BinlogDMLEvent) {
 }
 
 func (c *Coordinator) MarkTransactionCompleted(sequenceNumber int64) {
-	c.mu.Lock()
+	var channelsToNotify []chan struct{}
 
-	fmt.Printf("Coordinator: Marking job as completed: %d\n", sequenceNumber)
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
 
-	// Mark the job as completed
-	c.completedJobs[sequenceNumber] = true
+		// fmt.Printf("Coordinator: Marking job as completed: %d\n", sequenceNumber)
 
-	// Then, update the low water mark if possible
-	for {
-		if c.completedJobs[c.lowWaterMark+1] {
-			c.lowWaterMark++
-
-			// TODO: Remember the applied binlog coordinates
-			delete(c.completedJobs, c.lowWaterMark)
+		if sequenceNumber == c.lowWaterMark+1 {
+			c.lowWaterMark += 1
 		} else {
-			break
+			// Mark the job as completed
+			c.completedJobs[sequenceNumber] = true
+
+			// Then, update the low water mark if possible
+			for {
+				if c.completedJobs[c.lowWaterMark+1] {
+					c.lowWaterMark++
+
+					// TODO: Remember the applied binlog coordinates
+					delete(c.completedJobs, c.lowWaterMark)
+				} else {
+					break
+				}
+			}
 		}
-	}
 
-	// Schedule any jobs that were waiting for this job to complete
-	channelsToNotify := c.waitingJobs[sequenceNumber]
-	delete(c.waitingJobs, sequenceNumber)
+		channelsToNotify = make([]chan struct{}, 0)
 
-	c.mu.Unlock()
+		// Schedule any jobs that were waiting for this job to complete
+		for waitingForSequenceNumber, channels := range c.waitingJobs {
+			if waitingForSequenceNumber <= c.lowWaterMark {
+				channelsToNotify = append(channelsToNotify, channels...)
+				delete(c.waitingJobs, waitingForSequenceNumber)
+			}
+		}
+	}()
 
 	for _, waitChannel := range channelsToNotify {
 		waitChannel <- struct{}{}
