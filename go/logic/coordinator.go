@@ -156,7 +156,10 @@ func (w *Worker) ProcessEvents() error {
 						dmlEvents = append(dmlEvents, dmlEvent)
 
 						if len(dmlEvents) == cap(dmlEvents) {
-							w.coordinator.applier.ApplyDMLEventQueries(dmlEvents)
+							err := w.coordinator.applier.ApplyDMLEventQueries(dmlEvents)
+							if err != nil {
+								w.coordinator.migrationContext.Log.Errore(err)
+							}
 							dmlEvents = dmlEvents[:0]
 						}
 					}

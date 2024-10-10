@@ -161,6 +161,9 @@ type MigrationContext struct {
 	CutOverType                  CutOver
 	ReplicaServerId              uint
 
+	// Number of workers used by the Coordinator
+	NumWorkers int
+
 	Hostname                               string
 	AssumeMasterHostname                   string
 	ApplierTimeZone                        string

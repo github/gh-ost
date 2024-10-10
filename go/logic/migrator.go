@@ -352,6 +352,8 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
+	// TODO(meiji163): configure workers
+	this.migrationContext.NumWorkers = 16
 	this.trxCoordinator = NewCoordinator(this.migrationContext, this.applier, this.onChangelogEvent)
 
 	if err := this.initiateStreaming(); err != nil {
@@ -382,10 +384,8 @@ func (this *Migrator) Migrate() (err error) {
 		}
 	}
 
-	// TODO(meiji163): configure workers
-	numApplierWorkers := 16
 	this.migrationContext.Log.Info("starting applier workers")
-	this.trxCoordinator.InitializeWorkers(numApplierWorkers)
+	this.trxCoordinator.InitializeWorkers(this.migrationContext.NumWorkers)
 
 	initialLag, _ := this.inspector.getReplicationLag()
 	this.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
@@ -1144,7 +1144,7 @@ func (this *Migrator) initiateThrottler() {
 
 func (this *Migrator) initiateApplier() error {
 	this.applier = NewApplier(this.migrationContext)
-	if err := this.applier.InitDBConnections(); err != nil {
+	if err := this.applier.InitDBConnections(this.migrationContext.NumWorkers); err != nil {
 		return err
 	}
 	if err := this.applier.ValidateOrDropExistingTables(); err != nil {

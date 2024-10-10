@@ -71,7 +71,7 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	}
 }
 
-func (this *Applier) InitDBConnections() (err error) {
+func (this *Applier) InitDBConnections(maxConns int) (err error) {
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
@@ -80,7 +80,8 @@ func (this *Applier) InitDBConnections() (err error) {
 	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
 	}
-	this.singletonDB.SetMaxOpenConns(16)
+	this.singletonDB.SetMaxOpenConns(maxConns)
+	this.singletonDB.SetMaxIdleConns(maxConns)
 	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
 	if err != nil {
 		return err
