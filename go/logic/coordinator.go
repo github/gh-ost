@@ -29,8 +29,8 @@ type Coordinator struct {
 
 	applier *Applier
 
-	// List of workers
-	workers []*Worker
+	// Atomic counter for number of active workers
+	busyWorkers atomic.Int64
 
 	// Mutex to protect the fields below
 	mu sync.Mutex
@@ -78,7 +78,7 @@ func (w *Worker) ProcessEvents() error {
 		// Wait for conditions to be met
 		waitChannel := w.coordinator.WaitForTransaction(gtidEvent.LastCommitted)
 		if waitChannel != nil {
-			fmt.Printf("Worker %d - transaction %d waiting for transaction: %d\n", w.id, gtidEvent.SequenceNumber, gtidEvent.LastCommitted)
+			//fmt.Printf("Worker %d - transaction %d waiting for transaction: %d\n", w.id, gtidEvent.SequenceNumber, gtidEvent.LastCommitted)
 			t := time.Now()
 			<-waitChannel
 			timeWaited := time.Since(t)
@@ -177,13 +177,13 @@ func (w *Worker) ProcessEvents() error {
 		if changelogEvent != nil {
 			waitChannel = w.coordinator.WaitForTransaction(gtidEvent.SequenceNumber - 1)
 			if waitChannel != nil {
-				fmt.Printf("waiting\n")
 				<-waitChannel
 			}
 			w.coordinator.HandleChangeLogEvent(changelogEvent)
 		}
 
 		w.coordinator.workerQueue <- w
+		w.coordinator.busyWorkers.Add(-1)
 	}
 }
 
@@ -316,6 +316,7 @@ func (c *Coordinator) ProcessEventsUntilDrained() error {
 				}
 
 				worker := <-c.workerQueue
+				c.busyWorkers.Add(1)
 
 				// c.migrationContext.Log.Infof("Submitting job %d to worker", ev.Event.(*replication.GTIDEvent).SequenceNumber)
 				worker.eventQueue <- ev
@@ -357,10 +358,15 @@ func (c *Coordinator) ProcessEventsUntilDrained() error {
 
 		// No events in the queue. Check if all workers are sleeping now
 		default:
+			c.migrationContext.Log.Info("No events in the queue")
 			{
-				if len(c.workerQueue) == cap(c.workerQueue) {
+				busyWorkers := c.busyWorkers.Load()
+				if busyWorkers == 0 {
+					//c.migrationContext.Log.Info("All workers are sleeping")
 					// All workers are sleeping. We're done.
 					return nil
+				} else {
+					//c.migrationContext.Log.Infof("%d/%d workers are busy\n", busyWorkers, cap(c.workerQueue))
 				}
 			}
 		}
@@ -410,24 +416,20 @@ func (c *Coordinator) MarkTransactionCompleted(sequenceNumber int64) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
-		// fmt.Printf("Coordinator: Marking job as completed: %d\n", sequenceNumber)
+		c.migrationContext.Log.Infof("Coordinator: Marking job as completed: %d\n", sequenceNumber)
 
-		if sequenceNumber == c.lowWaterMark+1 {
-			c.lowWaterMark += 1
-		} else {
-			// Mark the job as completed
-			c.completedJobs[sequenceNumber] = true
+		// Mark the job as completed
+		c.completedJobs[sequenceNumber] = true
 
-			// Then, update the low water mark if possible
-			for {
-				if c.completedJobs[c.lowWaterMark+1] {
-					c.lowWaterMark++
+		// Then, update the low water mark if possible
+		for {
+			if c.completedJobs[c.lowWaterMark+1] {
+				c.lowWaterMark++
 
-					// TODO: Remember the applied binlog coordinates
-					delete(c.completedJobs, c.lowWaterMark)
-				} else {
-					break
-				}
+				// TODO: Remember the applied binlog coordinates
+				delete(c.completedJobs, c.lowWaterMark)
+			} else {
+				break
 			}
 		}
 
