@@ -71,9 +71,10 @@ func TestCoordinator(t *testing.T) {
 	}
 
 	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.NumWorkers = 4
 
 	applier := NewApplier(migrationContext)
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(migrationContext.NumWorkers)
 	require.NoError(t, err)
 
 	err = applier.CreateChangelogTable()
@@ -116,8 +117,11 @@ func TestCoordinator(t *testing.T) {
 	coord.applier = applier
 	coord.InitializeWorkers(8)
 
+	canStopStreaming := func() bool {
+		return false
+	}
 	go func() {
-		err = coord.StartStreaming()
+		err = coord.StartStreaming(canStopStreaming)
 		require.NoError(t, err)
 	}()
 

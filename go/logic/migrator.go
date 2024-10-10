@@ -1109,7 +1109,7 @@ func (this *Migrator) initiateStreaming() error {
 	go func() {
 		this.migrationContext.Log.Debugf("Beginning streaming")
 		//err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
-		err := this.trxCoordinator.StartStreaming()
+		err := this.trxCoordinator.StartStreaming(this.canStopStreaming)
 		if err != nil {
 			this.migrationContext.PanicAbort <- err
 		}
@@ -1348,6 +1348,16 @@ func (this *Migrator) finalCleanup() error {
 func (this *Migrator) teardown() {
 	atomic.StoreInt64(&this.finishedMigrating, 1)
 
+	if this.trxCoordinator != nil {
+		this.migrationContext.Log.Infof("Tearing down coordinator")
+		this.trxCoordinator.Teardown()
+	}
+
+	if this.throttler != nil {
+		this.migrationContext.Log.Infof("Tearing down throttler")
+		this.throttler.Teardown()
+	}
+
 	if this.inspector != nil {
 		this.migrationContext.Log.Infof("Tearing down inspector")
 		this.inspector.Teardown()
@@ -1361,10 +1371,5 @@ func (this *Migrator) teardown() {
 	if this.eventsStreamer != nil {
 		this.migrationContext.Log.Infof("Tearing down streamer")
 		this.eventsStreamer.Teardown()
-	}
-
-	if this.throttler != nil {
-		this.migrationContext.Log.Infof("Tearing down throttler")
-		this.throttler.Teardown()
 	}
 }
