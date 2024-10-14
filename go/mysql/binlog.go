@@ -14,11 +14,12 @@ import (
 
 // BinlogCoordinates described binary log coordinates in the form of log file & log position.
 type BinlogCoordinates struct {
-	LogFile string
-	LogPos  int64
+	LogFile   string
+	LogPos    int64
+	EventSize int64
 }
 
-// ParseInstanceKey will parse an InstanceKey from a string representation such as 127.0.0.1:3306
+// ParseBinlogCoordinates will parse an InstanceKey from a string representation such as 127.0.0.1:3306
 func ParseBinlogCoordinates(logFileLogPos string) (*BinlogCoordinates, error) {
 	tokens := strings.SplitN(logFileLogPos, ":", 2)
 	if len(tokens) != 2 {
@@ -73,4 +74,28 @@ func (this *BinlogCoordinates) SmallerThanOrEquals(other *BinlogCoordinates) boo
 		return true
 	}
 	return this.LogFile == other.LogFile && this.LogPos == other.LogPos
+}
+
+// IsLogPosOverflowBeyond4Bytes returns true if the coordinate endpos is overflow beyond 4 bytes.
+// The binlog event end_log_pos field type is defined as uint32, 4 bytes.
+// https://github.com/go-mysql-org/go-mysql/blob/master/replication/event.go
+// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_replication_binlog_event.html#sect_protocol_replication_binlog_event_header
+// Issue: https://github.com/github/gh-ost/issues/1366
+func (this *BinlogCoordinates) IsLogPosOverflowBeyond4Bytes(preCoordinate *BinlogCoordinates) bool {
+	if preCoordinate == nil {
+		return false
+	}
+	if preCoordinate.IsEmpty() {
+		return false
+	}
+
+	if this.LogFile != preCoordinate.LogFile {
+		return false
+	}
+
+	if preCoordinate.LogPos+this.EventSize >= 1<<32 {
+		// Unexpected rows event, the previous binlog log_pos + current binlog event_size is overflow 4 bytes
+		return true
+	}
+	return false
 }

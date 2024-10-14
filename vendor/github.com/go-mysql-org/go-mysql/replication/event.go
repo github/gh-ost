@@ -10,8 +10,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
 	"github.com/pingcap/errors"
-	uuid "github.com/satori/go.uuid"
 
 	. "github.com/go-mysql-org/go-mysql/mysql"
 )
@@ -91,7 +91,7 @@ func (h *EventHeader) Decode(data []byte) error {
 	pos += 4
 
 	h.Flags = binary.LittleEndian.Uint16(data[pos:])
-	pos += 2
+	// pos += 2
 
 	if h.EventSize < uint32(EventHeaderSize) {
 		return errors.Errorf("invalid event size %d, must >= 19", h.EventSize)
@@ -108,11 +108,11 @@ func (h *EventHeader) Dump(w io.Writer) {
 }
 
 var (
-	checksumVersionSplitMysql   []int = []int{5, 6, 1}
-	checksumVersionProductMysql int   = (checksumVersionSplitMysql[0]*256+checksumVersionSplitMysql[1])*256 + checksumVersionSplitMysql[2]
+	checksumVersionSplitMysql   = []int{5, 6, 1}
+	checksumVersionProductMysql = (checksumVersionSplitMysql[0]*256+checksumVersionSplitMysql[1])*256 + checksumVersionSplitMysql[2]
 
-	checksumVersionSplitMariaDB   []int = []int{5, 3, 0}
-	checksumVersionProductMariaDB int   = (checksumVersionSplitMariaDB[0]*256+checksumVersionSplitMariaDB[1])*256 + checksumVersionSplitMariaDB[2]
+	checksumVersionSplitMariaDB   = []int{5, 3, 0}
+	checksumVersionProductMariaDB = (checksumVersionSplitMariaDB[0]*256+checksumVersionSplitMariaDB[1])*256 + checksumVersionSplitMariaDB[2]
 )
 
 // server version format X.Y.Zabc, a is not . or number
@@ -141,7 +141,7 @@ func splitServerVersion(server string) []int {
 func calcVersionProduct(server string) int {
 	versionSplit := splitServerVersion(server)
 
-	return ((versionSplit[0]*256+versionSplit[1])*256 + versionSplit[2])
+	return (versionSplit[0]*256+versionSplit[1])*256 + versionSplit[2]
 }
 
 type FormatDescriptionEvent struct {
@@ -251,7 +251,7 @@ func (e *PreviousGTIDsEvent) Decode(data []byte) error {
 		}
 		previousGTIDSets = append(previousGTIDSets, fmt.Sprintf("%s:%s", uuid, strings.Join(intervals, ":")))
 	}
-	e.GTIDSets = fmt.Sprintf("%s", strings.Join(previousGTIDSets, ","))
+	e.GTIDSets = strings.Join(previousGTIDSets, ",")
 	return nil
 }
 
@@ -420,7 +420,7 @@ func (e *GTIDEvent) Decode(data []byte) error {
 				// If the most significant bit set, another 4 byte follows representing OriginalServerVersion
 				e.ImmediateServerVersion &= ^(uint32(1) << 31)
 				e.OriginalServerVersion = binary.LittleEndian.Uint32(data[pos:])
-				pos += 4
+				// pos += 4
 			} else {
 				// Otherwise OriginalServerVersion == ImmediateServerVersion
 				e.OriginalServerVersion = e.ImmediateServerVersion
@@ -642,4 +642,20 @@ func (e *MariadbGTIDListEvent) Decode(data []byte) error {
 func (e *MariadbGTIDListEvent) Dump(w io.Writer) {
 	fmt.Fprintf(w, "Lists: %v\n", e.GTIDs)
 	fmt.Fprintln(w)
+}
+
+type IntVarEvent struct {
+	Type  IntVarEventType
+	Value uint64
+}
+
+func (i *IntVarEvent) Decode(data []byte) error {
+	i.Type = IntVarEventType(data[0])
+	i.Value = binary.LittleEndian.Uint64(data[1:])
+	return nil
+}
+
+func (i *IntVarEvent) Dump(w io.Writer) {
+	fmt.Fprintf(w, "Type: %d\n", i.Type)
+	fmt.Fprintf(w, "Value: %d\n", i.Value)
 }

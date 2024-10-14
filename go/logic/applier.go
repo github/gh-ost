@@ -89,7 +89,7 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	this.migrationContext.ApplierMySQLVersion = version
-	if err := this.validateAndReadTimeZone(); err != nil {
+	if err := this.validateAndReadGlobalVariables(); err != nil {
 		return err
 	}
 	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
@@ -106,10 +106,13 @@ func (this *Applier) InitDBConnections() (err error) {
 	return nil
 }
 
-// validateAndReadTimeZone potentially reads server time-zone
-func (this *Applier) validateAndReadTimeZone() error {
-	query := `select @@global.time_zone`
-	if err := this.db.QueryRow(query).Scan(&this.migrationContext.ApplierTimeZone); err != nil {
+// validateAndReadGlobalVariables potentially reads server global variables, such as the time_zone and wait_timeout.
+func (this *Applier) validateAndReadGlobalVariables() error {
+	query := `select /* gh-ost */ @@global.time_zone, @@global.wait_timeout`
+	if err := this.db.QueryRow(query).Scan(
+		&this.migrationContext.ApplierTimeZone,
+		&this.migrationContext.ApplierWaitTimeout,
+	); err != nil {
 		return err
 	}
 
@@ -392,14 +395,15 @@ func (this *Applier) WriteChangelog(hint, value string) (string, error) {
 		explicitId = 3
 	}
 	query := fmt.Sprintf(`
-			insert /* gh-ost */ into %s.%s
-				(id, hint, value)
-			values
-				(NULLIF(?, 0), ?, ?)
-			on duplicate key update
-				last_update=NOW(),
-				value=VALUES(value)
-		`,
+		insert /* gh-ost */
+		into
+			%s.%s
+			(id, hint, value)
+		values
+			(NULLIF(?, 0), ?, ?)
+		on duplicate key update
+			last_update=NOW(),
+			value=VALUES(value)`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetChangelogTableName()),
 	)
@@ -471,7 +475,7 @@ func (this *Applier) ExecuteThrottleQuery() (int64, error) {
 // readMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey)
 	if err != nil {
 		return err
 	}
@@ -496,7 +500,7 @@ func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 // readMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	this.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, &uniqueKey.Columns)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, uniqueKey)
 	if err != nil {
 		return err
 	}
@@ -795,7 +799,7 @@ func (this *Applier) StartSlaveIOThread() error {
 	return nil
 }
 
-// StartSlaveSQLThread is applicable with --test-on-replica
+// StopSlaveSQLThread is applicable with --test-on-replica
 func (this *Applier) StopSlaveSQLThread() error {
 	query := `stop /* gh-ost */ slave sql_thread`
 	this.migrationContext.Log.Infof("Verifying SQL thread is stopped")
@@ -854,7 +858,7 @@ func (this *Applier) GetSessionLockName(sessionId int64) string {
 // ExpectUsedLock expects the special hint voluntary lock to exist on given session
 func (this *Applier) ExpectUsedLock(sessionId int64) error {
 	var result int64
-	query := `select is_used_lock(?)`
+	query := `select /* gh-ost */ is_used_lock(?)`
 	lockName := this.GetSessionLockName(sessionId)
 	this.migrationContext.Log.Infof("Checking session lock: %s", lockName)
 	if err := this.db.QueryRow(query, lockName).Scan(&result); err != nil || result != sessionId {
@@ -867,14 +871,14 @@ func (this *Applier) ExpectUsedLock(sessionId int64) error {
 func (this *Applier) ExpectProcess(sessionId int64, stateHint, infoHint string) error {
 	found := false
 	query := `
-		select id
-			from information_schema.processlist
-			where
-				id != connection_id()
-				and ? in (0, id)
-				and state like concat('%', ?, '%')
-				and info  like concat('%', ?, '%')
-	`
+		select /* gh-ost */ id
+		from
+			information_schema.processlist
+		where
+			id != connection_id()
+			and ? in (0, id)
+			and state like concat('%', ?, '%')
+			and info like concat('%', ?, '%')`
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		found = true
 		return nil
@@ -912,10 +916,10 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 	}
 	tableName := this.migrationContext.GetOldTableName()
 
-	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s (
+	query := fmt.Sprintf(`
+		create /* gh-ost */ table %s.%s (
 			id int auto_increment primary key
-		) engine=%s comment='%s'
-		`,
+		) engine=%s comment='%s'`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(tableName),
 		this.migrationContext.TableEngine,
@@ -931,6 +935,27 @@ func (this *Applier) CreateAtomicCutOverSentryTable() error {
 	this.migrationContext.Log.Infof("Magic cut-over table created")
 
 	return nil
+}
+
+// InitAtomicCutOverWaitTimeout sets the cut-over session wait_timeout in order to reduce the
+// time an unresponsive (but still connected) gh-ost process can hold the cut-over lock.
+func (this *Applier) InitAtomicCutOverWaitTimeout(tx *gosql.Tx) error {
+	cutOverWaitTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 3
+	this.migrationContext.Log.Infof("Setting cut-over idle timeout as %d seconds", cutOverWaitTimeoutSeconds)
+	query := fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, cutOverWaitTimeoutSeconds)
+	_, err := tx.Exec(query)
+	return err
+}
+
+// RevertAtomicCutOverWaitTimeout restores the original wait_timeout for the applier session post-cut-over.
+func (this *Applier) RevertAtomicCutOverWaitTimeout() {
+	this.migrationContext.Log.Infof("Reverting cut-over idle timeout to %d seconds", this.migrationContext.ApplierWaitTimeout)
+	query := fmt.Sprintf(`set /* gh-ost */ session wait_timeout:=%d`, this.migrationContext.ApplierWaitTimeout)
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		this.migrationContext.Log.Errorf("Failed to restore applier wait_timeout to %d seconds: %v",
+			this.migrationContext.ApplierWaitTimeout, err,
+		)
+	}
 }
 
 // AtomicCutOverMagicLock
@@ -949,14 +974,14 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 	}()
 
 	var sessionId int64
-	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
+	if err := tx.QueryRow(`select /* gh-ost */ connection_id()`).Scan(&sessionId); err != nil {
 		tableLocked <- err
 		return err
 	}
 	sessionIdChan <- sessionId
 
 	lockResult := 0
-	query := `select get_lock(?, 0)`
+	query := `select /* gh-ost */ get_lock(?, 0)`
 	lockName := this.GetSessionLockName(sessionId)
 	this.migrationContext.Log.Infof("Grabbing voluntary lock: %s", lockName)
 	if err := tx.QueryRow(query, lockName).Scan(&lockResult); err != nil || lockResult != 1 {
@@ -967,7 +992,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 
 	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
 	this.migrationContext.Log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
-	query = fmt.Sprintf(`set session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
+	query = fmt.Sprintf(`set /* gh-ost */ session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
 		tableLocked <- err
 		return err
@@ -977,6 +1002,12 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		tableLocked <- err
 		return err
 	}
+
+	if err := this.InitAtomicCutOverWaitTimeout(tx); err != nil {
+		tableLocked <- err
+		return err
+	}
+	defer this.RevertAtomicCutOverWaitTimeout()
 
 	query = fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write, %s.%s write`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -1026,7 +1057,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetOldTableName()),
 	)
-	query = `unlock tables`
+	query = `unlock /* gh-ost */ tables`
 	if _, err := tx.Exec(query); err != nil {
 		tableUnlocked <- err
 		return this.migrationContext.Log.Errore(err)
@@ -1048,13 +1079,13 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 		tablesRenamed <- fmt.Errorf("Unexpected error in AtomicCutoverRename(), injected to release blocking channel reads")
 	}()
 	var sessionId int64
-	if err := tx.QueryRow(`select connection_id()`).Scan(&sessionId); err != nil {
+	if err := tx.QueryRow(`select /* gh-ost */ connection_id()`).Scan(&sessionId); err != nil {
 		return err
 	}
 	sessionIdChan <- sessionId
 
 	this.migrationContext.Log.Infof("Setting RENAME timeout as %d seconds", this.migrationContext.CutOverLockTimeoutSeconds)
-	query := fmt.Sprintf(`set session lock_wait_timeout:=%d`, this.migrationContext.CutOverLockTimeoutSeconds)
+	query := fmt.Sprintf(`set /* gh-ost */ session lock_wait_timeout:=%d`, this.migrationContext.CutOverLockTimeoutSeconds)
 	if _, err := tx.Exec(query); err != nil {
 		return err
 	}
@@ -1080,7 +1111,7 @@ func (this *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed
 }
 
 func (this *Applier) ShowStatusVariable(variableName string) (result int64, err error) {
-	query := fmt.Sprintf(`show global status like '%s'`, variableName)
+	query := fmt.Sprintf(`show /* gh-ost */ global status like '%s'`, variableName)
 	if err := this.db.QueryRow(query).Scan(&variableName, &result); err != nil {
 		return 0, err
 	}
@@ -1150,7 +1181,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 			return err
 		}
 
-		sessionQuery := "SET SESSION time_zone = '+00:00'"
+		sessionQuery := "SET /* gh-ost */ SESSION time_zone = '+00:00'"
 		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
 
 		if _, err := tx.Exec(sessionQuery); err != nil {

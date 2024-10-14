@@ -31,5 +31,5 @@ cp ${tarball}.gz "$BUILD_ARTIFACT_DIR"/gh-ost/
 ### HACK HACK HACK HACK ###
 # blame @carlosmn, @mattr, @timvaillancourt and @rashiq
 # Allow builds on buster to also be used for focal
-focal_tarball_name=$(echo $(basename "${tarball}") | sed s/-stretch-/-focal-/)
+focal_tarball_name=$(echo $(basename "${tarball}") | sed s/-bullseye-/-focal-/)
 cp ${tarball}.gz "$BUILD_ARTIFACT_DIR/gh-ost/${focal_tarball_name}.gz"

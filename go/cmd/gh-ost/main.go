@@ -22,7 +22,7 @@ import (
 	"golang.org/x/term"
 )
 
-var AppVersion string
+var AppVersion, GitCommit string
 
 // acceptSignals registers for OS signals
 func acceptSignals(migrationContext *base.MigrationContext) {
@@ -57,6 +57,7 @@ func main() {
 	flag.StringVar(&migrationContext.CliMasterPassword, "master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
+	charset := flag.String("charset", "utf8mb4,utf8,latin1", "The default charset for the database connection is utf8mb4, utf8, latin1.")
 
 	flag.BoolVar(&migrationContext.UseTLS, "ssl", false, "Enable SSL encrypted connections to MySQL hosts")
 	flag.StringVar(&migrationContext.TLSCACertificate, "ssl-ca", "", "CA certificate in PEM format for TLS connections to MySQL hosts. Requires --ssl")
@@ -160,12 +161,15 @@ func main() {
 		flag.PrintDefaults()
 		return
 	}
+
+	if AppVersion == "" {
+		AppVersion = "unversioned"
+	}
+	if GitCommit == "" {
+		GitCommit = "unknown"
+	}
 	if *version {
-		appVersion := AppVersion
-		if appVersion == "" {
-			appVersion = "unversioned"
-		}
-		fmt.Println(appVersion)
+		fmt.Printf("%s (git commit: %s)\n", AppVersion, GitCommit)
 		return
 	}
 
@@ -187,6 +191,8 @@ func main() {
 	if err := migrationContext.SetConnectionConfig(*storageEngine); err != nil {
 		migrationContext.Log.Fatale(err)
 	}
+
+	migrationContext.SetConnectionCharset(*charset)
 
 	if migrationContext.AlterStatement == "" {
 		log.Fatal("--alter must be provided and statement must not be empty")
@@ -308,7 +314,7 @@ func main() {
 		migrationContext.Log.Errore(err)
 	}
 
-	log.Infof("starting gh-ost %+v", AppVersion)
+	log.Infof("starting gh-ost %+v (git commit: %s)", AppVersion, GitCommit)
 	acceptSignals(migrationContext)
 
 	migrator := logic.NewMigrator(migrationContext, AppVersion)

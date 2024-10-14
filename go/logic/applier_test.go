@@ -114,13 +114,12 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 		res := applier.buildDMLEventQuery(binlogEvent)
 		test.S(t).ExpectEquals(len(res), 1)
 		test.S(t).ExpectNil(res[0].err)
-		test.S(t).ExpectEquals(strings.TrimSpace(res[0].query),
-			`delete /* gh-ost `+"`test`.`_test_gho`"+` */
-				from
-					`+"`test`.`_test_gho`"+`
-				where
-					((`+"`id`"+` = ?) and (`+"`item_id`"+` = ?))`)
-
+		test.S(t).ExpectEquals(strings.TrimSpace(res[0].query), `delete /* gh-ost `+"`test`.`_test_gho`"+` */
+		from
+			`+"`test`.`_test_gho`"+`
+		where
+			((`+"`id`"+` = ?) and (`+"`item_id`"+` = ?))`,
+		)
 		test.S(t).ExpectEquals(len(res[0].args), 2)
 		test.S(t).ExpectEquals(res[0].args[0], 123456)
 		test.S(t).ExpectEquals(res[0].args[1], 42)
@@ -136,11 +135,12 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 		test.S(t).ExpectEquals(len(res), 1)
 		test.S(t).ExpectNil(res[0].err)
 		test.S(t).ExpectEquals(strings.TrimSpace(res[0].query),
-			`replace /* gh-ost `+"`test`.`_test_gho`"+` */ into
-				`+"`test`.`_test_gho`"+`
-					`+"(`id`, `item_id`)"+`
-				values
-					(?, ?)`)
+			`replace /* gh-ost `+"`test`.`_test_gho`"+` */
+		into
+			`+"`test`.`_test_gho`"+`
+			`+"(`id`, `item_id`)"+`
+		values
+			(?, ?)`)
 		test.S(t).ExpectEquals(len(res[0].args), 2)
 		test.S(t).ExpectEquals(res[0].args[0], 123456)
 		test.S(t).ExpectEquals(res[0].args[1], 42)
@@ -158,11 +158,11 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 		test.S(t).ExpectNil(res[0].err)
 		test.S(t).ExpectEquals(strings.TrimSpace(res[0].query),
 			`update /* gh-ost `+"`test`.`_test_gho`"+` */
-					`+"`test`.`_test_gho`"+`
-				set
-					`+"`id`"+`=?, `+"`item_id`"+`=?
-				where
-					((`+"`id`"+` = ?) and (`+"`item_id`"+` = ?))`)
+			`+"`test`.`_test_gho`"+`
+		set
+			`+"`id`"+`=?, `+"`item_id`"+`=?
+		where
+			((`+"`id`"+` = ?) and (`+"`item_id`"+` = ?))`)
 		test.S(t).ExpectEquals(len(res[0].args), 4)
 		test.S(t).ExpectEquals(res[0].args[0], 123456)
 		test.S(t).ExpectEquals(res[0].args[1], 42)

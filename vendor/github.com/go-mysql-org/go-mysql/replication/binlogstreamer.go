@@ -84,11 +84,32 @@ func (s *BinlogStreamer) closeWithError(err error) {
 	}
 }
 
-func newBinlogStreamer() *BinlogStreamer {
+func NewBinlogStreamer() *BinlogStreamer {
 	s := new(BinlogStreamer)
 
 	s.ch = make(chan *BinlogEvent, 10240)
 	s.ech = make(chan error, 4)
 
 	return s
+}
+
+// AddEventToStreamer adds a binlog event to the streamer. You can use it when you want to add an event to the streamer manually.
+// can be used in replication handlers
+func (s *BinlogStreamer) AddEventToStreamer(ev *BinlogEvent) error {
+	select {
+	case s.ch <- ev:
+		return nil
+	case err := <-s.ech:
+		return err
+	}
+}
+
+// AddErrorToStreamer adds an error to the streamer.
+func (s *BinlogStreamer) AddErrorToStreamer(err error) bool {
+	select {
+	case s.ech <- err:
+		return true
+	default:
+		return false
+	}
 }
