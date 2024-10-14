@@ -20,4 +20,3 @@ Tests are found under [localtests](https://github.com/github/gh-ost/tree/master/
 New data-integrity, synchronization issues or otherwise concerns are expected to be tested by new test cases.
 
 While this is merged work is still ongoing.
-
