@@ -16,7 +16,7 @@ import (
 )
 
 func TestCoordinator(t *testing.T) {
-	db, err := gosql.Open("mysql", "root:@/")
+	db, err := gosql.Open("mysql", "root:root@/")
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -27,12 +27,12 @@ func TestCoordinator(t *testing.T) {
 
 	prepareDatabase(t, db)
 
-	_, err = db.Exec("CREATE TABLE testing._gh_ost_test_gho (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255))")
+	_, err = db.Exec("CREATE TABLE test._gh_ost_test_gho (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255))")
 	require.NoError(t, err)
 
 	migrationContext := base.NewMigrationContext()
 	migrationContext.Hostname = "localhost"
-	migrationContext.DatabaseName = "testing"
+	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
 	migrationContext.AllowedRunningOnMaster = true
@@ -48,7 +48,7 @@ func TestCoordinator(t *testing.T) {
 			Port:     3306,
 		},
 		User:     "root",
-		Password: "",
+		Password: "root",
 	}
 
 	migrationContext.InspectorConnectionConfig = &mysql.ConnectionConfig{
@@ -57,7 +57,7 @@ func TestCoordinator(t *testing.T) {
 			Port:     3306,
 		},
 		User:     "root",
-		Password: "",
+		Password: "root",
 	}
 
 	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "name"})
@@ -87,7 +87,7 @@ func TestCoordinator(t *testing.T) {
 		require.NoError(t, err)
 
 		for j := 0; j < 100; j++ {
-			_, err = tx.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
+			_, err = tx.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test')")
 			require.NoError(t, err)
 		}
 
@@ -95,10 +95,10 @@ func TestCoordinator(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	_, err = db.Exec("UPDATE testing.gh_ost_test SET name = 'foobar' WHERE id = 1")
+	_, err = db.Exec("UPDATE test.gh_ost_test SET name = 'foobar' WHERE id = 1")
 	require.NoError(t, err)
 
-	_, err = db.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
+	_, err = db.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test')")
 	require.NoError(t, err)
 
 	_, err = applier.WriteChangelogState("completed")

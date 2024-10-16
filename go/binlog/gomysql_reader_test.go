@@ -31,7 +31,7 @@ func getMigrationContext() *base.MigrationContext {
 			Port:     3306,
 		},
 		User:     "root",
-		Password: "",
+		Password: "root",
 	}
 	migrationContext.SetConnectionConfig("innodb")
 	migrationContext.ReplicaServerId = 99999
@@ -39,21 +39,21 @@ func getMigrationContext() *base.MigrationContext {
 }
 
 func prepareDatabase(t *testing.T, db *sql.DB) {
-	_, err := db.Exec("DROP DATABASE testing")
+	_, err := db.Exec("DROP DATABASE test")
 	require.NoError(t, err)
 
-	_, err = db.Exec("CREATE DATABASE testing")
+	_, err = db.Exec("CREATE DATABASE test")
 	require.NoError(t, err)
 
-	_, err = db.Exec("CREATE TABLE testing.gh_ost_test (id int NOT NULL AUTO_INCREMENT, name varchar(255), PRIMARY KEY (id)) ENGINE=InnoDB")
+	_, err = db.Exec("CREATE TABLE test.gh_ost_test (id int NOT NULL AUTO_INCREMENT, name varchar(255), PRIMARY KEY (id)) ENGINE=InnoDB")
 	require.NoError(t, err)
 
-	_, err = db.Exec("CREATE TABLE testing.gh_ost_test2 (id int NOT NULL AUTO_INCREMENT, name varchar(255), PRIMARY KEY (id)) ENGINE=InnoDB")
+	_, err = db.Exec("CREATE TABLE test.gh_ost_test2 (id int NOT NULL AUTO_INCREMENT, name varchar(255), PRIMARY KEY (id)) ENGINE=InnoDB")
 	require.NoError(t, err)
 }
 
 func TestStreamTransactionSingleAutoCommitChange(t *testing.T) {
-	db, err := sql.Open("mysql", "root:@/")
+	db, err := sql.Open("mysql", "root:root@/")
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -62,7 +62,7 @@ func TestStreamTransactionSingleAutoCommitChange(t *testing.T) {
 	binlogCoordinates := getCurrentBinlogCoordinates(t, db)
 
 	migrationContext := getMigrationContext()
-	migrationContext.DatabaseName = "testing"
+	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
 
@@ -79,7 +79,7 @@ func TestStreamTransactionSingleAutoCommitChange(t *testing.T) {
 		require.Equal(t, err, context.Canceled)
 	}()
 
-	_, err = db.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
+	_, err = db.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test')")
 	require.NoError(t, err)
 
 	tx := <-transactionsChan
@@ -96,7 +96,7 @@ func TestStreamTransactionSingleAutoCommitChange(t *testing.T) {
 }
 
 func TestStreamTransactionSingleChangeInTransaction(t *testing.T) {
-	db, err := sql.Open("mysql", "root:@/")
+	db, err := sql.Open("mysql", "root:root@/")
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -105,7 +105,7 @@ func TestStreamTransactionSingleChangeInTransaction(t *testing.T) {
 	binlogCoordinates := getCurrentBinlogCoordinates(t, db)
 
 	migrationContext := getMigrationContext()
-	migrationContext.DatabaseName = "testing"
+	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
 
@@ -125,7 +125,7 @@ func TestStreamTransactionSingleChangeInTransaction(t *testing.T) {
 	sqlTx, err := db.Begin()
 	require.NoError(t, err)
 
-	_, err = sqlTx.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
+	_, err = sqlTx.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test')")
 	require.NoError(t, err)
 
 	err = sqlTx.Commit()
@@ -145,7 +145,7 @@ func TestStreamTransactionSingleChangeInTransaction(t *testing.T) {
 }
 
 func TestStreamTransactionMultipleChangesInTransaction(t *testing.T) {
-	db, err := sql.Open("mysql", "root:@/")
+	db, err := sql.Open("mysql", "root:root@/")
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -154,7 +154,7 @@ func TestStreamTransactionMultipleChangesInTransaction(t *testing.T) {
 	binlogCoordinates := getCurrentBinlogCoordinates(t, db)
 
 	migrationContext := getMigrationContext()
-	migrationContext.DatabaseName = "testing"
+	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
 
@@ -173,13 +173,13 @@ func TestStreamTransactionMultipleChangesInTransaction(t *testing.T) {
 	sqlTx, err := db.Begin()
 	require.NoError(t, err)
 
-	_, err = sqlTx.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test1')")
+	_, err = sqlTx.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test1')")
 	require.NoError(t, err)
 
-	_, err = sqlTx.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test2')")
+	_, err = sqlTx.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test2')")
 	require.NoError(t, err)
 
-	_, err = sqlTx.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test3')")
+	_, err = sqlTx.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test3')")
 	require.NoError(t, err)
 
 	err = sqlTx.Commit()
@@ -200,7 +200,7 @@ func TestStreamTransactionMultipleChangesInTransaction(t *testing.T) {
 }
 
 func TestStreamTransactionWithDDL(t *testing.T) {
-	db, err := sql.Open("mysql", "root:@/")
+	db, err := sql.Open("mysql", "root:root@/")
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -209,7 +209,7 @@ func TestStreamTransactionWithDDL(t *testing.T) {
 	binlogCoordinates := getCurrentBinlogCoordinates(t, db)
 
 	migrationContext := getMigrationContext()
-	migrationContext.DatabaseName = "testing"
+	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
 
@@ -226,7 +226,7 @@ func TestStreamTransactionWithDDL(t *testing.T) {
 		require.Equal(t, err, context.Canceled)
 	}()
 
-	_, err = db.Exec("ALTER TABLE testing.gh_ost_test ADD COLUMN age INT")
+	_, err = db.Exec("ALTER TABLE test.gh_ost_test ADD COLUMN age INT")
 	require.NoError(t, err)
 
 	tx := <-transactionsChan

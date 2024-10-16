@@ -25,6 +25,7 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
+	"sync"
 )
 
 func TestMigratorOnChangelogEvent(t *testing.T) {
@@ -267,18 +268,18 @@ func prepareDatabase(t *testing.T, db *gosql.DB) {
 	_, err = db.Exec("SET @@GLOBAL.	binlog_transaction_dependency_tracking = WRITESET")
 	require.NoError(t, err)
 
-	_, err = db.Exec("DROP DATABASE IF EXISTS testing")
+	_, err = db.Exec("DROP DATABASE test")
 	require.NoError(t, err)
 
-	_, err = db.Exec("CREATE DATABASE testing")
+	_, err = db.Exec("CREATE DATABASE test")
 	require.NoError(t, err)
 
-	_, err = db.Exec("CREATE TABLE testing.gh_ost_test (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255)) ENGINE=InnoDB")
+	_, err = db.Exec("CREATE TABLE test.gh_ost_test (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255)) ENGINE=InnoDB")
 	require.NoError(t, err)
 }
 
 func TestMigrate(t *testing.T) {
-	db, err := gosql.Open("mysql", "root:@/")
+	db, err := gosql.Open("mysql", "root:root@/")
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -291,7 +292,7 @@ func TestMigrate(t *testing.T) {
 
 	migrationContext := base.NewMigrationContext()
 	migrationContext.Hostname = "localhost"
-	migrationContext.DatabaseName = "testing"
+	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
 	migrationContext.AllowedRunningOnMaster = true
@@ -306,7 +307,7 @@ func TestMigrate(t *testing.T) {
 			Port:     3306,
 		},
 		User:     "root",
-		Password: "",
+		Password: "root",
 	}
 
 	migrationContext.SetConnectionConfig("innodb")
@@ -317,64 +318,59 @@ func TestMigrate(t *testing.T) {
 
 	rowsWritten := atomic.Int32{}
 
-	go func() {
-		ticker := time.NewTicker(time.Millisecond)
+	var wg sync.WaitGroup
 
+	go func() {
+		wg.Add(1)
+		defer wg.Done()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				//				fmt.Printf("Inserting row\n")
-				_, err := db.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
+			default:
+				_, err := db.ExecContext(ctx, "INSERT INTO test.gh_ost_test (name) VALUES ('test')")
+				if errors.Is(err, context.Canceled) {
+					return
+				}
 				require.NoError(t, err)
-
 				rowsWritten.Add(1)
+
+				time.Sleep(time.Millisecond)
 			}
 		}
 	}()
 
 	go func() {
-		ticker := time.NewTicker(time.Millisecond)
-
+		wg.Add(1)
+		defer wg.Done()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				//				fmt.Printf("Inserting row\n")
-				tx, err := db.Begin()
+			default:
+				tx, err := db.BeginTx(ctx, &gosql.TxOptions{})
+				if errors.Is(err, context.Canceled) {
+					return
+				} else if err != nil {
+					fmt.Println(err.Error())
+				}
 				require.NoError(t, err)
 
 				for i := 0; i < 10; i++ {
-					_, err := tx.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
+					_, err = tx.ExecContext(ctx, "INSERT INTO test.gh_ost_test (name) VALUES ('test')")
+					if errors.Is(err, context.Canceled) {
+						tx.Rollback()
+						return
+					}
 					require.NoError(t, err)
-
 					rowsWritten.Add(1)
 				}
+				tx.Commit()
 
-				err = tx.Commit()
-				require.NoError(t, err)
+				time.Sleep(time.Millisecond)
 			}
 		}
 	}()
-
-	// go func() {
-	// 	ticker := time.NewTicker(time.Millisecond)
-
-	// 	for {
-	// 		select {
-	// 		case <-ctx.Done():
-	// 			return
-	// 		case <-ticker.C:
-	// 			//				fmt.Printf("Inserting row\n")
-	// 			_, err := db.Exec("INSERT INTO testing.gh_ost_test (name) VALUES ('test')")
-	// 			require.NoError(t, err)
-
-	// 			rowsWritten.Add(1)
-	// 		}
-	// 	}
-	// }()
 
 	go func() {
 		time.Sleep(10 * time.Second)
@@ -383,7 +379,7 @@ func TestMigrate(t *testing.T) {
 
 	err = migrator.Migrate()
 	require.NoError(t, err)
+	wg.Wait()
 
 	fmt.Printf("Rows written: %d\n", rowsWritten.Load())
-
 }

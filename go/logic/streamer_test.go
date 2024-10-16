@@ -19,11 +19,11 @@ func TestStreamEvents(t *testing.T) {
 			Port:     3306,
 		},
 		User:     "root",
-		Password: "",
+		Password: "root",
 	}
 	migrationContext.SetConnectionConfig("innodb")
 	migrationContext.ReplicaServerId = 99999
-	migrationContext.DatabaseName = "testing"
+	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
 
