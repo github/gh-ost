@@ -23,18 +23,16 @@ type Coordinator struct {
 
 	binlogSyncer *replication.BinlogSyncer
 
-	// protects currentCoordinates and transactionCoordinates
-	currentCoordinatesMutex *sync.Mutex
-	currentCoordinates      mysql.BinlogCoordinates
-	// maps sequence number to its binlog coordinates.
-	transactionCoordinates map[int64]mysql.BinlogCoordinates
-
 	onChangelogEvent func(dmlEvent *binlog.BinlogDMLEvent) error
 
 	applier *Applier
 
 	// Atomic counter for number of active workers
 	busyWorkers atomic.Int64
+
+	currentCoordinatesMutex sync.Mutex
+	// The binlog coordinates of the low water mark transaction.
+	currentCoordinates mysql.BinlogCoordinates
 
 	// Mutex to protect the fields below
 	mu sync.Mutex
@@ -44,7 +42,8 @@ type Coordinator struct {
 
 	// This is a map of completed jobs by their sequence numbers.
 	// This is used when updating the low water mark.
-	completedJobs map[int64]bool
+	// It records the binlog coordinates of the completed transaction.
+	completedJobs map[int64]*mysql.BinlogCoordinates
 
 	// These are the jobs that are waiting for a previous job to complete.
 	// They are indexed by the sequence number of the job they are waiting for.
@@ -84,16 +83,6 @@ func (w *Worker) ProcessEvents() error {
 			w.coordinator.migrationContext.Log.Debugf("Received unexpected event: %v\n", ev)
 		}
 
-		// record the coordinates for this transaction
-		func() {
-			w.coordinator.currentCoordinatesMutex.Lock()
-			defer w.coordinator.currentCoordinatesMutex.Unlock()
-			w.coordinator.transactionCoordinates[gtidEvent.SequenceNumber] = mysql.BinlogCoordinates{
-				LogPos:    int64(ev.Header.LogPos),
-				EventSize: int64(ev.Header.EventSize),
-			}
-		}()
-
 		// Wait for conditions to be met
 		waitChannel := w.coordinator.WaitForTransaction(gtidEvent.LastCommitted)
 		if waitChannel != nil {
@@ -114,9 +103,6 @@ func (w *Worker) ProcessEvents() error {
 
 	events:
 		for {
-			if w.coordinator.finishedMigrating.Load() {
-				return nil
-			}
 			ev := <-w.eventQueue
 			if ev == nil {
 				fmt.Printf("Worker %d ending transaction early\n", w.id)
@@ -199,7 +185,7 @@ func (w *Worker) ProcessEvents() error {
 			}
 		}
 
-		w.coordinator.MarkTransactionCompleted(gtidEvent.SequenceNumber)
+		w.coordinator.MarkTransactionCompleted(gtidEvent.SequenceNumber, int64(ev.Header.LogPos), int64(ev.Header.EventSize))
 
 		// Did we see a changelog event?
 		// Handle it now
@@ -225,9 +211,7 @@ func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, o
 
 		onChangelogEvent: onChangelogEvent,
 
-		currentCoordinates:      mysql.BinlogCoordinates{},
-		currentCoordinatesMutex: &sync.Mutex{},
-		transactionCoordinates:  make(map[int64]mysql.BinlogCoordinates),
+		currentCoordinates: mysql.BinlogCoordinates{},
 
 		binlogSyncer: replication.NewBinlogSyncer(replication.BinlogSyncerConfig{
 			ServerID:                uint32(migrationContext.ReplicaServerId),
@@ -243,7 +227,7 @@ func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, o
 		}),
 
 		lowWaterMark:  0,
-		completedJobs: make(map[int64]bool),
+		completedJobs: make(map[int64]*mysql.BinlogCoordinates),
 		waitingJobs:   make(map[int64][]chan struct{}),
 
 		events: make(chan *replication.BinlogEvent, 1000),
@@ -254,7 +238,6 @@ func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, o
 
 func (c *Coordinator) StartStreaming(canStopStreaming func() bool) error {
 	ctx := context.TODO()
-
 	streamer, err := c.binlogSyncer.StartSync(gomysql.Position{
 		Name: c.currentCoordinates.LogFile,
 		Pos:  uint32(c.currentCoordinates.LogPos),
@@ -263,14 +246,29 @@ func (c *Coordinator) StartStreaming(canStopStreaming func() bool) error {
 		return err
 	}
 
+	var retries int64
 	for {
 		if canStopStreaming() {
 			return nil
 		}
 		ev, err := streamer.GetEvent(ctx)
 		if err != nil {
-			//TODO(meiji163): try reconnect on error
-			return err
+			coords := c.GetCurrentBinlogCoordinates()
+			if retries >= c.migrationContext.MaxRetries() {
+				return fmt.Errorf("%d successive failures in streamer reconnect at coordinates %+v", retries, coords)
+			}
+			c.migrationContext.Log.Infof("Reconnecting... Will resume at %+v", coords)
+			retries += 1
+			// We reconnect at the position of the last low water mark.
+			// Some jobs after low water mark may have already applied, but
+			// it's OK to reapply them since the DML operations are idempotent.
+			streamer, err = c.binlogSyncer.StartSync(gomysql.Position{
+				Name: coords.LogFile,
+				Pos:  uint32(coords.LogPos),
+			})
+			if err != nil {
+				return err
+			}
 		}
 		c.events <- ev
 	}
@@ -429,7 +427,7 @@ func (c *Coordinator) WaitForTransaction(lastCommitted int64) chan struct{} {
 		return nil
 	}
 
-	if c.completedJobs[lastCommitted] {
+	if _, ok := c.completedJobs[lastCommitted]; ok {
 		return nil
 	}
 
@@ -440,7 +438,7 @@ func (c *Coordinator) WaitForTransaction(lastCommitted int64) chan struct{} {
 }
 
 func (c *Coordinator) HandleChangeLogEvent(event *binlog.BinlogDMLEvent) {
-	c.migrationContext.Log.Infof("Coordinator: Handling changelog event: %+v\n", event)
+	//c.migrationContext.Log.Infof("Coordinator: Handling changelog event: %+v\n", event)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -448,9 +446,9 @@ func (c *Coordinator) HandleChangeLogEvent(event *binlog.BinlogDMLEvent) {
 	c.onChangelogEvent(event)
 }
 
-func (c *Coordinator) MarkTransactionCompleted(sequenceNumber int64) {
+func (c *Coordinator) MarkTransactionCompleted(sequenceNumber, logPos, eventSize int64) {
 	var channelsToNotify []chan struct{}
-	transactionsCompleted := []int64{}
+	var lastCoords *mysql.BinlogCoordinates
 
 	func() {
 		c.mu.Lock()
@@ -459,12 +457,13 @@ func (c *Coordinator) MarkTransactionCompleted(sequenceNumber int64) {
 		//c.migrationContext.Log.Infof("Coordinator: Marking job as completed: %d\n", sequenceNumber)
 
 		// Mark the job as completed
-		c.completedJobs[sequenceNumber] = true
+		c.completedJobs[sequenceNumber] = &mysql.BinlogCoordinates{LogPos: logPos, EventSize: eventSize}
+
 		// Then, update the low water mark if possible
 		for {
-			if c.completedJobs[c.lowWaterMark+1] {
+			if coords, ok := c.completedJobs[c.lowWaterMark+1]; ok {
+				lastCoords = coords
 				c.lowWaterMark++
-				transactionsCompleted = append(transactionsCompleted, c.lowWaterMark)
 				delete(c.completedJobs, c.lowWaterMark)
 			} else {
 				break
@@ -479,28 +478,30 @@ func (c *Coordinator) MarkTransactionCompleted(sequenceNumber int64) {
 				delete(c.waitingJobs, waitingForSequenceNumber)
 			}
 		}
+
 	}()
 
-	// update the binlog coords to the coords of the low water mark
-	if len(transactionsCompleted) > 0 {
-		// c.migrationContext.Log.Infof("Updating binlog coordinates to %s:%d\n", c.currentCoordinates.LogFile, c.currentCoordinates.LogPos)
-		go func() {
+	// update the binlog coords of the low water mark
+	if lastCoords != nil {
+		func() {
+			// c.migrationContext.Log.Infof("Updating binlog coordinates to %s:%d\n", c.currentCoordinates.LogFile, c.currentCoordinates.LogPos)
 			c.currentCoordinatesMutex.Lock()
 			defer c.currentCoordinatesMutex.Unlock()
-
-			lastPos := c.transactionCoordinates[c.lowWaterMark]
-			c.currentCoordinates.LogPos = lastPos.LogPos
-			c.currentCoordinates.EventSize = lastPos.EventSize
-
-			for _, sequenceNumber := range transactionsCompleted {
-				delete(c.transactionCoordinates, sequenceNumber)
-			}
+			c.currentCoordinates.LogPos = lastCoords.LogPos
+			c.currentCoordinates.EventSize = lastCoords.EventSize
 		}()
 	}
 
 	for _, waitChannel := range channelsToNotify {
 		waitChannel <- struct{}{}
 	}
+}
+
+func (c *Coordinator) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinates {
+	c.currentCoordinatesMutex.Lock()
+	defer c.currentCoordinatesMutex.Unlock()
+	returnCoordinates := c.currentCoordinates
+	return &returnCoordinates
 }
 
 func (c *Coordinator) Teardown() {
