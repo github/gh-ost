@@ -456,6 +456,7 @@ waitForGhostTable:
 		return err
 	}
 	this.printStatus(ForcePrintStatusRule)
+	this.printWorkerStats()
 
 	if this.migrationContext.IsCountingTableRows() {
 		this.migrationContext.Log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
@@ -762,10 +763,13 @@ func (this *Migrator) atomicCutOver() (err error) {
 
 // initiateServer begins listening on unix socket/tcp for incoming interactive commands
 func (this *Migrator) initiateServer() (err error) {
-	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
+	var printStatus printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
 		this.printStatus(rule, writer)
 	}
-	this.server = NewServer(this.migrationContext, this.hooksExecutor, f)
+	var printWorkers printWorkersFunc = func(writer io.Writer) {
+		this.printWorkerStats(writer)
+	}
+	this.server = NewServer(this.migrationContext, this.hooksExecutor, printStatus, printWorkers)
 	if err := this.server.BindSocketFile(); err != nil {
 		return err
 	}
@@ -1020,6 +1024,29 @@ func (this *Migrator) shouldPrintMigrationStatusHint(rule PrintStatusRule, elaps
 		shouldPrint = true
 	}
 	return shouldPrint
+}
+
+// printWorkerStats prints cumulative stats from the trxCoordinator workers.
+func (this *Migrator) printWorkerStats(writers ...io.Writer) {
+	writers = append(writers, os.Stdout)
+	mw := io.MultiWriter(writers...)
+
+	busyWorkers := this.trxCoordinator.busyWorkers.Load()
+	totalWorkers := cap(this.trxCoordinator.workerQueue)
+	fmt.Fprintf(mw, "# %d/%d workers are busy\n", busyWorkers, totalWorkers)
+
+	stats := this.trxCoordinator.GetWorkerStats()
+	for id, stat := range stats {
+		fmt.Fprintf(mw,
+			"Worker %d; Waited: %s; Busy: %s; DML Applied: %d (%.2f/s), Trx Applied: %d (%.2f/s)\n",
+			id,
+			base.PrettifyDurationOutput(stat.waitTime),
+			base.PrettifyDurationOutput(stat.busyTime),
+			stat.dmlEventsApplied,
+			stat.dmlRate,
+			stat.executedJobs,
+			stat.trxRate)
+	}
 }
 
 // printStatus prints the progress status, and optionally additionally detailed

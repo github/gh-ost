@@ -30,12 +30,16 @@ type Coordinator struct {
 	// Atomic counter for number of active workers
 	busyWorkers atomic.Int64
 
+	// Mutex protecting currentCoordinates
 	currentCoordinatesMutex sync.Mutex
 	// The binlog coordinates of the low water mark transaction.
 	currentCoordinates mysql.BinlogCoordinates
 
 	// Mutex to protect the fields below
 	mu sync.Mutex
+
+	// list of workers
+	workers []*Worker
 
 	// The low water mark. This is the sequence number of the last job that has been committed.
 	lowWaterMark int64
@@ -56,13 +60,25 @@ type Coordinator struct {
 	finishedMigrating atomic.Bool
 }
 
+// Worker takes jobs from the Coordinator and applies the job's DML events.
 type Worker struct {
 	id          int
 	coordinator *Coordinator
+	eventQueue  chan *replication.BinlogEvent
 
-	executedJobs int
+	executedJobs     atomic.Int64
+	dmlEventsApplied atomic.Int64
+	waitTimeNs       atomic.Int64
+	busyTimeNs       atomic.Int64
+}
 
-	eventQueue chan *replication.BinlogEvent
+type stats struct {
+	dmlRate          float64
+	trxRate          float64
+	dmlEventsApplied int64
+	executedJobs     int64
+	busyTime         time.Duration
+	waitTime         time.Duration
 }
 
 func (w *Worker) ProcessEvents() error {
@@ -86,21 +102,15 @@ func (w *Worker) ProcessEvents() error {
 		// Wait for conditions to be met
 		waitChannel := w.coordinator.WaitForTransaction(gtidEvent.LastCommitted)
 		if waitChannel != nil {
-			//fmt.Printf("Worker %d - transaction %d waiting for transaction: %d\n", w.id, gtidEvent.SequenceNumber, gtidEvent.LastCommitted)
-			t := time.Now()
+			waitStart := time.Now()
 			<-waitChannel
-			timeWaited := time.Since(t)
-			w.coordinator.migrationContext.Log.Infof(
-				"Worker %d waited for transaction %d for: %d\n",
-				w.id, gtidEvent.LastCommitted, timeWaited)
+			timeWaited := time.Since(waitStart)
+			w.waitTimeNs.Add(timeWaited.Nanoseconds())
 		}
 
 		// Process the transaction
-
 		var changelogEvent *binlog.BinlogDMLEvent
-
 		dmlEvents := make([]*binlog.BinlogDMLEvent, 0, int(atomic.LoadInt64(&w.coordinator.migrationContext.DMLBatchSize)))
-
 	events:
 		for {
 			ev := <-w.eventQueue
@@ -166,11 +176,8 @@ func (w *Worker) ProcessEvents() error {
 						dmlEvents = append(dmlEvents, dmlEvent)
 
 						if len(dmlEvents) == cap(dmlEvents) {
-							err := w.coordinator.applier.ApplyDMLEventQueries(dmlEvents)
-							if err != nil {
-								//TODO(meiji163) add retry
+							if err := w.applyDMLEvents(dmlEvents); err != nil {
 								w.coordinator.migrationContext.Log.Errore(err)
-								w.coordinator.migrationContext.PanicAbort <- err
 							}
 							dmlEvents = dmlEvents[:0]
 						}
@@ -178,9 +185,12 @@ func (w *Worker) ProcessEvents() error {
 				}
 			case *replication.XIDEvent:
 				if len(dmlEvents) > 0 {
-					w.coordinator.applier.ApplyDMLEventQueries(dmlEvents)
+					if err := w.applyDMLEvents(dmlEvents); err != nil {
+						w.coordinator.migrationContext.Log.Errore(err)
+					}
 				}
 
+				w.executedJobs.Add(1)
 				break events
 			}
 		}
@@ -190,17 +200,31 @@ func (w *Worker) ProcessEvents() error {
 		// Did we see a changelog event?
 		// Handle it now
 		if changelogEvent != nil {
+			// wait for all transactions before this point
 			waitChannel = w.coordinator.WaitForTransaction(gtidEvent.SequenceNumber - 1)
 			if waitChannel != nil {
+				waitStart := time.Now()
 				<-waitChannel
+				w.waitTimeNs.Add(time.Since(waitStart).Nanoseconds())
 			}
 			w.coordinator.HandleChangeLogEvent(changelogEvent)
 		}
 
-		w.executedJobs += 1
 		w.coordinator.workerQueue <- w
 		w.coordinator.busyWorkers.Add(-1)
 	}
+}
+
+func (w *Worker) applyDMLEvents(dmlEvents []*binlog.BinlogDMLEvent) error {
+	busyStart := time.Now()
+	err := w.coordinator.applier.ApplyDMLEventQueries(dmlEvents)
+	if err != nil {
+		//TODO(meiji163) add retry
+		return err
+	}
+	w.busyTimeNs.Add(time.Since(busyStart).Nanoseconds())
+	w.dmlEventsApplied.Add(int64(len(dmlEvents)))
+	return nil
 }
 
 func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, onChangelogEvent func(dmlEvent *binlog.BinlogDMLEvent) error) *Coordinator {
@@ -338,7 +362,6 @@ func (c *Coordinator) ProcessEventsUntilDrained() error {
 				if c.finishedMigrating.Load() {
 					return nil
 				}
-				//				c.migrationContext.Log.Infof("Received event: %T - %+v", ev.Event, ev.Event)
 
 				switch binlogEvent := ev.Event.(type) {
 				case *replication.GTIDEvent:
@@ -358,12 +381,9 @@ func (c *Coordinator) ProcessEventsUntilDrained() error {
 				worker := <-c.workerQueue
 				c.busyWorkers.Add(1)
 
-				// c.migrationContext.Log.Infof("Submitting job %d to worker", ev.Event.(*replication.GTIDEvent).SequenceNumber)
 				worker.eventQueue <- ev
 
 				ev = <-c.events
-
-				// c.migrationContext.Log.Infof("Received event: %T - %+v", ev.Event, ev.Event)
 
 				switch binlogEvent := ev.Event.(type) {
 				case *replication.QueryEvent:
@@ -381,9 +401,6 @@ func (c *Coordinator) ProcessEventsUntilDrained() error {
 			events:
 				for {
 					ev = <-c.events
-
-					// c.migrationContext.Log.Infof("Received event: %T - %+v", ev.Event, ev.Event)
-
 					switch ev.Event.(type) {
 					case *replication.RowsEvent:
 						worker.eventQueue <- ev
@@ -402,8 +419,6 @@ func (c *Coordinator) ProcessEventsUntilDrained() error {
 				busyWorkers := c.busyWorkers.Load()
 				if busyWorkers == 0 {
 					return nil
-				} else {
-					//c.migrationContext.Log.Infof("%d/%d workers are busy\n", busyWorkers, cap(c.workerQueue))
 				}
 			}
 		}
@@ -414,9 +429,33 @@ func (c *Coordinator) InitializeWorkers(count int) {
 	c.workerQueue = make(chan *Worker, count)
 	for i := 0; i < count; i++ {
 		w := &Worker{id: i, coordinator: c, eventQueue: make(chan *replication.BinlogEvent, 1000)}
+
+		c.mu.Lock()
+		c.workers = append(c.workers, w)
+		c.mu.Unlock()
+
 		c.workerQueue <- w
 		go w.ProcessEvents()
 	}
+}
+
+func (c *Coordinator) GetWorkerStats() []stats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	statSlice := make([]stats, 0, len(c.workers))
+	for _, w := range c.workers {
+		stat := stats{}
+		stat.dmlEventsApplied = w.dmlEventsApplied.Load()
+		stat.executedJobs = w.executedJobs.Load()
+		stat.busyTime = time.Duration(w.busyTimeNs.Load())
+		stat.waitTime = time.Duration(w.waitTimeNs.Load())
+		if stat.busyTime.Milliseconds() > 0 {
+			stat.dmlRate = 1000.0 * float64(stat.dmlEventsApplied) / float64(stat.busyTime.Milliseconds())
+			stat.trxRate = 1000.0 * float64(stat.executedJobs) / float64(stat.busyTime.Milliseconds())
+		}
+		statSlice = append(statSlice, stat)
+	}
+	return statSlice
 }
 
 func (c *Coordinator) WaitForTransaction(lastCommitted int64) chan struct{} {
@@ -438,11 +477,8 @@ func (c *Coordinator) WaitForTransaction(lastCommitted int64) chan struct{} {
 }
 
 func (c *Coordinator) HandleChangeLogEvent(event *binlog.BinlogDMLEvent) {
-	//c.migrationContext.Log.Infof("Coordinator: Handling changelog event: %+v\n", event)
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	c.onChangelogEvent(event)
 }
 
