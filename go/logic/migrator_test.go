@@ -265,9 +265,6 @@ func prepareDatabase(t *testing.T, db *gosql.DB) {
 	_, err := db.Exec("RESET MASTER")
 	require.NoError(t, err)
 
-	_, err = db.Exec("SET @@GLOBAL. transaction_write_set_extraction = XXHASH64")
-	require.NoError(t, err)
-
 	_, err = db.Exec("SET @@GLOBAL.	binlog_transaction_dependency_tracking = WRITESET")
 	require.NoError(t, err)
 
