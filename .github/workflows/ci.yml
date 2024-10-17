@@ -15,8 +15,14 @@ jobs:
           MYSQL_DATABASE: "test"
           TZ: America/Los_Angeles
         ports:
-          - "3306:3306"
+          - 3306:3306
         options: >-
+          --log-bin=mysql-bin
+          --binlog-format=row
+          --gtid-mode=ON
+          --enforce-gtid-consistency=ON
+          --binlog-transaction-dependency-tracking=WRITESET
+          --transaction-write-set-extraction=XXHASH64
           --health-cmd="mysqladmin ping"
           --health-interval=10s
           --health-timeout=5s
