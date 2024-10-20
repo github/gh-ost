@@ -172,7 +172,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3}
 		rangeEndArgs := []interface{}{103}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
@@ -199,7 +199,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
@@ -240,14 +240,14 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeStartArgs := []interface{}{3}
 		rangeEndArgs := []interface{}{103}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into
 				mydb.ghost
 				(id, name, location)
-			( 
+			(
 				select id, name, position
 				from
 					mydb.tbl
@@ -268,7 +268,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true, false)
+		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
@@ -302,7 +302,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true, true)
+		query, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true)
 		test.S(t).ExpectNil(err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
@@ -315,7 +315,6 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 					mydb.tbl
 				force index (name_position_uidx)
 				where (((name > ?) or (((name = ?)) AND (position > ?)) or ((name = ?) and (position = ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?))))
-				lock in share mode
 			)`
 		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
 		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
@@ -335,7 +334,7 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 		test.S(t).ExpectNil(err)
 		expected := `
 			select /* gh-ost mydb.tbl test */ name, position
-			from ( 
+			from (
 				select
 					name, position
 				from
