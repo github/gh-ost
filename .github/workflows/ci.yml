@@ -1,35 +1,23 @@
-
 name: CI
+
 on: [pull_request]
+
 jobs:
   build:
+
     runs-on: ubuntu-latest
+
     steps:
-    - name: Setup MySQL
-      run: >-
-        docker run --rm -d
-        --name mysql
-        -p 3306:3306
-        --health-cmd="mysqladmin ping"
-        --health-interval=10s
-        --health-timeout=5s
-        --health-retries=3
-        mysql:8.0.39
-        -e MYSQL_ROOT_PASSWORD=root
-        -e MYSQL_DATABASE=test
-        --log-bin=mysql-bin
-        --binlog-format=row
-        --gtid-mode=ON
-        --enforce-gtid-consistency=ON
-        --transaction-write-set-extraction=XXHASH64
-        --binlog-transaction-dependency-tracking=WRITESET
     - uses: actions/checkout@v4
+
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
         go-version-file: go.mod
+
     - name: Build
       run: script/cibuild
+
     - name: Upload gh-ost binary artifact
       uses: actions/upload-artifact@v4
       with:

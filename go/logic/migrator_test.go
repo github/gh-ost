@@ -20,6 +20,8 @@ import (
 
 	"github.com/openark/golib/tests"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"sync"
 
@@ -269,9 +271,6 @@ func prepareDatabase(t *testing.T, db *gosql.DB) {
 	_, err = db.Exec("SET @@GLOBAL.	binlog_transaction_dependency_tracking = WRITESET")
 	require.NoError(t, err)
 
-	_, err = db.Exec("DROP DATABASE test")
-	require.NoError(t, err)
-
 	_, err = db.Exec("CREATE DATABASE test")
 	require.NoError(t, err)
 
@@ -280,7 +279,27 @@ func prepareDatabase(t *testing.T, db *gosql.DB) {
 }
 
 func TestMigrate(t *testing.T) {
-	db, err := gosql.Open("mysql", "root:root@/")
+	ctx := context.Background()
+	req := testcontainers.ContainerRequest{
+		Image:      "mysql:8.0",
+		Env:        map[string]string{"MYSQL_ROOT_PASSWORD": "root"},
+		WaitingFor: wait.ForLog("port: 3306  MySQL Community Server - GPL"),
+	}
+
+	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx := context.Background()
+		require.NoError(t, mysqlContainer.Terminate(ctx))
+	})
+
+	host, err := mysqlContainer.ContainerIP(ctx)
+	require.NoError(t, err)
+
+	db, err := gosql.Open("mysql", "root:root@tcp("+host+")/")
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -292,7 +311,6 @@ func TestMigrate(t *testing.T) {
 	prepareDatabase(t, db)
 
 	migrationContext := base.NewMigrationContext()
-	migrationContext.Hostname = "localhost"
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
@@ -304,7 +322,7 @@ func TestMigrate(t *testing.T) {
 
 	migrationContext.InspectorConnectionConfig = &mysql.ConnectionConfig{
 		Key: mysql.InstanceKey{
-			Hostname: "localhost",
+			Hostname: host,
 			Port:     3306,
 		},
 		User:     "root",

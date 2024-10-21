@@ -13,10 +13,32 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func TestCoordinator(t *testing.T) {
-	db, err := gosql.Open("mysql", "root:root@/")
+	ctx := context.Background()
+	req := testcontainers.ContainerRequest{
+		Image:      "mysql:8.0",
+		Env:        map[string]string{"MYSQL_ROOT_PASSWORD": "root"},
+		WaitingFor: wait.ForLog("port: 3306  MySQL Community Server - GPL"),
+	}
+
+	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx := context.Background()
+		require.NoError(t, mysqlContainer.Terminate(ctx))
+	})
+
+	host, err := mysqlContainer.ContainerIP(ctx)
+	require.NoError(t, err)
+
+	db, err := gosql.Open("mysql", "root:root@tcp("+host+")/")
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -31,7 +53,6 @@ func TestCoordinator(t *testing.T) {
 	require.NoError(t, err)
 
 	migrationContext := base.NewMigrationContext()
-	migrationContext.Hostname = "localhost"
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
@@ -44,7 +65,7 @@ func TestCoordinator(t *testing.T) {
 
 	migrationContext.ApplierConnectionConfig = &mysql.ConnectionConfig{
 		Key: mysql.InstanceKey{
-			Hostname: "localhost",
+			Hostname: host,
 			Port:     3306,
 		},
 		User:     "root",
@@ -53,7 +74,7 @@ func TestCoordinator(t *testing.T) {
 
 	migrationContext.InspectorConnectionConfig = &mysql.ConnectionConfig{
 		Key: mysql.InstanceKey{
-			Hostname: "localhost",
+			Hostname: host,
 			Port:     3306,
 		},
 		User:     "root",

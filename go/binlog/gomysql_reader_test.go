@@ -1,13 +1,16 @@
 package binlog
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/context"
+	"github.com/stretchr/testify/suite"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func getCurrentBinlogCoordinates(t *testing.T, db *sql.DB) mysql.BinlogCoordinates {
@@ -24,11 +27,11 @@ func getCurrentBinlogCoordinates(t *testing.T, db *sql.DB) mysql.BinlogCoordinat
 	return mysql.BinlogCoordinates{LogFile: file, LogPos: position}
 }
 
-func getMigrationContext() *base.MigrationContext {
+func getMigrationContext(host string) *base.MigrationContext {
 	migrationContext := base.NewMigrationContext()
 	migrationContext.InspectorConnectionConfig = &mysql.ConnectionConfig{
 		Key: mysql.InstanceKey{
-			Hostname: "localhost",
+			Hostname: host,
 			Port:     3306,
 		},
 		User:     "root",
@@ -40,21 +43,65 @@ func getMigrationContext() *base.MigrationContext {
 }
 
 func prepareDatabase(t *testing.T, db *sql.DB) {
-	_, err := db.Exec("DROP DATABASE test")
-	require.NoError(t, err)
-
-	_, err = db.Exec("CREATE DATABASE test")
-	require.NoError(t, err)
-
-	_, err = db.Exec("CREATE TABLE test.gh_ost_test (id int NOT NULL AUTO_INCREMENT, name varchar(255), PRIMARY KEY (id)) ENGINE=InnoDB")
+	_, err := db.Exec("CREATE TABLE test.gh_ost_test (id int NOT NULL AUTO_INCREMENT, name varchar(255), PRIMARY KEY (id)) ENGINE=InnoDB")
 	require.NoError(t, err)
 
 	_, err = db.Exec("CREATE TABLE test.gh_ost_test2 (id int NOT NULL AUTO_INCREMENT, name varchar(255), PRIMARY KEY (id)) ENGINE=InnoDB")
 	require.NoError(t, err)
 }
 
-func TestStreamTransactionSingleAutoCommitChange(t *testing.T) {
-	db, err := sql.Open("mysql", "root:root@/")
+type GoMySQLReaderTestSuite struct {
+	suite.Suite
+
+	mysqlContainer testcontainers.Container
+}
+
+func (suite *GoMySQLReaderTestSuite) SetupSuite() {
+	ctx := context.Background()
+
+	req := testcontainers.ContainerRequest{
+		Image:      "mysql:8.0",
+		Env:        map[string]string{"MYSQL_ROOT_PASSWORD": "root"},
+		WaitingFor: wait.ForLog("port: 3306  MySQL Community Server - GPL"),
+	}
+
+	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	suite.Require().NoError(err)
+	suite.mysqlContainer = mysqlContainer
+}
+
+func (suite *GoMySQLReaderTestSuite) TearDownSuite() {
+	ctx := context.Background()
+	suite.Require().NoError(suite.mysqlContainer.Terminate(ctx))
+}
+
+func (suite *GoMySQLReaderTestSuite) SetupTest() {
+	ctx := context.Background()
+
+	rc, _, err := suite.mysqlContainer.Exec(ctx, []string{"mysql", "-proot", "-e", "CREATE DATABASE test"})
+	suite.Require().NoError(err)
+	suite.Require().Equal(0, rc, "expected exit code 0")
+}
+
+func (suite *GoMySQLReaderTestSuite) TearDownTest() {
+	ctx := context.Background()
+
+	rc, _, err := suite.mysqlContainer.Exec(ctx, []string{"mysql", "-proot", "-e", "DROP DATABASE test"})
+	suite.Require().NoError(err)
+	suite.Require().Equal(0, rc, "expected exit code 0")
+}
+
+func (suite *GoMySQLReaderTestSuite) TestStreamTransactionSingleAutoCommitChange() {
+	t := suite.T()
+
+	ctx := context.Background()
+	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	require.NoError(t, err)
+
+	db, err := sql.Open("mysql", "root:root@tcp("+host+")/")
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -62,7 +109,7 @@ func TestStreamTransactionSingleAutoCommitChange(t *testing.T) {
 
 	binlogCoordinates := getCurrentBinlogCoordinates(t, db)
 
-	migrationContext := getMigrationContext()
+	migrationContext := getMigrationContext(host)
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
@@ -96,8 +143,14 @@ func TestStreamTransactionSingleAutoCommitChange(t *testing.T) {
 	require.Len(t, transactionsChan, 0)
 }
 
-func TestStreamTransactionSingleChangeInTransaction(t *testing.T) {
-	db, err := sql.Open("mysql", "root:root@/")
+func (suite *GoMySQLReaderTestSuite) TestStreamTransactionSingleChangeInTransaction() {
+	t := suite.T()
+
+	ctx := context.Background()
+	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	require.NoError(t, err)
+
+	db, err := sql.Open("mysql", "root:root@tcp("+host+")/")
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -105,7 +158,7 @@ func TestStreamTransactionSingleChangeInTransaction(t *testing.T) {
 
 	binlogCoordinates := getCurrentBinlogCoordinates(t, db)
 
-	migrationContext := getMigrationContext()
+	migrationContext := getMigrationContext(host)
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
@@ -145,8 +198,14 @@ func TestStreamTransactionSingleChangeInTransaction(t *testing.T) {
 	require.Len(t, transactionsChan, 0)
 }
 
-func TestStreamTransactionMultipleChangesInTransaction(t *testing.T) {
-	db, err := sql.Open("mysql", "root:root@/")
+func (suite *GoMySQLReaderTestSuite) TestStreamTransactionMultipleChangesInTransaction() {
+	t := suite.T()
+
+	ctx := context.Background()
+	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	require.NoError(t, err)
+
+	db, err := sql.Open("mysql", "root:root@tcp("+host+")/")
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -154,7 +213,7 @@ func TestStreamTransactionMultipleChangesInTransaction(t *testing.T) {
 
 	binlogCoordinates := getCurrentBinlogCoordinates(t, db)
 
-	migrationContext := getMigrationContext()
+	migrationContext := getMigrationContext(host)
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
@@ -200,8 +259,14 @@ func TestStreamTransactionMultipleChangesInTransaction(t *testing.T) {
 	require.Len(t, transactionsChan, 0)
 }
 
-func TestStreamTransactionWithDDL(t *testing.T) {
-	db, err := sql.Open("mysql", "root:root@/")
+func (suite *GoMySQLReaderTestSuite) TestStreamTransactionWithDDL() {
+	t := suite.T()
+
+	ctx := context.Background()
+	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	require.NoError(t, err)
+
+	db, err := sql.Open("mysql", "root:root@tcp("+host+")/")
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -209,7 +274,7 @@ func TestStreamTransactionWithDDL(t *testing.T) {
 
 	binlogCoordinates := getCurrentBinlogCoordinates(t, db)
 
-	migrationContext := getMigrationContext()
+	migrationContext := getMigrationContext(host)
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
@@ -241,4 +306,8 @@ func TestStreamTransactionWithDDL(t *testing.T) {
 	cancel()
 	close(transactionsChan)
 	require.Len(t, transactionsChan, 0)
+}
+
+func TestGoMySQLReader(t *testing.T) {
+	suite.Run(t, new(GoMySQLReaderTestSuite))
 }
