@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/openark/golib/log"
-	test "github.com/openark/golib/tests"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -19,56 +19,56 @@ func init() {
 func TestParseInstanceKey(t *testing.T) {
 	{
 		key, err := ParseInstanceKey("myhost:1234")
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(key.Hostname, "myhost")
-		test.S(t).ExpectEquals(key.Port, 1234)
+		require.NoError(t, err)
+		require.Equal(t, "myhost", key.Hostname)
+		require.Equal(t, 1234, key.Port)
 	}
 	{
 		key, err := ParseInstanceKey("myhost")
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(key.Hostname, "myhost")
-		test.S(t).ExpectEquals(key.Port, 3306)
+		require.NoError(t, err)
+		require.Equal(t, "myhost", key.Hostname)
+		require.Equal(t, 3306, key.Port)
 	}
 	{
 		key, err := ParseInstanceKey("10.0.0.3:3307")
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(key.Hostname, "10.0.0.3")
-		test.S(t).ExpectEquals(key.Port, 3307)
+		require.NoError(t, err)
+		require.Equal(t, "10.0.0.3", key.Hostname)
+		require.Equal(t, 3307, key.Port)
 	}
 	{
 		key, err := ParseInstanceKey("10.0.0.3")
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(key.Hostname, "10.0.0.3")
-		test.S(t).ExpectEquals(key.Port, 3306)
+		require.NoError(t, err)
+		require.Equal(t, "10.0.0.3", key.Hostname)
+		require.Equal(t, 3306, key.Port)
 	}
 	{
 		key, err := ParseInstanceKey("[2001:db8:1f70::999:de8:7648:6e8]:3308")
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(key.Hostname, "2001:db8:1f70::999:de8:7648:6e8")
-		test.S(t).ExpectEquals(key.Port, 3308)
+		require.NoError(t, err)
+		require.Equal(t, "2001:db8:1f70::999:de8:7648:6e8", key.Hostname)
+		require.Equal(t, 3308, key.Port)
 	}
 	{
 		key, err := ParseInstanceKey("::1")
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(key.Hostname, "::1")
-		test.S(t).ExpectEquals(key.Port, 3306)
+		require.NoError(t, err)
+		require.Equal(t, "::1", key.Hostname)
+		require.Equal(t, 3306, key.Port)
 	}
 	{
 		key, err := ParseInstanceKey("0:0:0:0:0:0:0:0")
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(key.Hostname, "0:0:0:0:0:0:0:0")
-		test.S(t).ExpectEquals(key.Port, 3306)
+		require.NoError(t, err)
+		require.Equal(t, "0:0:0:0:0:0:0:0", key.Hostname)
+		require.Equal(t, 3306, key.Port)
 	}
 	{
 		_, err := ParseInstanceKey("[2001:xxxx:1f70::999:de8:7648:6e8]:3308")
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 	{
 		_, err := ParseInstanceKey("10.0.0.4:")
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 	{
 		_, err := ParseInstanceKey("10.0.0.4:5.6.7")
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 }
