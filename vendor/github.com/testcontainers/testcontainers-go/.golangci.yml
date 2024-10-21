@@ -1,0 +1,36 @@
+linters:
+  enable:
+    - errcheck
+    - errorlint
+    - gci
+    - gocritic
+    - gofumpt
+    - misspell
+    - nolintlint
+    - nonamedreturns
+    - testifylint
+    - thelper
+
+linters-settings:
+  errorlint:
+    # Check whether fmt.Errorf uses the %w verb for formatting errors.
+    # See the https://github.com/polyfloyd/go-errorlint for caveats.
+    errorf: true
+    # Permit more than 1 %w verb, valid per Go 1.20 (Requires errorf:true)
+    errorf-multi: true
+    # Check for plain type assertions and type switches.
+    asserts: true
+    # Check for plain error comparisons.
+    comparison: true
+  gci:
+    sections:
+      - standard
+      - default
+      - prefix(github.com/testcontainers)
+  testifylint:
+    disable:
+      - float-compare
+      - go-require
+    enable-all: true
+run:
+  timeout: 5m
