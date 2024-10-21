@@ -2,6 +2,9 @@
 ## explicit; go 1.20
 filippo.io/edwards25519
 filippo.io/edwards25519/field
+# github.com/davecgh/go-spew v1.1.1
+## explicit
+github.com/davecgh/go-spew/spew
 # github.com/go-ini/ini v1.67.0
 ## explicit
 github.com/go-ini/ini
@@ -22,10 +25,12 @@ github.com/google/uuid
 ## explicit; go 1.16
 github.com/openark/golib/log
 github.com/openark/golib/sqlutils
-github.com/openark/golib/tests
 # github.com/pingcap/errors v0.11.5-0.20210425183316-da1aaba5fb63
 ## explicit; go 1.14
 github.com/pingcap/errors
+# github.com/pmezard/go-difflib v1.0.0
+## explicit
+github.com/pmezard/go-difflib/difflib
 # github.com/shopspring/decimal v0.0.0-20180709203117-cd690d0c9e24
 ## explicit
 github.com/shopspring/decimal
@@ -36,6 +41,10 @@ github.com/siddontang/go/hack
 ## explicit
 github.com/siddontang/go-log/log
 github.com/siddontang/go-log/loggers
+# github.com/stretchr/testify v1.9.0
+## explicit; go 1.17
+github.com/stretchr/testify/assert
+github.com/stretchr/testify/require
 # go.uber.org/atomic v1.7.0
 ## explicit; go 1.13
 go.uber.org/atomic
@@ -58,3 +67,6 @@ golang.org/x/text/encoding/internal
 golang.org/x/text/encoding/internal/identifier
 golang.org/x/text/encoding/simplifiedchinese
 golang.org/x/text/transform
+# gopkg.in/yaml.v3 v3.0.1
+## explicit
+gopkg.in/yaml.v3
