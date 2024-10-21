@@ -40,6 +40,7 @@ func TestCoordinator(t *testing.T) {
 	require.NoError(t, err)
 
 	mappedPort, err := mysqlContainer.MappedPort(ctx, "3306")
+	require.NoError(t, err)
 
 	db, err := gosql.Open("mysql", "root:root@tcp("+host+":"+mappedPort.Port()+")/")
 	require.NoError(t, err)
