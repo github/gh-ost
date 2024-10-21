@@ -1117,7 +1117,8 @@ func (this *Migrator) initiateStreaming() error {
 	go func() {
 		this.migrationContext.Log.Debugf("Beginning streaming")
 		//err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
-		err := this.trxCoordinator.StartStreaming(this.canStopStreaming)
+		ctx := context.TODO()
+		err := this.trxCoordinator.StartStreaming(ctx, this.canStopStreaming)
 		if err != nil {
 			this.migrationContext.PanicAbort <- err
 		}

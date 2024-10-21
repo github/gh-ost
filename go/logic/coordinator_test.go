@@ -20,9 +20,10 @@ import (
 func TestCoordinator(t *testing.T) {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
-		Image:      "mysql:8.0",
-		Env:        map[string]string{"MYSQL_ROOT_PASSWORD": "root"},
-		WaitingFor: wait.ForLog("port: 3306  MySQL Community Server - GPL"),
+		Image:        "mysql:8.0",
+		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root"},
+		WaitingFor:   wait.ForLog("port: 3306  MySQL Community Server - GPL"),
+		ExposedPorts: []string{"3306"},
 	}
 
 	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -35,10 +36,12 @@ func TestCoordinator(t *testing.T) {
 		require.NoError(t, mysqlContainer.Terminate(ctx))
 	})
 
-	host, err := mysqlContainer.ContainerIP(ctx)
+	host, err := mysqlContainer.Host(ctx)
 	require.NoError(t, err)
 
-	db, err := gosql.Open("mysql", "root:root@tcp("+host+")/")
+	mappedPort, err := mysqlContainer.MappedPort(ctx, "3306")
+
+	db, err := gosql.Open("mysql", "root:root@tcp("+host+":"+mappedPort.Port()+")/")
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -66,7 +69,7 @@ func TestCoordinator(t *testing.T) {
 	migrationContext.ApplierConnectionConfig = &mysql.ConnectionConfig{
 		Key: mysql.InstanceKey{
 			Hostname: host,
-			Port:     3306,
+			Port:     mappedPort.Int(),
 		},
 		User:     "root",
 		Password: "root",
@@ -75,7 +78,7 @@ func TestCoordinator(t *testing.T) {
 	migrationContext.InspectorConnectionConfig = &mysql.ConnectionConfig{
 		Key: mysql.InstanceKey{
 			Hostname: host,
-			Port:     3306,
+			Port:     mappedPort.Int(),
 		},
 		User:     "root",
 		Password: "root",
@@ -93,6 +96,8 @@ func TestCoordinator(t *testing.T) {
 
 	migrationContext.SetConnectionConfig("innodb")
 	migrationContext.NumWorkers = 4
+	// HACK: so
+	migrationContext.AzureMySQL = true
 
 	applier := NewApplier(migrationContext)
 	err = applier.InitDBConnections(migrationContext.NumWorkers)
@@ -143,8 +148,8 @@ func TestCoordinator(t *testing.T) {
 		return streamCtx.Err() != nil
 	}
 	go func() {
-		err = coord.StartStreaming(canStopStreaming)
-		require.NoError(t, err)
+		err = coord.StartStreaming(streamCtx, canStopStreaming)
+		require.Equal(t, context.Canceled, err)
 	}()
 
 	// Give streamer some time to start

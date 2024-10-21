@@ -295,21 +295,21 @@ func TestMigrate(t *testing.T) {
 		require.NoError(t, mysqlContainer.Terminate(ctx))
 	})
 
-	host, err := mysqlContainer.ContainerIP(ctx)
+	host, err := mysqlContainer.Host(ctx)
+	mappedPort, err := mysqlContainer.MappedPort(ctx, "3306")
+	db, err := gosql.Open("mysql", "root:root@tcp("+host+":"+mappedPort.Port()+")/")
 	require.NoError(t, err)
 
-	db, err := gosql.Open("mysql", "root:root@tcp("+host+")/")
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
+	defer func() {
 		require.NoError(t, db.Close())
-	})
+	}()
 
 	_ = os.Remove("/tmp/gh-ost.sock")
 
 	prepareDatabase(t, db)
 
 	migrationContext := base.NewMigrationContext()
+	migrationContext.AzureMySQL = true
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
@@ -322,7 +322,7 @@ func TestMigrate(t *testing.T) {
 	migrationContext.InspectorConnectionConfig = &mysql.ConnectionConfig{
 		Key: mysql.InstanceKey{
 			Hostname: host,
-			Port:     3306,
+			Port:     mappedPort.Int(),
 		},
 		User:     "root",
 		Password: "root",
@@ -342,19 +342,18 @@ func TestMigrate(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for {
-			select {
-			case <-ctx.Done():
+			if ctx.Err() != nil {
 				return
-			default:
-				_, err := db.ExecContext(ctx, "INSERT INTO test.gh_ost_test (name) VALUES ('test')")
-				if errors.Is(err, context.Canceled) {
-					return
-				}
-				require.NoError(t, err)
-				rowsWritten.Add(1)
-
-				time.Sleep(time.Millisecond)
 			}
+			_, err := db.ExecContext(ctx, "INSERT INTO test.gh_ost_test (name) VALUES ('test')")
+			fmt.Printf("err: %+v, ctx: %+v\n", err, ctx.Err())
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			require.NoError(t, err)
+			rowsWritten.Add(1)
+
+			time.Sleep(time.Millisecond)
 		}
 	}()
 
@@ -362,36 +361,37 @@ func TestMigrate(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for {
-			select {
-			case <-ctx.Done():
+			tx, err := db.BeginTx(ctx, &gosql.TxOptions{})
+			if errors.Is(err, context.Canceled) {
 				return
-			default:
-				tx, err := db.BeginTx(ctx, &gosql.TxOptions{})
+			}
+			// if err != nil {
+			// 	fmt.Println(err.Error())
+			// }
+			require.NoError(t, err)
+
+			for i := 0; i < 10; i++ {
+				_, err = tx.ExecContext(ctx, "INSERT INTO test.gh_ost_test (name) VALUES ('test')")
 				if errors.Is(err, context.Canceled) {
 					return
-				} else if err != nil {
-					fmt.Println(err.Error())
 				}
 				require.NoError(t, err)
-
-				for i := 0; i < 10; i++ {
-					_, err = tx.ExecContext(ctx, "INSERT INTO test.gh_ost_test (name) VALUES ('test')")
-					if errors.Is(err, context.Canceled) {
-						tx.Rollback()
-						return
-					}
-					require.NoError(t, err)
-					rowsWritten.Add(1)
-				}
-				tx.Commit()
-
-				time.Sleep(time.Millisecond)
+				rowsWritten.Add(1)
 			}
+			err = tx.Commit()
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			require.NoError(t, err)
+
+			time.Sleep(time.Millisecond)
 		}
 	}()
 
+	wg.Add(1)
 	go func() {
-		time.Sleep(10 * time.Second)
+		defer wg.Done()
+		time.Sleep(5 * time.Second)
 		cancel()
 	}()
 

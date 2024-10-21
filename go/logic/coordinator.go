@@ -260,8 +260,7 @@ func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, o
 	}
 }
 
-func (c *Coordinator) StartStreaming(canStopStreaming func() bool) error {
-	ctx := context.TODO()
+func (c *Coordinator) StartStreaming(ctx context.Context, canStopStreaming func() bool) error {
 	streamer, err := c.binlogSyncer.StartSync(gomysql.Position{
 		Name: c.currentCoordinates.LogFile,
 		Pos:  uint32(c.currentCoordinates.LogPos),
@@ -269,13 +268,20 @@ func (c *Coordinator) StartStreaming(canStopStreaming func() bool) error {
 	if err != nil {
 		return err
 	}
+	defer c.binlogSyncer.Close()
 
 	var retries int64
 	for {
 		if canStopStreaming() {
 			return nil
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		ev, err := streamer.GetEvent(ctx)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err != nil {
 			coords := c.GetCurrentBinlogCoordinates()
 			if retries >= c.migrationContext.MaxRetries() {
