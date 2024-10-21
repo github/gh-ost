@@ -309,7 +309,9 @@ func TestMigrate(t *testing.T) {
 	prepareDatabase(t, db)
 
 	migrationContext := base.NewMigrationContext()
+	// Hack:
 	migrationContext.AzureMySQL = true
+	migrationContext.AssumeMasterHostname = host + ":" + mappedPort.Port()
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "gh_ost_test"
 	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
@@ -320,6 +322,10 @@ func TestMigrate(t *testing.T) {
 	migrationContext.ThrottleHTTPIntervalMillis = 100
 
 	migrationContext.InspectorConnectionConfig = &mysql.ConnectionConfig{
+		ImpliedKey: &mysql.InstanceKey{
+			Hostname: host,
+			Port:     mappedPort.Int(),
+		},
 		Key: mysql.InstanceKey{
 			Hostname: host,
 			Port:     mappedPort.Int(),
@@ -346,7 +352,6 @@ func TestMigrate(t *testing.T) {
 				return
 			}
 			_, err := db.ExecContext(ctx, "INSERT INTO test.gh_ost_test (name) VALUES ('test')")
-			fmt.Printf("err: %+v, ctx: %+v\n", err, ctx.Err())
 			if errors.Is(err, context.Canceled) {
 				return
 			}
@@ -396,8 +401,8 @@ func TestMigrate(t *testing.T) {
 	}()
 
 	err = migrator.Migrate()
-	require.NoError(t, err)
 	wg.Wait()
+	require.NoError(t, err)
 
 	fmt.Printf("Rows written: %d\n", rowsWritten.Load())
 }
