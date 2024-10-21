@@ -8,9 +8,8 @@ package logic
 import (
 	"testing"
 
-	test "github.com/openark/golib/tests"
-
 	"github.com/github/gh-ost/go/sql"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInspectGetSharedUniqueKeys(t *testing.T) {
@@ -25,7 +24,7 @@ func TestInspectGetSharedUniqueKeys(t *testing.T) {
 	}
 	inspector := &Inspector{}
 	sharedUniqKeys := inspector.getSharedUniqueKeys(origUniqKeys, ghostUniqKeys)
-	test.S(t).ExpectEquals(len(sharedUniqKeys), 2)
-	test.S(t).ExpectEquals(sharedUniqKeys[0].Columns.String(), "id,item_id")
-	test.S(t).ExpectEquals(sharedUniqKeys[1].Columns.String(), "id,org_id")
+	require.Len(t, sharedUniqKeys, 2)
+	require.Equal(t, "id,item_id", sharedUniqKeys[0].Columns.String())
+	require.Equal(t, "id,org_id", sharedUniqKeys[1].Columns.String())
 }
