@@ -327,6 +327,7 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 		suite.Require().NoError(err)
 		count += 1
 	}
+	suite.Require().NoError(rows.Err())
 
 	suite.Require().Equal(1, count)
 	suite.Require().Equal(123456, id)
