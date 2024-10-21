@@ -21,11 +21,12 @@ import (
 	"github.com/openark/golib/tests"
 	"github.com/stretchr/testify/require"
 
+	"sync"
+
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"sync"
 )
 
 func TestMigratorOnChangelogEvent(t *testing.T) {
@@ -320,8 +321,8 @@ func TestMigrate(t *testing.T) {
 
 	var wg sync.WaitGroup
 
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		defer wg.Done()
 		for {
 			select {
@@ -340,8 +341,8 @@ func TestMigrate(t *testing.T) {
 		}
 	}()
 
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		defer wg.Done()
 		for {
 			select {

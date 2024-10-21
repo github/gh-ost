@@ -42,26 +42,6 @@ func ReadChangelogState(s string) ChangelogState {
 
 type tableWriteFunc func() error
 
-type applyEventStruct struct {
-	writeFunc *tableWriteFunc
-	dmlEvent  *binlog.BinlogDMLEvent
-	trxEvent  *binlog.Transaction
-}
-
-func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
-	result := &applyEventStruct{writeFunc: writeFunc}
-	return result
-}
-
-func newApplyEventStructByDML(dmlEvent *binlog.BinlogDMLEvent) *applyEventStruct {
-	result := &applyEventStruct{dmlEvent: dmlEvent}
-	return result
-}
-
-func newApplyEventStructFromTrx(trxEvent *binlog.Transaction) *applyEventStruct {
-	return &applyEventStruct{trxEvent: trxEvent}
-}
-
 type PrintStatusRule int
 
 const (

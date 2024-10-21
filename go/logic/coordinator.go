@@ -350,6 +350,7 @@ func (c *Coordinator) ProcessEventsUntilNextChangelogEvent() (*binlog.BinlogDMLE
 		}
 	}
 
+	//nolint:nilnil
 	return nil, nil
 }
 
@@ -514,7 +515,6 @@ func (c *Coordinator) MarkTransactionCompleted(sequenceNumber, logPos, eventSize
 				delete(c.waitingJobs, waitingForSequenceNumber)
 			}
 		}
-
 	}()
 
 	// update the binlog coords of the low water mark

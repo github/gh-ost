@@ -17,6 +17,7 @@ func getCurrentBinlogCoordinates(t *testing.T, db *sql.DB) mysql.BinlogCoordinat
 	var binlogIgnoreDb string
 	var executedGtidSet string
 
+	//nolint:execinquery // SHOW MASTER STATUS returns a result set
 	err := db.QueryRow("SHOW MASTER STATUS").Scan(&file, &position, &binlogDoDb, &binlogIgnoreDb, &executedGtidSet)
 	require.NoError(t, err)
 
