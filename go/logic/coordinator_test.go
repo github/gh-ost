@@ -138,8 +138,9 @@ func TestCoordinator(t *testing.T) {
 	coord.applier = applier
 	coord.InitializeWorkers(8)
 
+	streamCtx, cancelStreaming := context.WithCancel(context.Background())
 	canStopStreaming := func() bool {
-		return false
+		return streamCtx.Err() != nil
 	}
 	go func() {
 		err = coord.StartStreaming(canStopStreaming)
@@ -153,6 +154,7 @@ func TestCoordinator(t *testing.T) {
 
 	for {
 		if ctx.Err() != nil {
+			cancelStreaming()
 			break
 		}
 
