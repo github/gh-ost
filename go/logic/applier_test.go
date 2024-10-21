@@ -261,7 +261,7 @@ func (suite *ApplierTestSuite) TestInitDBConnections() {
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	suite.Require().Equal("8.0.40", migrationContext.ApplierMySQLVersion)
@@ -294,7 +294,7 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	rc, _, err := suite.mysqlContainer.Exec(ctx, []string{"mysql", "-uroot", "-proot-password", "-e", "CREATE TABLE test._testing_gho (id INT, item_id INT);"})
@@ -360,7 +360,7 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	err = applier.ValidateOrDropExistingTables()
