@@ -8,12 +8,11 @@ package sql
 import (
 	"testing"
 
-	"reflect"
 	"regexp"
 	"strings"
 
 	"github.com/openark/golib/log"
-	test "github.com/openark/golib/tests"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -35,7 +34,7 @@ func TestEscapeName(t *testing.T) {
 	names := []string{"my_table", `"my_table"`, "`my_table`"}
 	for _, name := range names {
 		escaped := EscapeName(name)
-		test.S(t).ExpectEquals(escaped, "`my_table`")
+		require.Equal(t, "`my_table`", escaped)
 	}
 }
 
@@ -44,27 +43,27 @@ func TestBuildEqualsComparison(t *testing.T) {
 		columns := []string{"c1"}
 		values := []string{"@v1"}
 		comparison, err := BuildEqualsComparison(columns, values)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(comparison, "((`c1` = @v1))")
+		require.NoError(t, err)
+		require.Equal(t, "((`c1` = @v1))", comparison)
 	}
 	{
 		columns := []string{"c1", "c2"}
 		values := []string{"@v1", "@v2"}
 		comparison, err := BuildEqualsComparison(columns, values)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(comparison, "((`c1` = @v1) and (`c2` = @v2))")
+		require.NoError(t, err)
+		require.Equal(t, "((`c1` = @v1) and (`c2` = @v2))", comparison)
 	}
 	{
 		columns := []string{"c1"}
 		values := []string{"@v1", "@v2"}
 		_, err := BuildEqualsComparison(columns, values)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 	{
 		columns := []string{}
 		values := []string{}
 		_, err := BuildEqualsComparison(columns, values)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 }
 
@@ -72,8 +71,8 @@ func TestBuildEqualsPreparedComparison(t *testing.T) {
 	{
 		columns := []string{"c1", "c2"}
 		comparison, err := BuildEqualsPreparedComparison(columns)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(comparison, "((`c1` = ?) and (`c2` = ?))")
+		require.NoError(t, err)
+		require.Equal(t, "((`c1` = ?) and (`c2` = ?))", comparison)
 	}
 }
 
@@ -81,19 +80,19 @@ func TestBuildSetPreparedClause(t *testing.T) {
 	{
 		columns := NewColumnList([]string{"c1"})
 		clause, err := BuildSetPreparedClause(columns)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(clause, "`c1`=?")
+		require.NoError(t, err)
+		require.Equal(t, "`c1`=?", clause)
 	}
 	{
 		columns := NewColumnList([]string{"c1", "c2"})
 		clause, err := BuildSetPreparedClause(columns)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(clause, "`c1`=?, `c2`=?")
+		require.NoError(t, err)
+		require.Equal(t, "`c1`=?, `c2`=?", clause)
 	}
 	{
 		columns := NewColumnList([]string{})
 		_, err := BuildSetPreparedClause(columns)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 }
 
@@ -103,59 +102,59 @@ func TestBuildRangeComparison(t *testing.T) {
 		values := []string{"@v1"}
 		args := []interface{}{3}
 		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanComparisonSign)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(comparison, "((`c1` < @v1))")
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3}))
+		require.NoError(t, err)
+		require.Equal(t, "((`c1` < @v1))", comparison)
+		require.Equal(t, []interface{}{3}, explodedArgs)
 	}
 	{
 		columns := []string{"c1"}
 		values := []string{"@v1"}
 		args := []interface{}{3}
 		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or ((`c1` = @v1)))")
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3}))
+		require.NoError(t, err)
+		require.Equal(t, "((`c1` < @v1) or ((`c1` = @v1)))", comparison)
+		require.Equal(t, []interface{}{3, 3}, explodedArgs)
 	}
 	{
 		columns := []string{"c1", "c2"}
 		values := []string{"@v1", "@v2"}
 		args := []interface{}{3, 17}
 		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanComparisonSign)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)))")
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17}))
+		require.NoError(t, err)
+		require.Equal(t, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)))", comparison)
+		require.Equal(t, []interface{}{3, 3, 17}, explodedArgs)
 	}
 	{
 		columns := []string{"c1", "c2"}
 		values := []string{"@v1", "@v2"}
 		args := []interface{}{3, 17}
 		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)) or ((`c1` = @v1) and (`c2` = @v2)))")
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17}))
+		require.NoError(t, err)
+		require.Equal(t, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)) or ((`c1` = @v1) and (`c2` = @v2)))", comparison)
+		require.Equal(t, []interface{}{3, 3, 17, 3, 17}, explodedArgs)
 	}
 	{
 		columns := []string{"c1", "c2", "c3"}
 		values := []string{"@v1", "@v2", "@v3"}
 		args := []interface{}{3, 17, 22}
 		comparison, explodedArgs, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(comparison, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)) or (((`c1` = @v1) and (`c2` = @v2)) AND (`c3` < @v3)) or ((`c1` = @v1) and (`c2` = @v2) and (`c3` = @v3)))")
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 22, 3, 17, 22}))
+		require.NoError(t, err)
+		require.Equal(t, "((`c1` < @v1) or (((`c1` = @v1)) AND (`c2` < @v2)) or (((`c1` = @v1) and (`c2` = @v2)) AND (`c3` < @v3)) or ((`c1` = @v1) and (`c2` = @v2) and (`c3` = @v3)))", comparison)
+		require.Equal(t, []interface{}{3, 3, 17, 3, 17, 22, 3, 17, 22}, explodedArgs)
 	}
 	{
 		columns := []string{"c1"}
 		values := []string{"@v1", "@v2"}
 		args := []interface{}{3, 17}
 		_, _, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 	{
 		columns := []string{}
 		values := []string{}
 		args := []interface{}{}
 		_, _, err := BuildRangeComparison(columns, values, args, LessThanOrEqualsComparisonSign)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 }
 
@@ -173,7 +172,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeEndArgs := []interface{}{103}
 
 		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into
@@ -188,8 +187,8 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 					(((id > @v1s) or ((id = @v1s)))
 					and ((id < @v1e) or ((id = @v1e))))
 			)`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, 3, 103, 103}, explodedArgs)
 	}
 	{
 		uniqueKey := "name_position_uidx"
@@ -200,7 +199,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		rangeEndArgs := []interface{}{103, 117}
 
 		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into
@@ -221,8 +220,8 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 					AND (position < @v2e))
 					or ((name = @v1e) and (position = @v2e))))
 			)`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
 	}
 }
 
@@ -241,7 +240,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeEndArgs := []interface{}{103}
 
 		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into
@@ -257,8 +256,8 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 					and
 					((id < @v1e) or ((id = @v1e))))
 			)`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 103, 103}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, 3, 103, 103}, explodedArgs)
 	}
 	{
 		uniqueKey := "name_position_uidx"
@@ -269,7 +268,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		rangeEndArgs := []interface{}{103, 117}
 
 		query, explodedArgs, err := BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, true)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into
@@ -286,8 +285,8 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 					and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e))
 					or ((name = @v1e) and (position = @v2e))))
 			)`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
 	}
 }
 
@@ -303,7 +302,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 		rangeEndArgs := []interface{}{103, 117}
 
 		query, explodedArgs, err := BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName, sharedColumns, sharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, true)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into
@@ -316,8 +315,8 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 				force index (name_position_uidx)
 				where (((name > ?) or (((name = ?)) AND (position > ?)) or ((name = ?) and (position = ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?))))
 			)`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
 	}
 }
 
@@ -331,7 +330,7 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 		rangeEndArgs := []interface{}{103, 117}
 
 		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			select /* gh-ost mydb.tbl test */ name, position
 			from (
@@ -346,8 +345,8 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 			order by
 				name desc, position desc
 			limit 1`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(explodedArgs, []interface{}{3, 3, 17, 103, 103, 117, 103, 117}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
 	}
 }
 
@@ -358,7 +357,7 @@ func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 	uniqueKey := &UniqueKey{Name: "PRIMARY", Columns: *uniqueKeyColumns}
 	{
 		query, err := BuildUniqueKeyMinValuesPreparedQuery(databaseName, originalTableName, uniqueKey)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			select /* gh-ost mydb.tbl */ name, position
 			  from
@@ -368,11 +367,11 @@ func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 			    name asc, position asc
 			  limit 1
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 	}
 	{
 		query, err := BuildUniqueKeyMaxValuesPreparedQuery(databaseName, originalTableName, uniqueKey)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			select /* gh-ost mydb.tbl */ name, position
 			  from
@@ -382,7 +381,7 @@ func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 			    name desc, position desc
 			  limit 1
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 	}
 }
 
@@ -395,7 +394,7 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 		uniqueKeyColumns := NewColumnList([]string{"position"})
 
 		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			delete /* gh-ost mydb.tbl */
 				from
@@ -403,14 +402,14 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 				where
 					((position = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{17}, uniqueKeyArgs)
 	}
 	{
 		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 
 		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			delete /* gh-ost mydb.tbl */
 				from
@@ -418,14 +417,14 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 				where
 					((name = ?) and (position = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{"testname", 17}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{"testname", 17}, uniqueKeyArgs)
 	}
 	{
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
 
 		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			delete /* gh-ost mydb.tbl */
 				from
@@ -433,15 +432,15 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 				where
 					((position = ?) and (name = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17, "testname"}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{17, "testname"}, uniqueKeyArgs)
 	}
 	{
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
 		args := []interface{}{"first", 17}
 
 		_, _, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 }
 
@@ -454,7 +453,7 @@ func TestBuildDMLDeleteQuerySignedUnsigned(t *testing.T) {
 		// test signed (expect no change)
 		args := []interface{}{3, "testname", "first", -1, 23}
 		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			delete /* gh-ost mydb.tbl */
 				from
@@ -462,15 +461,15 @@ func TestBuildDMLDeleteQuerySignedUnsigned(t *testing.T) {
 				where
 					((position = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{-1}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{-1}, uniqueKeyArgs)
 	}
 	{
 		// test unsigned
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		uniqueKeyColumns.SetUnsigned("position")
 		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			delete /* gh-ost mydb.tbl */
 				from
@@ -478,8 +477,8 @@ func TestBuildDMLDeleteQuerySignedUnsigned(t *testing.T) {
 				where
 					((position = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{uint8(255)}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{uint8(255)}, uniqueKeyArgs)
 	}
 }
 
@@ -491,7 +490,7 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
 				into mydb.tbl
@@ -499,13 +498,13 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 				values
 					(?, ?, ?, ?)
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"position", "name", "age", "id"})
 		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
 				into mydb.tbl
@@ -513,18 +512,18 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 				values
 					(?, ?, ?, ?)
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{17, "testname", 23, 3}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{17, "testname", 23, 3}, sharedArgs)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"position", "name", "surprise", "id"})
 		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 	{
 		sharedColumns := NewColumnList([]string{})
 		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 }
 
@@ -538,7 +537,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
 				into mydb.tbl
@@ -546,15 +545,15 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 				values
 					(?, ?, ?, ?)
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", int8(-1), 23}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", int8(-1), 23}, sharedArgs)
 	}
 	{
 		// testing unsigned
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		sharedColumns.SetUnsigned("position")
 		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
 				into mydb.tbl
@@ -562,15 +561,15 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 				values
 					(?, ?, ?, ?)
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", uint8(255), 23}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", uint8(255), 23}, sharedArgs)
 	}
 	{
 		// testing unsigned
 		args := []interface{}{3, "testname", "first", int32(-1), 23}
 		sharedColumns.SetUnsigned("position")
 		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
 				into mydb.tbl
@@ -578,8 +577,8 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 				values
 					(?, ?, ?, ?)
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", uint32(4294967295), 23}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", uint32(4294967295), 23}, sharedArgs)
 	}
 }
 
@@ -593,7 +592,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"position"})
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
 			  mydb.tbl
@@ -601,15 +600,15 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 				where
 					((position = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
+		require.Equal(t, []interface{}{17}, uniqueKeyArgs)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
 			  mydb.tbl
@@ -617,15 +616,15 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 				where
 					((position = ?) and (name = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{17, "testname"}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
+		require.Equal(t, []interface{}{17, "testname"}, uniqueKeyArgs)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age"})
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
 			  mydb.tbl
@@ -633,15 +632,15 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 				where
 					((age = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{56}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
+		require.Equal(t, []interface{}{56}, uniqueKeyArgs)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age", "position", "id", "name"})
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
 			  mydb.tbl
@@ -649,28 +648,28 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 				where
 					((age = ?) and (position = ?) and (id = ?) and (name = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{56, 17, 3, "testname"}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
+		require.Equal(t, []interface{}{56, 17, 3, "testname"}, uniqueKeyArgs)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age", "surprise"})
 		_, _, _, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{})
 		_, _, _, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		mappedColumns := NewColumnList([]string{"id", "name", "role", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"id"})
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, mappedColumns, uniqueKeyColumns, valueArgs, whereArgs)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
 			  mydb.tbl
@@ -678,9 +677,9 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 				where
 					((id = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", 17, 23}))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{3}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
+		require.Equal(t, []interface{}{3}, uniqueKeyArgs)
 	}
 }
 
@@ -695,7 +694,7 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 	{
 		// test signed
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
 			  mydb.tbl
@@ -703,16 +702,16 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 				where
 					((position = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", int8(-17), int8(-2)}))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{int8(-3)}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", int8(-17), int8(-2)}, sharedArgs)
+		require.Equal(t, []interface{}{int8(-3)}, uniqueKeyArgs)
 	}
 	{
 		// test unsigned
 		sharedColumns.SetUnsigned("age")
 		uniqueKeyColumns.SetUnsigned("position")
 		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
-		test.S(t).ExpectNil(err)
+		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
 			  mydb.tbl
@@ -720,8 +719,8 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 				where
 					((position = ?))
 		`
-		test.S(t).ExpectEquals(normalizeQuery(query), normalizeQuery(expected))
-		test.S(t).ExpectTrue(reflect.DeepEqual(sharedArgs, []interface{}{3, "testname", int8(-17), uint8(254)}))
-		test.S(t).ExpectTrue(reflect.DeepEqual(uniqueKeyArgs, []interface{}{uint8(253)}))
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, "testname", int8(-17), uint8(254)}, sharedArgs)
+		require.Equal(t, []interface{}{uint8(253)}, uniqueKeyArgs)
 	}
 }

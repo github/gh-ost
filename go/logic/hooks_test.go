@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openark/golib/tests"
+	"github.com/stretchr/testify/require"
 
 	"github.com/github/gh-ost/go/base"
 )
@@ -44,7 +44,7 @@ func TestHooksExecutorExecuteHooks(t *testing.T) {
 
 	t.Run("does-not-exist", func(t *testing.T) {
 		migrationContext.HooksPath = "/does/not/exist"
-		tests.S(t).ExpectNil(hooksExecutor.executeHooks("test-hook"))
+		require.Nil(t, hooksExecutor.executeHooks("test-hook"))
 	})
 
 	t.Run("failed", func(t *testing.T) {
@@ -57,7 +57,7 @@ func TestHooksExecutorExecuteHooks(t *testing.T) {
 			panic(err)
 		}
 		defer os.RemoveAll(migrationContext.HooksPath)
-		tests.S(t).ExpectNotNil(hooksExecutor.executeHooks("failed-hook"))
+		require.NotNil(t, hooksExecutor.executeHooks("failed-hook"))
 	})
 
 	t.Run("success", func(t *testing.T) {
@@ -73,7 +73,7 @@ func TestHooksExecutorExecuteHooks(t *testing.T) {
 
 		var buf bytes.Buffer
 		hooksExecutor.writer = &buf
-		tests.S(t).ExpectNil(hooksExecutor.executeHooks("success-hook", "TEST="+t.Name()))
+		require.Nil(t, hooksExecutor.executeHooks("success-hook", "TEST="+t.Name()))
 
 		scanner := bufio.NewScanner(&buf)
 		for scanner.Scan() {
@@ -81,32 +81,32 @@ func TestHooksExecutorExecuteHooks(t *testing.T) {
 			switch split[0] {
 			case "GH_OST_COPIED_ROWS":
 				copiedRows, _ := strconv.ParseInt(split[1], 10, 64)
-				tests.S(t).ExpectEquals(copiedRows, migrationContext.TotalRowsCopied)
+				require.Equal(t, migrationContext.TotalRowsCopied, copiedRows)
 			case "GH_OST_DATABASE_NAME":
-				tests.S(t).ExpectEquals(split[1], migrationContext.DatabaseName)
+				require.Equal(t, migrationContext.DatabaseName, split[1])
 			case "GH_OST_DDL":
-				tests.S(t).ExpectEquals(split[1], migrationContext.AlterStatement)
+				require.Equal(t, migrationContext.AlterStatement, split[1])
 			case "GH_OST_DRY_RUN":
-				tests.S(t).ExpectEquals(split[1], "false")
+				require.Equal(t, "false", split[1])
 			case "GH_OST_ESTIMATED_ROWS":
 				estimatedRows, _ := strconv.ParseInt(split[1], 10, 64)
-				tests.S(t).ExpectEquals(estimatedRows, int64(123))
+				require.Equal(t, int64(123), estimatedRows)
 			case "GH_OST_ETA_SECONDS":
 				etaSeconds, _ := strconv.ParseInt(split[1], 10, 64)
-				tests.S(t).ExpectEquals(etaSeconds, int64(60))
+				require.Equal(t, int64(60), etaSeconds)
 			case "GH_OST_EXECUTING_HOST":
-				tests.S(t).ExpectEquals(split[1], migrationContext.Hostname)
+				require.Equal(t, migrationContext.Hostname, split[1])
 			case "GH_OST_GHOST_TABLE_NAME":
-				tests.S(t).ExpectEquals(split[1], fmt.Sprintf("_%s_gho", migrationContext.OriginalTableName))
+				require.Equal(t, fmt.Sprintf("_%s_gho", migrationContext.OriginalTableName), split[1])
 			case "GH_OST_OLD_TABLE_NAME":
-				tests.S(t).ExpectEquals(split[1], fmt.Sprintf("_%s_del", migrationContext.OriginalTableName))
+				require.Equal(t, fmt.Sprintf("_%s_del", migrationContext.OriginalTableName), split[1])
 			case "GH_OST_PROGRESS":
 				progress, _ := strconv.ParseFloat(split[1], 64)
-				tests.S(t).ExpectEquals(progress, 50.0)
+				require.Equal(t, 50.0, progress)
 			case "GH_OST_TABLE_NAME":
-				tests.S(t).ExpectEquals(split[1], migrationContext.OriginalTableName)
+				require.Equal(t, migrationContext.OriginalTableName, split[1])
 			case "TEST":
-				tests.S(t).ExpectEquals(split[1], t.Name())
+				require.Equal(t, t.Name(), split[1])
 			}
 		}
 	})
