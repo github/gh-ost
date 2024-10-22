@@ -183,6 +183,7 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 func TestApplierInstantDDL(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
 	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
 	migrationContext.OriginalTableName = "mytable"
 	migrationContext.AlterStatementOptions = "ADD INDEX (foo)"
 	applier := NewApplier(migrationContext)
@@ -202,9 +203,10 @@ type ApplierTestSuite struct {
 func (suite *ApplierTestSuite) SetupSuite() {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
-		Image:      "mysql:8.0",
-		Env:        map[string]string{"MYSQL_ROOT_PASSWORD": "root-password"},
-		WaitingFor: wait.ForLog("port: 3306  MySQL Community Server - GPL"),
+		Image:        "mysql:8.0.40",
+		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root-password"},
+		ExposedPorts: []string{"3306/tcp"},
+		WaitingFor:   wait.ForListeningPort("3306/tcp"),
 	}
 
 	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -245,16 +247,20 @@ func (suite *ApplierTestSuite) TearDownTest() {
 func (suite *ApplierTestSuite) TestInitDBConnections() {
 	ctx := context.Background()
 
-	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	host, err := suite.mysqlContainer.Host(ctx)
+	suite.Require().NoError(err)
+
+	port, err := suite.mysqlContainer.MappedPort(ctx, "3306")
 	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
 	migrationContext.ApplierConnectionConfig = mysql.NewConnectionConfig()
 	migrationContext.ApplierConnectionConfig.Key.Hostname = host
-	migrationContext.ApplierConnectionConfig.Key.Port = 3306
+	migrationContext.ApplierConnectionConfig.Key.Port = port.Int()
 	migrationContext.ApplierConnectionConfig.User = "root"
 	migrationContext.ApplierConnectionConfig.Password = "root-password"
 	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
 	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
 
@@ -274,16 +280,20 @@ func (suite *ApplierTestSuite) TestInitDBConnections() {
 func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	ctx := context.Background()
 
-	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	host, err := suite.mysqlContainer.Host(ctx)
+	suite.Require().NoError(err)
+
+	port, err := suite.mysqlContainer.MappedPort(ctx, "3306")
 	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
 	migrationContext.ApplierConnectionConfig = mysql.NewConnectionConfig()
 	migrationContext.ApplierConnectionConfig.Key.Hostname = host
-	migrationContext.ApplierConnectionConfig.Key.Port = 3306
+	migrationContext.ApplierConnectionConfig.Key.Port = port.Int()
 	migrationContext.ApplierConnectionConfig.User = "root"
 	migrationContext.ApplierConnectionConfig.Password = "root-password"
 	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
 	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
 
@@ -340,16 +350,20 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
 	ctx := context.Background()
 
-	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	host, err := suite.mysqlContainer.Host(ctx)
+	suite.Require().NoError(err)
+
+	port, err := suite.mysqlContainer.MappedPort(ctx, "3306")
 	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
 	migrationContext.ApplierConnectionConfig = mysql.NewConnectionConfig()
 	migrationContext.ApplierConnectionConfig.Key.Hostname = host
-	migrationContext.ApplierConnectionConfig.Key.Port = 3306
+	migrationContext.ApplierConnectionConfig.Key.Port = port.Int()
 	migrationContext.ApplierConnectionConfig.User = "root"
 	migrationContext.ApplierConnectionConfig.Password = "root-password"
 	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
 	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
 
