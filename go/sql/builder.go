@@ -530,3 +530,171 @@ func BuildDMLUpdateQuery(databaseName, tableName string, tableColumns, sharedCol
 	)
 	return result, sharedArgs, uniqueKeyArgs, nil
 }
+
+type DMLDeleteQueryBuilder struct {
+	tableColumns, uniqueKeyColumns *ColumnList
+	preparedStatement              string
+}
+
+func NewDMLDeleteQueryBuilder(databaseName, tableName string, tableColumns, uniqueKeyColumns *ColumnList) (*DMLDeleteQueryBuilder, error) {
+	if uniqueKeyColumns.Len() == 0 {
+		return nil, fmt.Errorf("no unique key columns found in NewDMLDeleteQueryBuilder")
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
+	if err != nil {
+		return nil, err
+	}
+
+	stmt := fmt.Sprintf(`
+		delete /* gh-ost %s.%s */
+		from
+			%s.%s
+		where
+			%s`,
+		databaseName, tableName,
+		databaseName, tableName,
+		equalsComparison,
+	)
+
+	b := &DMLDeleteQueryBuilder{
+		tableColumns:      tableColumns,
+		uniqueKeyColumns:  uniqueKeyColumns,
+		preparedStatement: stmt,
+	}
+	return b, nil
+}
+
+func (b *DMLDeleteQueryBuilder) BuildQuery(args []interface{}) (string, []interface{}, error) {
+	if len(args) != b.tableColumns.Len() {
+		return "", nil, fmt.Errorf("args count differs from table column count in BuildDMLDeleteQuery")
+	}
+	uniqueKeyArgs := make([]interface{}, 0, b.uniqueKeyColumns.Len())
+	for _, column := range b.uniqueKeyColumns.Columns() {
+		tableOrdinal := b.tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal], true)
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+	}
+	return b.preparedStatement, uniqueKeyArgs, nil
+}
+
+type DMLInsertQueryBuilder struct {
+	tableColumns, sharedColumns *ColumnList
+	preparedStatement           string
+}
+
+func NewDMLInsertQueryBuilder(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns *ColumnList) (*DMLInsertQueryBuilder, error) {
+	if !sharedColumns.IsSubsetOf(tableColumns) {
+		return nil, fmt.Errorf("shared columns is not a subset of table columns in NewDMLInsertQueryBuilder")
+	}
+	if sharedColumns.Len() == 0 {
+		return nil, fmt.Errorf("no shared columns found in NewDMLInsertQueryBuilder")
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names())
+	for i := range mappedSharedColumnNames {
+		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
+	}
+	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
+
+	stmt := fmt.Sprintf(`
+		replace /* gh-ost %s.%s */
+		into
+			%s.%s
+			(%s)
+		values
+			(%s)`,
+		databaseName, tableName,
+		databaseName, tableName,
+		strings.Join(mappedSharedColumnNames, ", "),
+		strings.Join(preparedValues, ", "),
+	)
+
+	return &DMLInsertQueryBuilder{
+		tableColumns:      tableColumns,
+		sharedColumns:     sharedColumns,
+		preparedStatement: stmt,
+	}, nil
+}
+
+func (b *DMLInsertQueryBuilder) BuildQuery(args []interface{}) (string, []interface{}, error) {
+	if len(args) != b.tableColumns.Len() {
+		return "", nil, fmt.Errorf("args count differs from table column count in BuildDMLInsertQuery")
+	}
+	sharedArgs := make([]interface{}, 0, b.sharedColumns.Len())
+	for _, column := range b.sharedColumns.Columns() {
+		tableOrdinal := b.tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal], false)
+		sharedArgs = append(sharedArgs, arg)
+	}
+	return b.preparedStatement, sharedArgs, nil
+}
+
+type DMLUpdateQueryBuilder struct {
+	tableColumns, sharedColumns, uniqueKeyColumns *ColumnList
+	preparedStatement                             string
+}
+
+func NewDMLUpdateQueryBuilder(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns, uniqueKeyColumns *ColumnList) (*DMLUpdateQueryBuilder, error) {
+	if !sharedColumns.IsSubsetOf(tableColumns) {
+		return nil, fmt.Errorf("shared columns is not a subset of table columns in NewDMLUpdateQueryBuilder")
+	}
+	if !uniqueKeyColumns.IsSubsetOf(sharedColumns) {
+		return nil, fmt.Errorf("unique key columns is not a subset of shared columns in NewDMLUpdateQueryBuilder")
+	}
+	if sharedColumns.Len() == 0 {
+		return nil, fmt.Errorf("no shared columns found in NewDMLUpdateQueryBuilder")
+	}
+	if uniqueKeyColumns.Len() == 0 {
+		return nil, fmt.Errorf("no unique key columns found in NewDMLUpdateQueryBuilder")
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+	setClause, err := BuildSetPreparedClause(mappedSharedColumns)
+	if err != nil {
+		return nil, err
+	}
+
+	equalsComparison, err := BuildEqualsPreparedComparison(uniqueKeyColumns.Names())
+	if err != nil {
+		return nil, err
+	}
+	stmt := fmt.Sprintf(`
+		update /* gh-ost %s.%s */
+			%s.%s
+		set
+			%s
+		where
+			%s`,
+		databaseName, tableName,
+		databaseName, tableName,
+		setClause,
+		equalsComparison,
+	)
+	return &DMLUpdateQueryBuilder{
+		tableColumns:      tableColumns,
+		sharedColumns:     sharedColumns,
+		uniqueKeyColumns:  uniqueKeyColumns,
+		preparedStatement: stmt,
+	}, nil
+}
+
+func (b *DMLUpdateQueryBuilder) BuildQuery(valueArgs, whereArgs []interface{}) (string, []interface{}, []interface{}, error) {
+	sharedArgs := make([]interface{}, 0, b.sharedColumns.Len())
+	for _, column := range b.sharedColumns.Columns() {
+		tableOrdinal := b.tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(valueArgs[tableOrdinal], false)
+		sharedArgs = append(sharedArgs, arg)
+	}
+
+	uniqueKeyArgs := make([]interface{}, 0, b.uniqueKeyColumns.Len())
+	for _, column := range b.uniqueKeyColumns.Columns() {
+		tableOrdinal := b.tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(whereArgs[tableOrdinal], true)
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+	}
+
+	return b.preparedStatement, sharedArgs, uniqueKeyArgs, nil
+}

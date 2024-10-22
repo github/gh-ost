@@ -60,6 +60,10 @@ type Applier struct {
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
 	name              string
+
+	dmlDeleteQueryBuilder *sql.DMLDeleteQueryBuilder
+	dmlInsertQueryBuilder *sql.DMLInsertQueryBuilder
+	dmlUpdateQueryBuilder *sql.DMLUpdateQueryBuilder
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -103,6 +107,37 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	this.migrationContext.Log.Infof("Applier initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.ApplierMySQLVersion)
+	return nil
+}
+
+func (this *Applier) prepareQueries() (err error) {
+	if this.dmlDeleteQueryBuilder, err = sql.NewDMLDeleteQueryBuilder(
+		this.migrationContext.DatabaseName,
+		this.migrationContext.GetGhostTableName(),
+		this.migrationContext.OriginalTableColumns,
+		&this.migrationContext.UniqueKey.Columns,
+	); err != nil {
+		return err
+	}
+	if this.dmlInsertQueryBuilder, err = sql.NewDMLInsertQueryBuilder(
+		this.migrationContext.DatabaseName,
+		this.migrationContext.GetGhostTableName(),
+		this.migrationContext.OriginalTableColumns,
+		this.migrationContext.SharedColumns,
+		this.migrationContext.MappedSharedColumns,
+	); err != nil {
+		return err
+	}
+	if this.dmlUpdateQueryBuilder, err = sql.NewDMLUpdateQueryBuilder(
+		this.migrationContext.DatabaseName,
+		this.migrationContext.GetGhostTableName(),
+		this.migrationContext.OriginalTableColumns,
+		this.migrationContext.SharedColumns,
+		this.migrationContext.MappedSharedColumns,
+		&this.migrationContext.UniqueKey.Columns,
+	); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1135,35 +1170,36 @@ func (this *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEv
 
 // buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
 // event entry on the original table.
-func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (results [](*dmlBuildResult)) {
+func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBuildResult {
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
 		{
-			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
-			return append(results, newDmlBuildResult(query, uniqueKeyArgs, -1, err))
+			query, uniqueKeyArgs, err := this.dmlDeleteQueryBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
+			return []*dmlBuildResult{newDmlBuildResult(query, uniqueKeyArgs, -1, err)}
 		}
 	case binlog.InsertDML:
 		{
-			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
-			return append(results, newDmlBuildResult(query, sharedArgs, 1, err))
+			query, sharedArgs, err := this.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
+			return []*dmlBuildResult{newDmlBuildResult(query, sharedArgs, 1, err)}
 		}
 	case binlog.UpdateDML:
 		{
 			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
+				results := make([]*dmlBuildResult, 0, 2)
 				dmlEvent.DML = binlog.DeleteDML
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
 				dmlEvent.DML = binlog.InsertDML
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
 				return results
 			}
-			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			query, sharedArgs, uniqueKeyArgs, err := this.dmlUpdateQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args := sqlutils.Args()
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
-			return append(results, newDmlBuildResult(query, args, 0, err))
+			return []*dmlBuildResult{newDmlBuildResult(query, args, 0, err)}
 		}
 	}
-	return append(results, newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)))
+	return []*dmlBuildResult{newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML))}
 }
 
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
