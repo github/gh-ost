@@ -76,12 +76,13 @@ func (this *Applier) InitDBConnections(maxConns int) (err error) {
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
+	this.db.SetMaxOpenConns(maxConns)
+	this.db.SetMaxIdleConns(maxConns)
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
 	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
 	}
-	this.singletonDB.SetMaxOpenConns(maxConns)
-	this.singletonDB.SetMaxIdleConns(maxConns)
+	this.singletonDB.SetMaxOpenConns(1)
 	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
 	if err != nil {
 		return err
