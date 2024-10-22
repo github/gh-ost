@@ -456,6 +456,7 @@ func (suite *ApplierTestSuite) TestApplyIterationInsertQueryFailsFastWhenSelecti
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "testing"
 	migrationContext.ChunkSize = 10
+	migrationContext.TableEngine = "innodb"
 	migrationContext.SetConnectionConfig("innodb")
 
 	db, err := suite.getDb(ctx)
