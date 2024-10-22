@@ -229,6 +229,7 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 			force index (%s)
 			where
 				(%s and %s)
+			for share nowait
 		)`,
 		databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, uniqueKey,

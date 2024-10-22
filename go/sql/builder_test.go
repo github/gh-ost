@@ -186,6 +186,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 				where
 					(((id > @v1s) or ((id = @v1s)))
 					and ((id < @v1e) or ((id = @v1e))))
+				for share nowait
 			)`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 3, 103, 103}, explodedArgs)
@@ -219,6 +220,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 					or (((name = @v1e))
 					AND (position < @v2e))
 					or ((name = @v1e) and (position = @v2e))))
+				for share nowait
 			)`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
@@ -255,6 +257,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 					(((id > @v1s) or ((id = @v1s)))
 					and
 					((id < @v1e) or ((id = @v1e))))
+				for share nowait
 			)`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 3, 103, 103}, explodedArgs)
@@ -284,6 +287,7 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 					AND (position > @v2s)) or ((name = @v1s) and (position = @v2s)))
 					and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e))
 					or ((name = @v1e) and (position = @v2e))))
+				for share nowait
 			)`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
@@ -314,6 +318,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 					mydb.tbl
 				force index (name_position_uidx)
 				where (((name > ?) or (((name = ?)) AND (position > ?)) or ((name = ?) and (position = ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?))))
+				for share nowait
 			)`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
