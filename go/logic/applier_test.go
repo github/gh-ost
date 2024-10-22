@@ -425,7 +425,7 @@ func (suite *ApplierTestSuite) TestApplyIterationInsertQuery() {
 	chunkSize, rowsAffected, duration, err := applier.ApplyIterationInsertQuery()
 	suite.Require().NoError(err)
 
-	suite.Require().Equal(int64(migrationContext.ChunkSize), chunkSize)
+	suite.Require().Equal(migrationContext.ChunkSize, chunkSize)
 	suite.Require().Equal(int64(10), rowsAffected)
 	suite.Require().Greater(duration, time.Duration(0))
 
@@ -501,7 +501,7 @@ func (suite *ApplierTestSuite) TestApplyIterationInsertQueryFailsFastWhenSelecti
 	suite.Require().Error(err)
 	suite.Require().EqualError(err, "Error 3572 (HY000): Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.")
 
-	suite.Require().Equal(int64(migrationContext.ChunkSize), chunkSize)
+	suite.Require().Equal(migrationContext.ChunkSize, chunkSize)
 	suite.Require().Equal(int64(0), rowsAffected)
 	suite.Require().Equal(time.Duration(0), duration)
 
