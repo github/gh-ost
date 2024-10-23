@@ -393,8 +393,10 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 	args := []interface{}{3, "testname", "first", 17, 23}
 	{
 		uniqueKeyColumns := NewColumnList([]string{"position"})
+		builder, err := NewDMLDeleteQueryBuilder(databaseName, tableName, tableColumns, uniqueKeyColumns)
+		require.NoError(t, err)
 
-		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
+		query, uniqueKeyArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
 			delete /* gh-ost mydb.tbl */
@@ -408,8 +410,10 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 	}
 	{
 		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+		builder, err := NewDMLDeleteQueryBuilder(databaseName, tableName, tableColumns, uniqueKeyColumns)
+		require.NoError(t, err)
 
-		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
+		query, uniqueKeyArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
 			delete /* gh-ost mydb.tbl */
@@ -423,8 +427,10 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 	}
 	{
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
+		builder, err := NewDMLDeleteQueryBuilder(databaseName, tableName, tableColumns, uniqueKeyColumns)
+		require.NoError(t, err)
 
-		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
+		query, uniqueKeyArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
 			delete /* gh-ost mydb.tbl */
@@ -439,8 +445,10 @@ func TestBuildDMLDeleteQuery(t *testing.T) {
 	{
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
 		args := []interface{}{"first", 17}
+		builder, err := NewDMLDeleteQueryBuilder(databaseName, tableName, tableColumns, uniqueKeyColumns)
+		require.NoError(t, err)
 
-		_, _, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
+		_, _, err = builder.BuildQuery(args)
 		require.Error(t, err)
 	}
 }
@@ -450,10 +458,12 @@ func TestBuildDMLDeleteQuerySignedUnsigned(t *testing.T) {
 	tableName := "tbl"
 	tableColumns := NewColumnList([]string{"id", "name", "rank", "position", "age"})
 	uniqueKeyColumns := NewColumnList([]string{"position"})
+	builder, err := NewDMLDeleteQueryBuilder(databaseName, tableName, tableColumns, uniqueKeyColumns)
+	require.NoError(t, err)
 	{
 		// test signed (expect no change)
 		args := []interface{}{3, "testname", "first", -1, 23}
-		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
+		query, uniqueKeyArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
 			delete /* gh-ost mydb.tbl */
@@ -469,7 +479,7 @@ func TestBuildDMLDeleteQuerySignedUnsigned(t *testing.T) {
 		// test unsigned
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		uniqueKeyColumns.SetUnsigned("position")
-		query, uniqueKeyArgs, err := BuildDMLDeleteQuery(databaseName, tableName, tableColumns, uniqueKeyColumns, args)
+		query, uniqueKeyArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
 			delete /* gh-ost mydb.tbl */
@@ -490,7 +500,9 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 	args := []interface{}{3, "testname", "first", 17, 23}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		builder, err := NewDMLInsertQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns)
+		require.NoError(t, err)
+		query, sharedArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -504,7 +516,9 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 	}
 	{
 		sharedColumns := NewColumnList([]string{"position", "name", "age", "id"})
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		builder, err := NewDMLInsertQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns)
+		require.NoError(t, err)
+		query, sharedArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -518,12 +532,12 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 	}
 	{
 		sharedColumns := NewColumnList([]string{"position", "name", "surprise", "id"})
-		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		_, err := NewDMLInsertQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns)
 		require.Error(t, err)
 	}
 	{
 		sharedColumns := NewColumnList([]string{})
-		_, _, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		_, err := NewDMLInsertQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns)
 		require.Error(t, err)
 	}
 }
@@ -537,7 +551,9 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		// testing signed
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		builder, err := NewDMLInsertQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns)
+		require.NoError(t, err)
+		query, sharedArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -553,7 +569,9 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		// testing unsigned
 		args := []interface{}{3, "testname", "first", int8(-1), 23}
 		sharedColumns.SetUnsigned("position")
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		builder, err := NewDMLInsertQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns)
+		require.NoError(t, err)
+		query, sharedArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -569,7 +587,9 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		// testing unsigned
 		args := []interface{}{3, "testname", "first", int32(-1), 23}
 		sharedColumns.SetUnsigned("position")
-		query, sharedArgs, err := BuildDMLInsertQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, args)
+		builder, err := NewDMLInsertQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns)
+		require.NoError(t, err)
+		query, sharedArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
 			replace /* gh-ost mydb.tbl */
@@ -592,7 +612,9 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"position"})
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
+		require.NoError(t, err)
+		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -608,7 +630,9 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
+		require.NoError(t, err)
+		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -624,7 +648,9 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age"})
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
+		require.NoError(t, err)
+		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -640,7 +666,9 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age", "position", "id", "name"})
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
+		require.NoError(t, err)
+		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -656,20 +684,24 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age", "surprise"})
-		_, _, _, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
+		require.NoError(t, err)
+		_, _, _, err = builder.BuildQuery(valueArgs, whereArgs)
 		require.Error(t, err)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{})
-		_, _, _, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		_, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
 		require.Error(t, err)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		mappedColumns := NewColumnList([]string{"id", "name", "role", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"id"})
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, mappedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, mappedColumns, uniqueKeyColumns)
+		require.NoError(t, err)
+		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -692,9 +724,11 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 	whereArgs := []interface{}{3, "testname", "findme", int8(-3), 56}
 	sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 	uniqueKeyColumns := NewColumnList([]string{"position"})
+	builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
+	require.NoError(t, err)
 	{
 		// test signed
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -711,7 +745,7 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 		// test unsigned
 		sharedColumns.SetUnsigned("age")
 		uniqueKeyColumns.SetUnsigned("position")
-		query, sharedArgs, uniqueKeyArgs, err := BuildDMLUpdateQuery(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns, valueArgs, whereArgs)
+		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
