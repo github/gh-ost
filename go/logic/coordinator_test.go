@@ -104,6 +104,9 @@ func TestCoordinator(t *testing.T) {
 	err = applier.InitDBConnections(migrationContext.NumWorkers)
 	require.NoError(t, err)
 
+	err = applier.prepareQueries()
+	require.NoError(t, err)
+
 	err = applier.CreateChangelogTable()
 	require.NoError(t, err)
 
