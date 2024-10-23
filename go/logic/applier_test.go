@@ -443,6 +443,7 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExi
 
 	// Check that the ghost table was dropped
 	var tableName string
+	//nolint:execinquery
 	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_gho'").Scan(&tableName)
 	suite.Require().Error(err)
 	suite.Require().Equal(gosql.ErrNoRows, err)
@@ -483,12 +484,14 @@ func (suite *ApplierTestSuite) TestCreateGhostTable() {
 
 	// Check that the ghost table was created
 	var tableName string
+	//nolint:execinquery
 	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_gho'").Scan(&tableName)
 	suite.Require().NoError(err)
 	suite.Require().Equal("_testing_gho", tableName)
 
 	// Check that the ghost table has the same columns as the original table
 	var createDDL string
+	//nolint:execinquery
 	err = suite.db.QueryRow("SHOW CREATE TABLE test._testing_gho").Scan(&tableName, &createDDL)
 	suite.Require().NoError(err)
 	suite.Require().Equal("CREATE TABLE `_testing_gho` (\n  `id` int DEFAULT NULL,\n  `item_id` int DEFAULT NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createDDL)
