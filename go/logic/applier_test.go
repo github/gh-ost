@@ -19,7 +19,6 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
-	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 )
 
@@ -198,6 +197,7 @@ type ApplierTestSuite struct {
 	suite.Suite
 
 	mysqlContainer testcontainers.Container
+	db             *gosql.DB
 }
 
 func (suite *ApplierTestSuite) SetupSuite() {
@@ -216,49 +216,50 @@ func (suite *ApplierTestSuite) SetupSuite() {
 	suite.Require().NoError(err)
 
 	suite.mysqlContainer = mysqlContainer
+
+	dsn, err := GetDSN(ctx, mysqlContainer)
+	suite.Require().NoError(err)
+
+	db, err := gosql.Open("mysql", dsn)
+	suite.Require().NoError(err)
+
+	suite.db = db
 }
 
 func (suite *ApplierTestSuite) TeardownSuite() {
 	ctx := context.Background()
 
-	suite.Require().NoError(suite.mysqlContainer.Terminate(ctx))
+	suite.Assert().NoError(suite.db.Close())
+	suite.Assert().NoError(suite.mysqlContainer.Terminate(ctx))
 }
 
 func (suite *ApplierTestSuite) SetupTest() {
 	ctx := context.Background()
 
-	rc, _, err := suite.mysqlContainer.Exec(ctx, []string{"mysql", "-uroot", "-proot-password", "-e", "CREATE DATABASE test;"})
+	_, err := suite.db.ExecContext(ctx, "CREATE DATABASE test")
 	suite.Require().NoError(err)
-	suite.Require().Equalf(0, rc, "failed to created database: expected exit code 0, got %d", rc)
-
-	rc, _, err = suite.mysqlContainer.Exec(ctx, []string{"mysql", "-uroot", "-proot-password", "-e", "CREATE TABLE test.testing (id INT, item_id INT);"})
-	suite.Require().NoError(err)
-	suite.Require().Equalf(0, rc, "failed to created table: expected exit code 0, got %d", rc)
 }
 
 func (suite *ApplierTestSuite) TearDownTest() {
 	ctx := context.Background()
 
-	rc, _, err := suite.mysqlContainer.Exec(ctx, []string{"mysql", "-uroot", "-proot-password", "-e", "DROP DATABASE test;"})
+	_, err := suite.db.ExecContext(ctx, "DROP DATABASE test")
 	suite.Require().NoError(err)
-	suite.Require().Equalf(0, rc, "failed to created database: expected exit code 0, got %d", rc)
 }
 
 func (suite *ApplierTestSuite) TestInitDBConnections() {
 	ctx := context.Background()
 
-	host, err := suite.mysqlContainer.Host(ctx)
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
 	suite.Require().NoError(err)
 
-	port, err := suite.mysqlContainer.MappedPort(ctx, "3306")
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
-	migrationContext.ApplierConnectionConfig = mysql.NewConnectionConfig()
-	migrationContext.ApplierConnectionConfig.Key.Hostname = host
-	migrationContext.ApplierConnectionConfig.Key.Port = port.Int()
-	migrationContext.ApplierConnectionConfig.User = "root"
-	migrationContext.ApplierConnectionConfig.Password = "root-password"
+	migrationContext.ApplierConnectionConfig = connectionConfig
 	migrationContext.DatabaseName = "test"
 	migrationContext.SkipPortValidation = true
 	migrationContext.OriginalTableName = "testing"
@@ -280,18 +281,19 @@ func (suite *ApplierTestSuite) TestInitDBConnections() {
 func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	ctx := context.Background()
 
-	host, err := suite.mysqlContainer.Host(ctx)
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
 	suite.Require().NoError(err)
 
-	port, err := suite.mysqlContainer.MappedPort(ctx, "3306")
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test._testing_gho (id INT, item_id INT);")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
-	migrationContext.ApplierConnectionConfig = mysql.NewConnectionConfig()
-	migrationContext.ApplierConnectionConfig.Key.Hostname = host
-	migrationContext.ApplierConnectionConfig.Key.Port = port.Int()
-	migrationContext.ApplierConnectionConfig.User = "root"
-	migrationContext.ApplierConnectionConfig.Password = "root-password"
+	migrationContext.ApplierConnectionConfig = connectionConfig
 	migrationContext.DatabaseName = "test"
 	migrationContext.SkipPortValidation = true
 	migrationContext.OriginalTableName = "testing"
@@ -307,10 +309,6 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	err = applier.InitDBConnections()
 	suite.Require().NoError(err)
 
-	rc, _, err := suite.mysqlContainer.Exec(ctx, []string{"mysql", "-uroot", "-proot-password", "-e", "CREATE TABLE test._testing_gho (id INT, item_id INT);"})
-	suite.Require().NoError(err)
-	suite.Require().Equalf(0, rc, "failed to created table: expected exit code 0, got %d", rc)
-
 	dmlEvents := []*binlog.BinlogDMLEvent{
 		{
 			DatabaseName:    "test",
@@ -323,11 +321,7 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	suite.Require().NoError(err)
 
 	// Check that the row was inserted
-	db, err := gosql.Open("mysql", "root:root-password@tcp("+host+":3306)/test")
-	suite.Require().NoError(err)
-	defer db.Close()
-
-	rows, err := db.Query("SELECT * FROM test._testing_gho")
+	rows, err := suite.db.Query("SELECT * FROM test._testing_gho")
 	suite.Require().NoError(err)
 	defer rows.Close()
 
@@ -350,18 +344,16 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
 	ctx := context.Background()
 
-	host, err := suite.mysqlContainer.Host(ctx)
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
 	suite.Require().NoError(err)
 
-	port, err := suite.mysqlContainer.MappedPort(ctx, "3306")
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
-	migrationContext.ApplierConnectionConfig = mysql.NewConnectionConfig()
-	migrationContext.ApplierConnectionConfig.Key.Hostname = host
-	migrationContext.ApplierConnectionConfig.Key.Port = port.Int()
-	migrationContext.ApplierConnectionConfig.User = "root"
-	migrationContext.ApplierConnectionConfig.Password = "root-password"
+	migrationContext.ApplierConnectionConfig = connectionConfig
 	migrationContext.DatabaseName = "test"
 	migrationContext.SkipPortValidation = true
 	migrationContext.OriginalTableName = "testing"
@@ -379,6 +371,127 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
 
 	err = applier.ValidateOrDropExistingTables()
 	suite.Require().NoError(err)
+}
+
+func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExisting() {
+	ctx := context.Background()
+
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test._testing_gho (id INT, item_id INT);")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
+	migrationContext.OriginalTableName = "testing"
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	err = applier.ValidateOrDropExistingTables()
+	suite.Require().Error(err)
+	suite.Require().EqualError(err, "Table `_testing_gho` already exists. Panicking. Use --initially-drop-ghost-table to force dropping it, though I really prefer that you drop it or rename it away")
+}
+
+func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExistingAndInitiallyDropGhostTableSet() {
+	ctx := context.Background()
+
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test._testing_gho (id INT, item_id INT);")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
+	migrationContext.OriginalTableName = "testing"
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.InitiallyDropGhostTable = true
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	err = applier.ValidateOrDropExistingTables()
+	suite.Require().NoError(err)
+
+	// Check that the ghost table was dropped
+	var tableName string
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_gho'").Scan(&tableName)
+	suite.Require().Error(err)
+	suite.Require().Equal(gosql.ErrNoRows, err)
+}
+
+func (suite *ApplierTestSuite) TestCreateGhostTable() {
+	ctx := context.Background()
+
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
+	migrationContext.OriginalTableName = "testing"
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+
+	migrationContext.InitiallyDropGhostTable = true
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	err = applier.CreateGhostTable()
+	suite.Require().NoError(err)
+
+	// Check that the ghost table was created
+	var tableName string
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_gho'").Scan(&tableName)
+	suite.Require().NoError(err)
+	suite.Require().Equal("_testing_gho", tableName)
+
+	// Check that the ghost table has the same columns as the original table
+	var createDDL string
+	err = suite.db.QueryRow("SHOW CREATE TABLE test._testing_gho").Scan(&tableName, &createDDL)
+	suite.Require().NoError(err)
+	suite.Require().Equal("CREATE TABLE `_testing_gho` (\n  `id` int DEFAULT NULL,\n  `item_id` int DEFAULT NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createDDL)
 }
 
 func TestApplier(t *testing.T) {
