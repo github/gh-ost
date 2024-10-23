@@ -39,5 +39,5 @@ func GetDSN(ctx context.Context, container testcontainers.Container) (string, er
 		return "", err
 	}
 
-	return fmt.Sprintf("root:root-password@tcp(%s:%s)/", host, port), nil
+	return fmt.Sprintf("root:root-password@tcp(%s:%s)/", host, port.Port()), nil
 }
