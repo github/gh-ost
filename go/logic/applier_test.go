@@ -10,6 +10,7 @@ import (
 	gosql "database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -100,6 +101,7 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 	columnValues := sql.ToColumnValues([]interface{}{123456, 42})
 
 	migrationContext := base.NewMigrationContext()
+	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "test"
 	migrationContext.OriginalTableColumns = columns
 	migrationContext.SharedColumns = columns
@@ -110,6 +112,7 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 	}
 
 	applier := NewApplier(migrationContext)
+	applier.prepareQueries()
 
 	t.Run("delete", func(t *testing.T) {
 		binlogEvent := &binlog.BinlogDMLEvent{
@@ -199,6 +202,30 @@ type ApplierTestSuite struct {
 	mysqlContainer testcontainers.Container
 }
 
+func (suite *ApplierTestSuite) getConnectionConfig(ctx context.Context) (*mysql.ConnectionConfig, error) {
+	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	config := mysql.NewConnectionConfig()
+	config.Key.Hostname = host
+	config.Key.Port = 3306
+	config.User = "root"
+	config.Password = "root-password"
+
+	return config, nil
+}
+
+func (suite *ApplierTestSuite) getDb(ctx context.Context) (*gosql.DB, error) {
+	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return gosql.Open("mysql", "root:root-password@tcp("+host+":3306)/test")
+}
+
 func (suite *ApplierTestSuite) SetupSuite() {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
@@ -229,7 +256,7 @@ func (suite *ApplierTestSuite) SetupTest() {
 	suite.Require().NoError(err)
 	suite.Require().Equalf(0, rc, "failed to created database: expected exit code 0, got %d", rc)
 
-	rc, _, err = suite.mysqlContainer.Exec(ctx, []string{"mysql", "-uroot", "-proot-password", "-e", "CREATE TABLE test.testing (id INT, item_id INT);"})
+	rc, _, err = suite.mysqlContainer.Exec(ctx, []string{"mysql", "-uroot", "-proot-password", "-e", "CREATE TABLE test.testing (id INT, item_id INT, PRIMARY KEY (id));"})
 	suite.Require().NoError(err)
 	suite.Require().Equalf(0, rc, "failed to created table: expected exit code 0, got %d", rc)
 }
@@ -245,15 +272,11 @@ func (suite *ApplierTestSuite) TearDownTest() {
 func (suite *ApplierTestSuite) TestInitDBConnections() {
 	ctx := context.Background()
 
-	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	connectionConfig, err := suite.getConnectionConfig(ctx)
 	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
-	migrationContext.ApplierConnectionConfig = mysql.NewConnectionConfig()
-	migrationContext.ApplierConnectionConfig.Key.Hostname = host
-	migrationContext.ApplierConnectionConfig.Key.Port = 3306
-	migrationContext.ApplierConnectionConfig.User = "root"
-	migrationContext.ApplierConnectionConfig.Password = "root-password"
+	migrationContext.ApplierConnectionConfig = connectionConfig
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
@@ -274,15 +297,11 @@ func (suite *ApplierTestSuite) TestInitDBConnections() {
 func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	ctx := context.Background()
 
-	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	connectionConfig, err := suite.getConnectionConfig(ctx)
 	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
-	migrationContext.ApplierConnectionConfig = mysql.NewConnectionConfig()
-	migrationContext.ApplierConnectionConfig.Key.Hostname = host
-	migrationContext.ApplierConnectionConfig.Key.Port = 3306
-	migrationContext.ApplierConnectionConfig.User = "root"
-	migrationContext.ApplierConnectionConfig.Password = "root-password"
+	migrationContext.ApplierConnectionConfig = connectionConfig
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
@@ -290,8 +309,13 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
 	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
 	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "primary_key",
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
 
 	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
 	err = applier.InitDBConnections(8)
@@ -313,7 +337,7 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	suite.Require().NoError(err)
 
 	// Check that the row was inserted
-	db, err := gosql.Open("mysql", "root:root-password@tcp("+host+":3306)/test")
+	db, err := suite.getDb(ctx)
 	suite.Require().NoError(err)
 	defer db.Close()
 
@@ -340,15 +364,11 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
 	ctx := context.Background()
 
-	host, err := suite.mysqlContainer.ContainerIP(ctx)
+	connectionConfig, err := suite.getConnectionConfig(ctx)
 	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
-	migrationContext.ApplierConnectionConfig = mysql.NewConnectionConfig()
-	migrationContext.ApplierConnectionConfig.Key.Hostname = host
-	migrationContext.ApplierConnectionConfig.Key.Port = 3306
-	migrationContext.ApplierConnectionConfig.User = "root"
-	migrationContext.ApplierConnectionConfig.Password = "root-password"
+	migrationContext.ApplierConnectionConfig = connectionConfig
 	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
@@ -365,6 +385,140 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
 
 	err = applier.ValidateOrDropExistingTables()
 	suite.Require().NoError(err)
+}
+
+func (suite *ApplierTestSuite) TestApplyIterationInsertQuery() {
+	ctx := context.Background()
+
+	connectionConfig, err := suite.getConnectionConfig(ctx)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.OriginalTableName = "testing"
+	migrationContext.ChunkSize = 10
+	migrationContext.SetConnectionConfig("innodb")
+
+	db, err := suite.getDb(ctx)
+	suite.Require().NoError(err)
+	defer db.Close()
+
+	_, err = db.Exec("CREATE TABLE test._testing_gho (id INT, item_id INT, PRIMARY KEY (id))")
+	suite.Require().NoError(err)
+
+	// Insert some test values
+	for i := 1; i <= 10; i++ {
+		_, err = db.Exec("INSERT INTO test.testing (id, item_id) VALUES (?, ?)", i, i)
+		suite.Require().NoError(err)
+	}
+
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "PRIMARY",
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+
+	migrationContext.MigrationIterationRangeMinValues = sql.ToColumnValues([]interface{}{1})
+	migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{10})
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationInsertQuery()
+	suite.Require().NoError(err)
+
+	suite.Require().Equal(migrationContext.ChunkSize, chunkSize)
+	suite.Require().Equal(int64(10), rowsAffected)
+	suite.Require().Greater(duration, time.Duration(0))
+
+	// Check that the rows were inserted
+	rows, err := db.Query("SELECT * FROM test._testing_gho")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var count, id, item_id int
+	for rows.Next() {
+		err = rows.Scan(&id, &item_id)
+		suite.Require().NoError(err)
+		count += 1
+	}
+	suite.Require().NoError(rows.Err())
+
+	suite.Require().Equal(10, count)
+}
+
+func (suite *ApplierTestSuite) TestApplyIterationInsertQueryFailsFastWhenSelectingLockedRows() {
+	ctx := context.Background()
+
+	connectionConfig, err := suite.getConnectionConfig(ctx)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.OriginalTableName = "testing"
+	migrationContext.ChunkSize = 10
+	migrationContext.TableEngine = "innodb"
+	migrationContext.SetConnectionConfig("innodb")
+
+	db, err := suite.getDb(ctx)
+	suite.Require().NoError(err)
+	defer db.Close()
+
+	_, err = db.Exec("CREATE TABLE test._testing_gho (id INT, item_id INT, PRIMARY KEY (id))")
+	suite.Require().NoError(err)
+
+	// Insert some test values
+	for i := 1; i <= 10; i++ {
+		_, err = db.Exec("INSERT INTO test.testing (id, item_id) VALUES (?, ?)", i, i)
+		suite.Require().NoError(err)
+	}
+
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "PRIMARY",
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+
+	migrationContext.MigrationIterationRangeMinValues = sql.ToColumnValues([]interface{}{1})
+	migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{10})
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Lock one of the rows
+	tx, err := db.Begin()
+	suite.Require().NoError(err)
+	defer func() {
+		suite.Require().NoError(tx.Rollback())
+	}()
+
+	_, err = tx.Exec("SELECT * FROM test.testing WHERE id = 5 FOR UPDATE")
+	suite.Require().NoError(err)
+
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationInsertQuery()
+	suite.Require().Error(err)
+	suite.Require().EqualError(err, "Error 3572 (HY000): Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.")
+
+	suite.Require().Equal(migrationContext.ChunkSize, chunkSize)
+	suite.Require().Equal(int64(0), rowsAffected)
+	suite.Require().Equal(time.Duration(0), duration)
+
+	// Check that the no rows were inserted
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM test._testing_gho").Scan(&count)
+	suite.Require().NoError(err)
+
+	suite.Require().Equal(0, count)
 }
 
 func TestApplier(t *testing.T) {

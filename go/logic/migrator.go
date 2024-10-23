@@ -393,6 +393,10 @@ waitForGhostTable:
 	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
 		return err
 	}
+	// We can prepare some of the queries on the applier
+	if err := this.applier.prepareQueries(); err != nil {
+		return err
+	}
 	// Validation complete! We're good to execute this migration
 	if err := this.hooksExecutor.onValidated(); err != nil {
 		return err
