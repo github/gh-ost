@@ -631,6 +631,8 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
 		this.migrationContext.GetIteration() == 0,
 		this.migrationContext.IsTransactionalTable(),
+		// TODO: Don't hardcode this
+		strings.HasPrefix(this.migrationContext.ApplierMySQLVersion, "8."),
 	)
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
