@@ -426,7 +426,7 @@ func (suite *ApplierTestSuite) TestApplyIterationInsertQuery() {
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	chunkSize, rowsAffected, duration, err := applier.ApplyIterationInsertQuery()
@@ -492,7 +492,7 @@ func (suite *ApplierTestSuite) TestApplyIterationInsertQueryFailsFastWhenSelecti
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	// Lock one of the rows
