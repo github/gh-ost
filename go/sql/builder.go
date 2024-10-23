@@ -641,9 +641,6 @@ func NewDMLUpdateQueryBuilder(databaseName, tableName string, tableColumns, shar
 	if !sharedColumns.IsSubsetOf(tableColumns) {
 		return nil, fmt.Errorf("shared columns is not a subset of table columns in NewDMLUpdateQueryBuilder")
 	}
-	if !uniqueKeyColumns.IsSubsetOf(sharedColumns) {
-		return nil, fmt.Errorf("unique key columns is not a subset of shared columns in NewDMLUpdateQueryBuilder")
-	}
 	if sharedColumns.Len() == 0 {
 		return nil, fmt.Errorf("no shared columns found in NewDMLUpdateQueryBuilder")
 	}
@@ -682,6 +679,11 @@ func NewDMLUpdateQueryBuilder(databaseName, tableName string, tableColumns, shar
 }
 
 func (b *DMLUpdateQueryBuilder) BuildQuery(valueArgs, whereArgs []interface{}) (string, []interface{}, []interface{}, error) {
+	// TODO: move this check back to `NewDMLUpdateQueryBuilder()`, needs fix on generated columns.
+	if !b.uniqueKeyColumns.IsSubsetOf(b.sharedColumns) {
+		return "", nil, nil, fmt.Errorf("unique key columns is not a subset of shared columns in DMLUpdateQueryBuilder")
+	}
+
 	sharedArgs := make([]interface{}, 0, b.sharedColumns.Len())
 	for _, column := range b.sharedColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
