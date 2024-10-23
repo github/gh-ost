@@ -338,6 +338,7 @@ func (suite *MigratorTestSuite) TestFoo() {
 	migrationContext.ThrottleHTTPIntervalMillis = 100
 	migrationContext.ThrottleHTTPTimeoutMillis = 1000
 
+	//nolint:dogsled
 	_, filename, _, _ := runtime.Caller(0)
 	migrationContext.ServeSocketFile = filepath.Join(filepath.Dir(filename), "../../tmp/gh-ost.sock")
 
