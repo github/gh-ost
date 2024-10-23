@@ -6,13 +6,12 @@
 package base
 
 import (
+	gosql "database/sql"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
 	"time"
-
-	gosql "database/sql"
 
 	"github.com/github/gh-ost/go/mysql"
 )
@@ -75,7 +74,7 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 	// AliyunRDS set users port to "NULL", replace it by gh-ost param
 	// GCP set users port to "NULL", replace it by gh-ost param
 	// Azure MySQL set users port to a different value by design, replace it by gh-ost para
-	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform || migrationContext.AzureMySQL {
+	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform || migrationContext.AzureMySQL || migrationContext.OceanBaseBinlogService {
 		port = connectionConfig.Key.Port
 	} else {
 		portQuery := `select @@global.port`

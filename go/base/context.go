@@ -102,6 +102,7 @@ type MigrationContext struct {
 	GoogleCloudPlatform      bool
 	AzureMySQL               bool
 	AttemptInstantDDL        bool
+	OceanBaseBinlogService   bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
