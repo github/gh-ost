@@ -101,6 +101,7 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 	columnValues := sql.ToColumnValues([]interface{}{123456, 42})
 
 	migrationContext := base.NewMigrationContext()
+	migrationContext.DatabaseName = "test"
 	migrationContext.OriginalTableName = "test"
 	migrationContext.OriginalTableColumns = columns
 	migrationContext.SharedColumns = columns
@@ -111,6 +112,7 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 	}
 
 	applier := NewApplier(migrationContext)
+	applier.prepareQueries()
 
 	t.Run("delete", func(t *testing.T) {
 		binlogEvent := &binlog.BinlogDMLEvent{
@@ -307,8 +309,13 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
 	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
 	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "primary_key",
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
 
 	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
 	err = applier.InitDBConnections()
