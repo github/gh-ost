@@ -1225,27 +1225,34 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return rollback(err)
 		}
+		multiArgs := []interface{}{}
+		var multiQueryBuilder strings.Builder
 		for _, dmlEvent := range dmlEvents {
 			for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
 				if buildResult.err != nil {
-					return rollback(buildResult.err)
+					return buildResult.err
 				}
-				result, err := tx.Exec(buildResult.query, buildResult.args...)
-				if err != nil {
-					err = fmt.Errorf("%w; query=%s; args=%+v", err, buildResult.query, buildResult.args)
-					return rollback(err)
-				}
-
-				rowsAffected, err := result.RowsAffected()
-				if err != nil {
-					log.Warningf("error getting rows affected from DML event query: %s. i'm going to assume that the DML affected a single row, but this may result in inaccurate statistics", err)
-					rowsAffected = 1
-				}
-				// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
-				// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
-				totalDelta += buildResult.rowsDelta * rowsAffected
+				multiArgs = append(multiArgs, buildResult.args...)
+				multiQueryBuilder.WriteString(buildResult.query)
+				multiQueryBuilder.WriteString(";\n")
 			}
 		}
+		// TODO: get rows affected from each query in multi statement
+		log.Warningf("error getting rows affected from DML event query: %s. i'm going to assume that the DML affected a single row, but this may result in inaccurate statistics", err)
+		_, err = tx.Exec(multiQueryBuilder.String(), multiArgs...)
+		if err != nil {
+			err = fmt.Errorf("%w; query=%s; args=%+v", err, multiQueryBuilder.String(), multiArgs)
+			return rollback(err)
+		}
+		// rowsAffected, err := result.RowsAffected()
+		// if err != nil {
+		// 	log.Warningf("error getting rows affected from DML event query: %s. i'm going to assume that the DML affected a single row, but this may result in inaccurate statistics", err)
+		// 	rowsAffected = 1
+		// }
+		// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
+		// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
+		// totalDelta += buildResult.rowsDelta * rowsAffected
+
 		if err := tx.Commit(); err != nil {
 			return err
 		}

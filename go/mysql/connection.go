@@ -132,6 +132,7 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 	connectionParams := []string{
 		"autocommit=true",
 		"interpolateParams=true",
+		"multiStatements=true",
 		fmt.Sprintf("charset=%s", this.Charset),
 		fmt.Sprintf("tls=%s", tlsOption),
 		fmt.Sprintf("transaction_isolation=%q", this.TransactionIsolation),
