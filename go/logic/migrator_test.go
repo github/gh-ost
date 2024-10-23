@@ -6,9 +6,12 @@
 package logic
 
 import (
+	"context"
+	gosql "database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +19,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -253,4 +259,115 @@ func TestMigratorShouldPrintStatus(t *testing.T) {
 	require.False(t, migrator.shouldPrintStatus(HeuristicPrintStatusRule, 99, 210*time.Second))      // test 'elapsedSeconds <= 180'
 	require.False(t, migrator.shouldPrintStatus(HeuristicPrintStatusRule, 12345, 86400*time.Second)) // test 'else'
 	require.True(t, migrator.shouldPrintStatus(HeuristicPrintStatusRule, 30030, 86400*time.Second))  // test 'else' again
+}
+
+type MigratorTestSuite struct {
+	suite.Suite
+
+	mysqlContainer testcontainers.Container
+	db             *gosql.DB
+}
+
+func (suite *MigratorTestSuite) SetupSuite() {
+	ctx := context.Background()
+	req := testcontainers.ContainerRequest{
+		Image:        "mysql:8.0.40",
+		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root-password"},
+		ExposedPorts: []string{"3306/tcp"},
+		WaitingFor:   wait.ForListeningPort("3306/tcp"),
+	}
+
+	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	suite.Require().NoError(err)
+
+	suite.mysqlContainer = mysqlContainer
+
+	dsn, err := GetDSN(ctx, mysqlContainer)
+	suite.Require().NoError(err)
+
+	db, err := gosql.Open("mysql", dsn)
+	suite.Require().NoError(err)
+
+	suite.db = db
+}
+
+func (suite *MigratorTestSuite) TeardownSuite() {
+	ctx := context.Background()
+
+	suite.Assert().NoError(suite.db.Close())
+	suite.Assert().NoError(suite.mysqlContainer.Terminate(ctx))
+}
+
+func (suite *MigratorTestSuite) SetupTest() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, "CREATE DATABASE test")
+	suite.Require().NoError(err)
+}
+
+func (suite *MigratorTestSuite) TearDownTest() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, "DROP DATABASE test")
+	suite.Require().NoError(err)
+}
+
+func (suite *MigratorTestSuite) TestFoo() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT PRIMARY KEY, name VARCHAR(64))")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.AllowedRunningOnMaster = true
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
+	migrationContext.OriginalTableName = "testing"
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.AlterStatementOptions = "ADD COLUMN foobar varchar(255), ENGINE=InnoDB"
+	migrationContext.ReplicaServerId = 99999
+	migrationContext.HeartbeatIntervalMilliseconds = 100
+	migrationContext.ThrottleHTTPIntervalMillis = 100
+	migrationContext.ThrottleHTTPTimeoutMillis = 1000
+
+	_, filename, _, _ := runtime.Caller(0)
+	migrationContext.ServeSocketFile = filepath.Join(filepath.Dir(filename), "../../tmp/gh-ost.sock")
+
+	migrator := NewMigrator(migrationContext, "0.0.0")
+
+	err = migrator.Migrate()
+	suite.Require().NoError(err)
+
+	// Verify the new column was added
+	var tableName, createTableSQL string
+	//nolint:execinquery
+	err = suite.db.QueryRow("SHOW CREATE TABLE test.testing").Scan(&tableName, &createTableSQL)
+	suite.Require().NoError(err)
+
+	suite.Require().Equal("testing", tableName)
+	suite.Require().Equal("CREATE TABLE `testing` (\n  `id` int NOT NULL,\n  `name` varchar(64) DEFAULT NULL,\n  `foobar` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createTableSQL)
+
+	// Verify the changelog table was claned up
+	//nolint:execinquery
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_ghc'").Scan(&tableName)
+	suite.Require().Error(err)
+	suite.Require().Equal(gosql.ErrNoRows, err)
+
+	// Verify the old table was renamed
+	//nolint:execinquery
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_del'").Scan(&tableName)
+	suite.Require().NoError(err)
+	suite.Require().Equal("_testing_del", tableName)
+}
+
+func TestMigrator(t *testing.T) {
+	suite.Run(t, new(MigratorTestSuite))
 }
