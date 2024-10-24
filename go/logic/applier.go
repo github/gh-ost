@@ -80,7 +80,8 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 
 func (this *Applier) InitDBConnections() (err error) {
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
+	uriWithMulti := fmt.Sprintf("%s&multiStatements=true", applierUri)
+	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, uriWithMulti); err != nil {
 		return err
 	}
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
@@ -1210,7 +1211,7 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlB
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
 func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
 	var totalDelta int64
-	ctx := context.TODO()
+	ctx := context.Background()
 
 	err := func() error {
 		conn, err := this.db.Conn(ctx)
@@ -1236,31 +1237,23 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		}
 
 		buildResults := make([]*dmlBuildResult, 0, len(dmlEvents))
+		nArgs := 0
 		for _, dmlEvent := range dmlEvents {
 			for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
 				if buildResult.err != nil {
 					return rollback(buildResult.err)
 				}
-
+				nArgs += len(buildResult.args)
 				buildResults = append(buildResults, buildResult)
 			}
 		}
 
 		execErr := conn.Raw(func(driverConn any) error {
-			ex, ok := driverConn.(driver.ExecerContext)
-			if !ok {
-				return fmt.Errorf("could not cast driverConn to ExecerContext")
-			}
+			ex := driverConn.(driver.ExecerContext)
+			nvc := driverConn.(driver.NamedValueChecker)
 
-			nvc, ok := driverConn.(driver.NamedValueChecker)
-			if !ok {
-				return fmt.Errorf("could not cast driverConn to NamedValueChecker")
-			}
-
-			var multiArgs []driver.NamedValue
+			multiArgs := make([]driver.NamedValue, 0, nArgs)
 			multiQueryBuilder := strings.Builder{}
-			var rowDeltas []int64
-
 			for _, buildResult := range buildResults {
 				for _, arg := range buildResult.args {
 					nv := driver.NamedValue{Value: driver.Value(arg)}
@@ -1270,29 +1263,21 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 
 				multiQueryBuilder.WriteString(buildResult.query)
 				multiQueryBuilder.WriteString(";\n")
-
-				rowDeltas = append(rowDeltas, buildResult.rowsDelta)
 			}
 
-			// this.migrationContext.Log.Infof("Executing query: %s, args: %+v", multiQueryBuilder.String(), multiArgs)
 			res, err := ex.ExecContext(ctx, multiQueryBuilder.String(), multiArgs)
 			if err != nil {
 				err = fmt.Errorf("%w; query=%s; args=%+v", err, multiQueryBuilder.String(), multiArgs)
-				this.migrationContext.Log.Errorf("Error exec: %+v", err)
 				return err
 			}
 
-			mysqlRes, ok := res.(drivermysql.Result)
-			if !ok {
-				return fmt.Errorf("Could not cast %+v to mysql.Result", res)
-			}
+			mysqlRes := res.(drivermysql.Result)
 
 			// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
 			// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
 			for i, rowsAffected := range mysqlRes.AllRowsAffected() {
-				totalDelta += rowDeltas[i] * rowsAffected
+				totalDelta += buildResults[i].rowsDelta * rowsAffected
 			}
-
 			return nil
 		})
 
