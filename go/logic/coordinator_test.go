@@ -136,14 +136,15 @@ func TestCoordinator(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	coord := NewCoordinator(migrationContext, applier, func(dmlEvent *binlog.BinlogDMLEvent) error {
-		fmt.Printf("Received Changelog DML event: %+v\n", dmlEvent)
-		fmt.Printf("Rowdata: %v - %v\n", dmlEvent.NewColumnValues, dmlEvent.WhereColumnValues)
+	coord := NewCoordinator(migrationContext, applier, nil,
+		func(dmlEvent *binlog.BinlogDMLEvent) error {
+			fmt.Printf("Received Changelog DML event: %+v\n", dmlEvent)
+			fmt.Printf("Rowdata: %v - %v\n", dmlEvent.NewColumnValues, dmlEvent.WhereColumnValues)
 
-		cancel()
+			cancel()
 
-		return nil
-	})
+			return nil
+		})
 	coord.applier = applier
 	coord.InitializeWorkers(8)
 

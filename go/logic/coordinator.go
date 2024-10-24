@@ -27,6 +27,8 @@ type Coordinator struct {
 
 	applier *Applier
 
+	throttler *Throttler
+
 	// Atomic counter for number of active workers
 	busyWorkers atomic.Int64
 
@@ -91,7 +93,6 @@ func (w *Worker) ProcessEvents() error {
 			return nil
 		}
 		ev := <-w.eventQueue
-		// fmt.Printf("Worker %d processing event: %T\n", w.id, ev.Event)
 
 		// Verify this is a GTID Event
 		gtidEvent, ok := ev.Event.(*replication.GTIDEvent)
@@ -118,8 +119,6 @@ func (w *Worker) ProcessEvents() error {
 				fmt.Printf("Worker %d ending transaction early\n", w.id)
 				break events
 			}
-
-			// fmt.Printf("Worker %d processing event: %T\n", w.id, ev.Event)
 
 			switch binlogEvent := ev.Event.(type) {
 			case *replication.RowsEvent:
@@ -216,6 +215,9 @@ func (w *Worker) ProcessEvents() error {
 }
 
 func (w *Worker) applyDMLEvents(dmlEvents []*binlog.BinlogDMLEvent) error {
+	if w.coordinator.throttler != nil {
+		w.coordinator.throttler.throttle(nil)
+	}
 	busyStart := time.Now()
 	err := w.coordinator.applier.ApplyDMLEventQueries(dmlEvents)
 	if err != nil {
@@ -227,13 +229,15 @@ func (w *Worker) applyDMLEvents(dmlEvents []*binlog.BinlogDMLEvent) error {
 	return nil
 }
 
-func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, onChangelogEvent func(dmlEvent *binlog.BinlogDMLEvent) error) *Coordinator {
+func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, throttler *Throttler, onChangelogEvent func(dmlEvent *binlog.BinlogDMLEvent) error) *Coordinator {
 	connectionConfig := migrationContext.InspectorConnectionConfig
 
 	return &Coordinator{
 		migrationContext: migrationContext,
 
 		onChangelogEvent: onChangelogEvent,
+
+		throttler: throttler,
 
 		currentCoordinates: mysql.BinlogCoordinates{},
 

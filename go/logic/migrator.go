@@ -334,7 +334,7 @@ func (this *Migrator) Migrate() (err error) {
 
 	// TODO(meiji163): configure workers
 	this.migrationContext.NumWorkers = 16
-	this.trxCoordinator = NewCoordinator(this.migrationContext, this.applier, this.onChangelogEvent)
+	this.trxCoordinator = NewCoordinator(this.migrationContext, this.applier, this.throttler, this.onChangelogEvent)
 
 	if err := this.initiateStreaming(); err != nil {
 		return err
