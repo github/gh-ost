@@ -103,6 +103,11 @@ type MigrationContext struct {
 	AzureMySQL               bool
 	AttemptInstantDDL        bool
 
+	// SkipPortValidation allows skipping the port validation in `ValidateConnection`
+	// This is useful when connecting to a MySQL instance where the external port
+	// may not match the internal port.
+	SkipPortValidation bool
+
 	config            ContextConfig
 	configMutex       *sync.Mutex
 	ConfigFile        string
