@@ -1220,6 +1220,12 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		}
 		defer conn.Close()
 
+		sessionQuery := "SET /* gh-ost */ SESSION time_zone = '+00:00'"
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
+		if _, err := conn.ExecContext(ctx, sessionQuery); err != nil {
+			return err
+		}
+
 		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
 			return err
@@ -1227,13 +1233,6 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		rollback := func(err error) error {
 			tx.Rollback()
 			return err
-		}
-
-		sessionQuery := "SET /* gh-ost */ SESSION time_zone = '+00:00'"
-		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
-
-		if _, err := tx.Exec(sessionQuery); err != nil {
-			return rollback(err)
 		}
 
 		buildResults := make([]*dmlBuildResult, 0, len(dmlEvents))
@@ -1248,6 +1247,9 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 			}
 		}
 
+		// We batch together the DML queries into multi-statements to minimize network trips.
+		// We have to use the raw driver connection to access the rows affected
+		// for each statement in the multi-statement.
 		execErr := conn.Raw(func(driverConn any) error {
 			ex := driverConn.(driver.ExecerContext)
 			nvc := driverConn.(driver.NamedValueChecker)
