@@ -93,6 +93,7 @@ func (suite *EventsStreamerTestSuite) TestStreamEvents() {
 
 	err = streamer.InitDBConnections()
 	suite.Require().NoError(err)
+	defer streamer.Close()
 	defer streamer.Teardown()
 
 	streamCtx, cancel := context.WithCancel(context.Background())
@@ -172,6 +173,7 @@ func (suite *EventsStreamerTestSuite) TestStreamEventsAutomaticallyReconnects() 
 
 	err = streamer.InitDBConnections()
 	suite.Require().NoError(err)
+	defer streamer.Close()
 	defer streamer.Teardown()
 
 	streamCtx, cancel := context.WithCancel(context.Background())
