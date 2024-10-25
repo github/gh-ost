@@ -217,6 +217,7 @@ func (suite *EventsStreamerTestSuite) TestStreamEventsAutomaticallyReconnects() 
 			return err
 		}
 
+		//nolint:execinquery
 		rows, err := suite.db.Query("SHOW FULL PROCESSLIST")
 		if err != nil {
 			return err
