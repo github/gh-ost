@@ -75,11 +75,13 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	}
 }
 
-func (this *Applier) InitDBConnections() (err error) {
+func (this *Applier) InitDBConnections(maxConns int) (err error) {
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
 		return err
 	}
+	this.db.SetMaxOpenConns(maxConns)
+	this.db.SetMaxIdleConns(maxConns)
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
 	if this.singletonDB, _, err = mysql.GetDB(this.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
@@ -1231,6 +1233,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 					return rollback(buildResult.err)
 				}
 				result, err := tx.Exec(buildResult.query, buildResult.args...)
+
 				if err != nil {
 					err = fmt.Errorf("%w; query=%s; args=%+v", err, buildResult.query, buildResult.args)
 					return rollback(err)

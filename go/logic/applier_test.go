@@ -284,7 +284,7 @@ func (suite *ApplierTestSuite) TestInitDBConnections() {
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	suite.Require().Equal("8.0.40", migrationContext.ApplierMySQLVersion)
@@ -318,7 +318,7 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	rc, _, err := suite.mysqlContainer.Exec(ctx, []string{"mysql", "-uroot", "-proot-password", "-e", "CREATE TABLE test._testing_gho (id INT, item_id INT);"})
@@ -380,7 +380,7 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	err = applier.ValidateOrDropExistingTables()
@@ -426,7 +426,7 @@ func (suite *ApplierTestSuite) TestApplyIterationInsertQuery() {
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	chunkSize, rowsAffected, duration, err := applier.ApplyIterationInsertQuery()
@@ -492,7 +492,7 @@ func (suite *ApplierTestSuite) TestApplyIterationInsertQueryFailsFastWhenSelecti
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	// Lock one of the rows
