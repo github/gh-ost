@@ -332,8 +332,6 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
-	// TODO(meiji163): configure workers
-	this.migrationContext.NumWorkers = 16
 	this.trxCoordinator = NewCoordinator(this.migrationContext, this.applier, this.throttler, this.onChangelogEvent)
 
 	if err := this.initiateStreaming(); err != nil {
@@ -364,7 +362,7 @@ func (this *Migrator) Migrate() (err error) {
 		}
 	}
 
-	this.migrationContext.Log.Info("starting applier workers")
+	this.migrationContext.Log.Infof("starting %d applier workers", this.migrationContext.NumWorkers)
 	this.trxCoordinator.InitializeWorkers(this.migrationContext.NumWorkers)
 
 	initialLag, _ := this.inspector.getReplicationLag()

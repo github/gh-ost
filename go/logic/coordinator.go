@@ -276,8 +276,6 @@ func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, t
 		waitingJobs:   make(map[int64][]chan struct{}),
 
 		events: make(chan *replication.BinlogEvent, 1000),
-
-		workerQueue: make(chan *Worker, 16),
 	}
 }
 
