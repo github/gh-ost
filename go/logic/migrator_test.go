@@ -324,6 +324,7 @@ func TestMigrate(t *testing.T) {
 	migrationContext.HeartbeatIntervalMilliseconds = 100
 	migrationContext.ServeSocketFile = "/tmp/gh-ost.sock"
 	migrationContext.ThrottleHTTPIntervalMillis = 100
+	migrationContext.NumWorkers = 8
 
 	migrationContext.InspectorConnectionConfig = &mysql.ConnectionConfig{
 		ImpliedKey: &mysql.InstanceKey{
