@@ -278,7 +278,7 @@ func (c *Coordinator) StartStreaming(ctx context.Context, canStopStreaming func(
 	for {
 		if err := c.binlogReader.StreamEvents(ctx, c.events); err != nil {
 			if errors.Is(err, context.Canceled) {
-				return nil
+				return err
 			}
 
 			c.migrationContext.Log.Infof("StreamEvents encountered unexpected error: %+v", err)

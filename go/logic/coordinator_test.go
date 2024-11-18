@@ -110,8 +110,6 @@ func TestCoordinator(t *testing.T) {
 	err = applier.CreateChangelogTable()
 	require.NoError(t, err)
 
-	// 	ctx, cancel := context.WithCancel(context.Background())
-
 	for i := 0; i < 100; i++ {
 		tx, err := db.Begin()
 		require.NoError(t, err)
@@ -146,6 +144,10 @@ func TestCoordinator(t *testing.T) {
 			return nil
 		})
 	coord.applier = applier
+	coord.currentCoordinates = mysql.BinlogCoordinates{
+		LogFile: "binlog.000001",
+		LogPos:  int64(4),
+	}
 	coord.InitializeWorkers(8)
 
 	streamCtx, cancelStreaming := context.WithCancel(context.Background())
