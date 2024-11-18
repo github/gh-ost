@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	gomysql "github.com/go-mysql-org/go-mysql/mysql"
+	"errors"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -21,7 +21,7 @@ import (
 type Coordinator struct {
 	migrationContext *base.MigrationContext
 
-	binlogSyncer *replication.BinlogSyncer
+	binlogReader *binlog.GoMySQLReader
 
 	onChangelogEvent func(dmlEvent *binlog.BinlogDMLEvent) error
 
@@ -247,8 +247,6 @@ func (w *Worker) applyDMLEvents(dmlEvents []*binlog.BinlogDMLEvent) error {
 }
 
 func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, throttler *Throttler, onChangelogEvent func(dmlEvent *binlog.BinlogDMLEvent) error) *Coordinator {
-	connectionConfig := migrationContext.InspectorConnectionConfig
-
 	return &Coordinator{
 		migrationContext: migrationContext,
 
@@ -258,18 +256,7 @@ func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, t
 
 		currentCoordinates: mysql.BinlogCoordinates{},
 
-		binlogSyncer: replication.NewBinlogSyncer(replication.BinlogSyncerConfig{
-			ServerID:                uint32(migrationContext.ReplicaServerId),
-			Flavor:                  gomysql.MySQLFlavor,
-			Host:                    connectionConfig.Key.Hostname,
-			Port:                    uint16(connectionConfig.Key.Port),
-			User:                    connectionConfig.User,
-			Password:                connectionConfig.Password,
-			TLSConfig:               connectionConfig.TLSConfig(),
-			UseDecimal:              true,
-			MaxReconnectAttempts:    migrationContext.BinlogSyncerMaxReconnectAttempts,
-			TimestampStringLocation: time.UTC,
-		}),
+		binlogReader: binlog.NewGoMySQLReader(migrationContext),
 
 		lowWaterMark:  0,
 		completedJobs: make(map[int64]*mysql.BinlogCoordinates),
@@ -280,46 +267,37 @@ func NewCoordinator(migrationContext *base.MigrationContext, applier *Applier, t
 }
 
 func (c *Coordinator) StartStreaming(ctx context.Context, canStopStreaming func() bool) error {
-	streamer, err := c.binlogSyncer.StartSync(gomysql.Position{
-		Name: c.currentCoordinates.LogFile,
-		Pos:  uint32(c.currentCoordinates.LogPos),
-	})
+	coords := c.GetCurrentBinlogCoordinates()
+	err := c.binlogReader.ConnectBinlogStreamer(*coords)
 	if err != nil {
 		return err
 	}
-	defer c.binlogSyncer.Close()
+	defer c.binlogReader.Close()
 
 	var retries int64
 	for {
-		if canStopStreaming() {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		ev, err := streamer.GetEvent(ctx)
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err != nil {
-			coords := c.GetCurrentBinlogCoordinates()
+		if err := c.binlogReader.StreamEvents(ctx, c.events); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+
+			c.migrationContext.Log.Infof("StreamEvents encountered unexpected error: %+v", err)
+			c.migrationContext.MarkPointOfInterest()
+
 			if retries >= c.migrationContext.MaxRetries() {
 				return fmt.Errorf("%d successive failures in streamer reconnect at coordinates %+v", retries, coords)
 			}
 			c.migrationContext.Log.Infof("Reconnecting... Will resume at %+v", coords)
-			retries += 1
+
 			// We reconnect at the position of the last low water mark.
-			// Some jobs after low water mark may have already applied, but
+			// Some jobs after the low water mark may have already applied, but
 			// it's OK to reapply them since the DML operations are idempotent.
-			streamer, err = c.binlogSyncer.StartSync(gomysql.Position{
-				Name: coords.LogFile,
-				Pos:  uint32(coords.LogPos),
-			})
-			if err != nil {
+			coords := c.GetCurrentBinlogCoordinates()
+			if err := c.binlogReader.ConnectBinlogStreamer(*coords); err != nil {
 				return err
 			}
+			retries += 1
 		}
-		c.events <- ev
 	}
 }
 

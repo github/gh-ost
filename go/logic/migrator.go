@@ -58,7 +58,6 @@ type Migrator struct {
 	parser           *sql.AlterTableParser
 	inspector        *Inspector
 	applier          *Applier
-	eventsStreamer   *EventsStreamer
 	server           *Server
 	throttler        *Throttler
 	hooksExecutor    *HooksExecutor
@@ -1072,7 +1071,6 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		return
 	}
 
-	// currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
 	currentBinlogCoordinates := *this.trxCoordinator.GetCurrentBinlogCoordinates()
 
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
@@ -1109,19 +1107,14 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 // initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
-	this.eventsStreamer = NewEventsStreamer(this.migrationContext)
-	if err := this.eventsStreamer.InitDBConnections(); err != nil {
+	initialCoords, err := this.inspector.readCurrentBinlogCoordinates()
+	if err != nil {
 		return err
 	}
+	this.trxCoordinator.currentCoordinates = *initialCoords
 
-	// TODO
-	coord := this.eventsStreamer.GetCurrentBinlogCoordinates()
-	this.trxCoordinator.currentCoordinates = *coord
-
-	//	ctx := context.Background()
 	go func() {
-		this.migrationContext.Log.Debugf("Beginning streaming")
-		//err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
+		this.migrationContext.Log.Debugf("Beginning streaming at coordinates: %+v", *initialCoords)
 		ctx := context.TODO()
 		err := this.trxCoordinator.StartStreaming(ctx, this.canStopStreaming)
 		if err != nil {
@@ -1137,7 +1130,6 @@ func (this *Migrator) initiateStreaming() error {
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}
-			//this.migrationContext.SetRecentBinlogCoordinates(*this.eventsStreamer.GetCurrentBinlogCoordinates())
 		}
 	}()
 	return nil
@@ -1280,11 +1272,10 @@ func (this *Migrator) executeWriteFuncs() error {
 			return nil
 		}
 
-		// TODO: Pass the throttler to the coordinator, so that it can throttle the events
 		this.throttler.throttle(nil)
 
 		// We give higher priority to event processing.
-		// ProcessEventsUntilDrained will process all events in the queue, and then return. once no more events are available.
+		// ProcessEventsUntilDrained will process all events in the queue, and then return once no more events are available.
 		this.trxCoordinator.ProcessEventsUntilDrained()
 
 		this.throttler.throttle(nil)
@@ -1333,10 +1324,6 @@ func (this *Migrator) finalCleanup() error {
 			this.migrationContext.Log.Errore(err)
 		}
 	}
-	if err := this.eventsStreamer.Close(); err != nil {
-		this.migrationContext.Log.Errore(err)
-	}
-
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
 		return err
 	}
@@ -1380,10 +1367,5 @@ func (this *Migrator) teardown() {
 	if this.applier != nil {
 		this.migrationContext.Log.Infof("Tearing down applier")
 		this.applier.Teardown()
-	}
-
-	if this.eventsStreamer != nil {
-		this.migrationContext.Log.Infof("Tearing down streamer")
-		this.eventsStreamer.Teardown()
 	}
 }
