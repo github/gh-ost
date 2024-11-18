@@ -8,9 +8,9 @@ package logic
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,14 +19,12 @@ import (
 	gosql "database/sql"
 
 	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"sync"
-
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
-	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 )
 
@@ -263,151 +261,115 @@ func TestMigratorShouldPrintStatus(t *testing.T) {
 	require.True(t, migrator.shouldPrintStatus(HeuristicPrintStatusRule, 30030, 86400*time.Second))  // test 'else' again
 }
 
-func prepareDatabase(t *testing.T, db *gosql.DB) {
-	_, err := db.Exec("RESET MASTER")
-	require.NoError(t, err)
+type MigratorTestSuite struct {
+	suite.Suite
 
-	_, err = db.Exec("SET @@GLOBAL.	binlog_transaction_dependency_tracking = WRITESET")
-	require.NoError(t, err)
-
-	_, err = db.Exec("CREATE DATABASE test")
-	require.NoError(t, err)
-
-	_, err = db.Exec("CREATE TABLE test.gh_ost_test (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255)) ENGINE=InnoDB")
-	require.NoError(t, err)
+	mysqlContainer testcontainers.Container
+	db             *gosql.DB
 }
 
-func TestMigrate(t *testing.T) {
+func (suite *MigratorTestSuite) SetupSuite() {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
-		Image:      "mysql:8.0",
-		Env:        map[string]string{"MYSQL_ROOT_PASSWORD": "root"},
-		WaitingFor: wait.ForLog("port: 3306  MySQL Community Server - GPL"),
+		Image:        "mysql:8.0.40",
+		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root-password"},
+		ExposedPorts: []string{"3306/tcp"},
+		WaitingFor:   wait.ForListeningPort("3306/tcp"),
 	}
 
 	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ctx := context.Background()
-		require.NoError(t, mysqlContainer.Terminate(ctx))
-	})
 
-	host, err := mysqlContainer.Host(ctx)
-	require.NoError(t, err)
+	suite.Require().NoError(err)
 
-	mappedPort, err := mysqlContainer.MappedPort(ctx, "3306")
-	require.NoError(t, err)
+	suite.mysqlContainer = mysqlContainer
 
-	db, err := gosql.Open("mysql", "root:root@tcp("+host+":"+mappedPort.Port()+")/")
-	require.NoError(t, err)
+	dsn, err := GetDSN(ctx, mysqlContainer)
+	suite.Require().NoError(err)
 
-	defer func() {
-		require.NoError(t, db.Close())
-	}()
+	db, err := gosql.Open("mysql", dsn)
+	suite.Require().NoError(err)
 
-	_ = os.Remove("/tmp/gh-ost.sock")
+	suite.db = db
+}
 
-	prepareDatabase(t, db)
+func (suite *MigratorTestSuite) TeardownSuite() {
+	ctx := context.Background()
+
+	suite.Assert().NoError(suite.db.Close())
+	suite.Assert().NoError(suite.mysqlContainer.Terminate(ctx))
+}
+
+func (suite *MigratorTestSuite) SetupTest() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, "CREATE DATABASE test")
+	suite.Require().NoError(err)
+}
+
+func (suite *MigratorTestSuite) TearDownTest() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, "DROP DATABASE test")
+	suite.Require().NoError(err)
+}
+
+func (suite *MigratorTestSuite) TestFoo() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT PRIMARY KEY, name VARCHAR(64))")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
-	// Hack:
-	migrationContext.AzureMySQL = true
-	migrationContext.AssumeMasterHostname = host + ":" + mappedPort.Port()
-	migrationContext.DatabaseName = "test"
-	migrationContext.OriginalTableName = "gh_ost_test"
-	migrationContext.AlterStatement = "ALTER TABLE gh_ost_test ENGINE=InnoDB"
 	migrationContext.AllowedRunningOnMaster = true
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
+	migrationContext.OriginalTableName = "testing"
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.AlterStatementOptions = "ADD COLUMN foobar varchar(255), ENGINE=InnoDB"
 	migrationContext.ReplicaServerId = 99999
 	migrationContext.HeartbeatIntervalMilliseconds = 100
-	migrationContext.ServeSocketFile = "/tmp/gh-ost.sock"
 	migrationContext.ThrottleHTTPIntervalMillis = 100
-	migrationContext.NumWorkers = 8
+	migrationContext.ThrottleHTTPTimeoutMillis = 1000
 
-	migrationContext.InspectorConnectionConfig = &mysql.ConnectionConfig{
-		ImpliedKey: &mysql.InstanceKey{
-			Hostname: host,
-			Port:     mappedPort.Int(),
-		},
-		Key: mysql.InstanceKey{
-			Hostname: host,
-			Port:     mappedPort.Int(),
-		},
-		User:     "root",
-		Password: "root",
-	}
+	//nolint:dogsled
+	_, filename, _, _ := runtime.Caller(0)
+	migrationContext.ServeSocketFile = filepath.Join(filepath.Dir(filename), "../../tmp/gh-ost.sock")
 
-	migrationContext.SetConnectionConfig("innodb")
-
-	migrator := NewMigrator(migrationContext, "1.2.3")
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	rowsWritten := atomic.Int32{}
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			if ctx.Err() != nil {
-				return
-			}
-			_, err := db.ExecContext(ctx, "INSERT INTO test.gh_ost_test (name) VALUES ('test')")
-			if errors.Is(err, context.Canceled) {
-				return
-			}
-			require.NoError(t, err)
-			rowsWritten.Add(1)
-
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			tx, err := db.BeginTx(ctx, &gosql.TxOptions{})
-			if errors.Is(err, context.Canceled) {
-				return
-			}
-			// if err != nil {
-			// 	fmt.Println(err.Error())
-			// }
-			require.NoError(t, err)
-
-			for i := 0; i < 10; i++ {
-				_, err = tx.ExecContext(ctx, "INSERT INTO test.gh_ost_test (name) VALUES ('test')")
-				if errors.Is(err, context.Canceled) {
-					return
-				}
-				require.NoError(t, err)
-				rowsWritten.Add(1)
-			}
-			err = tx.Commit()
-			if errors.Is(err, context.Canceled) {
-				return
-			}
-			require.NoError(t, err)
-
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		time.Sleep(5 * time.Second)
-		cancel()
-	}()
+	migrator := NewMigrator(migrationContext, "0.0.0")
 
 	err = migrator.Migrate()
-	wg.Wait()
-	require.NoError(t, err)
+	suite.Require().NoError(err)
 
-	fmt.Printf("Rows written: %d\n", rowsWritten.Load())
+	// Verify the new column was added
+	var tableName, createTableSQL string
+	//nolint:execinquery
+	err = suite.db.QueryRow("SHOW CREATE TABLE test.testing").Scan(&tableName, &createTableSQL)
+	suite.Require().NoError(err)
+
+	suite.Require().Equal("testing", tableName)
+	suite.Require().Equal("CREATE TABLE `testing` (\n  `id` int NOT NULL,\n  `name` varchar(64) DEFAULT NULL,\n  `foobar` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createTableSQL)
+
+	// Verify the changelog table was claned up
+	//nolint:execinquery
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_ghc'").Scan(&tableName)
+	suite.Require().Error(err)
+	suite.Require().Equal(gosql.ErrNoRows, err)
+
+	// Verify the old table was renamed
+	//nolint:execinquery
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_del'").Scan(&tableName)
+	suite.Require().NoError(err)
+	suite.Require().Equal("_testing_del", tableName)
+}
+
+func TestMigrator(t *testing.T) {
+	suite.Run(t, new(MigratorTestSuite))
 }

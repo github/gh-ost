@@ -51,7 +51,7 @@ func TestCoordinator(t *testing.T) {
 
 	_ = os.Remove("/tmp/gh-ost.sock")
 
-	prepareDatabase(t, db)
+	//prepareDatabase(t, db)
 
 	_, err = db.Exec("CREATE TABLE test._gh_ost_test_gho (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255))")
 	require.NoError(t, err)
