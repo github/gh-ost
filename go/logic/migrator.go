@@ -367,6 +367,9 @@ func (this *Migrator) Migrate() (err error) {
 		} else {
 			this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := this.applier.AttemptInstantDDL(); err == nil {
+				if err := this.hooksExecutor.onSuccess(); err != nil {
+					return err
+				}
 				this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 				return nil
 			} else {
