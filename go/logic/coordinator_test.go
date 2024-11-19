@@ -82,6 +82,7 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 	ctx := context.Background()
 
 	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
 
 	_ = os.Remove("/tmp/gh-ost.sock")
 
