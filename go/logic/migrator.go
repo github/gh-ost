@@ -410,13 +410,6 @@ waitForGhostTable:
 	if err := this.countTableRows(); err != nil {
 		return err
 	}
-	// if err := this.addDMLEventsListener(); err != nil {
-	// 	return err
-	// }
-
-	// if err := this.addTrxListener(); err != nil {
-	// 	return err
-	// }
 
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err

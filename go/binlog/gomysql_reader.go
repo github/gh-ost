@@ -76,8 +76,11 @@ func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinate
 
 // StreamEvents reads binlog events and sends them to the given channel.
 // It is blocking and should be executed in a goroutine.
-func (this *GoMySQLReader) StreamEvents(ctx context.Context, eventChannel chan<- *replication.BinlogEvent) error {
+func (this *GoMySQLReader) StreamEvents(ctx context.Context, canStopStreaming func() bool, eventChannel chan<- *replication.BinlogEvent) error {
 	for {
+		if canStopStreaming() {
+			return nil
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}

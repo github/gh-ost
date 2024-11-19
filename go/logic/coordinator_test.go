@@ -12,49 +12,81 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func TestCoordinator(t *testing.T) {
+type CoordinatorTestSuite struct {
+	suite.Suite
+
+	mysqlContainer testcontainers.Container
+	db             *gosql.DB
+}
+
+func (suite *CoordinatorTestSuite) SetupSuite() {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
-		Image:        "mysql:8.0",
-		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root"},
-		WaitingFor:   wait.ForLog("port: 3306  MySQL Community Server - GPL"),
-		ExposedPorts: []string{"3306"},
+		Image:        "mysql:8.0.40",
+		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root-password"},
+		WaitingFor:   wait.ForListeningPort("3306/tcp"),
+		ExposedPorts: []string{"3306/tcp"},
 	}
 
 	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ctx := context.Background()
-		require.NoError(t, mysqlContainer.Terminate(ctx))
-	})
+	suite.Require().NoError(err)
 
-	host, err := mysqlContainer.Host(ctx)
-	require.NoError(t, err)
+	suite.mysqlContainer = mysqlContainer
 
-	mappedPort, err := mysqlContainer.MappedPort(ctx, "3306")
-	require.NoError(t, err)
+	dsn, err := GetDSN(ctx, mysqlContainer)
+	suite.Require().NoError(err)
 
-	db, err := gosql.Open("mysql", "root:root@tcp("+host+":"+mappedPort.Port()+")/")
-	require.NoError(t, err)
+	db, err := gosql.Open("mysql", dsn)
+	suite.Require().NoError(err)
 
-	t.Cleanup(func() {
-		require.NoError(t, db.Close())
-	})
+	suite.db = db
+}
+
+func (suite *CoordinatorTestSuite) SetupTest() {
+	ctx := context.Background()
+	_, err := suite.db.ExecContext(ctx, "RESET MASTER")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "SET @@GLOBAL.binlog_transaction_dependency_tracking = WRITESET")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE test")
+	suite.Require().NoError(err)
+}
+
+func (suite *CoordinatorTestSuite) TearDownTest() {
+	ctx := context.Background()
+	_, err := suite.db.ExecContext(ctx, "DROP DATABASE test")
+	suite.Require().NoError(err)
+}
+
+func (suite *CoordinatorTestSuite) TeardownSuite() {
+	ctx := context.Background()
+
+	suite.Assert().NoError(suite.db.Close())
+	suite.Assert().NoError(suite.mysqlContainer.Terminate(ctx))
+}
+
+func (suite *CoordinatorTestSuite) TestApplyDML() {
+	ctx := context.Background()
+
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
 
 	_ = os.Remove("/tmp/gh-ost.sock")
 
-	//prepareDatabase(t, db)
+	_, err = suite.db.Exec("CREATE TABLE test.gh_ost_test (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255)) ENGINE=InnoDB")
+	suite.Require().NoError(err)
 
-	_, err = db.Exec("CREATE TABLE test._gh_ost_test_gho (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255))")
-	require.NoError(t, err)
+	_, err = suite.db.Exec("CREATE TABLE test._gh_ost_test_gho (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255))")
+	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
 	migrationContext.DatabaseName = "test"
@@ -67,23 +99,8 @@ func TestCoordinator(t *testing.T) {
 	migrationContext.ThrottleHTTPIntervalMillis = 100
 	migrationContext.DMLBatchSize = 10
 
-	migrationContext.ApplierConnectionConfig = &mysql.ConnectionConfig{
-		Key: mysql.InstanceKey{
-			Hostname: host,
-			Port:     mappedPort.Int(),
-		},
-		User:     "root",
-		Password: "root",
-	}
-
-	migrationContext.InspectorConnectionConfig = &mysql.ConnectionConfig{
-		Key: mysql.InstanceKey{
-			Hostname: host,
-			Port:     mappedPort.Int(),
-		},
-		User:     "root",
-		Password: "root",
-	}
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
 
 	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "name"})
 	migrationContext.GhostTableColumns = sql.NewColumnList([]string{"id", "name"})
@@ -96,41 +113,41 @@ func TestCoordinator(t *testing.T) {
 	}
 
 	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.SkipPortValidation = true
 	migrationContext.NumWorkers = 4
-	// HACK: so
-	migrationContext.AzureMySQL = true
 
 	applier := NewApplier(migrationContext)
 	err = applier.InitDBConnections(migrationContext.NumWorkers)
-	require.NoError(t, err)
+	suite.Require().NoError(err)
 
 	err = applier.prepareQueries()
-	require.NoError(t, err)
+	suite.Require().NoError(err)
 
 	err = applier.CreateChangelogTable()
-	require.NoError(t, err)
+	suite.Require().NoError(err)
 
+	//  TODO: use errgroup
 	for i := 0; i < 100; i++ {
-		tx, err := db.Begin()
-		require.NoError(t, err)
+		tx, err := suite.db.Begin()
+		suite.Require().NoError(err)
 
 		for j := 0; j < 100; j++ {
 			_, err = tx.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test')")
-			require.NoError(t, err)
+			suite.Require().NoError(err)
 		}
 
 		err = tx.Commit()
-		require.NoError(t, err)
+		suite.Require().NoError(err)
 	}
 
-	_, err = db.Exec("UPDATE test.gh_ost_test SET name = 'foobar' WHERE id = 1")
-	require.NoError(t, err)
+	_, err = suite.db.Exec("UPDATE test.gh_ost_test SET name = 'foobar' WHERE id = 1")
+	suite.Require().NoError(err)
 
-	_, err = db.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test')")
-	require.NoError(t, err)
+	_, err = suite.db.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test')")
+	suite.Require().NoError(err)
 
 	_, err = applier.WriteChangelogState("completed")
-	require.NoError(t, err)
+	suite.Require().NoError(err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -148,7 +165,7 @@ func TestCoordinator(t *testing.T) {
 		LogFile: "binlog.000001",
 		LogPos:  int64(4),
 	}
-	coord.InitializeWorkers(8)
+	coord.InitializeWorkers(4)
 
 	streamCtx, cancelStreaming := context.WithCancel(context.Background())
 	canStopStreaming := func() bool {
@@ -156,7 +173,7 @@ func TestCoordinator(t *testing.T) {
 	}
 	go func() {
 		err = coord.StartStreaming(streamCtx, canStopStreaming)
-		require.Equal(t, context.Canceled, err)
+		suite.Require().Equal(context.Canceled, err)
 	}()
 
 	// Give streamer some time to start
@@ -171,8 +188,12 @@ func TestCoordinator(t *testing.T) {
 		}
 
 		err = coord.ProcessEventsUntilDrained()
-		require.NoError(t, err)
+		suite.Require().NoError(err)
 	}
 
 	fmt.Printf("Time taken: %s\n", time.Since(startAt))
+}
+
+func TestCoordinator(t *testing.T) {
+	suite.Run(t, new(CoordinatorTestSuite))
 }

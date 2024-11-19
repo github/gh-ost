@@ -276,7 +276,13 @@ func (c *Coordinator) StartStreaming(ctx context.Context, canStopStreaming func(
 
 	var retries int64
 	for {
-		if err := c.binlogReader.StreamEvents(ctx, c.events); err != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if canStopStreaming() {
+			return nil
+		}
+		if err := c.binlogReader.StreamEvents(ctx, canStopStreaming, c.events); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
