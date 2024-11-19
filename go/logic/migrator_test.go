@@ -305,7 +305,10 @@ func (suite *MigratorTestSuite) TeardownSuite() {
 func (suite *MigratorTestSuite) SetupTest() {
 	ctx := context.Background()
 
-	_, err := suite.db.ExecContext(ctx, "CREATE DATABASE test")
+	_, err := suite.db.ExecContext(ctx, "SET @@GLOBAL.binlog_transaction_dependency_tracking = WRITESET")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE test")
 	suite.Require().NoError(err)
 }
 
@@ -322,6 +325,9 @@ func (suite *MigratorTestSuite) TestFoo() {
 	_, err := suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT PRIMARY KEY, name VARCHAR(64))")
 	suite.Require().NoError(err)
 
+	_, err = suite.db.ExecContext(ctx, "INSERT INTO test.testing(id, name) VALUES (1, 'mona')")
+	suite.Require().NoError(err)
+
 	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
@@ -330,18 +336,20 @@ func (suite *MigratorTestSuite) TestFoo() {
 	migrationContext.ApplierConnectionConfig = connectionConfig
 	migrationContext.InspectorConnectionConfig = connectionConfig
 	migrationContext.DatabaseName = "test"
-	migrationContext.SkipPortValidation = true
 	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
-	migrationContext.AlterStatementOptions = "ADD COLUMN foobar varchar(255), ENGINE=InnoDB"
+	migrationContext.AlterStatementOptions = "ADD COLUMN foobar varchar(255)"
 	migrationContext.ReplicaServerId = 99999
 	migrationContext.HeartbeatIntervalMilliseconds = 100
 	migrationContext.ThrottleHTTPIntervalMillis = 100
-	migrationContext.ThrottleHTTPTimeoutMillis = 1000
+	migrationContext.DMLBatchSize = 10
+	migrationContext.NumWorkers = 4
+	migrationContext.SkipPortValidation = true
 
 	//nolint:dogsled
 	_, filename, _, _ := runtime.Caller(0)
 	migrationContext.ServeSocketFile = filepath.Join(filepath.Dir(filename), "../../tmp/gh-ost.sock")
+	_ = os.Remove(filename)
 
 	migrator := NewMigrator(migrationContext, "0.0.0")
 

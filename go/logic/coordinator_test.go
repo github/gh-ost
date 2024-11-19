@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"path/filepath"
+	"runtime"
+
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
@@ -95,7 +98,6 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 	migrationContext.AllowedRunningOnMaster = true
 	migrationContext.ReplicaServerId = 99999
 	migrationContext.HeartbeatIntervalMilliseconds = 100
-	migrationContext.ServeSocketFile = "/tmp/gh-ost.sock"
 	migrationContext.ThrottleHTTPIntervalMillis = 100
 	migrationContext.DMLBatchSize = 10
 
@@ -115,6 +117,10 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 	migrationContext.SetConnectionConfig("innodb")
 	migrationContext.SkipPortValidation = true
 	migrationContext.NumWorkers = 4
+
+	//nolint:dogsled
+	_, filename, _, _ := runtime.Caller(0)
+	migrationContext.ServeSocketFile = filepath.Join(filepath.Dir(filename), "../../tmp/gh-ost.sock")
 
 	applier := NewApplier(migrationContext)
 	err = applier.InitDBConnections(migrationContext.NumWorkers)
