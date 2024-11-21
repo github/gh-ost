@@ -294,6 +294,10 @@ Defaults to 1000 (1 second). Configures the HTTP throttler check timeout in mill
 
 Makes the _old_ table include a timestamp value. The _old_ table is what the original table is renamed to at the end of a successful migration. For example, if the table is `gh_ost_test`, then the _old_ table would normally be `_gh_ost_test_del`. With `--timestamp-old-table` it would be, for example, `_gh_ost_test_20170221103147_del`.
 
+### transaction-isolation
+
+Defaults to `REPEATABLE-READ`. Configures the session-level transaction isolation level used for applier and inspector connections. Possible values: `REPEATABLE-READ` or `READ-COMMITTED`.
+
 ### tungsten
 
 See [`tungsten`](cheatsheet.md#tungsten) on the cheatsheet.
