@@ -1,0 +1,45 @@
+#!/bin/bash
+
+verbose=true
+# execute from gh-ost repo root directory
+root_dir="$PWD"
+
+container_exec() {
+    if [ "$verbose" = true ]; then
+        echo "$1: $2"
+    fi
+    docker exec "$1" bash -c "MYSQL_PWD=opensesame mysql -uroot -Ne \"$2\" test"
+}
+
+poll_container() {
+    CTR=0
+    while ! container_exec "$1" "select 1;" 2>&1 | grep -q "1"
+    do
+        sleep 1
+        CTR=$((CTR + 1))
+        if [ $CTR -gt 30 ]; then
+            echo "failed to start MySQL on $1"
+            exit 1
+        fi
+    done
+    echo "started MySQL on $1"
+}
+
+setup() {
+    docker compose -f "$root_dir/localtests/docker-compose.yml" up -d
+    poll_container "mysql-primary"
+    poll_container "mysql-replica"
+
+    export PATH="$PATH:$root_dir/script"
+
+    gh-ost-test-mysql-master -e "alter user 'repl'@'%' identified with 'mysql_native_password' by 'repl';"
+    gh-ost-test-mysql-master -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
+    gh-ost-test-mysql-master -e "create user if not exists 'gh-ost'@'%' identified by 'gh-ost'"
+    gh-ost-test-mysql-master -e "grant all on *.* to 'gh-ost'@'%'"
+
+    gh-ost-test-mysql-replica -e "flush privileges;"
+    gh-ost-test-mysql-replica -e "change replication source to source_host='mysql-primary', source_port=3307, source_user='repl', source_password='repl', source_auto_position=1;"
+    gh-ost-test-mysql-replica -e "start replica;"
+}
+
+setup
