@@ -194,6 +194,7 @@ type MigrationContext struct {
 	CurrentLag                             int64
 	currentProgress                        uint64
 	etaNanoseonds                          int64
+	EtaRowsPerSecond                       int64
 	ThrottleHTTPIntervalMillis             int64
 	ThrottleHTTPStatusCode                 int64
 	ThrottleHTTPTimeoutMillis              int64
