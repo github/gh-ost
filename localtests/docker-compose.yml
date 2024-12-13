@@ -5,6 +5,7 @@ services:
     command: --server-id=1 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON
     environment:
       MYSQL_ROOT_PASSWORD: opensesame
+      MYSQL_ROOT_HOST: '%'
       MYSQL_DATABASE: test
       MYSQL_TCP_PORT: 3307
     ports:
@@ -17,6 +18,7 @@ services:
     command: --server-id=2 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON --log-slave-updates=ON
     environment:
       MYSQL_ROOT_PASSWORD: opensesame
+      MYSQL_ROOT_HOST: '%'
       MYSQL_DATABASE: test
       MYSQL_TCP_PORT: 3308
     ports:
