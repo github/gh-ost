@@ -3,3 +3,4 @@
 /libexec/
 /.vendor/
 .idea/
+*.tmp

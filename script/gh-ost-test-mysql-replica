@@ -1,0 +1,6 @@
+#!/bin/bash
+#
+# This executes a command on the mysql-replica docker container created
+# from localtests/docker-compose.yml. It's used by localtests/test.sh.
+
+MYSQL_PWD=opensesame mysql -uroot -h0.0.0.0 -P3308 "$@"
