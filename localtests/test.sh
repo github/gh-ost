@@ -11,6 +11,7 @@ tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
 default_ghost_binary=/tmp/gh-ost-test
 ghost_binary=""
+docker=false
 storage_engine=innodb
 exec_command_file=/tmp/gh-ost-test.bash
 ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
@@ -25,13 +26,15 @@ replica_port=
 original_sql_mode=
 
 OPTIND=1
-while getopts "b:s:" OPTION
+while getopts "b:s:d" OPTION
 do
   case $OPTION in
     b)
       ghost_binary="$OPTARG";;
     s)
       storage_engine="$OPTARG";;
+    d)
+      docker=true;;
   esac
 done
 shift $((OPTIND-1))
@@ -97,6 +100,13 @@ start_replication() {
 test_single() {
   local test_name
   test_name="$1"
+
+  if [ "$docker" = true ]; then
+    master_host="0.0.0.0"
+    master_port="3307"
+    replica_host="0.0.0.0"
+    replica_port="3308"
+  fi
 
   if [ -f $tests_path/$test_name/ignore_versions ] ; then
     ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
@@ -270,9 +280,10 @@ build_binary() {
 
 test_all() {
   build_binary
-  find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | egrep "$test_pattern" | sort | while read test_name ; do
-    test_single "$test_name"
-    if [ $? -ne 0 ] ; then
+  test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | sort)
+  while read -r test_dir; do
+    test_name=$(basename "$test_dir")
+    if ! test_single "$test_name" ; then
       create_statement=$(gh-ost-test-mysql-replica test -t -e "show create table _gh_ost_test_gho \G")
       echo "$create_statement" >> $test_logfile
       echo "+ FAIL"
@@ -282,7 +293,7 @@ test_all() {
       echo "+ pass"
     fi
     gh-ost-test-mysql-replica -e "start slave"
-  done
+  done <<< "$test_dirs"
 }
 
 verify_master_and_replica
