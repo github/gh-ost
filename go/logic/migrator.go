@@ -367,6 +367,9 @@ func (this *Migrator) Migrate() (err error) {
 		} else {
 			this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := this.applier.AttemptInstantDDL(); err == nil {
+				if err := this.hooksExecutor.onSuccess(); err != nil {
+					return err
+				}
 				this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 				return nil
 			} else {
@@ -384,6 +387,10 @@ func (this *Migrator) Migrate() (err error) {
 	// on master this is always true, of course, and yet it also implies this knowledge
 	// is in the binlogs.
 	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
+		return err
+	}
+	// We can prepare some of the queries on the applier
+	if err := this.applier.prepareQueries(); err != nil {
 		return err
 	}
 	// Validation complete! We're good to execute this migration

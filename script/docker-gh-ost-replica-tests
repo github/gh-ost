@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# This script starts two MySQL docker containers in a primary-replica setup
+# which can be used for running the replica tests in localtests/ .
+# Set the environment var TEST_MYSQL_IMAGE to change the docker image.
+#
+# Usage:
+#   docker-gh-ost-replica-tests up      start the containers
+#   docker-gh-ost-replica-tests down    remove the containers
+#   docker-gh-ost-replica-tests run     run replica tests on the containers
+
+set -e
+
+GH_OST_ROOT=$(git rev-parse --show-toplevel)
+if [[ ":$PATH:" != *":$GH_OST_ROOT:"* ]]; then
+    export PATH="${PATH}:${GH_OST_ROOT}/script"
+fi
+
+poll_mysql() {
+    CTR=0
+    cmd="gh-ost-test-mysql-$1"
+    while ! $cmd -e "select 1;" > /dev/null 2>&1
+    do
+        sleep 1
+        CTR=$((CTR + 1))
+        if [ $CTR -gt 30 ]; then
+            echo " ❌ MySQL $1 failed to start"
+            return 1
+        fi
+    done
+    echo " ✔ MySQL $1 OK"
+    return 0
+}
+
+setup() {
+    [ -z "$TEST_MYSQL_IMAGE" ] && TEST_MYSQL_IMAGE="mysql:8.0.39"
+
+    echo "Starting MySQL $TEST_MYSQL_IMAGE containers..."
+    compose_file="$GH_OST_ROOT/localtests/docker-compose.yml"
+    (TEST_MYSQL_IMAGE="$TEST_MYSQL_IMAGE" envsubst < "$compose_file") > "$compose_file.tmp"
+    docker compose -f "$compose_file.tmp" up -d --wait
+
+    echo "Waiting for MySQL..."
+    poll_mysql "master" || exit 1
+    poll_mysql "replica" || exit 1
+
+    echo -n "Setting up replication..."
+    gh-ost-test-mysql-master -e "create user if not exists 'repl'@'%' identified with 'mysql_native_password' by 'repl';"
+    gh-ost-test-mysql-master -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
+    gh-ost-test-mysql-master -e "create user if not exists 'gh-ost'@'%' identified by 'gh-ost';"
+    gh-ost-test-mysql-master -e "grant all on *.* to 'gh-ost'@'%';"
+
+    sleep 1
+    gh-ost-test-mysql-replica -e "change master to master_host='mysql-primary', master_port=3307, master_user='repl', master_password='repl', master_auto_position=1;"
+    gh-ost-test-mysql-replica -e "start slave;"
+    echo "OK"
+}
+
+teardown() {
+    echo "Stopping containers..."
+    docker stop mysql-replica
+    docker stop mysql-primary
+    echo "Removing containers..."
+    docker rm mysql-replica
+    docker rm mysql-primary
+}
+
+main() {
+    if [[ "$1" == "up" ]]; then
+        setup
+    elif [[ "$1" == "down" ]]; then
+        teardown
+    elif [[ "$1" == "run" ]]; then
+        shift 1
+        "$GH_OST_ROOT/localtests/test.sh" -d "$@"
+    fi
+}
+
+main "$@"
