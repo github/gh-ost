@@ -220,9 +220,9 @@ func TestMigratorGetMigrationStateAndETA(t *testing.T) {
 		migrationContext.TotalRowsCopied = 456
 		migrationContext.EtaRowsPerSecond = 100
 		state, eta, etaDuration := migrator.getMigrationStateAndETA(123456)
-		tests.S(t).ExpectEquals(state, "migrating")
-		tests.S(t).ExpectEquals(eta, "20m30s")
-		tests.S(t).ExpectEquals(etaDuration.String(), "20m30s")
+		require.Equal(t, "migrating", state)
+		require.Equal(t, "20m30s", eta)
+		require.Equal(t, "20m30s", etaDuration.String())
 	}
 	{
 		migrationContext.TotalRowsCopied = 456
