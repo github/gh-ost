@@ -550,7 +550,7 @@ func NewDMLUpdateQueryBuilder(databaseName, tableName string, tableColumns, shar
 	// which only contains non-vritual columns
 	nonVirtualUniqueKeyColumns := uniqueKeyColumns.FilterBy(func(column Column) bool { return !column.IsVirtual })
 	if !nonVirtualUniqueKeyColumns.IsSubsetOf(sharedColumns) {
-		return nil, fmt.Errorf("unique key columns  is not a subset of shared columns in DMLUpdateQueryBuilder")
+		return nil, fmt.Errorf("unique key columns  is not a subset of shared columns in NewDMLUpdateQueryBuilder")
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
