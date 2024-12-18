@@ -589,6 +589,7 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		columnName := m.GetString("COLUMN_NAME")
 		columnType := m.GetString("COLUMN_TYPE")
 		columnOctetLength := m.GetUint("CHARACTER_OCTET_LENGTH")
+		extra := m.GetString("EXTRA")
 		for _, columnsList := range columnsLists {
 			column := columnsList.GetColumn(columnName)
 			if column == nil {
@@ -620,6 +621,9 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 			if strings.HasPrefix(columnType, "binary") {
 				column.Type = sql.BinaryColumnType
 				column.BinaryOctetLength = columnOctetLength
+			}
+			if strings.Contains(extra, " GENERATED") {
+				column.IsVirtual = true
 			}
 			if charset := m.GetString("CHARACTER_SET_NAME"); charset != "" {
 				column.Charset = charset
