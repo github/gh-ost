@@ -546,6 +546,12 @@ func NewDMLUpdateQueryBuilder(databaseName, tableName string, tableColumns, shar
 	if uniqueKeyColumns.Len() == 0 {
 		return nil, fmt.Errorf("no unique key columns found in NewDMLUpdateQueryBuilder")
 	}
+	// If unique key contains virtual columns, those column won't be in sharedColumns
+	// which only contains non-virtual columns
+	nonVirtualUniqueKeyColumns := uniqueKeyColumns.FilterBy(func(column Column) bool { return !column.IsVirtual })
+	if !nonVirtualUniqueKeyColumns.IsSubsetOf(sharedColumns) {
+		return nil, fmt.Errorf("unique key columns is not a subset of shared columns in NewDMLUpdateQueryBuilder")
+	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 	setClause, err := BuildSetPreparedClause(mappedSharedColumns)
@@ -580,11 +586,6 @@ func NewDMLUpdateQueryBuilder(databaseName, tableName string, tableColumns, shar
 // BuildQuery builds the arguments array for a DML event UPDATE query.
 // It returns the query string, the shared arguments array, and the unique key arguments array.
 func (b *DMLUpdateQueryBuilder) BuildQuery(valueArgs, whereArgs []interface{}) (string, []interface{}, []interface{}, error) {
-	// TODO: move this check back to `NewDMLUpdateQueryBuilder()`, needs fix on generated columns.
-	if !b.uniqueKeyColumns.IsSubsetOf(b.sharedColumns) {
-		return "", nil, nil, fmt.Errorf("unique key columns is not a subset of shared columns in DMLUpdateQueryBuilder")
-	}
-
 	sharedArgs := make([]interface{}, 0, b.sharedColumns.Len())
 	for _, column := range b.sharedColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
