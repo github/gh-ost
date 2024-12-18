@@ -246,16 +246,13 @@ func (this *ColumnList) IsSubsetOf(other *ColumnList) bool {
 }
 
 func (this *ColumnList) FilterBy(f func(Column) bool) *ColumnList {
-	filteredList := &ColumnList{}
-	filteredList.Ordinals = this.Ordinals
-	filteredCols := []Column{}
+	filteredCols := make([]Column, 0, len(this.columns))
 	for _, column := range this.columns {
 		if f(column) {
 			filteredCols = append(filteredCols, column)
 		}
 	}
-	filteredList.columns = filteredCols
-	return filteredList
+	return &ColumnList{Ordinals: this.Ordinals, columns: filteredCols}
 }
 
 func (this *ColumnList) Len() int {
