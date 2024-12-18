@@ -77,21 +77,25 @@ func (c *Conn) readInitialHandshake() error {
 		c.capability = uint32(binary.LittleEndian.Uint16(data[pos:pos+2]))<<16 | c.capability
 		pos += 2
 
-		// skip auth data len or [00]
+		// auth_data is end with 0x00, min data length is 13 + 8 = 21
+		// ref to https://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::Handshake
+		maxAuthDataLen := 21
+		if c.capability&CLIENT_PLUGIN_AUTH != 0 && int(data[pos]) > maxAuthDataLen {
+			maxAuthDataLen = int(data[pos])
+		}
+
 		// skip reserved (all [00])
 		pos += 10 + 1
 
-		// The documentation is ambiguous about the length.
-		// The official Python library uses the fixed length 12
-		// mysql-proxy also use 12
-		// which is not documented but seems to work.
-		c.salt = append(c.salt, data[pos:pos+12]...)
-		pos += 13
-		// auth plugin
-		if end := bytes.IndexByte(data[pos:], 0x00); end != -1 {
-			c.authPluginName = string(data[pos : pos+end])
-		} else {
-			c.authPluginName = string(data[pos:])
+		// auth_data is end with 0x00, so we need to trim 0x00
+		resetOfAuthDataEndPos := pos + maxAuthDataLen - 8 - 1
+		c.salt = append(c.salt, data[pos:resetOfAuthDataEndPos]...)
+
+		// skip reset of end pos
+		pos = resetOfAuthDataEndPos + 1
+
+		if c.capability&CLIENT_PLUGIN_AUTH != 0 {
+			c.authPluginName = string(data[pos : len(data)-1])
 		}
 	}
 
@@ -106,9 +110,9 @@ func (c *Conn) readInitialHandshake() error {
 // generate auth response data according to auth plugin
 //
 // NOTE: the returned boolean value indicates whether to add a \NUL to the end of data.
-//       it is quite tricky because MySQL server expects different formats of responses in different auth situations.
-//       here the \NUL needs to be added when sending back the empty password or cleartext password in 'sha256_password'
-//       authentication.
+// it is quite tricky because MySQL server expects different formats of responses in different auth situations.
+// here the \NUL needs to be added when sending back the empty password or cleartext password in 'sha256_password'
+// authentication.
 func (c *Conn) genAuthResponse(authData []byte) ([]byte, bool, error) {
 	// password hashing
 	switch c.authPluginName {
@@ -116,6 +120,8 @@ func (c *Conn) genAuthResponse(authData []byte) ([]byte, bool, error) {
 		return CalcPassword(authData[:20], []byte(c.password)), false, nil
 	case AUTH_CACHING_SHA2_PASSWORD:
 		return CalcCachingSha2Password(authData, c.password), false, nil
+	case AUTH_CLEAR_PASSWORD:
+		return []byte(c.password), true, nil
 	case AUTH_SHA256_PASSWORD:
 		if len(c.password) == 0 {
 			return nil, true, nil
@@ -135,14 +141,37 @@ func (c *Conn) genAuthResponse(authData []byte) ([]byte, bool, error) {
 	}
 }
 
+// generate connection attributes data
+func (c *Conn) genAttributes() []byte {
+	if len(c.attributes) == 0 {
+		return nil
+	}
+
+	attrData := make([]byte, 0)
+	for k, v := range c.attributes {
+		attrData = append(attrData, PutLengthEncodedString([]byte(k))...)
+		attrData = append(attrData, PutLengthEncodedString([]byte(v))...)
+	}
+	return append(PutLengthEncodedInt(uint64(len(attrData))), attrData...)
+}
+
 // See: http://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::HandshakeResponse
 func (c *Conn) writeAuthHandshake() error {
 	if !authPluginAllowed(c.authPluginName) {
 		return fmt.Errorf("unknow auth plugin name '%s'", c.authPluginName)
 	}
-	// Adjust client capability flags based on server support
+
+	// Set default client capabilities that reflect the abilities of this library
 	capability := CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION |
-		CLIENT_LONG_PASSWORD | CLIENT_TRANSACTIONS | CLIENT_PLUGIN_AUTH | c.capability&CLIENT_LONG_FLAG
+		CLIENT_LONG_PASSWORD | CLIENT_TRANSACTIONS | CLIENT_PLUGIN_AUTH
+	// Adjust client capability flags based on server support
+	capability |= c.capability & CLIENT_LONG_FLAG
+	// Adjust client capability flags on specific client requests
+	// Only flags that would make any sense setting and aren't handled elsewhere
+	// in the library are supported here
+	capability |= c.ccaps&CLIENT_FOUND_ROWS | c.ccaps&CLIENT_IGNORE_SPACE |
+		c.ccaps&CLIENT_MULTI_STATEMENTS | c.ccaps&CLIENT_MULTI_RESULTS |
+		c.ccaps&CLIENT_PS_MULTI_RESULTS | c.ccaps&CLIENT_CONNECT_ATTRS
 
 	// To enable TLS / SSL
 	if c.tlsConfig != nil {
@@ -181,6 +210,12 @@ func (c *Conn) writeAuthHandshake() error {
 	if len(c.db) > 0 {
 		capability |= CLIENT_CONNECT_WITH_DB
 		length += len(c.db) + 1
+	}
+	// connection attributes
+	attrData := c.genAttributes()
+	if len(attrData) > 0 {
+		capability |= CLIENT_CONNECT_ATTRS
+		length += len(attrData)
 	}
 
 	data := make([]byte, length+4)
@@ -251,6 +286,12 @@ func (c *Conn) writeAuthHandshake() error {
 	// Assume native client during response
 	pos += copy(data[pos:], c.authPluginName)
 	data[pos] = 0x00
+	pos++
+
+	// connection attributes
+	if len(attrData) > 0 {
+		copy(data[pos:], attrData)
+	}
 
 	return c.WritePacket(data)
 }

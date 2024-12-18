@@ -7,14 +7,18 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/siddontang/go-log/loggers"
+
+	"github.com/google/uuid"
+	"github.com/pingcap/errors"
+	"github.com/siddontang/go-log/log"
+
 	"github.com/go-mysql-org/go-mysql/client"
 	. "github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/pingcap/errors"
-	uuid "github.com/satori/go.uuid"
-	"github.com/siddontang/go-log/log"
 )
 
 var (
@@ -108,6 +112,16 @@ type BinlogSyncerConfig struct {
 	//Option function is used to set outside of BinlogSyncerConfig， between mysql connection and COM_REGISTER_SLAVE
 	//For MariaDB: slave_gtid_ignore_duplicates、skip_replication、slave_until_gtid
 	Option func(*client.Conn) error
+
+	// Set Logger
+	Logger loggers.Advanced
+
+	// Set Dialer
+	Dialer client.Dialer
+
+	RowsEventDecodeFunc func(*RowsEvent, []byte) error
+
+	DiscardGTIDSet bool
 }
 
 // BinlogSyncer syncs binlog event from server.
@@ -126,6 +140,9 @@ type BinlogSyncer struct {
 
 	prevGset, currGset GTIDSet
 
+	// instead of GTIDSet.Clone, use this to speed up calculate prevGset
+	prevMySQLGTIDEvent *GTIDEvent
+
 	running bool
 
 	ctx    context.Context
@@ -138,14 +155,22 @@ type BinlogSyncer struct {
 
 // NewBinlogSyncer creates the BinlogSyncer with cfg.
 func NewBinlogSyncer(cfg BinlogSyncerConfig) *BinlogSyncer {
+	if cfg.Logger == nil {
+		streamHandler, _ := log.NewStreamHandler(os.Stdout)
+		cfg.Logger = log.NewDefault(streamHandler)
+	}
 	if cfg.ServerID == 0 {
-		log.Fatal("can't use 0 as the server ID")
+		cfg.Logger.Fatal("can't use 0 as the server ID")
+	}
+	if cfg.Dialer == nil {
+		dialer := &net.Dialer{}
+		cfg.Dialer = dialer.DialContext
 	}
 
 	// Clear the Password to avoid outputing it in log.
 	pass := cfg.Password
 	cfg.Password = ""
-	log.Infof("create BinlogSyncer with config %v", cfg)
+	cfg.Logger.Infof("create BinlogSyncer with config %+v", cfg)
 	cfg.Password = pass
 
 	b := new(BinlogSyncer)
@@ -158,6 +183,7 @@ func NewBinlogSyncer(cfg BinlogSyncerConfig) *BinlogSyncer {
 	b.parser.SetTimestampStringLocation(b.cfg.TimestampStringLocation)
 	b.parser.SetUseDecimal(b.cfg.UseDecimal)
 	b.parser.SetVerifyChecksum(b.cfg.VerifyChecksum)
+	b.parser.SetRowsEventDecodeFunc(b.cfg.RowsEventDecodeFunc)
 	b.running = false
 	b.ctx, b.cancel = context.WithCancel(context.Background())
 
@@ -177,7 +203,7 @@ func (b *BinlogSyncer) close() {
 		return
 	}
 
-	log.Info("syncer is closing...")
+	b.cfg.Logger.Info("syncer is closing...")
 
 	b.running = false
 	b.cancel()
@@ -185,7 +211,7 @@ func (b *BinlogSyncer) close() {
 	if b.c != nil {
 		err := b.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		if err != nil {
-			log.Warnf(`could not set read deadline: %s`, err)
+			b.cfg.Logger.Warnf(`could not set read deadline: %s`, err)
 		}
 	}
 
@@ -194,7 +220,7 @@ func (b *BinlogSyncer) close() {
 		// Use a new connection to kill the binlog syncer
 		// because calling KILL from the same connection
 		// doesn't actually disconnect it.
-		c, err := b.newConnection()
+		c, err := b.newConnection(context.Background())
 		if err == nil {
 			b.killConnection(c, b.lastConnectionID)
 			c.Close()
@@ -207,7 +233,7 @@ func (b *BinlogSyncer) close() {
 		b.c.Close()
 	}
 
-	log.Info("syncer is closed")
+	b.cfg.Logger.Info("syncer is closed")
 }
 
 func (b *BinlogSyncer) isClosed() bool {
@@ -225,7 +251,7 @@ func (b *BinlogSyncer) registerSlave() error {
 	}
 
 	var err error
-	b.c, err = b.newConnection()
+	b.c, err = b.newConnection(b.ctx)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -298,7 +324,7 @@ func (b *BinlogSyncer) registerSlave() error {
 	if b.cfg.HeartbeatPeriod > 0 {
 		_, err = b.c.Execute(fmt.Sprintf("SET @master_heartbeat_period=%d;", b.cfg.HeartbeatPeriod))
 		if err != nil {
-			log.Errorf("failed to set @master_heartbeat_period=%d, err: %v", b.cfg.HeartbeatPeriod, err)
+			b.cfg.Logger.Errorf("failed to set @master_heartbeat_period=%d, err: %v", b.cfg.HeartbeatPeriod, err)
 			return errors.Trace(err)
 		}
 	}
@@ -308,6 +334,16 @@ func (b *BinlogSyncer) registerSlave() error {
 	}
 
 	if _, err = b.c.ReadOKPacket(); err != nil {
+		return errors.Trace(err)
+	}
+
+	serverUUID, err := uuid.NewUUID()
+	if err != nil {
+		b.cfg.Logger.Errorf("failed to get new uud %v", err)
+		return errors.Trace(err)
+	}
+	if _, err = b.c.Execute(fmt.Sprintf("SET @slave_uuid = '%s', @replica_uuid = '%s'", serverUUID, serverUUID)); err != nil {
+		b.cfg.Logger.Errorf("failed to set @slave_uuid = '%s', err: %v", serverUUID, err)
 		return errors.Trace(err)
 	}
 
@@ -324,7 +360,7 @@ func (b *BinlogSyncer) enableSemiSync() error {
 	} else {
 		s, _ := r.GetString(0, 1)
 		if s != "ON" {
-			log.Errorf("master does not support semi synchronous replication, use no semi-sync")
+			b.cfg.Logger.Errorf("master does not support semi synchronous replication, use no semi-sync")
 			b.cfg.SemiSyncEnabled = false
 			return nil
 		}
@@ -357,7 +393,7 @@ func (b *BinlogSyncer) prepare() error {
 func (b *BinlogSyncer) startDumpStream() *BinlogStreamer {
 	b.running = true
 
-	s := newBinlogStreamer()
+	s := NewBinlogStreamer()
 
 	b.wg.Add(1)
 	go b.onStream(s)
@@ -371,7 +407,7 @@ func (b *BinlogSyncer) GetNextPosition() Position {
 
 // StartSync starts syncing from the `pos` position.
 func (b *BinlogSyncer) StartSync(pos Position) (*BinlogStreamer, error) {
-	log.Infof("begin to sync binlog from position %s", pos)
+	b.cfg.Logger.Infof("begin to sync binlog from position %s", pos)
 
 	b.m.Lock()
 	defer b.m.Unlock()
@@ -389,8 +425,9 @@ func (b *BinlogSyncer) StartSync(pos Position) (*BinlogStreamer, error) {
 
 // StartSyncGTID starts syncing from the `gset` GTIDSet.
 func (b *BinlogSyncer) StartSyncGTID(gset GTIDSet) (*BinlogStreamer, error) {
-	log.Infof("begin to sync binlog from GTID set %s", gset)
+	b.cfg.Logger.Infof("begin to sync binlog from GTID set %s", gset)
 
+	b.prevMySQLGTIDEvent = nil
 	b.prevGset = gset
 
 	b.m.Lock()
@@ -587,19 +624,20 @@ func (b *BinlogSyncer) retrySync() error {
 	defer b.m.Unlock()
 
 	b.parser.Reset()
+	b.prevMySQLGTIDEvent = nil
 
 	if b.prevGset != nil {
 		msg := fmt.Sprintf("begin to re-sync from %s", b.prevGset.String())
 		if b.currGset != nil {
 			msg = fmt.Sprintf("%v (last read GTID=%v)", msg, b.currGset)
 		}
-		log.Infof(msg)
+		b.cfg.Logger.Infof(msg)
 
 		if err := b.prepareSyncGTID(b.prevGset); err != nil {
 			return errors.Trace(err)
 		}
 	} else {
-		log.Infof("begin to re-sync from %s", b.nextPos)
+		b.cfg.Logger.Infof("begin to re-sync from %s", b.nextPos)
 		if err := b.prepareSyncPos(b.nextPos); err != nil {
 			return errors.Trace(err)
 		}
@@ -668,7 +706,7 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 		}
 
 		if err != nil {
-			log.Error(err)
+			b.cfg.Logger.Error(err)
 			// we meet connection error, should re-connect again with
 			// last nextPos or nextGTID we got.
 			if len(b.nextPos.Name) == 0 && b.prevGset == nil {
@@ -678,7 +716,7 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 			}
 
 			if b.cfg.DisableRetrySync {
-				log.Warn("retry sync is disabled")
+				b.cfg.Logger.Warn("retry sync is disabled")
 				s.closeWithError(err)
 				return
 			}
@@ -692,12 +730,12 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 					b.retryCount++
 					if err = b.retrySync(); err != nil {
 						if b.cfg.MaxReconnectAttempts > 0 && b.retryCount >= b.cfg.MaxReconnectAttempts {
-							log.Errorf("retry sync err: %v, exceeded max retries (%d)", err, b.cfg.MaxReconnectAttempts)
+							b.cfg.Logger.Errorf("retry sync err: %v, exceeded max retries (%d)", err, b.cfg.MaxReconnectAttempts)
 							s.closeWithError(err)
 							return
 						}
 
-						log.Errorf("retry sync err: %v, wait 1s and retry again", err)
+						b.cfg.Logger.Errorf("retry sync err: %v, wait 1s and retry again", err)
 						continue
 					}
 				}
@@ -728,14 +766,13 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 			s.closeWithError(err)
 			return
 		case EOF_HEADER:
-			// Refer http://dev.mysql.com/doc/internals/en/packet-EOF_Packet.html
-			// In the MySQL client/server protocol, EOF and OK packets serve the same purpose.
-			// Some users told me that they received EOF packet here, but I don't know why.
-			// So we only log a message and retry ReadPacket.
-			log.Info("receive EOF packet, retry ReadPacket")
+			// refer to https://dev.mysql.com/doc/internals/en/com-binlog-dump.html#binlog-dump-non-block
+			// when COM_BINLOG_DUMP command use BINLOG_DUMP_NON_BLOCK flag,
+			// if there is no more event to send an EOF_Packet instead of blocking the connection
+			b.cfg.Logger.Info("receive EOF packet, no more binlog event now.")
 			continue
 		default:
-			log.Errorf("invalid stream header %c", data[0])
+			b.cfg.Logger.Errorf("invalid stream header %c", data[0])
 			continue
 		}
 	}
@@ -747,7 +784,7 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 
 	needACK := false
 	if b.cfg.SemiSyncEnabled && (data[0] == SemiSyncIndicator) {
-		needACK = (data[1] == 0x01)
+		needACK = data[1] == 0x01
 		//skip semi sync header
 		data = data[2:]
 	}
@@ -769,48 +806,49 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 		return b.currGset.Clone()
 	}
 
-	advanceCurrentGtidSet := func(gtid string) error {
-		if b.currGset == nil {
-			b.currGset = b.prevGset.Clone()
-		}
-		prev := b.currGset.Clone()
-		err := b.currGset.Update(gtid)
-		if err == nil {
-			// right after reconnect we will see same gtid as we saw before, thus currGset will not get changed
-			if !b.currGset.Equal(prev) {
-				b.prevGset = prev
-			}
-		}
-		return err
-	}
-
 	switch event := e.Event.(type) {
 	case *RotateEvent:
 		b.nextPos.Name = string(event.NextLogName)
 		b.nextPos.Pos = uint32(event.Position)
-		log.Infof("rotate to %s", b.nextPos)
+		b.cfg.Logger.Infof("rotate to %s", b.nextPos)
 	case *GTIDEvent:
 		if b.prevGset == nil {
 			break
 		}
-		u, _ := uuid.FromBytes(event.SID)
-		err := advanceCurrentGtidSet(fmt.Sprintf("%s:%d", u.String(), event.GNO))
-		if err != nil {
-			return errors.Trace(err)
+		if b.currGset == nil {
+			b.currGset = b.prevGset.Clone()
 		}
+		u, _ := uuid.FromBytes(event.SID)
+		b.currGset.(*MysqlGTIDSet).AddGTID(u, event.GNO)
+		if b.prevMySQLGTIDEvent != nil {
+			u, _ = uuid.FromBytes(b.prevMySQLGTIDEvent.SID)
+			b.prevGset.(*MysqlGTIDSet).AddGTID(u, b.prevMySQLGTIDEvent.GNO)
+		}
+		b.prevMySQLGTIDEvent = event
 	case *MariadbGTIDEvent:
 		if b.prevGset == nil {
 			break
 		}
-		GTID := event.GTID
-		err := advanceCurrentGtidSet(fmt.Sprintf("%d-%d-%d", GTID.DomainID, GTID.ServerID, GTID.SequenceNumber))
+		if b.currGset == nil {
+			b.currGset = b.prevGset.Clone()
+		}
+		prev := b.currGset.Clone()
+		err = b.currGset.(*MariadbGTIDSet).AddSet(&event.GTID)
 		if err != nil {
 			return errors.Trace(err)
 		}
+		// right after reconnect we will see same gtid as we saw before, thus currGset will not get changed
+		if !b.currGset.Equal(prev) {
+			b.prevGset = prev
+		}
 	case *XIDEvent:
-		event.GSet = getCurrentGtidSet()
+		if !b.cfg.DiscardGTIDSet {
+			event.GSet = getCurrentGtidSet()
+		}
 	case *QueryEvent:
-		event.GSet = getCurrentGtidSet()
+		if !b.cfg.DiscardGTIDSet {
+			event.GSet = getCurrentGtidSet()
+		}
 	}
 
 	needStop := false
@@ -839,27 +877,31 @@ func (b *BinlogSyncer) LastConnectionID() uint32 {
 	return b.lastConnectionID
 }
 
-func (b *BinlogSyncer) newConnection() (*client.Conn, error) {
+func (b *BinlogSyncer) newConnection(ctx context.Context) (*client.Conn, error) {
 	var addr string
 	if b.cfg.Port != 0 {
-		addr = fmt.Sprintf("%s:%d", b.cfg.Host, b.cfg.Port)
+		addr = net.JoinHostPort(b.cfg.Host, strconv.Itoa(int(b.cfg.Port)))
 	} else {
 		addr = b.cfg.Host
 	}
 
-	return client.Connect(addr, b.cfg.User, b.cfg.Password, "", func(c *client.Conn) {
-		c.SetTLSConfig(b.cfg.TLSConfig)
-	})
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Second*10)
+	defer cancel()
+
+	return client.ConnectWithDialer(timeoutCtx, "", addr, b.cfg.User, b.cfg.Password,
+		"", b.cfg.Dialer, func(c *client.Conn) {
+			c.SetTLSConfig(b.cfg.TLSConfig)
+		})
 }
 
 func (b *BinlogSyncer) killConnection(conn *client.Conn, id uint32) {
 	cmd := fmt.Sprintf("KILL %d", id)
 	if _, err := conn.Execute(cmd); err != nil {
-		log.Errorf("kill connection %d error %v", id, err)
+		b.cfg.Logger.Errorf("kill connection %d error %v", id, err)
 		// Unknown thread id
 		if code := ErrorCode(err.Error()); code != ER_NO_SUCH_THREAD {
-			log.Error(errors.Trace(err))
+			b.cfg.Logger.Error(errors.Trace(err))
 		}
 	}
-	log.Infof("kill last connection id %d", id)
+	b.cfg.Logger.Infof("kill last connection id %d", id)
 }

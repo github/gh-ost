@@ -61,6 +61,9 @@ It is not reliable to parse the `ALTER` statement to determine if it is instant 
 
 `gh-ost` will automatically fallback to the normal DDL process if the attempt to use instant DDL is unsuccessful.
 
+### binlogsyncer-max-reconnect-attempts
+`--binlogsyncer-max-reconnect-attempts=0`, the maximum number of attempts to re-establish a broken inspector connection for sync binlog. `0` or `negative number` means infinite retry, default `0`
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
@@ -187,6 +190,8 @@ When using [Connect to replica, migrate on master](cheatsheet.md#a-connect-to-re
 
 When [`--throttle-control-replicas`](#throttle-control-replicas) is provided, throttling also considers lag on specified hosts. Lag measurements on listed hosts is done by querying `gh-ost`'s _changelog_ table, where `gh-ost` injects a heartbeat.
 
+When using on master or when `--allow-on-master` is provided, `max-lag-millis` is also considered a threshold for starting the cutover stage of the migration. If the row copy is complete and the heartbeat lag is less than `max-lag-millis` cutover phase of the migration will start. 
+
 See also: [Sub-second replication lag throttling](subsecond-lag.md)
 
 ### max-load
@@ -257,6 +262,9 @@ But RocksDB currently lacks a few features support compared to InnoDB:
 - Geometry
 
 When `--storage-engine=rocksdb`, `gh-ost` will make some changes necessary (e.g. sets isolation level to `READ_COMMITTED`) to support RocksDB.
+
+### charset
+The default charset for the database connection is utf8mb4, utf8, latin1. The ability to specify character set and collation is supported, eg: utf8mb4_general_ci,utf8_general_ci,latin1. 
 
 ### test-on-replica
 

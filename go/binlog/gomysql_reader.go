@@ -13,6 +13,8 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
+	"time"
+
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"golang.org/x/net/context"
@@ -36,14 +38,16 @@ func NewGoMySQLReader(migrationContext *base.MigrationContext) *GoMySQLReader {
 		currentCoordinates:      mysql.BinlogCoordinates{},
 		currentCoordinatesMutex: &sync.Mutex{},
 		binlogSyncer: replication.NewBinlogSyncer(replication.BinlogSyncerConfig{
-			ServerID:   uint32(migrationContext.ReplicaServerId),
-			Flavor:     gomysql.MySQLFlavor,
-			Host:       connectionConfig.Key.Hostname,
-			Port:       uint16(connectionConfig.Key.Port),
-			User:       connectionConfig.User,
-			Password:   connectionConfig.Password,
-			TLSConfig:  connectionConfig.TLSConfig(),
-			UseDecimal: true,
+			ServerID:                uint32(migrationContext.ReplicaServerId),
+			Flavor:                  gomysql.MySQLFlavor,
+			Host:                    connectionConfig.Key.Hostname,
+			Port:                    uint16(connectionConfig.Key.Port),
+			User:                    connectionConfig.User,
+			Password:                connectionConfig.Password,
+			TLSConfig:               connectionConfig.TLSConfig(),
+			UseDecimal:              true,
+			MaxReconnectAttempts:    migrationContext.BinlogSyncerMaxReconnectAttempts,
+			TimestampStringLocation: time.UTC,
 		}),
 	}
 }
@@ -74,6 +78,10 @@ func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinate
 
 // StreamEvents
 func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
+	if this.currentCoordinates.IsLogPosOverflowBeyond4Bytes(&this.LastAppliedRowsEventHint) {
+		return fmt.Errorf("Unexpected rows event at %+v, the binlog end_log_pos is overflow 4 bytes", this.currentCoordinates)
+	}
+
 	if this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
 		this.migrationContext.Log.Debugf("Skipping handled query at %+v", this.currentCoordinates)
 		return nil
@@ -137,6 +145,7 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			this.currentCoordinatesMutex.Lock()
 			defer this.currentCoordinatesMutex.Unlock()
 			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
+			this.currentCoordinates.EventSize = int64(ev.Header.EventSize)
 		}()
 
 		switch binlogEvent := ev.Event.(type) {

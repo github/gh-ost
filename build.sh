@@ -1,6 +1,4 @@
 #!/bin/bash
-#
-#
 
 RELEASE_VERSION=
 buildpath=
@@ -52,14 +50,18 @@ main() {
     RELEASE_VERSION=$(git describe --abbrev=0 --tags | tr -d 'v')
   fi
   if [ -z "${RELEASE_VERSION}" ] ; then
-    RELEASE_VERSION=$(cat RELEASE_VERSION)
+    echo "RELEASE_VERSION must be set"
+    exit 1
   fi
 
+  if [ -z "${GIT_COMMIT}" ]; then
+    GIT_COMMIT=$(git rev-parse HEAD)
+  fi
 
   buildpath=/tmp/gh-ost-release
   target=gh-ost
   timestamp=$(date "+%Y%m%d%H%M%S")
-  ldflags="-X main.AppVersion=${RELEASE_VERSION}"
+  ldflags="-X main.AppVersion=${RELEASE_VERSION} -X main.GitCommit=${GIT_COMMIT}"
 
   mkdir -p ${buildpath}
   rm -rf ${buildpath:?}/*
@@ -68,11 +70,14 @@ main() {
   build macOS osx darwin amd64
   build macOS osx darwin arm64
 
+  bin_files=$(find $buildpath/gh-ost* -type f -maxdepth 1)
   echo "Binaries found in:"
-  find $buildpath/gh-ost* -type f -maxdepth 1
+  echo "$bin_files"
 
   echo "Checksums:"
-  (cd $buildpath && shasum -a256 gh-ost* 2>/dev/null)
+  (shasum -a256 $bin_files 2>/dev/null)
+
+  echo "Build Success!"
 }
 
 main "$@"

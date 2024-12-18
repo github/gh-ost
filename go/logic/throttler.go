@@ -284,7 +284,7 @@ func (this *Throttler) criticalLoadIsMet() (met bool, variableName string, value
 	return false, variableName, value, threshold, nil
 }
 
-// collectReplicationLag reads the latest changelog heartbeat value
+// collectThrottleHTTPStatus reads the latest changelog heartbeat value
 func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<- bool) {
 	collectFunc := func() (sleep bool, err error) {
 		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
@@ -434,7 +434,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 	return setThrottle(false, "", base.NoThrottleReasonHint)
 }
 
-// initiateThrottlerMetrics initiates the various processes that collect measurements
+// initiateThrottlerCollection initiates the various processes that collect measurements
 // that may affect throttling. There are several components, all running independently,
 // that collect such metrics.
 func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan<- bool) {

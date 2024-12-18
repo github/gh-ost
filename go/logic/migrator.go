@@ -13,7 +13,6 @@ import (
 	"math"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -363,12 +362,19 @@ func (this *Migrator) Migrate() (err error) {
 	// In MySQL 8.0 (and possibly earlier) some DDL statements can be applied instantly.
 	// Attempt to do this if AttemptInstantDDL is set.
 	if this.migrationContext.AttemptInstantDDL {
-		this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
-		if err := this.applier.AttemptInstantDDL(); err == nil {
-			this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
-			return nil
+		if this.migrationContext.Noop {
+			this.migrationContext.Log.Debugf("Noop operation; not really attempting instant DDL")
 		} else {
-			this.migrationContext.Log.Infof("ALGORITHM=INSTANT not supported for this operation, proceeding with original algorithm: %s", err)
+			this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
+			if err := this.applier.AttemptInstantDDL(); err == nil {
+				if err := this.hooksExecutor.onSuccess(); err != nil {
+					return err
+				}
+				this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+				return nil
+			} else {
+				this.migrationContext.Log.Infof("ALGORITHM=INSTANT not supported for this operation, proceeding with original algorithm: %s", err)
+			}
 		}
 	}
 
@@ -381,6 +387,10 @@ func (this *Migrator) Migrate() (err error) {
 	// on master this is always true, of course, and yet it also implies this knowledge
 	// is in the binlogs.
 	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
+		return err
+	}
+	// We can prepare some of the queries on the applier
+	if err := this.applier.prepareQueries(); err != nil {
 		return err
 	}
 	// Validation complete! We're good to execute this migration
@@ -639,12 +649,8 @@ func (this *Migrator) atomicCutOver() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	okToUnlockTable := make(chan bool, 4)
-	var dropCutOverSentryTableOnce sync.Once
 	defer func() {
 		okToUnlockTable <- true
-		dropCutOverSentryTableOnce.Do(func() {
-			this.applier.DropAtomicCutOverSentryTableIfExists()
-		})
 	}()
 
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
@@ -653,7 +659,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	go func() {
-		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, &dropCutOverSentryTableOnce); err != nil {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
 			this.migrationContext.Log.Errore(err)
 		}
 	}()
@@ -1065,7 +1071,14 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
-	this.migrationContext.Log.Infof(status)
+
+	// This "hack" is required here because the underlying logging library
+	// github.com/outbrain/golib/log provides two functions Info and Infof; but the arguments of
+	// both these functions are eventually redirected to the same function, which internally calls
+	// fmt.Sprintf. So, the argument of every function called on the DefaultLogger object
+	// migrationContext.Log will eventually pass through fmt.Sprintf, and thus the '%' character
+	// needs to be escaped.
+	this.migrationContext.Log.Info(strings.Replace(status, "%", "%%", 1))
 
 	hooksStatusIntervalSec := this.migrationContext.HooksStatusIntervalSec
 	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {

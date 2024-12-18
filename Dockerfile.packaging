@@ -1,8 +1,8 @@
-FROM golang:1.17
+FROM golang:1.22-bullseye
 
 RUN apt-get update
 RUN apt-get install -y ruby ruby-dev rubygems build-essential
-RUN gem install --no-ri --no-rdoc fpm
+RUN gem install fpm
 ENV GOPATH=/tmp/go
 
 RUN apt-get install -y curl

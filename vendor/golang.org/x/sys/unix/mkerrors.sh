@@ -54,10 +54,11 @@ includes_AIX='
 
 includes_Darwin='
 #define _DARWIN_C_SOURCE
-#define KERNEL
+#define KERNEL 1
 #define _DARWIN_USE_64_BIT_INODE
 #define __APPLE_USE_RFC_3542
 #include <stdint.h>
+#include <sys/stdio.h>
 #include <sys/attr.h>
 #include <sys/clonefile.h>
 #include <sys/kern_control.h>
@@ -66,6 +67,7 @@ includes_Darwin='
 #include <sys/ptrace.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/sockio.h>
 #include <sys/sys_domain.h>
@@ -75,6 +77,7 @@ includes_Darwin='
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <sys/xattr.h>
+#include <sys/vsock.h>
 #include <net/bpf.h>
 #include <net/if.h>
 #include <net/if_types.h>
@@ -82,6 +85,9 @@ includes_Darwin='
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <termios.h>
+
+// for backwards compatibility because moved TIOCREMOTE to Kernel.framework after MacOSX12.0.sdk.
+#define TIOCREMOTE 0x80047469
 '
 
 includes_DragonFly='
@@ -124,6 +130,7 @@ includes_FreeBSD='
 #include <sys/mount.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <sys/ptrace.h>
 #include <net/bpf.h>
 #include <net/if.h>
 #include <net/if_types.h>
@@ -150,6 +157,16 @@ includes_Linux='
 #define _FILE_OFFSET_BITS 64
 #endif
 #define _GNU_SOURCE
+
+// See the description in unix/linux/types.go
+#if defined(__ARM_EABI__) || \
+	(defined(__mips__) && (_MIPS_SIM == _ABIO32)) || \
+	(defined(__powerpc__) && (!defined(__powerpc64__)))
+# ifdef   _TIME_BITS
+#  undef  _TIME_BITS
+# endif
+# define  _TIME_BITS 32
+#endif
 
 // <sys/ioctl.h> is broken on powerpc64, as it fails to include definitions of
 // these structures. We just include them copied from <bits/termios.h>.
@@ -198,9 +215,12 @@ struct ltchars {
 #include <sys/timerfd.h>
 #include <sys/uio.h>
 #include <sys/xattr.h>
+#include <netinet/udp.h>
+#include <linux/audit.h>
 #include <linux/bpf.h>
 #include <linux/can.h>
 #include <linux/can/error.h>
+#include <linux/can/netlink.h>
 #include <linux/can/raw.h>
 #include <linux/capability.h>
 #include <linux/cryptouser.h>
@@ -210,6 +230,7 @@ struct ltchars {
 #include <linux/ethtool_netlink.h>
 #include <linux/falloc.h>
 #include <linux/fanotify.h>
+#include <linux/fib_rules.h>
 #include <linux/filter.h>
 #include <linux/fs.h>
 #include <linux/fscrypt.h>
@@ -217,8 +238,6 @@ struct ltchars {
 #include <linux/genetlink.h>
 #include <linux/hdreg.h>
 #include <linux/hidraw.h>
-#include <linux/icmp.h>
-#include <linux/icmpv6.h>
 #include <linux/if.h>
 #include <linux/if_addr.h>
 #include <linux/if_alg.h>
@@ -229,20 +248,25 @@ struct ltchars {
 #include <linux/if_packet.h>
 #include <linux/if_xdp.h>
 #include <linux/input.h>
+#include <linux/kcm.h>
 #include <linux/kexec.h>
 #include <linux/keyctl.h>
+#include <linux/landlock.h>
 #include <linux/loop.h>
 #include <linux/lwtunnel.h>
 #include <linux/magic.h>
 #include <linux/memfd.h>
 #include <linux/module.h>
+#include <linux/mount.h>
 #include <linux/netfilter/nfnetlink.h>
+#include <linux/netfilter/nf_tables.h>
 #include <linux/netlink.h>
 #include <linux/net_namespace.h>
 #include <linux/nfc.h>
 #include <linux/nsfs.h>
 #include <linux/perf_event.h>
 #include <linux/pps.h>
+#include <linux/ptp_clock.h>
 #include <linux/ptrace.h>
 #include <linux/random.h>
 #include <linux/reboot.h>
@@ -251,12 +275,14 @@ struct ltchars {
 #include <linux/sched.h>
 #include <linux/seccomp.h>
 #include <linux/serial.h>
+#include <linux/sock_diag.h>
 #include <linux/sockios.h>
 #include <linux/taskstats.h>
 #include <linux/tipc.h>
 #include <linux/vm_sockets.h>
 #include <linux/wait.h>
 #include <linux/watchdog.h>
+#include <linux/wireguard.h>
 
 #include <mtd/ubi-user.h>
 #include <mtd/mtd-user.h>
@@ -271,20 +297,12 @@ struct ltchars {
 #include <asm/termbits.h>
 #endif
 
-#ifndef MSG_FASTOPEN
-#define MSG_FASTOPEN    0x20000000
-#endif
-
 #ifndef PTRACE_GETREGS
 #define PTRACE_GETREGS	0xc
 #endif
 
 #ifndef PTRACE_SETREGS
 #define PTRACE_SETREGS	0xd
-#endif
-
-#ifndef SOL_NETLINK
-#define SOL_NETLINK	270
 #endif
 
 #ifdef SOL_BLUETOOTH
@@ -303,10 +321,23 @@ struct ltchars {
 #undef TIPC_WAIT_FOREVER
 #define TIPC_WAIT_FOREVER 0xffffffff
 
-// Copied from linux/l2tp.h
-// Including linux/l2tp.h here causes conflicts between linux/in.h
-// and netinet/in.h included via net/route.h above.
-#define IPPROTO_L2TP		115
+// Copied from linux/netfilter/nf_nat.h
+// Including linux/netfilter/nf_nat.h here causes conflicts between linux/in.h
+// and netinet/in.h.
+#define NF_NAT_RANGE_MAP_IPS			(1 << 0)
+#define NF_NAT_RANGE_PROTO_SPECIFIED		(1 << 1)
+#define NF_NAT_RANGE_PROTO_RANDOM		(1 << 2)
+#define NF_NAT_RANGE_PERSISTENT			(1 << 3)
+#define NF_NAT_RANGE_PROTO_RANDOM_FULLY		(1 << 4)
+#define NF_NAT_RANGE_PROTO_OFFSET		(1 << 5)
+#define NF_NAT_RANGE_NETMAP			(1 << 6)
+#define NF_NAT_RANGE_PROTO_RANDOM_ALL		\
+	(NF_NAT_RANGE_PROTO_RANDOM | NF_NAT_RANGE_PROTO_RANDOM_FULLY)
+#define NF_NAT_RANGE_MASK					\
+	(NF_NAT_RANGE_MAP_IPS | NF_NAT_RANGE_PROTO_SPECIFIED |	\
+	 NF_NAT_RANGE_PROTO_RANDOM | NF_NAT_RANGE_PERSISTENT |	\
+	 NF_NAT_RANGE_PROTO_RANDOM_FULLY | NF_NAT_RANGE_PROTO_OFFSET | \
+	 NF_NAT_RANGE_NETMAP)
 
 // Copied from linux/hid.h.
 // Keep in sync with the size of the referenced fields.
@@ -467,7 +498,6 @@ ccflags="$@"
 		$2 !~ /^EQUIV_/ &&
 		$2 !~ /^EXPR_/ &&
 		$2 !~ /^EVIOC/ &&
-		$2 !~ /^EV_/ &&
 		$2 ~ /^E[A-Z0-9_]+$/ ||
 		$2 ~ /^B[0-9_]+$/ ||
 		$2 ~ /^(OLD|NEW)DEV$/ ||
@@ -499,13 +529,18 @@ ccflags="$@"
 		$2 ~ /^O?XTABS$/ ||
 		$2 ~ /^TC[IO](ON|OFF)$/ ||
 		$2 ~ /^IN_/ ||
+		$2 ~ /^KCM/ ||
+		$2 ~ /^LANDLOCK_/ ||
 		$2 ~ /^LOCK_(SH|EX|NB|UN)$/ ||
 		$2 ~ /^LO_(KEY|NAME)_SIZE$/ ||
 		$2 ~ /^LOOP_(CLR|CTL|GET|SET)_/ ||
-		$2 ~ /^(AF|SOCK|SO|SOL|IPPROTO|IP|IPV6|TCP|MCAST|EVFILT|NOTE|SHUT|PROT|MAP|MFD|T?PACKET|MSG|SCM|MCL|DT|MADV|PR|LOCAL)_/ ||
+		$2 == "LOOP_CONFIGURE" ||
+		$2 ~ /^(AF|SOCK|SO|SOL|IPPROTO|IP|IPV6|TCP|MCAST|EVFILT|NOTE|SHUT|PROT|MAP|MREMAP|MFD|T?PACKET|MSG|SCM|MCL|DT|MADV|PR|LOCAL|TCPOPT|UDP)_/ ||
 		$2 ~ /^NFC_(GENL|PROTO|COMM|RF|SE|DIRECTION|LLCP|SOCKPROTO)_/ ||
 		$2 ~ /^NFC_.*_(MAX)?SIZE$/ ||
+		$2 ~ /^PTP_/ ||
 		$2 ~ /^RAW_PAYLOAD_/ ||
+		$2 ~ /^[US]F_/ ||
 		$2 ~ /^TP_STATUS_/ ||
 		$2 ~ /^FALLOC_/ ||
 		$2 ~ /^ICMPV?6?_(FILTER|SEC)/ ||
@@ -517,10 +552,10 @@ ccflags="$@"
 		$2 ~ /^HW_MACHINE$/ ||
 		$2 ~ /^SYSCTL_VERS/ ||
 		$2 !~ "MNT_BITS" &&
-		$2 ~ /^(MS|MNT|UMOUNT)_/ ||
+		$2 ~ /^(MS|MNT|MOUNT|UMOUNT)_/ ||
 		$2 ~ /^NS_GET_/ ||
 		$2 ~ /^TUN(SET|GET|ATTACH|DETACH)/ ||
-		$2 ~ /^(O|F|[ES]?FD|NAME|S|PTRACE|PT|TFD)_/ ||
+		$2 ~ /^(O|F|[ES]?FD|NAME|S|PTRACE|PT|PIOD|TFD)_/ ||
 		$2 ~ /^KEXEC_/ ||
 		$2 ~ /^LINUX_REBOOT_CMD_/ ||
 		$2 ~ /^LINUX_REBOOT_MAGIC[12]$/ ||
@@ -528,6 +563,8 @@ ccflags="$@"
 		$2 !~ "NLA_TYPE_MASK" &&
 		$2 !~ /^RTC_VL_(ACCURACY|BACKUP|DATA)/ &&
 		$2 ~ /^(NETLINK|NLM|NLMSG|NLA|IFA|IFAN|RT|RTC|RTCF|RTN|RTPROT|RTNH|ARPHRD|ETH_P|NETNSA)_/ ||
+		$2 ~ /^SOCK_|SK_DIAG_|SKNLGRP_$/ ||
+		$2 ~ /^(CONNECT|SAE)_/ ||
 		$2 ~ /^FIORDCHK$/ ||
 		$2 ~ /^SIOC/ ||
 		$2 ~ /^TIOC/ ||
@@ -542,8 +579,9 @@ ccflags="$@"
 		$2 ~ /^RLIMIT_(AS|CORE|CPU|DATA|FSIZE|LOCKS|MEMLOCK|MSGQUEUE|NICE|NOFILE|NPROC|RSS|RTPRIO|RTTIME|SIGPENDING|STACK)|RLIM_INFINITY/ ||
 		$2 ~ /^PRIO_(PROCESS|PGRP|USER)/ ||
 		$2 ~ /^CLONE_[A-Z_]+/ ||
-		$2 !~ /^(BPF_TIMEVAL|BPF_FIB_LOOKUP_[A-Z]+)$/ &&
+		$2 !~ /^(BPF_TIMEVAL|BPF_FIB_LOOKUP_[A-Z]+|BPF_F_LINK)$/ &&
 		$2 ~ /^(BPF|DLT)_/ ||
+		$2 ~ /^AUDIT_/ ||
 		$2 ~ /^(CLOCK|TIMER)_/ ||
 		$2 ~ /^CAN_/ ||
 		$2 ~ /^CAP_/ ||
@@ -562,10 +600,11 @@ ccflags="$@"
 		$2 ~ /^KEY_(SPEC|REQKEY_DEFL)_/ ||
 		$2 ~ /^KEYCTL_/ ||
 		$2 ~ /^PERF_/ ||
-		$2 ~ /^SECCOMP_MODE_/ ||
+		$2 ~ /^SECCOMP_/ ||
+		$2 ~ /^SEEK_/ ||
+		$2 ~ /^SCHED_/ ||
 		$2 ~ /^SPLICE_/ ||
 		$2 ~ /^SYNC_FILE_RANGE_/ ||
-		$2 !~ /^AUDIT_RECORD_MAGIC/ &&
 		$2 !~ /IOC_MAGIC/ &&
 		$2 ~ /^[A-Z][A-Z0-9_]+_MAGIC2?$/ ||
 		$2 ~ /^(VM|VMADDR)_/ ||
@@ -582,6 +621,9 @@ ccflags="$@"
 		$2 ~ /^FSOPT_/ ||
 		$2 ~ /^WDIO[CFS]_/ ||
 		$2 ~ /^NFN/ ||
+		$2 !~ /^NFT_META_IIFTYPE/ &&
+		$2 ~ /^NFT_/ ||
+		$2 ~ /^NF_NAT_/ ||
 		$2 ~ /^XDP_/ ||
 		$2 ~ /^RWF_/ ||
 		$2 ~ /^(HDIO|WIN|SMART)_/ ||
@@ -591,8 +633,10 @@ ccflags="$@"
 		$2 ~ /^DEVLINK_/ ||
 		$2 ~ /^ETHTOOL_/ ||
 		$2 ~ /^LWTUNNEL_IP/ ||
+		$2 ~ /^ITIMER_/ ||
 		$2 !~ "WMESGLEN" &&
 		$2 ~ /^W[A-Z0-9]+$/ ||
+		$2 ~ /^P_/ ||
 		$2 ~/^PPPIOC/ ||
 		$2 ~ /^FAN_|FANOTIFY_/ ||
 		$2 == "HID_MAX_DESCRIPTOR_SIZE" ||
@@ -601,7 +645,9 @@ ccflags="$@"
 		$2 ~ /^MTD/ ||
 		$2 ~ /^OTP/ ||
 		$2 ~ /^MEM/ ||
-		$2 ~ /^BLK[A-Z]*(GET$|SET$|BUF$|PART$|SIZE)/ {printf("\t%s = C.%s\n", $2, $2)}
+		$2 ~ /^WG/ ||
+		$2 ~ /^FIB_RULE_/ ||
+		$2 ~ /^BLK[A-Z]*(GET$|SET$|BUF$|PART$|SIZE|IOMIN$|IOOPT$|ALIGNOFF$|DISCARD|ROTATIONAL$|ZEROOUT$|GETDISKSEQ$)/ {printf("\t%s = C.%s\n", $2, $2)}
 		$2 ~ /^__WCOREFLAG$/ {next}
 		$2 ~ /^__W[A-Z0-9]+$/ {printf("\t%s = C.%s\n", substr($2,3), $2)}
 
@@ -622,7 +668,7 @@ errors=$(
 signals=$(
 	echo '#include <signal.h>' | $CC -x c - -E -dM $ccflags |
 	awk '$1=="#define" && $2 ~ /^SIG[A-Z0-9]+$/ { print $2 }' |
-	egrep -v '(SIGSTKSIZE|SIGSTKSZ|SIGRT|SIGMAX64)' |
+	grep -E -v '(SIGSTKSIZE|SIGSTKSZ|SIGRT|SIGMAX64)' |
 	sort
 )
 
@@ -632,14 +678,13 @@ echo '#include <errno.h>' | $CC -x c - -E -dM $ccflags |
 	sort >_error.grep
 echo '#include <signal.h>' | $CC -x c - -E -dM $ccflags |
 	awk '$1=="#define" && $2 ~ /^SIG[A-Z0-9]+$/ { print "^\t" $2 "[ \t]*=" }' |
-	egrep -v '(SIGSTKSIZE|SIGSTKSZ|SIGRT|SIGMAX64)' |
+	grep -E -v '(SIGSTKSIZE|SIGSTKSZ|SIGRT|SIGMAX64)' |
 	sort >_signal.grep
 
 echo '// mkerrors.sh' "$@"
 echo '// Code generated by the command above; see README.md. DO NOT EDIT.'
 echo
 echo "//go:build ${GOARCH} && ${GOOS}"
-echo "// +build ${GOARCH},${GOOS}"
 echo
 go tool cgo -godefs -- "$@" _const.go >_error.out
 cat _error.out | grep -vf _error.grep | grep -vf _signal.grep
@@ -718,7 +763,8 @@ main(void)
 		e = errors[i].num;
 		if(i > 0 && errors[i-1].num == e)
 			continue;
-		strcpy(buf, strerror(e));
+		strncpy(buf, strerror(e), sizeof(buf) - 1);
+		buf[sizeof(buf) - 1] = '\0';
 		// lowercase first letter: Bad -> bad, but STREAM -> STREAM.
 		if(A <= buf[0] && buf[0] <= Z && a <= buf[1] && buf[1] <= z)
 			buf[0] += a - A;
@@ -737,7 +783,8 @@ main(void)
 		e = signals[i].num;
 		if(i > 0 && signals[i-1].num == e)
 			continue;
-		strcpy(buf, strsignal(e));
+		strncpy(buf, strsignal(e), sizeof(buf) - 1);
+		buf[sizeof(buf) - 1] = '\0';
 		// lowercase first letter: Bad -> bad, but STREAM -> STREAM.
 		if(A <= buf[0] && buf[0] <= Z && a <= buf[1] && buf[1] <= z)
 			buf[0] += a - A;

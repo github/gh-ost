@@ -2,12 +2,18 @@ name: "CodeQL analysis"
 
 on: 
   push:
+    branches: [ master ]
   pull_request:
+    branches: [ master ]
   schedule:
-    - cron: '0 0 * * 0'
+    - cron: '25 22 * * 6'
 
 jobs:
   codeql:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
 
     strategy:
       fail-fast: false
@@ -16,10 +22,10 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
         
     - name: Initialize CodeQL 
-      uses: github/codeql-action/init@v1
+      uses: github/codeql-action/init@v3
     
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v1
+      uses: github/codeql-action/analyze@v3
