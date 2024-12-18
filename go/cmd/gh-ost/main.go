@@ -22,7 +22,7 @@ import (
 	"golang.org/x/term"
 )
 
-var AppVersion string
+var AppVersion string = "1.1.6"
 
 // acceptSignals registers for OS signals
 func acceptSignals(migrationContext *base.MigrationContext) {
