@@ -27,4 +27,6 @@ begin
   insert into gh_ost_test (id, a, b) values (null, 2,0);
   insert into gh_ost_test (id, a, b) values (null, 2,1);
   insert into gh_ost_test (id, a, b) values (null, 2,2);
+  update gh_ost_test set b=b+1 where id < 5;
+  update gh_ost_test set b=b-1 where id >= 5;
 end ;;

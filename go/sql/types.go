@@ -254,6 +254,7 @@ func (this *ColumnList) FilterBy(f func(Column) bool) *ColumnList {
 			filteredCols = append(filteredCols, column)
 		}
 	}
+	filteredList.columns = filteredCols
 	return filteredList
 }
 
