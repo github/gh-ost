@@ -10,7 +10,7 @@ require (
 	github.com/openark/golib v0.0.0-20210531070646-355f37940af8
 	github.com/stretchr/testify v1.9.0
 	github.com/testcontainers/testcontainers-go v0.34.0
-	golang.org/x/net v0.24.0
+	golang.org/x/net v0.33.0
 	golang.org/x/sync v0.10.0
 	golang.org/x/term v0.27.0
 	golang.org/x/text v0.21.0
