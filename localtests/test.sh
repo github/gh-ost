@@ -11,6 +11,7 @@ tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
 default_ghost_binary=/tmp/gh-ost-test
 ghost_binary=""
+docker=false
 storage_engine=innodb
 exec_command_file=/tmp/gh-ost-test.bash
 ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
@@ -280,9 +281,10 @@ build_binary() {
 
 test_all() {
   build_binary
-  find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | egrep "$test_pattern" | sort | while read test_name ; do
-    test_single "$test_name"
-    if [ $? -ne 0 ] ; then
+  test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | sort)
+  while read -r test_dir; do
+    test_name=$(basename "$test_dir")
+    if ! test_single "$test_name" ; then
       create_statement=$(gh-ost-test-mysql-replica test -t -e "show create table _gh_ost_test_gho \G")
       echo "$create_statement" >> $test_logfile
       echo "+ FAIL"
@@ -292,7 +294,7 @@ test_all() {
       echo "+ pass"
     fi
     gh-ost-test-mysql-replica -e "start slave"
-  done
+  done <<< "$test_dirs"
 }
 
 verify_master_and_replica

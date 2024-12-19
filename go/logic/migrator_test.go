@@ -216,6 +216,15 @@ func TestMigratorGetMigrationStateAndETA(t *testing.T) {
 		require.Equal(t, "4h29m44s", etaDuration.String())
 	}
 	{
+		// Test using rows-per-second added data.
+		migrationContext.TotalRowsCopied = 456
+		migrationContext.EtaRowsPerSecond = 100
+		state, eta, etaDuration := migrator.getMigrationStateAndETA(123456)
+		require.Equal(t, "migrating", state)
+		require.Equal(t, "20m30s", eta)
+		require.Equal(t, "20m30s", etaDuration.String())
+	}
+	{
 		migrationContext.TotalRowsCopied = 456
 		state, eta, etaDuration := migrator.getMigrationStateAndETA(456)
 		require.Equal(t, "migrating", state)

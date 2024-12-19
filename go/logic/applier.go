@@ -257,6 +257,15 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 func (this *Applier) AttemptInstantDDL() error {
 	query := this.generateInstantDDLQuery()
 	this.migrationContext.Log.Infof("INSTANT DDL query is: %s", query)
+
+	// Reuse cut-over-lock-timeout from regular migration process to reduce risk
+	// in situations where there may be long-running transactions.
+	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
+	this.migrationContext.Log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
+	lockTimeoutQuery := fmt.Sprintf(`set /* gh-ost */ session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
+	if _, err := this.db.Exec(lockTimeoutQuery); err != nil {
+		return err
+	}
 	// We don't need a trx, because for instant DDL the SQL mode doesn't matter.
 	_, err := this.db.Exec(query)
 	return err

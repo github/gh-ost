@@ -688,9 +688,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age", "surprise"})
-		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
-		require.NoError(t, err)
-		_, _, _, err = builder.BuildQuery(valueArgs, whereArgs)
+		_, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
 		require.Error(t, err)
 	}
 	{
