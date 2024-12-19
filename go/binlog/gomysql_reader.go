@@ -6,12 +6,10 @@
 package binlog
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
-	"github.com/github/gh-ost/go/sql"
 
 	"time"
 
@@ -76,68 +74,17 @@ func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinate
 	return &returnCoordinates
 }
 
-// StreamEvents
-func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
-	if this.currentCoordinates.IsLogPosOverflowBeyond4Bytes(&this.LastAppliedRowsEventHint) {
-		return fmt.Errorf("Unexpected rows event at %+v, the binlog end_log_pos is overflow 4 bytes", this.currentCoordinates)
-	}
-
-	if this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
-		this.migrationContext.Log.Debugf("Skipping handled query at %+v", this.currentCoordinates)
-		return nil
-	}
-
-	dml := ToEventDML(ev.Header.EventType.String())
-	if dml == NotDML {
-		return fmt.Errorf("Unknown DML type: %s", ev.Header.EventType.String())
-	}
-	for i, row := range rowsEvent.Rows {
-		if dml == UpdateDML && i%2 == 1 {
-			// An update has two rows (WHERE+SET)
-			// We do both at the same time
-			continue
-		}
-		binlogEntry := NewBinlogEntryAt(this.currentCoordinates)
-		binlogEntry.DmlEvent = NewBinlogDMLEvent(
-			string(rowsEvent.Table.Schema),
-			string(rowsEvent.Table.Table),
-			dml,
-		)
-		switch dml {
-		case InsertDML:
-			{
-				binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(row)
-			}
-		case UpdateDML:
-			{
-				binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
-				binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(rowsEvent.Rows[i+1])
-			}
-		case DeleteDML:
-			{
-				binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
-			}
-		}
-		// The channel will do the throttling. Whoever is reading from the channel
-		// decides whether action is taken synchronously (meaning we wait before
-		// next iteration) or asynchronously (we keep pushing more events)
-		// In reality, reads will be synchronous
-		entriesChannel <- binlogEntry
-	}
-	this.LastAppliedRowsEventHint = this.currentCoordinates
-	return nil
-}
-
-// StreamEvents
-func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChannel chan<- *BinlogEntry) error {
-	if canStopStreaming() {
-		return nil
-	}
+// StreamEvents reads binlog events and sends them to the given channel.
+// It is blocking and should be executed in a goroutine.
+func (this *GoMySQLReader) StreamEvents(ctx context.Context, canStopStreaming func() bool, eventChannel chan<- *replication.BinlogEvent) error {
 	for {
 		if canStopStreaming() {
-			break
+			return nil
 		}
-		ev, err := this.binlogStreamer.GetEvent(context.Background())
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		ev, err := this.binlogStreamer.GetEvent(ctx)
 		if err != nil {
 			return err
 		}
@@ -147,24 +94,8 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
 			this.currentCoordinates.EventSize = int64(ev.Header.EventSize)
 		}()
-
-		switch binlogEvent := ev.Event.(type) {
-		case *replication.RotateEvent:
-			func() {
-				this.currentCoordinatesMutex.Lock()
-				defer this.currentCoordinatesMutex.Unlock()
-				this.currentCoordinates.LogFile = string(binlogEvent.NextLogName)
-			}()
-			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), binlogEvent.NextLogName)
-		case *replication.RowsEvent:
-			if err := this.handleRowsEvent(ev, binlogEvent, entriesChannel); err != nil {
-				return err
-			}
-		}
+		eventChannel <- ev
 	}
-	this.migrationContext.Log.Debugf("done streaming events")
-
-	return nil
 }
 
 func (this *GoMySQLReader) Close() error {
