@@ -37,7 +37,7 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 	for i, column := range columns.Columns() {
 		var token string
 		if column.timezoneConversion != nil {
-			token = fmt.Sprintf("convert_tz(?, '%s', '%s')", column.timezoneConversion.ToTimezone, "+00:00")
+			token = fmt.Sprintf("convert_tz(?, '%s', '%s')", column.timezoneConversion.FromTimezone, column.timezoneConversion.ToTimezone)
 		} else if column.enumToTextConversion {
 			token = fmt.Sprintf("ELT(?, %s)", column.EnumValues)
 		} else if column.Type == JSONColumnType {
@@ -109,7 +109,7 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 	for _, column := range columns.Columns() {
 		var setToken string
 		if column.timezoneConversion != nil {
-			setToken = fmt.Sprintf("%s=convert_tz(?, '%s', '%s')", EscapeName(column.Name), column.timezoneConversion.ToTimezone, "+00:00")
+			setToken = fmt.Sprintf("%s=convert_tz(?, '%s', '%s')", EscapeName(column.Name), column.timezoneConversion.FromTimezone, column.timezoneConversion.ToTimezone)
 		} else if column.enumToTextConversion {
 			setToken = fmt.Sprintf("%s=ELT(?, %s)", EscapeName(column.Name), column.EnumValues)
 		} else if column.Type == JSONColumnType {
