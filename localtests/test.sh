@@ -18,6 +18,7 @@ ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
 throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
+timeout_duration="60s"
 
 master_host=
 master_port=
@@ -67,7 +68,7 @@ verify_master_and_replica() {
     echo "Expecting test replica to have binlog_format=ROW"
     exit 1
   fi
-  read replica_host replica_port <<< $(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
+  read -r replica_host replica_port <<< "$(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)"
   [ "$replica_host" == "$(hostname)" ] && replica_host="127.0.0.1"
   echo "# replica verified at $replica_host:$replica_port"
 }
@@ -190,9 +191,14 @@ test_single() {
   echo_dot
   echo $cmd > $exec_command_file
   echo_dot
-  bash $exec_command_file 1> $test_logfile 2>&1
 
+  # run test in background so we can interrupt the "timeout" command
+  trap 'test -d /proc/$pid && kill -INT -$pid' INT
+  timeout "$timeout_duration" bash $exec_command_file 1> $test_logfile 2>&1 &
+  pid=$!
+  wait $pid
   execution_result=$?
+  trap - INT
 
   if [ -f $tests_path/$test_name/sql_mode ] ; then
     gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
@@ -201,6 +207,16 @@ test_single() {
 
   if [ -f $tests_path/$test_name/destroy.sql ] ; then
     gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/destroy.sql
+  fi
+
+  if [ $execution_result -eq 124 ] ; then
+    echo
+    echo "ERROR $test_name execution exceeded timeout $timeout_duration"
+    return 1
+  elif [ $execution_result -eq 130 ] ; then
+    echo
+    echo "$test_name execution interrupted"
+    return 130
   fi
 
   if [ -f $tests_path/$test_name/expect_failure ] ; then
@@ -281,6 +297,10 @@ build_binary() {
 test_all() {
   build_binary
   test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | sort)
+  if [ -z "$test_dirs" ] ; then
+    echo "No tests found"
+    return 0
+  fi
   while read -r test_dir; do
     test_name=$(basename "$test_dir")
     if ! test_single "$test_name" ; then
