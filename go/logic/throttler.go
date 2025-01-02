@@ -216,6 +216,9 @@ func (this *Throttler) collectControlReplicasLag() {
 		lagResults := make(chan *mysql.ReplicationLagResult, instanceKeyMap.Len())
 		for replicaKey := range *instanceKeyMap {
 			connectionConfig := this.migrationContext.InspectorConnectionConfig.DuplicateCredentials(replicaKey)
+			if err := connectionConfig.RegisterTLSConfig(); err != nil {
+				return &mysql.ReplicationLagResult{Err: err}
+			}
 
 			lagResult := &mysql.ReplicationLagResult{Key: connectionConfig.Key}
 			go func() {
