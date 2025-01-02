@@ -128,8 +128,7 @@ func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKe
 	if !masterKey.IsValid() {
 		return connectionConfig, nil
 	}
-	masterConfig = connectionConfig.Duplicate()
-	masterConfig.Key = *masterKey
+	masterConfig = connectionConfig.DuplicateCredentials(*masterKey)
 
 	log.Debugf("Master of %+v is %+v", connectionConfig.Key, masterConfig.Key)
 	if visitedKeys.HasKey(masterConfig.Key) {
