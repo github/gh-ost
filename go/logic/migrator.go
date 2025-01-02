@@ -790,6 +790,9 @@ func (this *Migrator) initiateInspector() (err error) {
 		if this.migrationContext.CliMasterPassword != "" {
 			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
 		}
+		if err := this.migrationContext.ApplierConnectionConfig.RegisterTLSConfig(); err != nil {
+			return err
+		}
 		this.migrationContext.Log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	}
 	// validate configs
