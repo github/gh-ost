@@ -52,6 +52,16 @@ func (this *ConnectionConfig) DuplicateCredentials(key InstanceKey) *ConnectionC
 		TransactionIsolation: this.TransactionIsolation,
 		Charset:              this.Charset,
 	}
+
+	if this.tlsConfig != nil {
+		config.tlsConfig = &tls.Config{
+			ServerName:         key.Hostname,
+			Certificates:       this.tlsConfig.Certificates,
+			RootCAs:            this.tlsConfig.RootCAs,
+			InsecureSkipVerify: this.tlsConfig.InsecureSkipVerify,
+		}
+	}
+
 	config.ImpliedKey = &config.Key
 	return config
 }

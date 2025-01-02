@@ -52,7 +52,10 @@ func TestDuplicateCredentials(t *testing.T) {
 	require.Equal(t, 3310, dup.ImpliedKey.Port)
 	require.Equal(t, "gromit", dup.User)
 	require.Equal(t, "penguin", dup.Password)
-	require.Equal(t, c.tlsConfig, dup.tlsConfig)
+	require.Equal(t, "otherhost", dup.tlsConfig.ServerName)
+	require.Equal(t, c.tlsConfig.Certificates, dup.tlsConfig.Certificates)
+	require.Equal(t, c.tlsConfig.RootCAs, dup.tlsConfig.RootCAs)
+	require.Equal(t, c.tlsConfig.InsecureSkipVerify, dup.tlsConfig.InsecureSkipVerify)
 	require.Equal(t, c.TransactionIsolation, dup.TransactionIsolation)
 	require.Equal(t, c.Charset, dup.Charset)
 }
@@ -72,6 +75,7 @@ func TestDuplicate(t *testing.T) {
 	require.Equal(t, 3306, dup.ImpliedKey.Port)
 	require.Equal(t, "gromit", dup.User)
 	require.Equal(t, "penguin", dup.Password)
+	require.Equal(t, c.tlsConfig, dup.tlsConfig)
 	require.Equal(t, transactionIsolation, dup.TransactionIsolation)
 	require.Equal(t, "utf8mb4", dup.Charset)
 }
