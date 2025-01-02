@@ -113,6 +113,17 @@ func (this *ConnectionConfig) UseTLS(caCertificatePath, clientCertificate, clien
 		InsecureSkipVerify: allowInsecure,
 	}
 
+	return this.RegisterTLSConfig()
+}
+
+func (this *ConnectionConfig) RegisterTLSConfig() error {
+	if this.tlsConfig == nil {
+		return nil
+	}
+	if this.tlsConfig.ServerName == "" {
+		return errors.New("tlsConfig.ServerName cannot be empty")
+	}
+
 	var tlsOption = GetDBTLSConfigKey(this.tlsConfig.ServerName)
 
 	return mysql.RegisterTLSConfig(tlsOption, this.tlsConfig)
