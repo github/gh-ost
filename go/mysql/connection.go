@@ -113,7 +113,9 @@ func (this *ConnectionConfig) UseTLS(caCertificatePath, clientCertificate, clien
 		InsecureSkipVerify: allowInsecure,
 	}
 
-	return mysql.RegisterTLSConfig(TLS_CONFIG_KEY, this.tlsConfig)
+	var tlsOption = GetDBTLSConfigKey(this.tlsConfig.ServerName)
+
+	return mysql.RegisterTLSConfig(tlsOption, this.tlsConfig)
 }
 
 func (this *ConnectionConfig) TLSConfig() *tls.Config {
@@ -132,7 +134,7 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 	// simplify construction of the DSN below.
 	tlsOption := "false"
 	if this.tlsConfig != nil {
-		tlsOption = TLS_CONFIG_KEY
+		tlsOption = GetDBTLSConfigKey(this.tlsConfig.ServerName)
 	}
 
 	if this.Charset == "" {
@@ -151,4 +153,8 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 	}
 
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s", this.User, this.Password, hostname, this.Key.Port, databaseName, strings.Join(connectionParams, "&"))
+}
+
+func GetDBTLSConfigKey(tlsServerName string) string {
+	return fmt.Sprintf("%s-%s", TLS_CONFIG_KEY, tlsServerName)
 }
