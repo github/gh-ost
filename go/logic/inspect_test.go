@@ -25,8 +25,8 @@ func TestInspectGetSharedUniqueKeys(t *testing.T) {
 	}
 	inspector := &Inspector{}
 	sharedUniqKeys := inspector.getSharedUniqueKeys(origUniqKeys, ghostUniqKeys)
-	test.S(t).ExpectEquals(len(sharedUniqKeys), 3)
-	test.S(t).ExpectEquals(sharedUniqKeys[0].Columns.String(), "id,item_id")
-	test.S(t).ExpectEquals(sharedUniqKeys[1].Columns.String(), "id,org_id")
-	test.S(t).ExpectEquals(sharedUniqKeys[2].Columns.String(), "id")
+	require.Len(t, sharedUniqKeys, 3)
+	require.Equal(t, "id,item_id", sharedUniqKeys[0].Columns.String())
+	require.Equal(t, "id,org_id", sharedUniqKeys[1].Columns.String())
+	require.Equal(t, "id", sharedUniqKeys[2].Columns.String())
 }
