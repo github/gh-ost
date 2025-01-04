@@ -14,10 +14,13 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
-	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/openark/golib/log"
+	"context"
+	"database/sql/driver"
+
+	"github.com/github/gh-ost/go/mysql"
+	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/sqlutils"
 )
 
@@ -60,6 +63,10 @@ type Applier struct {
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
 	name              string
+
+	dmlDeleteQueryBuilder *sql.DMLDeleteQueryBuilder
+	dmlInsertQueryBuilder *sql.DMLInsertQueryBuilder
+	dmlUpdateQueryBuilder *sql.DMLUpdateQueryBuilder
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -73,7 +80,8 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 
 func (this *Applier) InitDBConnections() (err error) {
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
-	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, applierUri); err != nil {
+	uriWithMulti := fmt.Sprintf("%s&multiStatements=true", applierUri)
+	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, uriWithMulti); err != nil {
 		return err
 	}
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
@@ -103,6 +111,37 @@ func (this *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	this.migrationContext.Log.Infof("Applier initiated on %+v, version %+v", this.connectionConfig.ImpliedKey, this.migrationContext.ApplierMySQLVersion)
+	return nil
+}
+
+func (this *Applier) prepareQueries() (err error) {
+	if this.dmlDeleteQueryBuilder, err = sql.NewDMLDeleteQueryBuilder(
+		this.migrationContext.DatabaseName,
+		this.migrationContext.GetGhostTableName(),
+		this.migrationContext.OriginalTableColumns,
+		&this.migrationContext.UniqueKey.Columns,
+	); err != nil {
+		return err
+	}
+	if this.dmlInsertQueryBuilder, err = sql.NewDMLInsertQueryBuilder(
+		this.migrationContext.DatabaseName,
+		this.migrationContext.GetGhostTableName(),
+		this.migrationContext.OriginalTableColumns,
+		this.migrationContext.SharedColumns,
+		this.migrationContext.MappedSharedColumns,
+	); err != nil {
+		return err
+	}
+	if this.dmlUpdateQueryBuilder, err = sql.NewDMLUpdateQueryBuilder(
+		this.migrationContext.DatabaseName,
+		this.migrationContext.GetGhostTableName(),
+		this.migrationContext.OriginalTableColumns,
+		this.migrationContext.SharedColumns,
+		this.migrationContext.MappedSharedColumns,
+		&this.migrationContext.UniqueKey.Columns,
+	); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -216,6 +255,15 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 func (this *Applier) AttemptInstantDDL() error {
 	query := this.generateInstantDDLQuery()
 	this.migrationContext.Log.Infof("INSTANT DDL query is: %s", query)
+
+	// Reuse cut-over-lock-timeout from regular migration process to reduce risk
+	// in situations where there may be long-running transactions.
+	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
+	this.migrationContext.Log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
+	lockTimeoutQuery := fmt.Sprintf(`set /* gh-ost */ session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
+	if _, err := this.db.Exec(lockTimeoutQuery); err != nil {
+		return err
+	}
 	// We don't need a trx, because for instant DDL the SQL mode doesn't matter.
 	_, err := this.db.Exec(query)
 	return err
@@ -631,6 +679,8 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
 		this.migrationContext.GetIteration() == 0,
 		this.migrationContext.IsTransactionalTable(),
+		// TODO: Don't hardcode this
+		strings.HasPrefix(this.migrationContext.ApplierMySQLVersion, "8."),
 	)
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
@@ -1135,78 +1185,115 @@ func (this *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEv
 
 // buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
 // event entry on the original table.
-func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) (results [](*dmlBuildResult)) {
+func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBuildResult {
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
 		{
-			query, uniqueKeyArgs, err := sql.BuildDMLDeleteQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.WhereColumnValues.AbstractValues())
-			return append(results, newDmlBuildResult(query, uniqueKeyArgs, -1, err))
+			query, uniqueKeyArgs, err := this.dmlDeleteQueryBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
+			return []*dmlBuildResult{newDmlBuildResult(query, uniqueKeyArgs, -1, err)}
 		}
 	case binlog.InsertDML:
 		{
-			query, sharedArgs, err := sql.BuildDMLInsertQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, dmlEvent.NewColumnValues.AbstractValues())
-			return append(results, newDmlBuildResult(query, sharedArgs, 1, err))
+			query, sharedArgs, err := this.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
+			return []*dmlBuildResult{newDmlBuildResult(query, sharedArgs, 1, err)}
 		}
 	case binlog.UpdateDML:
 		{
 			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
+				results := make([]*dmlBuildResult, 0, 2)
 				dmlEvent.DML = binlog.DeleteDML
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
 				dmlEvent.DML = binlog.InsertDML
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
 				return results
 			}
-			query, sharedArgs, uniqueKeyArgs, err := sql.BuildDMLUpdateQuery(dmlEvent.DatabaseName, this.migrationContext.GetGhostTableName(), this.migrationContext.OriginalTableColumns, this.migrationContext.SharedColumns, this.migrationContext.MappedSharedColumns, &this.migrationContext.UniqueKey.Columns, dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			query, sharedArgs, uniqueKeyArgs, err := this.dmlUpdateQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args := sqlutils.Args()
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
-			return append(results, newDmlBuildResult(query, args, 0, err))
+			return []*dmlBuildResult{newDmlBuildResult(query, args, 0, err)}
 		}
 	}
-	return append(results, newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML)))
+	return []*dmlBuildResult{newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML))}
 }
 
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
 func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
 	var totalDelta int64
+	ctx := context.Background()
 
 	err := func() error {
-		tx, err := this.db.Begin()
+		conn, err := this.db.Conn(ctx)
 		if err != nil {
 			return err
 		}
+		defer conn.Close()
 
+		sessionQuery := "SET /* gh-ost */ SESSION time_zone = '+00:00'"
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
+		if _, err := conn.ExecContext(ctx, sessionQuery); err != nil {
+			return err
+		}
+
+		tx, err := conn.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
 		rollback := func(err error) error {
 			tx.Rollback()
 			return err
 		}
 
-		sessionQuery := "SET /* gh-ost */ SESSION time_zone = '+00:00'"
-		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
-
-		if _, err := tx.Exec(sessionQuery); err != nil {
-			return rollback(err)
-		}
+		buildResults := make([]*dmlBuildResult, 0, len(dmlEvents))
+		nArgs := 0
 		for _, dmlEvent := range dmlEvents {
 			for _, buildResult := range this.buildDMLEventQuery(dmlEvent) {
 				if buildResult.err != nil {
 					return rollback(buildResult.err)
 				}
-				result, err := tx.Exec(buildResult.query, buildResult.args...)
-				if err != nil {
-					err = fmt.Errorf("%w; query=%s; args=%+v", err, buildResult.query, buildResult.args)
-					return rollback(err)
+				nArgs += len(buildResult.args)
+				buildResults = append(buildResults, buildResult)
+			}
+		}
+
+		// We batch together the DML queries into multi-statements to minimize network trips.
+		// We have to use the raw driver connection to access the rows affected
+		// for each statement in the multi-statement.
+		execErr := conn.Raw(func(driverConn any) error {
+			ex := driverConn.(driver.ExecerContext)
+			nvc := driverConn.(driver.NamedValueChecker)
+
+			multiArgs := make([]driver.NamedValue, 0, nArgs)
+			multiQueryBuilder := strings.Builder{}
+			for _, buildResult := range buildResults {
+				for _, arg := range buildResult.args {
+					nv := driver.NamedValue{Value: driver.Value(arg)}
+					nvc.CheckNamedValue(&nv)
+					multiArgs = append(multiArgs, nv)
 				}
 
-				rowsAffected, err := result.RowsAffected()
-				if err != nil {
-					log.Warningf("error getting rows affected from DML event query: %s. i'm going to assume that the DML affected a single row, but this may result in inaccurate statistics", err)
-					rowsAffected = 1
-				}
-				// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
-				// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
-				totalDelta += buildResult.rowsDelta * rowsAffected
+				multiQueryBuilder.WriteString(buildResult.query)
+				multiQueryBuilder.WriteString(";\n")
 			}
+
+			res, err := ex.ExecContext(ctx, multiQueryBuilder.String(), multiArgs)
+			if err != nil {
+				err = fmt.Errorf("%w; query=%s; args=%+v", err, multiQueryBuilder.String(), multiArgs)
+				return err
+			}
+
+			mysqlRes := res.(drivermysql.Result)
+
+			// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
+			// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
+			for i, rowsAffected := range mysqlRes.AllRowsAffected() {
+				totalDelta += buildResults[i].rowsDelta * rowsAffected
+			}
+			return nil
+		})
+
+		if execErr != nil {
+			return rollback(execErr)
 		}
 		if err := tx.Commit(); err != nil {
 			return err

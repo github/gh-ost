@@ -8,9 +8,8 @@ package logic
 import (
 	"testing"
 
-	test "github.com/openark/golib/tests"
-
 	"github.com/github/gh-ost/go/sql"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInspectGetSharedUniqueKeys(t *testing.T) {

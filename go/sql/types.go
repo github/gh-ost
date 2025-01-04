@@ -40,6 +40,7 @@ type CharacterSetConversion struct {
 type Column struct {
 	Name                 string
 	IsUnsigned           bool
+	IsVirtual            bool
 	Charset              string
 	Type                 ColumnType
 	EnumValues           string
@@ -242,6 +243,16 @@ func (this *ColumnList) IsSubsetOf(other *ColumnList) bool {
 		}
 	}
 	return true
+}
+
+func (this *ColumnList) FilterBy(f func(Column) bool) *ColumnList {
+	filteredCols := make([]Column, 0, len(this.columns))
+	for _, column := range this.columns {
+		if f(column) {
+			filteredCols = append(filteredCols, column)
+		}
+	}
+	return &ColumnList{Ordinals: this.Ordinals, columns: filteredCols}
 }
 
 func (this *ColumnList) Len() int {

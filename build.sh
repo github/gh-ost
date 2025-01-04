@@ -1,6 +1,4 @@
 #!/bin/bash
-#
-#
 
 RELEASE_VERSION=
 buildpath=
@@ -72,11 +70,14 @@ main() {
   build macOS osx darwin amd64
   build macOS osx darwin arm64
 
+  bin_files=$(find $buildpath/gh-ost* -type f -maxdepth 1)
   echo "Binaries found in:"
-  find $buildpath/gh-ost* -type f -maxdepth 1
+  echo "$bin_files"
 
   echo "Checksums:"
-  (cd $buildpath && shasum -a256 gh-ost* 2>/dev/null)
+  (shasum -a256 $bin_files 2>/dev/null)
+
+  echo "Build Success!"
 }
 
 main "$@"
