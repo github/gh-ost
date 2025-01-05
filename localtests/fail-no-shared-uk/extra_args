@@ -1,1 +1,1 @@
---alter="drop primary key, add primary key (id, i)" 
+--alter="drop primary key, add primary key (i)" 
