@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
@@ -376,6 +377,72 @@ func (suite *MigratorTestSuite) TestFoo() {
 	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_del'").Scan(&tableName)
 	suite.Require().NoError(err)
 	suite.Require().Equal("_testing_del", tableName)
+}
+
+func TestMigratorRetry(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(100)
+	migrator := NewMigrator(migrationContext, "1.2.3")
+
+	var sleeps = 0
+	RetrySleepFn = func(duration time.Duration) {
+		assert.Equal(t, 1*time.Second, duration)
+		sleeps++
+	}
+
+	var tries = 0
+	retryable := func() error {
+		tries++
+		if tries < int(migrationContext.MaxRetries()) {
+			return errors.New("Backoff")
+		}
+		return nil
+	}
+
+	result := migrator.retryOperation(retryable, false)
+	assert.NoError(t, result)
+	assert.Equal(t, sleeps, 99)
+	assert.Equal(t, tries, 100)
+}
+
+func TestMigratorRetryWithExponentialBackoff(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(100)
+	migrationContext.SetExponentialBackoffMaxInterval(42)
+	migrator := NewMigrator(migrationContext, "1.2.3")
+
+	var sleeps = 0
+	expected := []int{
+		1, 2, 4, 8, 16, 32, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
+		42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
+		42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
+		42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
+		42, 42, 42, 42, 42, 42,
+	}
+	RetrySleepFn = func(duration time.Duration) {
+		assert.Equal(t, time.Duration(expected[sleeps])*time.Second, duration)
+		sleeps++
+	}
+
+	var tries = 0
+	retryable := func() error {
+		tries++
+		if tries < int(migrationContext.MaxRetries()) {
+			return errors.New("Backoff")
+		}
+		return nil
+	}
+
+	result := migrator.retryOperationWithExponentialBackoff(retryable, false)
+	assert.NoError(t, result)
+	assert.Equal(t, sleeps, 99)
+	assert.Equal(t, tries, 100)
 }
 
 func TestMigrator(t *testing.T) {
