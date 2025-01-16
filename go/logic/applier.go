@@ -30,18 +30,20 @@ const (
 )
 
 type dmlBuildResult struct {
-	query     string
-	args      []interface{}
-	rowsDelta int64
-	err       error
+	query         string
+	args          []interface{}
+	uniqueKeyArgs []interface{}
+	rowsDelta     int64
+	err           error
 }
 
-func newDmlBuildResult(query string, args []interface{}, rowsDelta int64, err error) *dmlBuildResult {
+func newDmlBuildResult(query string, args []interface{}, uniqueKeyArgs []interface{}, rowsDelta int64, err error) *dmlBuildResult {
 	return &dmlBuildResult{
-		query:     query,
-		args:      args,
-		rowsDelta: rowsDelta,
-		err:       err,
+		query:         query,
+		args:          args,
+		uniqueKeyArgs: uniqueKeyArgs,
+		rowsDelta:     rowsDelta,
+		err:           err,
 	}
 }
 
@@ -129,6 +131,7 @@ func (this *Applier) prepareQueries() (err error) {
 		this.migrationContext.OriginalTableColumns,
 		this.migrationContext.SharedColumns,
 		this.migrationContext.MappedSharedColumns,
+		&this.migrationContext.UniqueKey.Columns,
 	); err != nil {
 		return err
 	}
@@ -1190,12 +1193,12 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlB
 	case binlog.DeleteDML:
 		{
 			query, uniqueKeyArgs, err := this.dmlDeleteQueryBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
-			return []*dmlBuildResult{newDmlBuildResult(query, uniqueKeyArgs, -1, err)}
+			return []*dmlBuildResult{newDmlBuildResult(query, uniqueKeyArgs, uniqueKeyArgs, -1, err)}
 		}
 	case binlog.InsertDML:
 		{
-			query, sharedArgs, err := this.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
-			return []*dmlBuildResult{newDmlBuildResult(query, sharedArgs, 1, err)}
+			query, sharedArgs, uniqueKeyArgs, err := this.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
+			return []*dmlBuildResult{newDmlBuildResult(query, sharedArgs, uniqueKeyArgs, 1, err)}
 		}
 	case binlog.UpdateDML:
 		{
@@ -1211,10 +1214,85 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlB
 			args := sqlutils.Args()
 			args = append(args, sharedArgs...)
 			args = append(args, uniqueKeyArgs...)
-			return []*dmlBuildResult{newDmlBuildResult(query, args, 0, err)}
+			return []*dmlBuildResult{newDmlBuildResult(query, args, uniqueKeyArgs, 0, err)}
 		}
 	}
 	return []*dmlBuildResult{newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML))}
+}
+
+// IsIgnoreOverMaxChunkRangeEvent returns true if this event can be ignored, because the data will be synced by copy chunk
+// min       rangeMax        max
+// the value > rangeMax and value < max, ignore = true
+// otherwise ignore = false
+func (this *Applier) IsIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs []interface{}) (bool, error) {
+	if !this.migrationContext.IgnoreOverIterationRangeMaxBinlog {
+		return false, nil
+	}
+
+	// Currently only supports single-column unique index of int type
+	uniqueKeyCols := this.migrationContext.UniqueKey.Columns.Columns()
+	if len(uniqueKeyCols) != 1 {
+		return false, nil
+	}
+	uniqueKeyCol := uniqueKeyCols[0]
+	if uniqueKeyCol.CompareValueFunc == nil {
+		return false, nil
+	}
+
+	// Compare whether it is less than the MigrationIterationRangeMaxValues boundary value. If it is, it cannot be ignored and the corresponding binlog needs to be applied.
+	ignore, err := func() (bool, error) {
+		compareValues := this.migrationContext.MigrationIterationRangeMaxValues
+		if compareValues == nil {
+			// It means that the migration has not started yet, use MigrationRangeMinValues instead
+			compareValues = this.migrationContext.MigrationRangeMinValues
+		}
+
+		than, err := uniqueKeyCol.CompareValueFunc(uniqueKeyArgs[0], compareValues.StringColumn(0))
+		if err != nil {
+			return false, err
+		}
+
+		switch {
+		case than > 0:
+			return true, nil
+		case than < 0:
+			return false, nil
+		default:
+			// Since rowcopy is left-open-right-closed, when it is equal to the MigrationIterationRangeMaxValues boundary value, it cannot be ignored.
+			return false, nil
+		}
+	}()
+	if err != nil {
+		return false, err
+	}
+
+	if !ignore {
+		return false, nil
+	}
+
+	// Compare whether it is greater than the MigrationRangeMaxValues boundary value. If it is, it cannot be ignored and the corresponding binlog needs to be applied.
+	ignore, err = func() (bool, error) {
+		compareValues := this.migrationContext.MigrationRangeMaxValues
+		than, err := uniqueKeyCol.CompareValueFunc(uniqueKeyArgs[0], compareValues)
+		if err != nil {
+			return false, err
+		}
+
+		switch {
+		case than < 0:
+			return true, nil
+		case than > 0:
+			return false, nil
+		default:
+			// Since rowcopy is left-open-right-closed, when it is equal to the MigrationRangeMaxValues boundary value, it can be ignored.
+			return true, nil
+		}
+	}()
+	if err != nil {
+		return false, err
+	}
+
+	return ignore, nil
 }
 
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
@@ -1244,6 +1322,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 			return err
 		}
 
+		var ignoredEventSize int64
 		buildResults := make([]*dmlBuildResult, 0, len(dmlEvents))
 		nArgs := 0
 		for _, dmlEvent := range dmlEvents {
@@ -1251,9 +1330,24 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 				if buildResult.err != nil {
 					return rollback(buildResult.err)
 				}
+				if ignore, err := this.IsIgnoreOverMaxChunkRangeEvent(buildResult.uniqueKeyArgs); err != nil {
+					return rollback(err)
+				} else if ignore {
+					ignoredEventSize++
+					continue
+				}
 				nArgs += len(buildResult.args)
 				buildResults = append(buildResults, buildResult)
 			}
+		}
+		atomic.AddInt64(&this.migrationContext.TotalDMLEventsIgnored, ignoredEventSize)
+
+		// If there are no statements to execute, return directly
+		if len(buildResults) == 0 {
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			return nil
 		}
 
 		// We batch together the DML queries into multi-statements to minimize network trips.

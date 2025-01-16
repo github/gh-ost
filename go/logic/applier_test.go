@@ -8,6 +8,8 @@ package logic
 import (
 	"context"
 	gosql "database/sql"
+	"fmt"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -178,6 +180,63 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 		require.Equal(t, 42, res[0].args[1])
 		require.Equal(t, 123456, res[0].args[2])
 		require.Equal(t, 42, res[0].args[3])
+	})
+}
+
+func TestIsIgnoreOverMaxChunkRangeEvent(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrationContext.IgnoreOverIterationRangeMaxBinlog = true
+	uniqueColumns := sql.NewColumnList([]string{"id"})
+	uniqueColumns.SetColumnCompareValueFunc("id", func(a interface{}, b interface{}) (int, error) {
+		_a := new(big.Int)
+		if _a, _ = _a.SetString(fmt.Sprintf("%+v", a), 10); a == nil {
+			return 0, fmt.Errorf("CompareValueFunc err, %+v convert int is nil", a)
+		}
+		_b := new(big.Int)
+		if _b, _ = _b.SetString(fmt.Sprintf("%+v", b), 10); b == nil {
+			return 0, fmt.Errorf("CompareValueFunc err, %+v convert int is nil", b)
+		}
+		return _a.Cmp(_b), nil
+	})
+
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "PRIMARY KEY",
+		Columns: *uniqueColumns,
+	}
+	migrationContext.MigrationRangeMinValues = sql.ToColumnValues([]interface{}{10})
+	migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{123456})
+	migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{11111})
+
+	applier := NewApplier(migrationContext)
+
+	t.Run("less than MigrationRangeMinValues", func(t *testing.T) {
+		ignore, err := applier.IsIgnoreOverMaxChunkRangeEvent([]interface{}{5})
+		require.NoError(t, err)
+		require.False(t, ignore)
+	})
+
+	t.Run("equal to MigrationIterationRangeMaxValues", func(t *testing.T) {
+		ignore, err := applier.IsIgnoreOverMaxChunkRangeEvent([]interface{}{11111})
+		require.NoError(t, err)
+		require.False(t, ignore)
+	})
+
+	t.Run("ignore event", func(t *testing.T) {
+		ignore, err := applier.IsIgnoreOverMaxChunkRangeEvent([]interface{}{88888})
+		require.NoError(t, err)
+		require.True(t, ignore)
+	})
+
+	t.Run("equal to MigrationRangeMaxValues", func(t *testing.T) {
+		ignore, err := applier.IsIgnoreOverMaxChunkRangeEvent([]interface{}{123456})
+		require.NoError(t, err)
+		require.True(t, ignore)
+	})
+
+	t.Run("larger than MigrationRangeMaxValues", func(t *testing.T) {
+		ignore, err := applier.IsIgnoreOverMaxChunkRangeEvent([]interface{}{123457})
+		require.NoError(t, err)
+		require.False(t, ignore)
 	})
 }
 
