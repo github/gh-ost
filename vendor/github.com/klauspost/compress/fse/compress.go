@@ -212,11 +212,7 @@ func (s *Scratch) writeCount() error {
 		previous0 bool
 		charnum   uint16
 
-<<<<<<< HEAD
-		maxHeaderSize = ((int(s.symbolLen) * int(tableLog)) >> 3) + 3
-=======
 		maxHeaderSize = ((int(s.symbolLen)*int(tableLog) + 4 + 2) >> 3) + 3
->>>>>>> master
 
 		// Write Table Size
 		bitStream = uint32(tableLog - minTablelog)

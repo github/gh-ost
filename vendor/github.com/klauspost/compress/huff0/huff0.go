@@ -88,11 +88,7 @@ type Scratch struct {
 	// Decoders will return ErrMaxDecodedSizeExceeded is this limit is exceeded.
 	MaxDecodedSize int
 
-<<<<<<< HEAD
-	br byteReader
-=======
 	srcLen int
->>>>>>> master
 
 	// MaxSymbolValue will override the maximum symbol value of the next block.
 	MaxSymbolValue uint8
@@ -174,11 +170,7 @@ func (s *Scratch) prepare(in []byte) (*Scratch, error) {
 	if s.fse == nil {
 		s.fse = &fse.Scratch{}
 	}
-<<<<<<< HEAD
-	s.br.init(in)
-=======
 	s.srcLen = len(in)
->>>>>>> master
 
 	return s, nil
 }
