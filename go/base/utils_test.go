@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/openark/golib/log"
-	test "github.com/openark/golib/tests"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -19,11 +19,11 @@ func init() {
 func TestStringContainsAll(t *testing.T) {
 	s := `insert,delete,update`
 
-	test.S(t).ExpectFalse(StringContainsAll(s))
-	test.S(t).ExpectFalse(StringContainsAll(s, ""))
-	test.S(t).ExpectFalse(StringContainsAll(s, "drop"))
-	test.S(t).ExpectTrue(StringContainsAll(s, "insert"))
-	test.S(t).ExpectFalse(StringContainsAll(s, "insert", "drop"))
-	test.S(t).ExpectTrue(StringContainsAll(s, "insert", ""))
-	test.S(t).ExpectTrue(StringContainsAll(s, "insert", "update", "delete"))
+	require.False(t, StringContainsAll(s))
+	require.False(t, StringContainsAll(s, ""))
+	require.False(t, StringContainsAll(s, "drop"))
+	require.True(t, StringContainsAll(s, "insert"))
+	require.False(t, StringContainsAll(s, "insert", "drop"))
+	require.True(t, StringContainsAll(s, "insert", ""))
+	require.True(t, StringContainsAll(s, "insert", "update", "delete"))
 }

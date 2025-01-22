@@ -1,10 +1,10 @@
 drop table if exists gh_ost_test;
 create table gh_ost_test (
-  id int auto_increment,
+  id int not null,
   i int not null,
   ts timestamp,
   primary key(id)
-) auto_increment=1;
+);
 
 drop event if exists gh_ost_test;
 delimiter ;;

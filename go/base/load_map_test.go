@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/openark/golib/log"
-	test "github.com/openark/golib/tests"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -20,26 +20,26 @@ func TestParseLoadMap(t *testing.T) {
 	{
 		loadList := ""
 		m, err := ParseLoadMap(loadList)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(len(m), 0)
+		require.NoError(t, err)
+		require.Len(t, m, 0)
 	}
 	{
 		loadList := "threads_running=20,threads_connected=10"
 		m, err := ParseLoadMap(loadList)
-		test.S(t).ExpectNil(err)
-		test.S(t).ExpectEquals(len(m), 2)
-		test.S(t).ExpectEquals(m["threads_running"], int64(20))
-		test.S(t).ExpectEquals(m["threads_connected"], int64(10))
+		require.NoError(t, err)
+		require.Len(t, m, 2)
+		require.Equal(t, int64(20), m["threads_running"])
+		require.Equal(t, int64(10), m["threads_connected"])
 	}
 	{
 		loadList := "threads_running=20=30,threads_connected=10"
 		_, err := ParseLoadMap(loadList)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 	{
 		loadList := "threads_running=20,threads_connected"
 		_, err := ParseLoadMap(loadList)
-		test.S(t).ExpectNotNil(err)
+		require.Error(t, err)
 	}
 }
 
@@ -47,12 +47,12 @@ func TestString(t *testing.T) {
 	{
 		m, _ := ParseLoadMap("")
 		s := m.String()
-		test.S(t).ExpectEquals(s, "")
+		require.Equal(t, "", s)
 	}
 	{
 		loadList := "threads_running=20,threads_connected=10"
 		m, _ := ParseLoadMap(loadList)
 		s := m.String()
-		test.S(t).ExpectEquals(s, "threads_connected=10,threads_running=20")
+		require.Equal(t, "threads_connected=10,threads_running=20", s)
 	}
 }

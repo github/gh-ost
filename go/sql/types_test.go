@@ -8,10 +8,8 @@ package sql
 import (
 	"testing"
 
-	"reflect"
-
 	"github.com/openark/golib/log"
-	test "github.com/openark/golib/tests"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -22,11 +20,11 @@ func TestParseColumnList(t *testing.T) {
 	names := "id,category,max_len"
 
 	columnList := ParseColumnList(names)
-	test.S(t).ExpectEquals(columnList.Len(), 3)
-	test.S(t).ExpectTrue(reflect.DeepEqual(columnList.Names(), []string{"id", "category", "max_len"}))
-	test.S(t).ExpectEquals(columnList.Ordinals["id"], 0)
-	test.S(t).ExpectEquals(columnList.Ordinals["category"], 1)
-	test.S(t).ExpectEquals(columnList.Ordinals["max_len"], 2)
+	require.Equal(t, 3, columnList.Len())
+	require.Equal(t, []string{"id", "category", "max_len"}, columnList.Names())
+	require.Equal(t, 0, columnList.Ordinals["id"])
+	require.Equal(t, 1, columnList.Ordinals["category"])
+	require.Equal(t, 2, columnList.Ordinals["max_len"])
 }
 
 func TestGetColumn(t *testing.T) {
@@ -34,11 +32,11 @@ func TestGetColumn(t *testing.T) {
 	columnList := ParseColumnList(names)
 	{
 		column := columnList.GetColumn("category")
-		test.S(t).ExpectTrue(column != nil)
-		test.S(t).ExpectEquals(column.Name, "category")
+		require.NotNil(t, column)
+		require.Equal(t, column.Name, "category")
 	}
 	{
 		column := columnList.GetColumn("no_such_column")
-		test.S(t).ExpectTrue(column == nil)
+		require.Nil(t, column)
 	}
 }

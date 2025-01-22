@@ -367,6 +367,9 @@ func (this *Migrator) Migrate() (err error) {
 		} else {
 			this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := this.applier.AttemptInstantDDL(); err == nil {
+				if err := this.hooksExecutor.onSuccess(); err != nil {
+					return err
+				}
 				this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 				return nil
 			} else {
@@ -384,6 +387,10 @@ func (this *Migrator) Migrate() (err error) {
 	// on master this is always true, of course, and yet it also implies this knowledge
 	// is in the binlogs.
 	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
+		return err
+	}
+	// We can prepare some of the queries on the applier
+	if err := this.applier.prepareQueries(); err != nil {
 		return err
 	}
 	// Validation complete! We're good to execute this migration
@@ -812,11 +819,18 @@ func (this *Migrator) initiateStatus() {
 	this.printStatus(ForcePrintStatusAndHintRule)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var previousCount int64
 	for range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
 		go this.printStatus(HeuristicPrintStatusRule)
+		totalCopied := atomic.LoadInt64(&this.migrationContext.TotalRowsCopied)
+		if previousCount > 0 {
+			copiedThisLoop := totalCopied - previousCount
+			atomic.StoreInt64(&this.migrationContext.EtaRowsPerSecond, copiedThisLoop)
+		}
+		previousCount = totalCopied
 	}
 }
 
@@ -918,9 +932,20 @@ func (this *Migrator) getMigrationETA(rowsEstimate int64) (eta string, duration 
 		duration = 0
 	} else if progressPct >= 0.1 {
 		totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
-		elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
-		totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
-		etaSeconds := totalExpectedSeconds - elapsedRowCopySeconds
+		etaRowsPerSecond := atomic.LoadInt64(&this.migrationContext.EtaRowsPerSecond)
+		var etaSeconds float64
+		// If there is data available on our current row-copies-per-second rate, use it.
+		// Otherwise we can fallback to the total elapsed time and extrapolate.
+		// This is going to be less accurate on a longer copy as the insert rate
+		// will tend to slow down.
+		if etaRowsPerSecond > 0 {
+			remainingRows := float64(rowsEstimate) - float64(totalRowsCopied)
+			etaSeconds = remainingRows / float64(etaRowsPerSecond)
+		} else {
+			elapsedRowCopySeconds := this.migrationContext.ElapsedRowCopyTime().Seconds()
+			totalExpectedSeconds := elapsedRowCopySeconds * float64(rowsEstimate) / float64(totalRowsCopied)
+			etaSeconds = totalExpectedSeconds - elapsedRowCopySeconds
+		}
 		if etaSeconds >= 0 {
 			duration = time.Duration(etaSeconds) * time.Second
 		} else {
