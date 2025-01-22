@@ -160,6 +160,10 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			if err := this.handleRowsEvent(ev, binlogEvent, entriesChannel); err != nil {
 				return err
 			}
+		case *replication.TransactionPayloadEvent:
+			if err := this.handleTransactionPayloadEvent(binlogEvent, entriesChannel); err != nil {
+				return err
+			}
 		}
 	}
 	this.migrationContext.Log.Debugf("done streaming events")
@@ -170,4 +174,63 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 func (this *GoMySQLReader) Close() error {
 	this.binlogSyncer.Close()
 	return nil
+}
+
+// handleLoadQueryEvent
+func (this *GoMySQLReader) handleTransactionPayloadEvent(rowsEvents *replication.TransactionPayloadEvent, entriesChannel chan<- *BinlogEntry) (err error) {
+	if this.currentCoordinates.IsLogPosOverflowBeyond4Bytes(&this.LastAppliedRowsEventHint) {
+		return fmt.Errorf("Unexpected rows event at %+v, the binlog end_log_pos is overflow 4 bytes", this.currentCoordinates)
+	}
+	if this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
+		this.migrationContext.Log.Debugf("Skipping handled query at %+v", this.currentCoordinates)
+		return nil
+	}
+	for _, ev := range rowsEvents.Events {
+		switch rowsEvent := ev.Event.(type) {
+		case *replication.RowsEvent:
+			// if err := this.handleRowsEvent(ev, binlogEvent, entriesChannel); err != nil {
+			// 	return err
+			// }
+			dml := ToEventDML(ev.Header.EventType.String())
+			if dml == NotDML {
+				return fmt.Errorf("Unknown DML type: %s", ev.Header.EventType.String())
+			}
+			for i, row := range rowsEvent.Rows {
+				if dml == UpdateDML && i%2 == 1 {
+					// An update has two rows (WHERE+SET)
+					// We do both at the same time
+					continue
+				}
+				binlogEntry := NewBinlogEntryAt(this.currentCoordinates)
+				binlogEntry.DmlEvent = NewBinlogDMLEvent(
+					string(rowsEvent.Table.Schema),
+					string(rowsEvent.Table.Table),
+					dml,
+				)
+				switch dml {
+				case InsertDML:
+					{
+						binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(row)
+					}
+				case UpdateDML:
+					{
+						binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+						binlogEntry.DmlEvent.NewColumnValues = sql.ToColumnValues(rowsEvent.Rows[i+1])
+					}
+				case DeleteDML:
+					{
+						binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
+					}
+				}
+				// The channel will do the throttling. Whoever is reading from the channel
+				// decides whether action is taken synchronously (meaning we wait before
+				// next iteration) or asynchronously (we keep pushing more events)
+				// In reality, reads will be synchronous
+				entriesChannel <- binlogEntry
+			}
+
+		}
+	}
+	this.LastAppliedRowsEventHint = this.currentCoordinates
+	return
 }
