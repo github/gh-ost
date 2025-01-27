@@ -51,8 +51,13 @@ setup() {
     gh-ost-test-mysql-master -e "grant all on *.* to 'gh-ost'@'%';"
 
     sleep 1
-    gh-ost-test-mysql-replica -e "change master to master_host='mysql-primary', master_port=3307, master_user='repl', master_password='repl', master_auto_position=1;"
-    gh-ost-test-mysql-replica -e "start slave;"
+    if [[ $TEST_MYSQL_IMAGE ==* "mysql:8.4" ]]; then
+        gh-ost-test-mysql-replica -e "change replication source to to source_host='mysql-primary', source_port=3307, source_user='repl', source_password='repl', source_auto_position=1;"
+        gh-ost-test-mysql-replica -e "start replica;"
+    else
+        gh-ost-test-mysql-replica -e "change master to master_host='mysql-primary', master_port=3307, master_user='repl', master_password='repl', master_auto_position=1;"
+        gh-ost-test-mysql-replica -e "start slave;"
+    fi
     echo "OK"
 }
 
