@@ -83,9 +83,19 @@ echo_dot() {
 }
 
 start_replication() {
-  gh-ost-test-mysql-replica -e "stop slave; start slave;"
+  mysql_version="$(gh-ost-test-mysql-replica -e  "select @@version")"
+  seconds_behind_source="Seconds_Behind_Master"
+  replica_terminology="slave"
+  if [[ $mysql_version =~ "8.4" ]]; then
+    gh-ost-test-mysql-replica -e "stop replica; start replica;"
+    seconds_behind_source="Seconds_Behind_Source"
+    replica_terminology="replica"
+  else
+    gh-ost-test-mysql-replica -e "stop slave; start slave;"
+  fi
+
   num_attempts=0
-  while gh-ost-test-mysql-replica -e "show slave status\G" | grep Seconds_Behind_Master | grep -q NULL ; do
+  while gh-ost-test-mysql-replica -e "show $replica status\G" | grep $seconds_behind_source | grep -q NULL ; do
     ((num_attempts=num_attempts+1))
     if [ $num_attempts -gt 10 ] ; then
       echo
@@ -292,7 +302,12 @@ test_all() {
       echo
       echo "+ pass"
     fi
-    gh-ost-test-mysql-replica -e "start slave"
+    mysql_version="$(gh-ost-test-mysql-replica -e  "select @@version")"
+    replica_terminology="slave"
+    if [[ $mysql_version =~ "8.4" ]]; then
+      replica_terminology="replica"
+    fi
+    gh-ost-test-mysql-replica -e "start $replica_terminology"
   done <<< "$test_dirs"
 }
 
