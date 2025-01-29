@@ -32,16 +32,35 @@ poll_mysql() {
     return 0
 }
 
+mysql-source() {
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        gh-ost-test-mysql-master --ssl-mode=required "$@";
+    else
+        gh-ost-test-mysql-master $@;
+    fi
+}
+
+mysql-replica() {
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        gh-ost-test-mysql-replica --ssl-mode=required "$@";
+    else
+        gh-ost-test-mysql-replica $@;
+    fi
+}
+
+
 setup() {
     [ -z "$TEST_MYSQL_IMAGE" ] && TEST_MYSQL_IMAGE="mysql:8.0.39"
 
     echo "Starting MySQL $TEST_MYSQL_IMAGE containers..."
     compose_file="$GH_OST_ROOT/localtests/docker-compose.yml"
-    MYSQL_NATIVE_PASSWORD_FLAG=""
+    MYSQL_SHA2_RSA_KEYS_FLAG=""
+    MYSQL_PASSWORD_HASHING_ALGORITHM="mysql_native_password"
     if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
-        MYSQL_NATIVE_PASSWORD_FLAG="--mysql-native-password=ON"
+        MYSQL_PASSWORD_HASHING_ALGORITHM="caching_sha2_password"
+        MYSQL_SHA2_RSA_KEYS_FLAG="--caching-sha2-password-auto-generate-rsa-keys=ON"
     fi
-    (TEST_MYSQL_IMAGE="$TEST_MYSQL_IMAGE" MYSQL_NATIVE_PASSWORD_FLAG="$MYSQL_NATIVE_PASSWORD_FLAG" envsubst < "$compose_file") > "$compose_file.tmp"
+    (TEST_MYSQL_IMAGE="$TEST_MYSQL_IMAGE" MYSQL_SHA2_RSA_KEYS_FLAG="$MYSQL_SHA2_RSA_KEYS_FLAG" envsubst < "$compose_file") > "$compose_file.tmp"
     docker compose -f "$compose_file.tmp" up -d --wait
 
     echo "Waiting for MySQL..."
@@ -49,18 +68,18 @@ setup() {
     poll_mysql "replica" || exit 1
 
     echo -n "Setting up replication..."
-    gh-ost-test-mysql-master -e "create user if not exists 'repl'@'%' identified with 'mysql_native_password' by 'repl';"
-    gh-ost-test-mysql-master -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
-    gh-ost-test-mysql-master -e "create user if not exists 'gh-ost'@'%' identified by 'gh-ost';"
-    gh-ost-test-mysql-master -e "grant all on *.* to 'gh-ost'@'%';"
+    mysql-source -e "create user if not exists 'repl'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'repl';"
+    mysql-source -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
+    mysql-source -e "create user if not exists 'gh-ost'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'gh-ost';"
+    mysql-source -e "grant all on *.* to 'gh-ost'@'%';"
 
     sleep 1
     if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
-        gh-ost-test-mysql-replica -e "change replication source to source_host='mysql-primary', source_port=3307, source_user='repl', source_password='repl', source_auto_position=1;"
-        gh-ost-test-mysql-replica -e "start replica;"
+        mysql-replica -e "change replication source to source_host='mysql-primary', source_port=3307, source_user='repl', source_password='repl', source_auto_position=1, source_ssl=1;"
+        mysql-replica -e "start replica;"
     else
-        gh-ost-test-mysql-replica -e "change master to master_host='mysql-primary', master_port=3307, master_user='repl', master_password='repl', master_auto_position=1;"
-        gh-ost-test-mysql-replica -e "start slave;"
+        mysql-replica -e "change master to master_host='mysql-primary', master_port=3307, master_user='repl', master_password='repl', master_auto_position=1;"
+        mysql-replica -e "start slave;"
     fi
     echo "OK"
 }
