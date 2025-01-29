@@ -84,18 +84,17 @@ echo_dot() {
 
 start_replication() {
   mysql_version="$(gh-ost-test-mysql-replica -e  "select @@version")"
-  seconds_behind_source="Seconds_Behind_Master"
-  replica_terminology="slave"
   if [[ $mysql_version =~ "8.4" ]]; then
-    gh-ost-test-mysql-replica -e "stop replica; start replica;"
     seconds_behind_source="Seconds_Behind_Source"
     replica_terminology="replica"
   else
-    gh-ost-test-mysql-replica -e "stop slave; start slave;"
+    seconds_behind_source="Seconds_Behind_Master"
+    replica_terminology="slave"
   fi
+  gh-ost-test-mysql-replica -e "stop $replica_terminology; start $replica_terminology;"
 
   num_attempts=0
-  while gh-ost-test-mysql-replica -e "show $replica status\G" | grep $seconds_behind_source | grep -q NULL ; do
+  while gh-ost-test-mysql-replica -e "show $replica_terminology status\G" | grep $seconds_behind_source | grep -q NULL ; do
     ((num_attempts=num_attempts+1))
     if [ $num_attempts -gt 10 ] ; then
       echo
