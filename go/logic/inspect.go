@@ -30,6 +30,7 @@ const startReplicationMaxWait = 2 * time.Second
 type Inspector struct {
 	connectionConfig    *mysql.ConnectionConfig
 	db                  *gosql.DB
+	dbVersion           string
 	informationSchemaDb *gosql.DB
 	migrationContext    *base.MigrationContext
 	name                string
@@ -57,6 +58,8 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateConnection(); err != nil {
 		return err
 	}
+	this.dbVersion = this.migrationContext.InspectorMySQLVersion
+
 	if !this.migrationContext.AliyunRDS && !this.migrationContext.GoogleCloudPlatform && !this.migrationContext.AzureMySQL {
 		if impliedKey, err := mysql.GetInstanceKey(this.db); err != nil {
 			return err
@@ -288,15 +291,16 @@ func (this *Inspector) validateGrants() error {
 func (this *Inspector) restartReplication() error {
 	this.migrationContext.Log.Infof("Restarting replication on %s to make sure binlog settings apply to replication thread", this.connectionConfig.Key.String())
 
-	masterKey, _ := mysql.GetMasterKeyFromSlaveStatus(this.connectionConfig)
+	masterKey, _ := mysql.GetMasterKeyFromSlaveStatus(this.dbVersion, this.connectionConfig)
 	if masterKey == nil {
 		// This is not a replica
 		return nil
 	}
 
 	var stopError, startError error
-	_, stopError = sqlutils.ExecNoPrepare(this.db, `stop slave`)
-	_, startError = sqlutils.ExecNoPrepare(this.db, `start slave`)
+	replicaTerm := mysql.ReplicaTermFor(this.dbVersion, `slave`)
+	_, stopError = sqlutils.ExecNoPrepare(this.db, fmt.Sprintf("stop %s", replicaTerm))
+	_, startError = sqlutils.ExecNoPrepare(this.db, fmt.Sprintf("start %s", replicaTerm))
 	if stopError != nil {
 		return stopError
 	}
@@ -329,9 +333,11 @@ func (this *Inspector) restartReplication() error {
 // returns true if both are 'Yes', false otherwise
 func (this *Inspector) validateReplicationRestarted() (bool, error) {
 	errNotRunning := fmt.Errorf("Replication not running on %s", this.connectionConfig.Key.String())
-	query := `show /* gh-ost */ slave status`
+	query := fmt.Sprintf("show /* gh-ost */ %s", mysql.ReplicaTermFor(this.dbVersion, "slave status"))
 	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-		if rowMap.GetString("Slave_IO_Running") != "Yes" || rowMap.GetString("Slave_SQL_Running") != "Yes" {
+		ioRunningTerm := mysql.ReplicaTermFor(this.dbVersion, "Slave_IO_Running")
+		sqlRunningTerm := mysql.ReplicaTermFor(this.dbVersion, "Slave_SQL_Running")
+		if rowMap.GetString(ioRunningTerm) != "Yes" || rowMap.GetString(sqlRunningTerm) != "Yes" {
 			return errNotRunning
 		}
 		return nil
@@ -389,7 +395,7 @@ func (this *Inspector) validateBinlogs() error {
 		if !this.migrationContext.SwitchToRowBinlogFormat {
 			return fmt.Errorf("You must be using ROW binlog format. I can switch it for you, provided --switch-to-rbr and that %s doesn't have replicas", this.connectionConfig.Key.String())
 		}
-		query := `show /* gh-ost */ slave hosts`
+		query := fmt.Sprintf("show /* gh-ost */ %s", mysql.ReplicaTermFor(this.dbVersion, `slave hosts`))
 		countReplicas := 0
 		err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 			countReplicas++
@@ -779,8 +785,9 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 	// the ALTER is on the name itself...
 	for _, originalUniqueKey := range originalUniqueKeys {
 		for _, ghostUniqueKey := range ghostUniqueKeys {
-			if originalUniqueKey.Columns.EqualsByNames(&ghostUniqueKey.Columns) {
+			if originalUniqueKey.Columns.IsSubsetOf(&ghostUniqueKey.Columns) {
 				uniqueKeys = append(uniqueKeys, originalUniqueKey)
+				break
 			}
 		}
 	}
@@ -863,11 +870,12 @@ func (this *Inspector) readChangelogState(hint string) (string, error) {
 func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
 	this.migrationContext.Log.Infof("Recursively searching for replication master")
 	visitedKeys := mysql.NewInstanceKeyMap()
-	return mysql.GetMasterConnectionConfigSafe(this.connectionConfig, visitedKeys, this.migrationContext.AllowedMasterMaster)
+	return mysql.GetMasterConnectionConfigSafe(this.dbVersion, this.connectionConfig, visitedKeys, this.migrationContext.AllowedMasterMaster)
 }
 
 func (this *Inspector) getReplicationLag() (replicationLag time.Duration, err error) {
 	replicationLag, err = mysql.GetReplicationLagFromSlaveStatus(
+		this.dbVersion,
 		this.informationSchemaDb,
 	)
 	return replicationLag, err

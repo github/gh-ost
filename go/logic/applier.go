@@ -829,7 +829,8 @@ func (this *Applier) RenameTablesRollback() (renameError error) {
 // We need to keep the SQL thread active so as to complete processing received events,
 // and have them written to the binary log, so that we can then read them via streamer.
 func (this *Applier) StopSlaveIOThread() error {
-	query := `stop /* gh-ost */ slave io_thread`
+	replicaTerm := mysql.ReplicaTermFor(this.migrationContext.ApplierMySQLVersion, `slave`)
+	query := fmt.Sprintf("stop /* gh-ost */ %s io_thread", replicaTerm)
 	this.migrationContext.Log.Infof("Stopping replication IO thread")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
@@ -840,7 +841,8 @@ func (this *Applier) StopSlaveIOThread() error {
 
 // StartSlaveIOThread is applicable with --test-on-replica
 func (this *Applier) StartSlaveIOThread() error {
-	query := `start /* gh-ost */ slave io_thread`
+	replicaTerm := mysql.ReplicaTermFor(this.migrationContext.ApplierMySQLVersion, `slave`)
+	query := fmt.Sprintf("start /* gh-ost */ %s io_thread", replicaTerm)
 	this.migrationContext.Log.Infof("Starting replication IO thread")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
@@ -851,7 +853,8 @@ func (this *Applier) StartSlaveIOThread() error {
 
 // StopSlaveSQLThread is applicable with --test-on-replica
 func (this *Applier) StopSlaveSQLThread() error {
-	query := `stop /* gh-ost */ slave sql_thread`
+	replicaTerm := mysql.ReplicaTermFor(this.migrationContext.ApplierMySQLVersion, `slave`)
+	query := fmt.Sprintf("stop /* gh-ost */ %s sql_thread", replicaTerm)
 	this.migrationContext.Log.Infof("Verifying SQL thread is stopped")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
@@ -862,7 +865,8 @@ func (this *Applier) StopSlaveSQLThread() error {
 
 // StartSlaveSQLThread is applicable with --test-on-replica
 func (this *Applier) StartSlaveSQLThread() error {
-	query := `start /* gh-ost */ slave sql_thread`
+	replicaTerm := mysql.ReplicaTermFor(this.migrationContext.ApplierMySQLVersion, `slave`)
+	query := fmt.Sprintf("start /* gh-ost */ %s sql_thread", replicaTerm)
 	this.migrationContext.Log.Infof("Verifying SQL thread is running")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
@@ -880,7 +884,7 @@ func (this *Applier) StopReplication() error {
 		return err
 	}
 
-	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.db)
+	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.migrationContext.ApplierMySQLVersion, this.db)
 	if err != nil {
 		return err
 	}

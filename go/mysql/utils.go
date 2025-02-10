@@ -61,13 +61,16 @@ func GetDB(migrationUuid string, mysql_uri string) (db *gosql.DB, exists bool, e
 }
 
 // GetReplicationLagFromSlaveStatus returns replication lag for a given db; via SHOW SLAVE STATUS
-func GetReplicationLagFromSlaveStatus(informationSchemaDb *gosql.DB) (replicationLag time.Duration, err error) {
-	err = sqlutils.QueryRowsMap(informationSchemaDb, `show slave status`, func(m sqlutils.RowMap) error {
-		slaveIORunning := m.GetString("Slave_IO_Running")
-		slaveSQLRunning := m.GetString("Slave_SQL_Running")
-		secondsBehindMaster := m.GetNullInt64("Seconds_Behind_Master")
+func GetReplicationLagFromSlaveStatus(dbVersion string, informationSchemaDb *gosql.DB) (replicationLag time.Duration, err error) {
+	showReplicaStatusQuery := fmt.Sprintf("show %s", ReplicaTermFor(dbVersion, `slave status`))
+	err = sqlutils.QueryRowsMap(informationSchemaDb, showReplicaStatusQuery, func(m sqlutils.RowMap) error {
+		ioRunningTerm := ReplicaTermFor(dbVersion, "Slave_IO_Running")
+		sqlRunningTerm := ReplicaTermFor(dbVersion, "Slave_SQL_Running")
+		slaveIORunning := m.GetString(ioRunningTerm)
+		slaveSQLRunning := m.GetString(sqlRunningTerm)
+		secondsBehindMaster := m.GetNullInt64(ReplicaTermFor(dbVersion, "Seconds_Behind_Master"))
 		if !secondsBehindMaster.Valid {
-			return fmt.Errorf("replication not running; Slave_IO_Running=%+v, Slave_SQL_Running=%+v", slaveIORunning, slaveSQLRunning)
+			return fmt.Errorf("replication not running; %s=%+v, %s=%+v", ioRunningTerm, slaveIORunning, sqlRunningTerm, slaveSQLRunning)
 		}
 		replicationLag = time.Duration(secondsBehindMaster.Int64) * time.Second
 		return nil
@@ -76,7 +79,7 @@ func GetReplicationLagFromSlaveStatus(informationSchemaDb *gosql.DB) (replicatio
 	return replicationLag, err
 }
 
-func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
+func GetMasterKeyFromSlaveStatus(dbVersion string, connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
 	currentUri := connectionConfig.GetDBUri("information_schema")
 	// This function is only called once, okay to not have a cached connection pool
 	db, err := gosql.Open("mysql", currentUri)
@@ -85,29 +88,34 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 	}
 	defer db.Close()
 
-	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
+	showReplicaStatusQuery := fmt.Sprintf("show %s", ReplicaTermFor(dbVersion, `slave status`))
+	err = sqlutils.QueryRowsMap(db, showReplicaStatusQuery, func(rowMap sqlutils.RowMap) error {
 		// We wish to recognize the case where the topology's master actually has replication configuration.
 		// This can happen when a DBA issues a `RESET SLAVE` instead of `RESET SLAVE ALL`.
 
 		// An empty log file indicates this is a master:
-		if rowMap.GetString("Master_Log_File") == "" {
+		if rowMap.GetString(ReplicaTermFor(dbVersion, "Master_Log_File")) == "" {
 			return nil
 		}
 
-		slaveIORunning := rowMap.GetString("Slave_IO_Running")
-		slaveSQLRunning := rowMap.GetString("Slave_SQL_Running")
+		ioRunningTerm := ReplicaTermFor(dbVersion, "Slave_IO_Running")
+		sqlRunningTerm := ReplicaTermFor(dbVersion, "Slave_SQL_Running")
+		slaveIORunning := rowMap.GetString(ioRunningTerm)
+		slaveSQLRunning := rowMap.GetString(sqlRunningTerm)
 
 		if slaveIORunning != "Yes" || slaveSQLRunning != "Yes" {
-			return fmt.Errorf("Replication on %+v is broken: Slave_IO_Running: %s, Slave_SQL_Running: %s. Please make sure replication runs before using gh-ost.",
+			return fmt.Errorf("Replication on %+v is broken: %s: %s, %s: %s. Please make sure replication runs before using gh-ost.",
 				connectionConfig.Key,
+				ioRunningTerm,
 				slaveIORunning,
+				sqlRunningTerm,
 				slaveSQLRunning,
 			)
 		}
 
 		masterKey = &InstanceKey{
-			Hostname: rowMap.GetString("Master_Host"),
-			Port:     rowMap.GetInt("Master_Port"),
+			Hostname: rowMap.GetString(ReplicaTermFor(dbVersion, "Master_Host")),
+			Port:     rowMap.GetInt(ReplicaTermFor(dbVersion, "Master_Port")),
 		}
 		return nil
 	})
@@ -115,10 +123,10 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 	return masterKey, err
 }
 
-func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKeys *InstanceKeyMap, allowMasterMaster bool) (masterConfig *ConnectionConfig, err error) {
-	log.Debugf("Looking for master on %+v", connectionConfig.Key)
+func GetMasterConnectionConfigSafe(dbVersion string, connectionConfig *ConnectionConfig, visitedKeys *InstanceKeyMap, allowMasterMaster bool) (masterConfig *ConnectionConfig, err error) {
+	log.Debugf("Looking for %s on %+v", ReplicaTermFor(dbVersion, "master"), connectionConfig.Key)
 
-	masterKey, err := GetMasterKeyFromSlaveStatus(connectionConfig)
+	masterKey, err := GetMasterKeyFromSlaveStatus(dbVersion, connectionConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +142,7 @@ func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKe
 		return nil, err
 	}
 
-	log.Debugf("Master of %+v is %+v", connectionConfig.Key, masterConfig.Key)
+	log.Debugf("%s of %+v is %+v", ReplicaTermFor(dbVersion, "master"), connectionConfig.Key, masterConfig.Key)
 	if visitedKeys.HasKey(masterConfig.Key) {
 		if allowMasterMaster {
 			return connectionConfig, nil
@@ -142,26 +150,28 @@ func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKe
 		return nil, fmt.Errorf("There seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
 	}
 	visitedKeys.AddKey(masterConfig.Key)
-	return GetMasterConnectionConfigSafe(masterConfig, visitedKeys, allowMasterMaster)
+	return GetMasterConnectionConfigSafe(dbVersion, masterConfig, visitedKeys, allowMasterMaster)
 }
 
-func GetReplicationBinlogCoordinates(db *gosql.DB) (readBinlogCoordinates *BinlogCoordinates, executeBinlogCoordinates *BinlogCoordinates, err error) {
-	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
+func GetReplicationBinlogCoordinates(dbVersion string, db *gosql.DB) (readBinlogCoordinates *BinlogCoordinates, executeBinlogCoordinates *BinlogCoordinates, err error) {
+	showReplicaStatusQuery := fmt.Sprintf("show %s", ReplicaTermFor(dbVersion, `slave status`))
+	err = sqlutils.QueryRowsMap(db, showReplicaStatusQuery, func(m sqlutils.RowMap) error {
 		readBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("Master_Log_File"),
-			LogPos:  m.GetInt64("Read_Master_Log_Pos"),
+			LogFile: m.GetString(ReplicaTermFor(dbVersion, "Master_Log_File")),
+			LogPos:  m.GetInt64(ReplicaTermFor(dbVersion, "Read_Master_Log_Pos")),
 		}
 		executeBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("Relay_Master_Log_File"),
-			LogPos:  m.GetInt64("Exec_Master_Log_Pos"),
+			LogFile: m.GetString(ReplicaTermFor(dbVersion, "Relay_Master_Log_File")),
+			LogPos:  m.GetInt64(ReplicaTermFor(dbVersion, "Exec_Master_Log_Pos")),
 		}
 		return nil
 	})
 	return readBinlogCoordinates, executeBinlogCoordinates, err
 }
 
-func GetSelfBinlogCoordinates(db *gosql.DB) (selfBinlogCoordinates *BinlogCoordinates, err error) {
-	err = sqlutils.QueryRowsMap(db, `show master status`, func(m sqlutils.RowMap) error {
+func GetSelfBinlogCoordinates(dbVersion string, db *gosql.DB) (selfBinlogCoordinates *BinlogCoordinates, err error) {
+	binaryLogStatusTerm := ReplicaTermFor(dbVersion, "master status")
+	err = sqlutils.QueryRowsMap(db, fmt.Sprintf("show %s", binaryLogStatusTerm), func(m sqlutils.RowMap) error {
 		selfBinlogCoordinates = &BinlogCoordinates{
 			LogFile: m.GetString("File"),
 			LogPos:  m.GetInt64("Position"),
