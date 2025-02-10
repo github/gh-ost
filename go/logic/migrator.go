@@ -24,6 +24,7 @@ import (
 
 var (
 	ErrMigratorUnsupportedRenameAlter = errors.New("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
+	RetrySleepFn                      = time.Sleep
 )
 
 type ChangelogState string
@@ -135,7 +136,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
 			// sleep after previous iteration
-			time.Sleep(1 * time.Second)
+			RetrySleepFn(1 * time.Second)
 		}
 		err = operation()
 		if err == nil {
@@ -155,16 +156,16 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 // attempts are reached. Wait intervals between attempts obey a maximum of
 // `ExponentialBackoffMaxInterval`.
 func (this *Migrator) retryOperationWithExponentialBackoff(operation func() error, notFatalHint ...bool) (err error) {
-	var interval int64
 	maxRetries := int(this.migrationContext.MaxRetries())
 	maxInterval := this.migrationContext.ExponentialBackoffMaxInterval
 	for i := 0; i < maxRetries; i++ {
-		newInterval := int64(math.Exp2(float64(i - 1)))
-		if newInterval <= maxInterval {
-			interval = newInterval
-		}
+		interval := math.Min(
+			float64(maxInterval),
+			math.Max(1, math.Exp2(float64(i-1))),
+		)
+
 		if i != 0 {
-			time.Sleep(time.Duration(interval) * time.Second)
+			RetrySleepFn(time.Duration(interval) * time.Second)
 		}
 		err = operation()
 		if err == nil {
