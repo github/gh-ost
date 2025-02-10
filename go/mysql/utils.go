@@ -136,8 +136,11 @@ func GetMasterConnectionConfigSafe(dbVersion string, connectionConfig *Connectio
 	if !masterKey.IsValid() {
 		return connectionConfig, nil
 	}
-	masterConfig = connectionConfig.Duplicate()
-	masterConfig.Key = *masterKey
+
+	masterConfig = connectionConfig.DuplicateCredentials(*masterKey)
+	if err := masterConfig.RegisterTLSConfig(); err != nil {
+		return nil, err
+	}
 
 	log.Debugf("%s of %+v is %+v", ReplicaTermFor(dbVersion, "master"), connectionConfig.Key, masterConfig.Key)
 	if visitedKeys.HasKey(masterConfig.Key) {

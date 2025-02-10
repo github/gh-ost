@@ -52,7 +52,10 @@ func TestDuplicateCredentials(t *testing.T) {
 	require.Equal(t, 3310, dup.ImpliedKey.Port)
 	require.Equal(t, "gromit", dup.User)
 	require.Equal(t, "penguin", dup.Password)
-	require.Equal(t, c.tlsConfig, dup.tlsConfig)
+	require.Equal(t, "otherhost", dup.tlsConfig.ServerName)
+	require.Equal(t, c.tlsConfig.Certificates, dup.tlsConfig.Certificates)
+	require.Equal(t, c.tlsConfig.RootCAs, dup.tlsConfig.RootCAs)
+	require.Equal(t, c.tlsConfig.InsecureSkipVerify, dup.tlsConfig.InsecureSkipVerify)
 	require.Equal(t, c.TransactionIsolation, dup.TransactionIsolation)
 	require.Equal(t, c.Charset, dup.Charset)
 }
@@ -72,6 +75,7 @@ func TestDuplicate(t *testing.T) {
 	require.Equal(t, 3306, dup.ImpliedKey.Port)
 	require.Equal(t, "gromit", dup.User)
 	require.Equal(t, "penguin", dup.Password)
+	require.Equal(t, c.tlsConfig, dup.tlsConfig)
 	require.Equal(t, transactionIsolation, dup.TransactionIsolation)
 	require.Equal(t, "utf8mb4", dup.Charset)
 }
@@ -95,10 +99,17 @@ func TestGetDBUriWithTLSSetup(t *testing.T) {
 	c.User = "gromit"
 	c.Password = "penguin"
 	c.Timeout = 1.2345
-	c.tlsConfig = &tls.Config{}
+	c.tlsConfig = &tls.Config{
+		ServerName: c.Key.Hostname,
+	}
 	c.TransactionIsolation = transactionIsolation
 	c.Charset = "utf8mb4_general_ci,utf8_general_ci,latin1"
 
 	uri := c.GetDBUri("test")
-	require.Equal(t, `gromit:penguin@tcp(myhost:3306)/test?autocommit=true&interpolateParams=true&charset=utf8mb4_general_ci,utf8_general_ci,latin1&tls=ghost&transaction_isolation="REPEATABLE-READ"&timeout=1.234500s&readTimeout=1.234500s&writeTimeout=1.234500s`, uri)
+	require.Equal(t, `gromit:penguin@tcp(myhost:3306)/test?autocommit=true&interpolateParams=true&charset=utf8mb4_general_ci,utf8_general_ci,latin1&tls=ghost-myhost&transaction_isolation="REPEATABLE-READ"&timeout=1.234500s&readTimeout=1.234500s&writeTimeout=1.234500s`, uri)
+}
+
+func TestGetDBTLSConfigKey(t *testing.T) {
+	configKey := GetDBTLSConfigKey("myhost")
+	require.Equal(t, "ghost-myhost", configKey)
 }
