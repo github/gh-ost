@@ -1,0 +1,23 @@
+name: gh-ost
+
+env:
+    TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: /var/run/docker.sock
+    TESTCONTAINERS_RYUK_DISABLED: "true"
+
+up:
+  - go:
+        version: "1.22.12"
+  - podman
+  - custom:
+        name: Go Dependencies
+        met?: go mod download
+        meet: echo 'go mod failed to download dependencies'; false
+  - custom:
+        name: testcontainers-go podman setup
+        met?: export DOCKER_HOST=unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')
+        meet: ":"
+
+commands:
+  test:
+    desc: Run all the tests.
+    run: script/test
