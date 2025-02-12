@@ -753,6 +753,24 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err != nil {
 			return nil, err
 		}
+
+		rows, err := tx.Query("SHOW WARNINGS")
+		if err != nil {
+			return nil, err
+		}
+
+		var sqlWarnings []string
+		for rows.Next() {
+			var level, message string
+			var code int
+			if err := rows.Scan(&level, &code, &message); err != nil {
+				this.migrationContext.Log.Warningf("Failed to read SHOW WARNIGNS row")
+				continue
+			}
+			sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+		}
+		this.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
+
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}

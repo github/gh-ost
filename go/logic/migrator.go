@@ -1265,6 +1265,14 @@ func (this *Migrator) iterateChunks() error {
 				if err != nil {
 					return err // wrapping call will retry
 				}
+
+				// TODO: option that checks for warnings (terminate-on-warnings?)
+				// TODO: decide if need to check row count discrepancy (are we dropping rows?)
+				if len(this.migrationContext.MigrationLastInsertSQLWarnings) > 0 {
+					joinedWarnings := strings.Join(this.migrationContext.MigrationLastInsertSQLWarnings, "; ")
+					terminateRowIteration(fmt.Errorf("last SQL insert had warnings: %s", joinedWarnings))
+				}
+
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
 				return nil

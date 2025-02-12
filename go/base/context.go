@@ -231,6 +231,7 @@ type MigrationContext struct {
 	ColumnRenameMap                  map[string]string
 	DroppedColumnsMap                map[string]bool
 	MappedSharedColumns              *sql.ColumnList
+	MigrationLastInsertSQLWarnings   []string
 	MigrationRangeMinValues          *sql.ColumnValues
 	MigrationRangeMaxValues          *sql.ColumnValues
 	Iteration                        int64
