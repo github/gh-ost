@@ -130,6 +130,18 @@ func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 	}
 }
 
+func (this *Migrator) retryBatchCopyWithHooks(operation func() error, notFatalHint ...bool) (err error) {
+	wrappedOperation := func() error {
+		if err := operation(); err != nil {
+			this.hooksExecutor.onBatchCopyRetry()
+			return err
+		}
+		return nil
+	}
+
+	return this.retryOperation(wrappedOperation, notFatalHint...)
+}
+
 // retryOperation attempts up to `count` attempts at running given function,
 // exiting as soon as it returns with non-error.
 func (this *Migrator) retryOperation(operation func() error, notFatalHint ...bool) (err error) {
@@ -1232,28 +1244,28 @@ func (this *Migrator) iterateChunks() error {
 			return nil
 		}
 		copyRowsFunc := func() error {
-			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
-				// Done.
-				// There's another such check down the line
-				return nil
-			}
-
-			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
-
-			hasFurtherRange := false
-			expectedRangeSize := int64(0)
-			if err := this.retryOperation(func() (e error) {
-				hasFurtherRange, expectedRangeSize, e = this.applier.CalculateNextIterationRangeEndValues()
-				return e
-			}); err != nil {
-				return terminateRowIteration(err)
-			}
-			if !hasFurtherRange {
-				atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
-				return terminateRowIteration(nil)
-			}
 			// Copy task:
 			applyCopyRowsFunc := func() error {
+				if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
+					// Done.
+					// There's another such check down the line
+					return nil
+				}
+
+				// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
+
+				hasFurtherRange := false
+				// TODO: figure out how to rewrite this double retry?
+				if err := this.retryOperation(func() (e error) {
+					hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
+					return e
+				}); err != nil {
+					return terminateRowIteration(err)
+				}
+				if !hasFurtherRange {
+					atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
+					return terminateRowIteration(nil)
+				}
 				if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
 					// No need for more writes.
 					// This is the de-facto place where we avoid writing in the event of completed cut-over.
@@ -1286,7 +1298,7 @@ func (this *Migrator) iterateChunks() error {
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
 				return nil
 			}
-			if err := this.retryOperation(applyCopyRowsFunc); err != nil {
+			if err := this.retryBatchCopyWithHooks(applyCopyRowsFunc); err != nil {
 				return terminateRowIteration(err)
 			}
 			return nil
