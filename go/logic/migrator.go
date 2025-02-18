@@ -133,7 +133,7 @@ func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 func (this *Migrator) retryBatchCopyWithHooks(operation func() error, notFatalHint ...bool) (err error) {
 	wrappedOperation := func() error {
 		if err := operation(); err != nil {
-			this.hooksExecutor.onBatchCopyRetry()
+			this.hooksExecutor.onBatchCopyRetry(err.Error())
 			return err
 		}
 		return nil

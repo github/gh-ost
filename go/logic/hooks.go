@@ -125,8 +125,9 @@ func (this *HooksExecutor) onBeforeRowCopy() error {
 	return this.executeHooks(onBeforeRowCopy)
 }
 
-func (this *HooksExecutor) onBatchCopyRetry() error {
-	return this.executeHooks(onBatchCopyRetry)
+func (this *HooksExecutor) onBatchCopyRetry(errorMessage string) error {
+	v := fmt.Sprintf("GH_OST_LAST_BATCH_COPY_ERROR=%s", errorMessage)
+	return this.executeHooks(onBatchCopyRetry, v)
 }
 
 func (this *HooksExecutor) onRowCopyComplete() error {
