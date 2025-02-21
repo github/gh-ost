@@ -1253,14 +1253,9 @@ func (this *Migrator) iterateChunks() error {
 				}
 
 				// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
-
-				hasFurtherRange := false
-				// TODO: figure out how to rewrite this double retry?
-				if err := this.retryOperation(func() (e error) {
-					hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
-					return e
-				}); err != nil {
-					return terminateRowIteration(err)
+				hasFurtherRange, expectedRangeSize, err := this.applier.CalculateNextIterationRangeEndValues()
+				if err != nil {
+					return err // wrapping call will retry
 				}
 				if !hasFurtherRange {
 					atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
