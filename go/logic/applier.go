@@ -704,22 +704,28 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 			return nil, err
 		}
 
-		rows, err := tx.Query("SHOW WARNINGS")
-		if err != nil {
-			return nil, err
-		}
-
-		var sqlWarnings []string
-		for rows.Next() {
-			var level, message string
-			var code int
-			if err := rows.Scan(&level, &code, &message); err != nil {
-				this.migrationContext.Log.Warningf("Failed to read SHOW WARNIGNS row")
-				continue
+		if this.migrationContext.PanicOnWarnings {
+			rows, err := tx.Query("SHOW WARNINGS")
+			if err != nil {
+				return nil, err
 			}
-			sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+
+			var sqlWarnings []string
+			for rows.Next() {
+				var level, message string
+				var code int
+				if err := rows.Scan(&level, &code, &message); err != nil {
+					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+					continue
+				}
+				pkDuplicateSuffix := fmt.Sprintf("for key '%s.PRIMARY'", this.migrationContext.GetGhostTableName())
+				if strings.HasPrefix(message, "Duplicate entry") && strings.HasSuffix(message, pkDuplicateSuffix) {
+					continue
+				}
+				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+			}
+			this.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
 		}
-		this.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
 
 		if err := tx.Commit(); err != nil {
 			return nil, err
