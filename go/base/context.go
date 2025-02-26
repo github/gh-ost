@@ -151,6 +151,7 @@ type MigrationContext struct {
 	HooksHintOwner                      string
 	HooksHintToken                      string
 	HooksStatusIntervalSec              int64
+	PanicOnWarnings                     bool
 
 	DropServeSocket bool
 	ServeSocketFile string
