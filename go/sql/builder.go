@@ -275,7 +275,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
 	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames))
-	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames))
+	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames)) // TODO unused variable
 	for i, column := range uniqueKeyColumns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
@@ -286,21 +286,29 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 			uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumnNames[i])
 		}
 	}
+	joinedColumnNames := strings.Join(uniqueKeyColumnNames, ", ")
 	result = fmt.Sprintf(`
-		select /* gh-ost %s.%s %s */
-			%s
-		from
-			%s.%s
-		where
-			%s and %s
+		with /* gh-ost %s.%s %s */ key_range as (
+			select
+				%s
+			from
+				%s.%s
+			where
+				%s and %s
+		)
+		select
+			%s,
+			(select count(*) from key_range)
+		from key_range
 		order by
 			%s
 		limit 1
 		offset %d`,
 		databaseName, tableName, hint,
-		strings.Join(uniqueKeyColumnNames, ", "),
+		joinedColumnNames,
 		databaseName, tableName,
 		rangeStartComparison, rangeEndComparison,
+		joinedColumnNames,
 		strings.Join(uniqueKeyColumnAscending, ", "),
 		(chunkSize - 1),
 	)
@@ -342,9 +350,10 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 			uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumnNames[i])
 		}
 	}
+
+	joinedColumnNames := strings.Join(uniqueKeyColumnNames, ", ")
 	result = fmt.Sprintf(`
-		select /* gh-ost %s.%s %s */ %s
-		from (
+		with /* gh-ost %s.%s %s */ key_range as (
 			select
 				%s
 			from
@@ -353,14 +362,20 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 				%s and %s
 			order by
 				%s
-			limit %d) select_osc_chunk
+			limit %d
+		)
+		select
+			%s,
+			(select count(*) from key_range)
+		from key_range
 		order by
 			%s
 		limit 1`,
-		databaseName, tableName, hint, strings.Join(uniqueKeyColumnNames, ", "),
-		strings.Join(uniqueKeyColumnNames, ", "), databaseName, tableName,
+		databaseName, tableName, hint, joinedColumnNames,
+		databaseName, tableName,
 		rangeStartComparison, rangeEndComparison,
 		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
+		joinedColumnNames,
 		strings.Join(uniqueKeyColumnDescending, ", "),
 	)
 	return result, explodedArgs, nil
