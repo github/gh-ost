@@ -337,8 +337,7 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		require.NoError(t, err)
 		expected := `
-			select /* gh-ost mydb.tbl test */ name, position
-			from (
+			with /* gh-ost mydb.tbl test */ key_range as (
 				select
 					name, position
 				from
@@ -346,7 +345,12 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 				where ((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
 				order by
 					name asc, position asc
-				limit 500) select_osc_chunk
+				limit 500
+			)
+			select
+				name, position,
+				(select count(*) from key_range)
+			from key_range
 			order by
 				name desc, position desc
 			limit 1`
