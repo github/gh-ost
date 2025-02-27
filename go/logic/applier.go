@@ -709,8 +709,13 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		}
 
 		if this.migrationContext.PanicOnWarnings {
+			//nolint:execinquery
 			rows, err := tx.Query("SHOW WARNINGS")
 			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			if err = rows.Err(); err != nil {
 				return nil, err
 			}
 
