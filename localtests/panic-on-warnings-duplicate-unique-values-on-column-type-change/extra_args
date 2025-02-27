@@ -1,0 +1,1 @@
+--panic-on-warnings --alter "change column name name varchar(4) not null"
