@@ -320,7 +320,7 @@ func main() {
 	migrator := logic.NewMigrator(migrationContext, AppVersion)
 	if err := migrator.Migrate(); err != nil {
 		migrator.ExecOnFailureHook()
-		migrationContext.Log.Fatale("Migration failed. Please check the logs for more details.")
+		migrationContext.Log.Fatale(err)
 	}
 	fmt.Fprintln(os.Stdout, "# Done")
 }
