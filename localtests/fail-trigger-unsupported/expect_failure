@@ -1,0 +1,1 @@
+Trigger gh_ost_test_bi references table gh_ost_test_reference, which is not supported. Bailing out 
