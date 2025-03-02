@@ -1,4 +1,5 @@
 -- Drop riggers to ensure a clean slate
+drop trigger if exists gh_ost_test_bi;
 drop trigger if exists gh_ost_test_ai;
 drop trigger if exists gh_ost_test_bu;
 drop trigger if exists gh_ost_test_au;
@@ -14,7 +15,9 @@ drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int auto_increment,
   i int not null,
+  color varchar(32),
   ts timestamp default current_timestamp,
+  modified_count int default 0,
   primary key(id)
 ) auto_increment=1;
 
@@ -84,6 +87,10 @@ begin
   insert into gh_ost_test_stats (event_type, i_sum, count_events) 
   values ('update', NEW.i-OLD.i, 1) 
   on duplicate key update i_sum=i_sum+(NEW.i-OLD.i), count_events=count_events+1;
+
+  if NEW.color != OLD.color then
+    update gh_ost_test set modified_count = modified_count + 1 where id = NEW.id;
+  end if;
 end ;;
 delimiter ;
 
@@ -111,9 +118,9 @@ end ;;
 delimiter ;
 
 -- Insert initial data
-insert into gh_ost_test values (null, 11, null);
-insert into gh_ost_test values (null, 13, null);
-insert into gh_ost_test values (null, 17, null);
+insert into gh_ost_test values (null, 11, 'red', null, 0);
+insert into gh_ost_test values (null, 13, 'green', null, 0);
+insert into gh_ost_test values (null, 17, 'blue', null, 0);
 
 -- Create event to test all trigger types with complex operations
 drop event if exists gh_ost_test;
@@ -127,10 +134,13 @@ create event gh_ost_test
   do
 begin
   -- Test INSERT triggers
-  insert into gh_ost_test values (null, 23, null);
+  insert into gh_ost_test values (null, 23, 'red', null, 0);
   
-  -- Test UPDATE triggers
+  -- Test UPDATE triggers with numeric change (for stats)
   update gh_ost_test set i=i+1 where id=1;
+  
+  -- Test UPDATE triggers with color change
+  update gh_ost_test set color='yellow' where color='red' limit 1;
   
   -- Test DELETE triggers
   delete from gh_ost_test where id=2;
