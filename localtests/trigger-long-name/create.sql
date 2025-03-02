@@ -15,10 +15,10 @@ create table gh_ost_test_log (
   primary key(id)
 );
 
--- Create a trigger with a very long name (close to the 64 character limit)
-drop trigger if exists this_is_a_very_long_trigger_name_that_will_exceed_the_limit_when_suffix_is_added;
+-- Create a trigger with a very long name (just under the 64 character limit)
+drop trigger if exists this_is_a_very_long_trigger_name_that_will_exceed_limit_with_suffix;
 delimiter ;;
-create trigger this_is_a_very_long_trigger_name_that_will_exceed_the_limit_when_suffix_is_added after insert on gh_ost_test
+create trigger this_is_a_very_long_trigger_name_that_will_exceed_limit_with_suffix after insert on gh_ost_test
 for each row
 begin
   insert into gh_ost_test_log (test_id, action) values (NEW.id, 'INSERT');
