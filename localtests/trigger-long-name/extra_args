@@ -1,1 +1,0 @@
---include-triggers --trigger-suffix="_ghost_suffix" --remove-trigger-suffix-if-exists

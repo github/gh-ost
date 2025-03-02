@@ -1,1 +1,0 @@
---include-triggers --trigger-suffix="_gho" --remove-trigger-suffix-if-exists
