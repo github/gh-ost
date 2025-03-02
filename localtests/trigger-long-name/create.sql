@@ -1,3 +1,7 @@
+-- Drop both original and ghost triggers to ensure a clean slate
+drop trigger if exists this_is_a_very_long_trigger_name_that_will_exceed_limit_with_suffix;
+drop trigger if exists this_is_a_very_long_trigger_name_that_will_exceed_limit_with_suffix_ghost_suffix;
+
 drop table if exists gh_ost_test_log;
 drop table if exists gh_ost_test;
 create table gh_ost_test (
@@ -16,7 +20,6 @@ create table gh_ost_test_log (
 );
 
 -- Create a trigger with a very long name (just under the 64 character limit)
-drop trigger if exists this_is_a_very_long_trigger_name_that_will_exceed_limit_with_suffix;
 delimiter ;;
 create trigger this_is_a_very_long_trigger_name_that_will_exceed_limit_with_suffix after insert on gh_ost_test
 for each row

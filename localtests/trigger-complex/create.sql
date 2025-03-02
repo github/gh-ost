@@ -1,3 +1,7 @@
+-- Drop both original and ghost triggers to ensure a clean slate
+drop trigger if exists gh_ost_test_au;
+drop trigger if exists gh_ost_test_ai;
+drop trigger if exists gh_ost_test_ad;
 drop table if exists gh_ost_test_log;
 drop table if exists gh_ost_test_stats;
 drop table if exists gh_ost_test;
@@ -28,7 +32,6 @@ create table gh_ost_test_stats (
 );
 
 -- Create a complex trigger with multiple statements and conditional logic
-drop trigger if exists gh_ost_test_au;
 delimiter ;;
 create trigger gh_ost_test_au after update on gh_ost_test
 for each row
@@ -66,7 +69,6 @@ end ;;
 delimiter ;
 
 -- Create an insert trigger to initialize stats
-drop trigger if exists gh_ost_test_ai;
 delimiter ;;
 create trigger gh_ost_test_ai after insert on gh_ost_test
 for each row
@@ -83,7 +85,6 @@ end ;;
 delimiter ;
 
 -- Create a delete trigger to update stats
-drop trigger if exists gh_ost_test_ad;
 delimiter ;;
 create trigger gh_ost_test_ad after delete on gh_ost_test
 for each row

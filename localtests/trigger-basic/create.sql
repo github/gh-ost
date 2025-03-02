@@ -1,3 +1,5 @@
+-- Drop both original and ghost triggers to ensure a clean slate
+drop trigger if exists gh_ost_test_ai;
 drop table if exists gh_ost_test_log;
 drop table if exists gh_ost_test;
 create table gh_ost_test (
@@ -16,7 +18,6 @@ create table gh_ost_test_log (
 );
 
 -- Create a simple AFTER INSERT trigger
-drop trigger if exists gh_ost_test_ai;
 delimiter ;;
 create trigger gh_ost_test_ai after insert on gh_ost_test
 for each row

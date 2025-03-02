@@ -1,3 +1,10 @@
+-- Drop both original and ghost triggers to ensure a clean slate
+drop trigger if exists gh_ost_test_bi;
+drop trigger if exists gh_ost_test_ai;
+drop trigger if exists gh_ost_test_bu;
+drop trigger if exists gh_ost_test_au;
+drop trigger if exists gh_ost_test_bd;
+drop trigger if exists gh_ost_test_ad;
 drop table if exists gh_ost_test_log;
 drop table if exists gh_ost_test;
 create table gh_ost_test (
@@ -18,7 +25,6 @@ create table gh_ost_test_log (
 
 -- Create multiple triggers for all DML operations
 -- BEFORE INSERT trigger
-drop trigger if exists gh_ost_test_bi;
 delimiter ;;
 create trigger gh_ost_test_bi before insert on gh_ost_test
 for each row
@@ -30,7 +36,6 @@ end ;;
 delimiter ;
 
 -- AFTER INSERT trigger
-drop trigger if exists gh_ost_test_ai;
 delimiter ;;
 create trigger gh_ost_test_ai after insert on gh_ost_test
 for each row
@@ -40,7 +45,6 @@ end ;;
 delimiter ;
 
 -- BEFORE UPDATE trigger
-drop trigger if exists gh_ost_test_bu;
 delimiter ;;
 create trigger gh_ost_test_bu before update on gh_ost_test
 for each row
@@ -52,7 +56,6 @@ end ;;
 delimiter ;
 
 -- AFTER UPDATE trigger
-drop trigger if exists gh_ost_test_au;
 delimiter ;;
 create trigger gh_ost_test_au after update on gh_ost_test
 for each row
@@ -62,7 +65,6 @@ end ;;
 delimiter ;
 
 -- BEFORE DELETE trigger
-drop trigger if exists gh_ost_test_bd;
 delimiter ;;
 create trigger gh_ost_test_bd before delete on gh_ost_test
 for each row
@@ -72,7 +74,6 @@ end ;;
 delimiter ;
 
 -- AFTER DELETE trigger
-drop trigger if exists gh_ost_test_ad;
 delimiter ;;
 create trigger gh_ost_test_ad after delete on gh_ost_test
 for each row

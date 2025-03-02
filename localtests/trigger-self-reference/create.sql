@@ -1,3 +1,6 @@
+-- Drop both original and ghost triggers to ensure a clean slate
+drop trigger if exists gh_ost_test_au;
+
 drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int auto_increment,
@@ -9,7 +12,6 @@ create table gh_ost_test (
 ) auto_increment=1;
 
 -- Create a trigger that modifies the same table
-drop trigger if exists gh_ost_test_au;
 delimiter ;;
 create trigger gh_ost_test_au after update on gh_ost_test
 for each row
