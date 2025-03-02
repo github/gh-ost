@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"syscall"
 
 	"github.com/github/gh-ost/go/base"
@@ -137,6 +138,10 @@ func main() {
 	flag.UintVar(&migrationContext.ReplicaServerId, "replica-server-id", 99999, "server id used by gh-ost process. Default: 99999")
 	flag.IntVar(&migrationContext.BinlogSyncerMaxReconnectAttempts, "binlogsyncer-max-reconnect-attempts", 0, "when master node fails, the maximum number of binlog synchronization attempts to reconnect. 0 is unlimited")
 
+	flag.BoolVar(&migrationContext.IncludeTriggers, "include-triggers", false, "When true, the triggers (if exist) will be created on the new table")
+	flag.StringVar(&migrationContext.TriggerSuffix, "trigger-suffix", "", "Add a suffix to the trigger name (i.e '_v2'). Requires '--include-triggers'")
+	flag.BoolVar(&migrationContext.RemoveTriggerSuffix, "remove-trigger-suffix-if-exists", false, "Remove given suffix from name of trigger. Requires '--include-triggers' and '--trigger-suffix'")
+
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")
 	flag.Int64Var(&migrationContext.CriticalLoadIntervalMilliseconds, "critical-load-interval-millis", 0, "When 0, migration immediately bails out upon meeting critical-load. When non-zero, a second check is done after given interval, and migration only bails out if 2nd check still meets critical load")
@@ -257,7 +262,20 @@ func main() {
 		migrationContext.Log.Fatal("--ssl-allow-insecure requires --ssl")
 	}
 	if *replicationLagQuery != "" {
-		migrationContext.Log.Warning("--replication-lag-query is deprecated")
+		migrationContext.Log.Warningf("--replication-lag-query is deprecated")
+	}
+	if migrationContext.IncludeTriggers && migrationContext.TriggerSuffix == "" {
+		migrationContext.Log.Fatalf("--trigger-suffix must be used with --include-triggers")
+	}
+	if !migrationContext.IncludeTriggers && migrationContext.TriggerSuffix != "" {
+		migrationContext.Log.Fatalf("--trigger-suffix cannot be be used without --include-triggers")
+	}
+	if migrationContext.TriggerSuffix != "" {
+		regex := regexp.MustCompile(`^[\da-zA-Z_]+$`)
+
+		if !regex.Match([]byte(migrationContext.TriggerSuffix)) {
+			migrationContext.Log.Fatalf("--trigger-suffix must contain only alpha numeric characters and underscore (0-9,a-z,A-Z,_)")
+		}
 	}
 	if *storageEngine == "rocksdb" {
 		migrationContext.Log.Warning("RocksDB storage engine support is experimental")
