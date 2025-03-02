@@ -579,11 +579,20 @@ func (this *Inspector) validateGhostTriggersDontExist() error {
 		var foundTriggers []string
 		for _, trigger := range this.migrationContext.Triggers {
 			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
+			this.migrationContext.Log.Debugf("Looking for ghost trigger: %s (original: %s) in schema: %s",
+				triggerName,
+				trigger.Name,
+				this.migrationContext.DatabaseName)
 			query := "select 1 from information_schema.triggers where trigger_name = ? and trigger_schema = ?"
+			this.migrationContext.Log.Debugf("Ghost trigger check query: %s [%s, %s]",
+				query,
+				triggerName,
+				this.migrationContext.DatabaseName)
 			err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 				triggerExists := rowMap.GetInt("1")
 				if triggerExists == 1 {
 					foundTriggers = append(foundTriggers, triggerName)
+					this.migrationContext.Log.Debugf("Found existing ghost trigger: %s", triggerName)
 				}
 				return nil
 			},
