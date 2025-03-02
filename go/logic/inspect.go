@@ -576,17 +576,8 @@ func (this *Inspector) validateTableTriggers() error {
 // verifyTriggersDontExist verifies before createing new triggers we want to make sure these triggers dont exist already in the DB
 func (this *Inspector) validateGhostTriggersDontExist() error {
 	if len(this.migrationContext.Triggers) > 0 {
-		// Direct query to verify information_schema contents
-		query := "select trigger_name from information_schema.triggers where trigger_schema = ?"
-		this.migrationContext.Log.Debugf("Running direct verification query: %s [%s]", query, this.migrationContext.DatabaseName)
-		err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
-			triggerName := rowMap.GetString("trigger_name")
-			this.migrationContext.Log.Debugf("Direct query found trigger: %s", triggerName)
-			return nil
-		}, this.migrationContext.DatabaseName)
-		if err != nil {
-			this.migrationContext.Log.Errorf("Error in direct trigger verification: %+v", err)
-		}
+		// Log all existing triggers for debugging
+		this.migrationContext.Log.Debugf("Checking for existing ghost triggers in schema: %s", this.migrationContext.DatabaseName)
 
 		var foundTriggers []string
 		for _, trigger := range this.migrationContext.Triggers {
@@ -596,17 +587,22 @@ func (this *Inspector) validateGhostTriggersDontExist() error {
 				trigger.Name,
 				this.migrationContext.DatabaseName)
 
-			// Try two different queries to verify behavior
-			query1 := "select count(*) as cnt from information_schema.triggers where trigger_name = ? and trigger_schema = ?"
-			this.migrationContext.Log.Debugf("Ghost trigger check query 1: %s [%s, %s]",
-				query1,
+			// Use COUNT(*) which properly returns 0 for no results
+			query := "select count(*) as cnt from information_schema.triggers where trigger_name = ? and trigger_schema = ?"
+			this.migrationContext.Log.Debugf("Ghost trigger check query: %s [%s, %s]",
+				query,
 				triggerName,
 				this.migrationContext.DatabaseName)
 
-			var count int64
-			err := sqlutils.QueryRowsMap(this.db, query1, func(rowMap sqlutils.RowMap) error {
-				count = rowMap.GetInt64("cnt")
+			var exists bool
+			err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+				count := rowMap.GetInt("cnt")
+				exists = (count > 0)
 				this.migrationContext.Log.Debugf("Ghost trigger check result: count=%d for %s", count, triggerName)
+				if exists {
+					this.migrationContext.Log.Debugf("Found existing ghost trigger: %s", triggerName)
+					foundTriggers = append(foundTriggers, triggerName)
+				}
 				return nil
 			},
 				triggerName,
@@ -614,12 +610,6 @@ func (this *Inspector) validateGhostTriggersDontExist() error {
 			)
 			if err != nil {
 				return err
-			}
-
-			// Only add to foundTriggers if count > 0
-			if count > 0 {
-				this.migrationContext.Log.Debugf("Actually found ghost trigger: %s (count=%d)", triggerName, count)
-				foundTriggers = append(foundTriggers, triggerName)
 			}
 		}
 		if len(foundTriggers) > 0 {
