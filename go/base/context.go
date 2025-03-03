@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	uuid "github.com/google/uuid"
 
@@ -236,6 +237,11 @@ type MigrationContext struct {
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 	ForceTmpTableName                string
+
+	IncludeTriggers     bool
+	RemoveTriggerSuffix bool
+	TriggerSuffix       string
+	Triggers            []mysql.Trigger
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
@@ -923,4 +929,21 @@ func (this *MigrationContext) ReadConfigFile() error {
 	}
 
 	return nil
+}
+
+// getGhostTriggerName generates the name of a ghost trigger, based on original trigger name
+// or a given trigger name
+func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
+	if this.RemoveTriggerSuffix && strings.HasSuffix(triggerName, this.TriggerSuffix) {
+		return strings.TrimSuffix(triggerName, this.TriggerSuffix)
+	}
+	// else
+	return triggerName + this.TriggerSuffix
+}
+
+// validateGhostTriggerLength check if the ghost trigger name length is not more than 64 characters
+func (this *MigrationContext) ValidateGhostTriggerLengthBelowMaxLength(triggerName string) bool {
+	ghostTriggerName := this.GetGhostTriggerName(triggerName)
+
+	return utf8.RuneCountInString(ghostTriggerName) <= mysql.MaxTableNameLength
 }
