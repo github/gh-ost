@@ -1,4 +1,4 @@
--- Drop riggers to ensure a clean slate
+-- Drop triggers to ensure a clean slate
 drop trigger if exists gh_ost_test_bi;
 drop trigger if exists gh_ost_test_ai;
 drop trigger if exists gh_ost_test_bu;
