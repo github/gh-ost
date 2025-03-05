@@ -8,6 +8,7 @@ package mysql
 import (
 	gosql "database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -251,4 +252,48 @@ func GetTriggers(db *gosql.DB, databaseName, tableName string) (triggers []Trigg
 		return nil, err
 	}
 	return triggers, nil
+}
+
+func versionTokens(version string, digits int) []int {
+	v := strings.Split(version, "-")[0]
+	tokens := strings.Split(v, ".")
+	intTokens := make([]int, digits)
+	for i := range tokens {
+		if i >= digits {
+			break
+		}
+		intTokens[i], _ = strconv.Atoi(tokens[i])
+	}
+	return intTokens
+}
+
+func isSmallerVersion(version string, otherVersion string, digits int) bool {
+	v := versionTokens(version, digits)
+	o := versionTokens(otherVersion, digits)
+	for i := 0; i < len(v); i++ {
+		if v[i] < o[i] {
+			return true
+		}
+		if v[i] > o[i] {
+			return false
+		}
+		if i == digits {
+			break
+		}
+	}
+	return false
+}
+
+// IsSmallerMajorVersion tests two versions against another and returns true if
+// the former is a smaller "major" version than the latter.
+// e.g. 5.5.36 is NOT a smaller major version as compared to 5.5.40, but IS as compared to 5.6.9
+func IsSmallerMajorVersion(version string, otherVersion string) bool {
+	return isSmallerVersion(version, otherVersion, 2)
+}
+
+// IsSmallerMinorVersion tests two versions against another and returns true if
+// the former is a smaller "minor" version than the latter.
+// e.g. 5.5.36 is a smaller major version as compared to 5.5.40, as well as compared to 5.6.7
+func IsSmallerMinorVersion(version string, otherVersion string) bool {
+	return isSmallerVersion(version, otherVersion, 3)
 }
