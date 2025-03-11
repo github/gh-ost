@@ -24,6 +24,7 @@ import (
 
 var (
 	ErrMigratorUnsupportedRenameAlter = errors.New("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
+	ErrMigrationNotAllowedOnMaster    = errors.New("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (this reduces load from the master). To proceed please provide --allow-on-master.")
 	RetrySleepFn                      = time.Sleep
 )
 
@@ -631,6 +632,12 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
 		return err
 	}
+	// If we need to create triggers we need to do it here (only create part)
+	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
+		if err := this.retryOperation(this.applier.CreateTriggersOnGhost); err != nil {
+			return err
+		}
+	}
 	if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
 		return err
 	}
@@ -673,6 +680,13 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// We know any newly incoming DML on original table is blocked.
 	if err := this.waitForEventsUpToLock(); err != nil {
 		return this.migrationContext.Log.Errore(err)
+	}
+
+	// If we need to create triggers we need to do it here (only create part)
+	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
+		if err := this.applier.CreateTriggersOnGhost(); err != nil {
+			this.migrationContext.Log.Errore(err)
+		}
 	}
 
 	// Step 2
@@ -791,6 +805,9 @@ func (this *Migrator) initiateInspector() (err error) {
 		if this.migrationContext.CliMasterPassword != "" {
 			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
 		}
+		if err := this.migrationContext.ApplierConnectionConfig.RegisterTLSConfig(); err != nil {
+			return err
+		}
 		this.migrationContext.Log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	}
 	// validate configs
@@ -806,7 +823,7 @@ func (this *Migrator) initiateInspector() (err error) {
 			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.InspectorConnectionConfig.Key)
 		}
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
-		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", this.migrationContext.InspectorConnectionConfig, this.migrationContext.ApplierConnectionConfig)
+		return ErrMigrationNotAllowedOnMaster
 	}
 	if err := this.inspector.validateLogSlaveUpdates(); err != nil {
 		return err

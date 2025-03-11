@@ -531,7 +531,7 @@ func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) erro
 	return nil
 }
 
-// validateTableTriggers makes sure no triggers exist on the migrated table
+// validateTableTriggers makes sure no triggers exist on the migrated table. if --include_triggers is used then it fetches the triggers
 func (this *Inspector) validateTableTriggers() error {
 	query := `
 		SELECT /* gh-ost */ COUNT(*) AS num_triggers
@@ -553,9 +553,69 @@ func (this *Inspector) validateTableTriggers() error {
 		return err
 	}
 	if numTriggers > 0 {
-		return this.migrationContext.Log.Errorf("Found triggers on %s.%s. Triggers are not supported at this time. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+		if this.migrationContext.IncludeTriggers {
+			this.migrationContext.Log.Infof("Found %d triggers on %s.%s.", numTriggers, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+			this.migrationContext.Triggers, err = mysql.GetTriggers(this.db, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
+			if err != nil {
+				return err
+			}
+			if err := this.validateGhostTriggersDontExist(); err != nil {
+				return err
+			}
+			if err := this.validateGhostTriggersLength(); err != nil {
+				return err
+			}
+			return nil
+		}
+		return this.migrationContext.Log.Errorf("Found triggers on %s.%s. Tables with triggers are supported only when using \"include-triggers\" flag. Bailing out", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	}
 	this.migrationContext.Log.Debugf("Validated no triggers exist on table")
+	return nil
+}
+
+// verifyTriggersDontExist verifies before createing new triggers we want to make sure these triggers dont exist already in the DB
+func (this *Inspector) validateGhostTriggersDontExist() error {
+	if len(this.migrationContext.Triggers) > 0 {
+		var foundTriggers []string
+		for _, trigger := range this.migrationContext.Triggers {
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
+			query := "select 1 from information_schema.triggers where trigger_name = ? and trigger_schema = ? and event_object_table = ?"
+			err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+				triggerExists := rowMap.GetInt("1")
+				if triggerExists == 1 {
+					foundTriggers = append(foundTriggers, triggerName)
+				}
+				return nil
+			},
+				triggerName,
+				this.migrationContext.DatabaseName,
+				this.migrationContext.OriginalTableName,
+			)
+			if err != nil {
+				return err
+			}
+		}
+		if len(foundTriggers) > 0 {
+			return this.migrationContext.Log.Errorf("Found gh-ost triggers (%s). Please use a different suffix or drop them. Bailing out", strings.Join(foundTriggers, ","))
+		}
+	}
+
+	return nil
+}
+
+func (this *Inspector) validateGhostTriggersLength() error {
+	if len(this.migrationContext.Triggers) > 0 {
+		var foundTriggers []string
+		for _, trigger := range this.migrationContext.Triggers {
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
+			if ok := this.migrationContext.ValidateGhostTriggerLengthBelowMaxLength(triggerName); !ok {
+				foundTriggers = append(foundTriggers, triggerName)
+			}
+		}
+		if len(foundTriggers) > 0 {
+			return this.migrationContext.Log.Errorf("Gh-ost triggers (%s) length > %d characters. Bailing out", strings.Join(foundTriggers, ","), mysql.MaxTableNameLength)
+		}
+	}
 	return nil
 }
 
