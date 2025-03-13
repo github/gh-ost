@@ -236,7 +236,7 @@ func TestIsIgnoreOverMaxChunkRangeEvent(t *testing.T) {
 	t.Run("larger than MigrationRangeMaxValues", func(t *testing.T) {
 		ignore, err := applier.IsIgnoreOverMaxChunkRangeEvent([]interface{}{123457})
 		require.NoError(t, err)
-		require.False(t, ignore)
+		require.True(t, ignore)
 	})
 }
 

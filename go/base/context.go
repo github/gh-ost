@@ -204,6 +204,8 @@ type MigrationContext struct {
 	TotalDMLEventsIgnored                  int64
 	DMLBatchSize                           int64
 	IgnoreOverIterationRangeMaxBinlog      bool
+	IsMigrationRangeMaxValuesLocked        bool
+	MigrationRangeMaxValuesInitial         *sql.ColumnValues
 	isThrottled                            bool
 	throttleReason                         string
 	throttleReasonHint                     ThrottleReasonHint

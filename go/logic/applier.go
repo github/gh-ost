@@ -568,7 +568,15 @@ func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 			return err
 		}
 	}
-	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+
+	// Save a snapshot copy of the initial MigrationRangeMaxValues
+	if this.migrationContext.MigrationRangeMaxValues == nil {
+		this.migrationContext.MigrationRangeMaxValuesInitial = nil
+	} else {
+		abstractValues := make([]interface{}, len(this.migrationContext.MigrationRangeMaxValues.AbstractValues()))
+		copy(abstractValues, this.migrationContext.MigrationRangeMaxValues.AbstractValues())
+		this.migrationContext.MigrationRangeMaxValuesInitial = sql.ToColumnValues(abstractValues)
+	}
 
 	return rows.Err()
 }
@@ -611,6 +619,63 @@ func (this *Applier) ReadMigrationRangeValues() error {
 	return tx.Commit()
 }
 
+// ResetMigrationRangeMaxValues updates the MigrationRangeMaxValues with new values
+func (this *Applier) ResetMigrationRangeMaxValues(uniqueKeyAbstractValues []interface{}) {
+	abstractValues := make([]interface{}, len(uniqueKeyAbstractValues))
+	copy(abstractValues, uniqueKeyAbstractValues)
+	this.migrationContext.MigrationRangeMaxValues = sql.ToColumnValues(abstractValues)
+	this.migrationContext.Log.Debugf("Reset migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+}
+
+// LockMigrationRangeMaxValues locks the MigrationRangeMaxValues to prevent further updates
+func (this *Applier) LockMigrationRangeMaxValues() {
+	if this.migrationContext.IsMigrationRangeMaxValuesLocked {
+		return
+	}
+	this.migrationContext.IsMigrationRangeMaxValuesLocked = true
+	this.migrationContext.Log.Infof("Lock migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+}
+
+// AttemptToLockMigrationRangeMaxValues attempts to lock MigrationRangeMaxValues to prevent endless copying.
+// To avoid infinite updates of MigrationRangeMaxValues causing the copy to never end,
+// we need a strategy to stop updates. When the initial copy target is achieved,
+// MigrationRangeMaxValues will be locked.
+func (this *Applier) AttemptToLockMigrationRangeMaxValues() {
+	if this.migrationContext.IsMigrationRangeMaxValuesLocked {
+		return
+	}
+
+	// Currently only supports single-column unique index of int type
+	uniqueKeyCols := this.migrationContext.UniqueKey.Columns.Columns()
+	if len(uniqueKeyCols) != 1 {
+		this.LockMigrationRangeMaxValues()
+		return
+	}
+	uniqueKeyCol := uniqueKeyCols[0]
+	if uniqueKeyCol.CompareValueFunc == nil {
+		this.LockMigrationRangeMaxValues()
+		return
+	}
+
+	// Compare MigrationIterationRangeMinValues with MigrationRangeMaxValuesInitial to determine copy progress
+	if this.migrationContext.MigrationIterationRangeMinValues == nil {
+		return
+	}
+	than, err := uniqueKeyCol.CompareValueFunc(
+		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues()[0],
+		this.migrationContext.MigrationRangeMaxValuesInitial.AbstractValues()[0],
+	)
+	if err != nil {
+		// If comparison fails, fallback to locking MigrationRangeMaxValues
+		this.migrationContext.Log.Errore(err)
+		this.LockMigrationRangeMaxValues()
+		return
+	}
+	if than >= 0 {
+		this.LockMigrationRangeMaxValues()
+	}
+}
+
 // CalculateNextIterationRangeEndValues reads the next-iteration-range-end unique key values,
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
@@ -620,6 +685,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
 		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
 	}
+	this.AttemptToLockMigrationRangeMaxValues()
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
@@ -661,6 +727,8 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		}
 	}
 	this.migrationContext.Log.Debugf("Iteration complete: no further range to iterate")
+	// Ensure MigrationRangeMaxValues is locked after iteration is complete
+	this.LockMigrationRangeMaxValues()
 	return hasFurtherRange, nil
 }
 
@@ -1282,7 +1350,14 @@ func (this *Applier) IsIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs []interface{})
 		case than < 0:
 			return true, nil
 		case than > 0:
-			return false, nil
+			// When the value is greater than MigrationRangeMaxValues boundary, attempt to dynamically expand MigrationRangeMaxValues
+			// After expand, treat this comparison as equal, otherwise it cannot be ignored
+			if !this.migrationContext.IsMigrationRangeMaxValuesLocked {
+				this.ResetMigrationRangeMaxValues(uniqueKeyArgs)
+				return true, nil
+			} else {
+				return false, nil
+			}
 		default:
 			// Since rowcopy is left-open-right-closed, when it is equal to the MigrationRangeMaxValues boundary value, it can be ignored.
 			return true, nil
