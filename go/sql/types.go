@@ -50,6 +50,8 @@ type Column struct {
 	// https://github.com/github/gh-ost/issues/909
 	BinaryOctetLength uint
 	charsetConversion *CharacterSetConversion
+	// compare a and b using this function, when a equal b, return 0, when a > b, return 1, when a < b, return -1
+	CompareValueFunc func(a interface{}, b interface{}) (int, error)
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
@@ -216,6 +218,14 @@ func (this *ColumnList) SetEnumToTextConversion(columnName string) {
 
 func (this *ColumnList) IsEnumToTextConversion(columnName string) bool {
 	return this.GetColumn(columnName).enumToTextConversion
+}
+
+func (this *ColumnList) SetColumnCompareValueFunc(columnName string, f func(a interface{}, b interface{}) (int, error)) {
+	this.GetColumn(columnName).CompareValueFunc = f
+}
+
+func (this *ColumnList) GetColumnCompareValueFunc(columnName string) func(a interface{}, b interface{}) (int, error) {
+	return this.GetColumn(columnName).CompareValueFunc
 }
 
 func (this *ColumnList) SetEnumValues(columnName string, enumValues string) {
