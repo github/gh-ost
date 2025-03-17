@@ -37,10 +37,10 @@ $ echo status | nc -U /tmp/gh-ost.test.sample_data_0.sock
 # Throttle additional flag file: /tmp/gh-ost.throttle
 # Serving on unix socket: /tmp/gh-ost.test.sample_data_0.sock
 # Serving on TCP port: 10001
-Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 40s(copy), 41s(total); streamer: mysql-bin.000550:49942; ETA: throttled, flag-file
+Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Time: 41s(total), 40s(copy); streamer: mysql-bin.000550:49942; Lag: 0.01s, HeartbeatLag: 0.01s, State: throttled, flag-file; ETA: N/A
 ```
 
-2. `gh-ost` creates and uses a changelog table for internal bookkeeping. This table has the `_osc` suffix (the tool creates and announces this table upon startup) If you like, you can SQL your status:
+1. `gh-ost` creates and uses a changelog table for internal bookkeeping. This table has the `_osc` suffix (the tool creates and announces this table upon startup) If you like, you can SQL your status:
 
 ```
 > select * from _sample_data_0_osc order by id desc limit 1 \G
@@ -48,7 +48,7 @@ Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 40s(copy), 41s(total); s
          id: 325
 last_update: 2016-06-08 15:52:13
        hint: copy iteration 0 at 1465393933
-      value: Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 1m35s(copy), 1m35s(total); streamer: mysql-bin.000560:60904; ETA: throttled, flag-file
+      value: throttled, flag-file
 ```
 
 ### Postpone the cut-over phase
