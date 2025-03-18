@@ -297,6 +297,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 					%s.%s
 				where
 					%s and %s
+				limit
+					%d
 			) select_osc_chunk)
 		from (
 			select
@@ -305,6 +307,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 				%s.%s
 			where
 				%s and %s
+			limit
+				%d
 		) select_osc_chunk
 		order by
 			%s
@@ -313,10 +317,10 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 		databaseName, tableName, hint,
 		joinedColumnNames, joinedColumnNames,
 		databaseName, tableName,
-		rangeStartComparison, rangeEndComparison,
+		rangeStartComparison, rangeEndComparison, chunkSize,
 		joinedColumnNames,
 		databaseName, tableName,
-		rangeStartComparison, rangeEndComparison,
+		rangeStartComparison, rangeEndComparison, chunkSize,
 		strings.Join(uniqueKeyColumnAscending, ", "),
 		(chunkSize - 1),
 	)
