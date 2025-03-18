@@ -2,8 +2,6 @@ module github.com/github/gh-ost
 
 go 1.23.0
 
-toolchain go1.24.1
-
 require (
 	github.com/go-ini/ini v1.67.0
 	github.com/go-mysql-org/go-mysql v1.7.0
