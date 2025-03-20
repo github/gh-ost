@@ -777,8 +777,8 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
 					continue
 				}
-				pkDuplicateSuffix := fmt.Sprintf("for key '%s.PRIMARY'", this.migrationContext.GetGhostTableName())
-				if strings.HasPrefix(message, "Duplicate entry") && strings.HasSuffix(message, pkDuplicateSuffix) {
+				migrationUniqueKeySuffix := fmt.Sprintf("for key '%s.%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.Name)
+				if strings.HasPrefix(message, "Duplicate entry") && strings.HasSuffix(message, migrationUniqueKeySuffix) {
 					continue
 				}
 				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
