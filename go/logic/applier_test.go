@@ -531,8 +531,9 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySuc
 	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
 	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
 	migrationContext.UniqueKey = &sql.UniqueKey{
-		Name:    "item_id",
-		Columns: *sql.NewColumnList([]string{"item_id"}),
+		Name:             "item_id",
+		NameInGhostTable: "item_id",
+		Columns:          *sql.NewColumnList([]string{"item_id"}),
 	}
 
 	applier := NewApplier(migrationContext)
