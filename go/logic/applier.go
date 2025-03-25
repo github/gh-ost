@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -777,8 +778,10 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
 					continue
 				}
-				migrationUniqueKeySuffix := fmt.Sprintf("for key '%s.%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
-				if strings.HasPrefix(message, "Duplicate entry") && strings.HasSuffix(message, migrationUniqueKeySuffix) {
+				// Duplicate warnings are formatted differently across mysql versions, hence the optional table name prefix
+				migrationUniqueKeyExpression := fmt.Sprintf("for key '(%s\\.)?%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
+				matched, _ := regexp.MatchString(migrationUniqueKeyExpression, message)
+				if strings.Contains(message, "Duplicate entry") && matched {
 					continue
 				}
 				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
