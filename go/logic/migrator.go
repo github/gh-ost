@@ -361,6 +361,15 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.createFlagFiles(); err != nil {
 		return err
 	}
+	onSuccessFunc := func() error {
+		if err := this.finalCleanup(); err != nil {
+			return nil
+		}
+		if err := this.hooksExecutor.onSuccess(); err != nil {
+			return err
+		}
+		return nil
+	}
 	// In MySQL 8.0 (and possibly earlier) some DDL statements can be applied instantly.
 	// Attempt to do this if AttemptInstantDDL is set.
 	if this.migrationContext.AttemptInstantDDL {
@@ -369,7 +378,7 @@ func (this *Migrator) Migrate() (err error) {
 		} else {
 			this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := this.applier.AttemptInstantDDL(); err == nil {
-				if err := this.hooksExecutor.onSuccess(); err != nil {
+				if err := onSuccessFunc(); err != nil {
 					return err
 				}
 				this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -451,10 +460,7 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 
-	if err := this.finalCleanup(); err != nil {
-		return nil
-	}
-	if err := this.hooksExecutor.onSuccess(); err != nil {
+	if err := onSuccessFunc(); err != nil {
 		return err
 	}
 	this.migrationContext.Log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
