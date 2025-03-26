@@ -275,36 +275,54 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
 	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames))
-	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames))
 	for i, column := range uniqueKeyColumns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
 			uniqueKeyColumnAscending[i] = fmt.Sprintf("concat(%s) asc", uniqueKeyColumnNames[i])
-			uniqueKeyColumnDescending[i] = fmt.Sprintf("concat(%s) desc", uniqueKeyColumnNames[i])
 		} else {
 			uniqueKeyColumnAscending[i] = fmt.Sprintf("%s asc", uniqueKeyColumnNames[i])
-			uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumnNames[i])
 		}
 	}
+	joinedColumnNames := strings.Join(uniqueKeyColumnNames, ", ")
 	result = fmt.Sprintf(`
 		select /* gh-ost %s.%s %s */
-			%s
-		from
-			%s.%s
-		where
-			%s and %s
+			%s,
+			(select count(*) from (
+				select
+					%s
+				from
+					%s.%s
+				where
+					%s and %s
+				limit
+					%d
+			) select_osc_chunk)
+		from (
+			select
+				%s
+			from
+				%s.%s
+			where
+				%s and %s
+			limit
+				%d
+		) select_osc_chunk
 		order by
 			%s
 		limit 1
 		offset %d`,
 		databaseName, tableName, hint,
-		strings.Join(uniqueKeyColumnNames, ", "),
+		joinedColumnNames, joinedColumnNames,
 		databaseName, tableName,
-		rangeStartComparison, rangeEndComparison,
+		rangeStartComparison, rangeEndComparison, chunkSize,
+		joinedColumnNames,
+		databaseName, tableName,
+		rangeStartComparison, rangeEndComparison, chunkSize,
 		strings.Join(uniqueKeyColumnAscending, ", "),
 		(chunkSize - 1),
 	)
-	return result, explodedArgs, nil
+	// 2x the explodedArgs for the subquery (CTE would be possible but not supported by MySQL 5)
+	return result, append(explodedArgs, explodedArgs...), nil
 }
 
 func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
@@ -342,8 +360,22 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 			uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumnNames[i])
 		}
 	}
+
+	joinedColumnNames := strings.Join(uniqueKeyColumnNames, ", ")
 	result = fmt.Sprintf(`
-		select /* gh-ost %s.%s %s */ %s
+		select /* gh-ost %s.%s %s */
+			%s,
+			(select count(*) from (
+				select
+					%s
+				from
+					%s.%s
+				where
+					%s and %s
+				order by
+					%s
+				limit %d
+			) select_osc_chunk)
 		from (
 			select
 				%s
@@ -353,17 +385,22 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 				%s and %s
 			order by
 				%s
-			limit %d) select_osc_chunk
+			limit %d
+		) select_osc_chunk
 		order by
 			%s
 		limit 1`,
-		databaseName, tableName, hint, strings.Join(uniqueKeyColumnNames, ", "),
-		strings.Join(uniqueKeyColumnNames, ", "), databaseName, tableName,
+		databaseName, tableName, hint, joinedColumnNames,
+		joinedColumnNames, databaseName, tableName,
+		rangeStartComparison, rangeEndComparison,
+		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
+		joinedColumnNames, databaseName, tableName,
 		rangeStartComparison, rangeEndComparison,
 		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
 		strings.Join(uniqueKeyColumnDescending, ", "),
 	)
-	return result, explodedArgs, nil
+	// 2x the explodedArgs for the subquery (CTE would be possible but not supported by MySQL 5)
+	return result, append(explodedArgs, explodedArgs...), nil
 }
 
 func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKey *UniqueKey) (string, error) {

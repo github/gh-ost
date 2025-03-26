@@ -202,6 +202,12 @@ List of metrics and threshold values; topping the threshold of any will cause th
 
 Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but otherwise will make no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
 
+### panic-on-warnings
+
+When this flag is set, `gh-ost` will panic when SQL warnings indicating data loss are encountered when copying data. This flag helps prevent data loss scenarios with migrations touching unique keys, column collation and types, as well as `NOT NULL` constraints, where `MySQL` will silently drop inserted rows that no longer satisfy the updated constraint (also dependent on the configured `sql_mode`).
+
+While `panic-on-warnings` is currently disabled by defaults, it will default to `true` in a future version of `gh-ost`.
+
 ### postpone-cut-over-flag-file
 
 Indicate a file name, such that the final [cut-over](cut-over.md) step does not take place as long as the file exists.

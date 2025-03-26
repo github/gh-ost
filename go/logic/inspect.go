@@ -846,6 +846,9 @@ func (this *Inspector) getSharedUniqueKeys(originalUniqueKeys, ghostUniqueKeys [
 	for _, originalUniqueKey := range originalUniqueKeys {
 		for _, ghostUniqueKey := range ghostUniqueKeys {
 			if originalUniqueKey.Columns.IsSubsetOf(&ghostUniqueKey.Columns) {
+				// In case the unique key gets renamed in -alter, PanicOnWarnings needs to rely on the new name
+				// to check SQL warnings on the ghost table, so return new name here.
+				originalUniqueKey.NameInGhostTable = ghostUniqueKey.Name
 				uniqueKeys = append(uniqueKeys, originalUniqueKey)
 				break
 			}

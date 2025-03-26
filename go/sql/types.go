@@ -265,10 +265,11 @@ func (this *ColumnList) SetCharsetConversion(columnName string, fromCharset stri
 
 // UniqueKey is the combination of a key's name and columns
 type UniqueKey struct {
-	Name            string
-	Columns         ColumnList
-	HasNullable     bool
-	IsAutoIncrement bool
+	Name             string
+	NameInGhostTable string // Name of the corresponding key in the Ghost table in case it is being renamed
+	Columns          ColumnList
+	HasNullable      bool
+	IsAutoIncrement  bool
 }
 
 // IsPrimary checks if this unique key is primary

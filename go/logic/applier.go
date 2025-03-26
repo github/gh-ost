@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -662,7 +663,7 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and this done with copying row chunks)
-func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
+func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, expectedRowCount int64, err error) {
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
 		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
@@ -683,32 +684,36 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			fmt.Sprintf("iteration:%d", this.migrationContext.GetIteration()),
 		)
 		if err != nil {
-			return hasFurtherRange, err
+			return hasFurtherRange, expectedRowCount, err
 		}
 
 		rows, err := this.db.Query(query, explodedArgs...)
 		if err != nil {
-			return hasFurtherRange, err
+			return hasFurtherRange, expectedRowCount, err
 		}
 		defer rows.Close()
 
-		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
+		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len() + 1)
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
-				return hasFurtherRange, err
+				return hasFurtherRange, expectedRowCount, err
 			}
-			hasFurtherRange = true
+
+			expectedRowCount = (*iterationRangeMaxValues.ValuesPointers[len(iterationRangeMaxValues.ValuesPointers)-1].(*interface{})).(int64)
+			iterationRangeMaxValues = sql.ToColumnValues(iterationRangeMaxValues.AbstractValues()[:len(iterationRangeMaxValues.AbstractValues())-1])
+
+			hasFurtherRange = expectedRowCount > 0
 		}
 		if err = rows.Err(); err != nil {
-			return hasFurtherRange, err
+			return hasFurtherRange, expectedRowCount, err
 		}
 		if hasFurtherRange {
 			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
-			return hasFurtherRange, nil
+			return hasFurtherRange, expectedRowCount, nil
 		}
 	}
 	this.migrationContext.Log.Debugf("Iteration complete: no further range to iterate")
-	return hasFurtherRange, nil
+	return hasFurtherRange, expectedRowCount, nil
 }
 
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
@@ -753,6 +758,37 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err != nil {
 			return nil, err
 		}
+
+		if this.migrationContext.PanicOnWarnings {
+			//nolint:execinquery
+			rows, err := tx.Query("SHOW WARNINGS")
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			if err = rows.Err(); err != nil {
+				return nil, err
+			}
+
+			var sqlWarnings []string
+			for rows.Next() {
+				var level, message string
+				var code int
+				if err := rows.Scan(&level, &code, &message); err != nil {
+					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+					continue
+				}
+				// Duplicate warnings are formatted differently across mysql versions, hence the optional table name prefix
+				migrationUniqueKeyExpression := fmt.Sprintf("for key '(%s\\.)?%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
+				matched, _ := regexp.MatchString(migrationUniqueKeyExpression, message)
+				if strings.Contains(message, "Duplicate entry") && matched {
+					continue
+				}
+				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+			}
+			this.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
+		}
+
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
