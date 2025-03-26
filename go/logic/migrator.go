@@ -202,6 +202,11 @@ func (this *Migrator) canStopStreaming() bool {
 
 // onChangelogEvent is called when a binlog event operation on the changelog table is intercepted.
 func (this *Migrator) onChangelogEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+	if dmlEvent.NewColumnValues == nil {
+		// in some compatible systems, such as OceanBase Binlog Service, an UPSERT event is
+		// converted to a DELETE event and an INSERT event, we need to skip the DELETE event.
+		return nil
+	}
 	// Hey, I created the changelog table, I know the type of columns it has!
 	switch hint := dmlEvent.NewColumnValues.StringColumn(2); hint {
 	case "state":
@@ -564,9 +569,15 @@ func (this *Migrator) cutOver() (err error) {
 
 	switch this.migrationContext.CutOverType {
 	case base.CutOverAtomic:
-		// Atomic solution: we use low timeout and multiple attempts. But for
-		// each failed attempt, we throttle until replication lag is back to normal
-		err = this.atomicCutOver()
+		if this.migrationContext.OceanBase || !mysql.IsSmallerMinorVersion(this.migrationContext.ApplierMySQLVersion, "8.0.13") {
+			// Atomic solution for latest MySQL: cut over the tables in the same session where the origin
+			// table and ghost table are both locked, it can only work on MySQL 8.0.13 or later versions
+			err = this.atomicCutOverMySQL8()
+		} else {
+			// Atomic solution: we use low timeout and multiple attempts. But for
+			// each failed attempt, we throttle until replication lag is back to normal
+			err = this.atomicCutOver()
+		}
 	case base.CutOverTwoStep:
 		err = this.cutOverTwoStep()
 	default:
@@ -639,6 +650,39 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 		}
 	}
 	if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
+		return err
+	}
+	if err := this.retryOperation(this.applier.UnlockTables); err != nil {
+		return err
+	}
+
+	lockAndRenameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.LockTablesStartTime)
+	renameDuration := this.migrationContext.RenameTablesEndTime.Sub(this.migrationContext.RenameTablesStartTime)
+	this.migrationContext.Log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(this.migrationContext.OriginalTableName))
+	return nil
+}
+
+// atomicCutOverMySQL8 will lock down the original table and the ghost table, execute
+// what's left of last DML entries, and atomically swap original->old, then new->original.
+// It requires to execute RENAME TABLE when the table is LOCKED under WRITE LOCK, which is
+// supported from MySQL 8.0.13, see https://dev.mysql.com/doc/relnotes/mysql/8.0/en/news-8-0-13.html.
+func (this *Migrator) atomicCutOverMySQL8() (err error) {
+	atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 1)
+	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
+	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
+
+	if err := this.retryOperation(this.applier.LockOriginalTable); err != nil {
+		return err
+	}
+
+	if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
+		return err
+	}
+	if err := this.retryOperation(this.applier.LockGhostTable); err != nil {
+		return err
+	}
+
+	if err := this.applier.AtomicCutoverRenameWithLock(); err != nil {
 		return err
 	}
 	if err := this.retryOperation(this.applier.UnlockTables); err != nil {
