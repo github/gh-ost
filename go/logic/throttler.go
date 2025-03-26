@@ -150,7 +150,7 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 			// when running on replica, the heartbeat injection is also done on the replica.
 			// This means we will always get a good heartbeat value.
 			// When running on replica, we should instead check the `SHOW SLAVE STATUS` output.
-			if lag, err := mysql.GetReplicationLagFromSlaveStatus(this.inspector.informationSchemaDb); err != nil {
+			if lag, err := mysql.GetReplicationLagFromSlaveStatus(this.inspector.dbVersion, this.inspector.informationSchemaDb); err != nil {
 				return this.migrationContext.Log.Errore(err)
 			} else {
 				atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
@@ -215,8 +215,10 @@ func (this *Throttler) collectControlReplicasLag() {
 		}
 		lagResults := make(chan *mysql.ReplicationLagResult, instanceKeyMap.Len())
 		for replicaKey := range *instanceKeyMap {
-			connectionConfig := this.migrationContext.InspectorConnectionConfig.Duplicate()
-			connectionConfig.Key = replicaKey
+			connectionConfig := this.migrationContext.InspectorConnectionConfig.DuplicateCredentials(replicaKey)
+			if err := connectionConfig.RegisterTLSConfig(); err != nil {
+				return &mysql.ReplicationLagResult{Err: err}
+			}
 
 			lagResult := &mysql.ReplicationLagResult{Key: connectionConfig.Key}
 			go func() {

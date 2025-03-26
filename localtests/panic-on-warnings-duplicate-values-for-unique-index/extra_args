@@ -1,0 +1,1 @@
+--panic-on-warnings --alter "add unique index name_index(name)"

@@ -504,6 +504,99 @@ func (suite *ApplierTestSuite) TestCreateGhostTable() {
 	suite.Require().Equal("CREATE TABLE `_testing_gho` (\n  `id` int DEFAULT NULL,\n  `item_id` int DEFAULT NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createDDL)
 }
 
+func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySucceedsWithUniqueKeyWarningInsertedByDMLEvent() {
+	ctx := context.Background()
+
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT, UNIQUE KEY (item_id));")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test._testing_gho (id INT, item_id INT, UNIQUE KEY (item_id));")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
+	migrationContext.OriginalTableName = "testing"
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "item_id",
+		NameInGhostTable: "item_id",
+		Columns:          *sql.NewColumnList([]string{"item_id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections(8)
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "INSERT INTO test.testing (id, item_id) VALUES (123456, 42);")
+	suite.Require().NoError(err)
+
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    "test",
+			TableName:       "testing",
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{123456, 42}),
+		},
+	}
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().NoError(err)
+
+	err = applier.CreateChangelogTable()
+	suite.Require().NoError(err)
+	err = applier.ReadMigrationRangeValues()
+	suite.Require().NoError(err)
+
+	hasFurtherRange, expectedRangeSize, err := applier.CalculateNextIterationRangeEndValues()
+	suite.Require().NoError(err)
+	suite.Require().True(hasFurtherRange)
+	suite.Require().Equal(int64(1), expectedRangeSize)
+
+	_, rowsAffected, _, err := applier.ApplyIterationInsertQuery()
+	suite.Require().NoError(err)
+	suite.Require().Equal(int64(0), rowsAffected)
+
+	// Ensure Duplicate entry '42' for key '_testing_gho.item_id' is ignored correctly
+	suite.Require().Empty(applier.migrationContext.MigrationLastInsertSQLWarnings)
+
+	// Check that the row was inserted
+	rows, err := suite.db.Query("SELECT * FROM test._testing_gho")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var count, id, item_id int
+	for rows.Next() {
+		err = rows.Scan(&id, &item_id)
+		suite.Require().NoError(err)
+		count += 1
+	}
+	suite.Require().NoError(rows.Err())
+
+	suite.Require().Equal(1, count)
+	suite.Require().Equal(123456, id)
+	suite.Require().Equal(42, item_id)
+
+	suite.Require().
+		Equal(int64(1), migrationContext.TotalDMLEventsApplied)
+	suite.Require().
+		Equal(int64(0), migrationContext.RowsDeltaEstimate)
+}
+
 func TestApplier(t *testing.T) {
 	suite.Run(t, new(ApplierTestSuite))
 }

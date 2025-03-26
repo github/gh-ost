@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -417,6 +418,56 @@ func (this *Applier) dropTable(tableName string) error {
 	return nil
 }
 
+// dropTriggers drop the triggers on the applied host
+func (this *Applier) DropTriggersFromGhost() error {
+	if len(this.migrationContext.Triggers) > 0 {
+		for _, trigger := range this.migrationContext.Triggers {
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
+			query := fmt.Sprintf("drop trigger if exists %s", sql.EscapeName(triggerName))
+			_, err := sqlutils.ExecNoPrepare(this.db, query)
+			if err != nil {
+				return err
+			}
+			this.migrationContext.Log.Infof("Trigger '%s' dropped", triggerName)
+		}
+	}
+	return nil
+}
+
+// createTriggers creates the triggers on the applied host
+func (this *Applier) createTriggers(tableName string) error {
+	if len(this.migrationContext.Triggers) > 0 {
+		for _, trigger := range this.migrationContext.Triggers {
+			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
+			query := fmt.Sprintf(`create /* gh-ost */ trigger %s %s %s on %s.%s for each row
+		%s`,
+				sql.EscapeName(triggerName),
+				trigger.Timing,
+				trigger.Event,
+				sql.EscapeName(this.migrationContext.DatabaseName),
+				sql.EscapeName(tableName),
+				trigger.Statement,
+			)
+			this.migrationContext.Log.Infof("Createing trigger %s on %s.%s",
+				sql.EscapeName(triggerName),
+				sql.EscapeName(this.migrationContext.DatabaseName),
+				sql.EscapeName(tableName),
+			)
+			if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+				return err
+			}
+		}
+		this.migrationContext.Log.Infof("Triggers created on %s", tableName)
+	}
+	return nil
+}
+
+// CreateTriggers creates the original triggers on applier host
+func (this *Applier) CreateTriggersOnGhost() error {
+	err := this.createTriggers(this.migrationContext.GetGhostTableName())
+	return err
+}
+
 // DropChangelogTable drops the changelog table on the applier host
 func (this *Applier) DropChangelogTable() error {
 	return this.dropTable(this.migrationContext.GetChangelogTableName())
@@ -614,7 +665,7 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and this done with copying row chunks)
-func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
+func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, expectedRowCount int64, err error) {
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
 		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
@@ -635,32 +686,36 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			fmt.Sprintf("iteration:%d", this.migrationContext.GetIteration()),
 		)
 		if err != nil {
-			return hasFurtherRange, err
+			return hasFurtherRange, expectedRowCount, err
 		}
 
 		rows, err := this.db.Query(query, explodedArgs...)
 		if err != nil {
-			return hasFurtherRange, err
+			return hasFurtherRange, expectedRowCount, err
 		}
 		defer rows.Close()
 
-		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
+		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len() + 1)
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
-				return hasFurtherRange, err
+				return hasFurtherRange, expectedRowCount, err
 			}
-			hasFurtherRange = true
+
+			expectedRowCount = (*iterationRangeMaxValues.ValuesPointers[len(iterationRangeMaxValues.ValuesPointers)-1].(*interface{})).(int64)
+			iterationRangeMaxValues = sql.ToColumnValues(iterationRangeMaxValues.AbstractValues()[:len(iterationRangeMaxValues.AbstractValues())-1])
+
+			hasFurtherRange = expectedRowCount > 0
 		}
 		if err = rows.Err(); err != nil {
-			return hasFurtherRange, err
+			return hasFurtherRange, expectedRowCount, err
 		}
 		if hasFurtherRange {
 			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
-			return hasFurtherRange, nil
+			return hasFurtherRange, expectedRowCount, nil
 		}
 	}
 	this.migrationContext.Log.Debugf("Iteration complete: no further range to iterate")
-	return hasFurtherRange, nil
+	return hasFurtherRange, expectedRowCount, nil
 }
 
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
@@ -705,6 +760,37 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		if err != nil {
 			return nil, err
 		}
+
+		if this.migrationContext.PanicOnWarnings {
+			//nolint:execinquery
+			rows, err := tx.Query("SHOW WARNINGS")
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			if err = rows.Err(); err != nil {
+				return nil, err
+			}
+
+			var sqlWarnings []string
+			for rows.Next() {
+				var level, message string
+				var code int
+				if err := rows.Scan(&level, &code, &message); err != nil {
+					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+					continue
+				}
+				// Duplicate warnings are formatted differently across mysql versions, hence the optional table name prefix
+				migrationUniqueKeyExpression := fmt.Sprintf("for key '(%s\\.)?%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
+				matched, _ := regexp.MatchString(migrationUniqueKeyExpression, message)
+				if strings.Contains(message, "Duplicate entry") && matched {
+					continue
+				}
+				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+			}
+			this.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
+		}
+
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
@@ -831,7 +917,8 @@ func (this *Applier) RenameTablesRollback() (renameError error) {
 // We need to keep the SQL thread active so as to complete processing received events,
 // and have them written to the binary log, so that we can then read them via streamer.
 func (this *Applier) StopSlaveIOThread() error {
-	query := `stop /* gh-ost */ slave io_thread`
+	replicaTerm := mysql.ReplicaTermFor(this.migrationContext.ApplierMySQLVersion, `slave`)
+	query := fmt.Sprintf("stop /* gh-ost */ %s io_thread", replicaTerm)
 	this.migrationContext.Log.Infof("Stopping replication IO thread")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
@@ -842,7 +929,8 @@ func (this *Applier) StopSlaveIOThread() error {
 
 // StartSlaveIOThread is applicable with --test-on-replica
 func (this *Applier) StartSlaveIOThread() error {
-	query := `start /* gh-ost */ slave io_thread`
+	replicaTerm := mysql.ReplicaTermFor(this.migrationContext.ApplierMySQLVersion, `slave`)
+	query := fmt.Sprintf("start /* gh-ost */ %s io_thread", replicaTerm)
 	this.migrationContext.Log.Infof("Starting replication IO thread")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
@@ -853,7 +941,8 @@ func (this *Applier) StartSlaveIOThread() error {
 
 // StopSlaveSQLThread is applicable with --test-on-replica
 func (this *Applier) StopSlaveSQLThread() error {
-	query := `stop /* gh-ost */ slave sql_thread`
+	replicaTerm := mysql.ReplicaTermFor(this.migrationContext.ApplierMySQLVersion, `slave`)
+	query := fmt.Sprintf("stop /* gh-ost */ %s sql_thread", replicaTerm)
 	this.migrationContext.Log.Infof("Verifying SQL thread is stopped")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
@@ -864,7 +953,8 @@ func (this *Applier) StopSlaveSQLThread() error {
 
 // StartSlaveSQLThread is applicable with --test-on-replica
 func (this *Applier) StartSlaveSQLThread() error {
-	query := `start /* gh-ost */ slave sql_thread`
+	replicaTerm := mysql.ReplicaTermFor(this.migrationContext.ApplierMySQLVersion, `slave`)
+	query := fmt.Sprintf("start /* gh-ost */ %s sql_thread", replicaTerm)
 	this.migrationContext.Log.Infof("Verifying SQL thread is running")
 	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
 		return err
@@ -882,7 +972,7 @@ func (this *Applier) StopReplication() error {
 		return err
 	}
 
-	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.db)
+	readBinlogCoordinates, executeBinlogCoordinates, err := mysql.GetReplicationBinlogCoordinates(this.migrationContext.ApplierMySQLVersion, this.db)
 	if err != nil {
 		return err
 	}

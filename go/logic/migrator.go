@@ -25,6 +25,8 @@ import (
 
 var (
 	ErrMigratorUnsupportedRenameAlter = errors.New("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
+	ErrMigrationNotAllowedOnMaster    = errors.New("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (this reduces load from the master). To proceed please provide --allow-on-master.")
+	RetrySleepFn                      = time.Sleep
 )
 
 type ChangelogState string
@@ -119,7 +121,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
 			// sleep after previous iteration
-			time.Sleep(1 * time.Second)
+			RetrySleepFn(1 * time.Second)
 		}
 		err = operation()
 		if err == nil {
@@ -139,16 +141,16 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 // attempts are reached. Wait intervals between attempts obey a maximum of
 // `ExponentialBackoffMaxInterval`.
 func (this *Migrator) retryOperationWithExponentialBackoff(operation func() error, notFatalHint ...bool) (err error) {
-	var interval int64
 	maxRetries := int(this.migrationContext.MaxRetries())
 	maxInterval := this.migrationContext.ExponentialBackoffMaxInterval
 	for i := 0; i < maxRetries; i++ {
-		newInterval := int64(math.Exp2(float64(i - 1)))
-		if newInterval <= maxInterval {
-			interval = newInterval
-		}
+		interval := math.Min(
+			float64(maxInterval),
+			math.Max(1, math.Exp2(float64(i-1))),
+		)
+
 		if i != 0 {
-			time.Sleep(time.Duration(interval) * time.Second)
+			RetrySleepFn(time.Duration(interval) * time.Second)
 		}
 		err = operation()
 		if err == nil {
@@ -634,6 +636,12 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
 		return err
 	}
+	// If we need to create triggers we need to do it here (only create part)
+	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
+		if err := this.retryOperation(this.applier.CreateTriggersOnGhost); err != nil {
+			return err
+		}
+	}
 	if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
 		return err
 	}
@@ -676,6 +684,13 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// We know any newly incoming DML on original table is blocked.
 	if err := this.waitForEventsUpToLock(); err != nil {
 		return this.migrationContext.Log.Errore(err)
+	}
+
+	// If we need to create triggers we need to do it here (only create part)
+	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
+		if err := this.applier.CreateTriggersOnGhost(); err != nil {
+			this.migrationContext.Log.Errore(err)
+		}
 	}
 
 	// Step 2
@@ -797,6 +812,9 @@ func (this *Migrator) initiateInspector() (err error) {
 		if this.migrationContext.CliMasterPassword != "" {
 			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
 		}
+		if err := this.migrationContext.ApplierConnectionConfig.RegisterTLSConfig(); err != nil {
+			return err
+		}
 		this.migrationContext.Log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	}
 	// validate configs
@@ -812,7 +830,7 @@ func (this *Migrator) initiateInspector() (err error) {
 			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.InspectorConnectionConfig.Key)
 		}
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
-		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", this.migrationContext.InspectorConnectionConfig, this.migrationContext.ApplierConnectionConfig)
+		return ErrMigrationNotAllowedOnMaster
 	}
 	if err := this.inspector.validateLogSlaveUpdates(); err != nil {
 		return err
@@ -1228,8 +1246,9 @@ func (this *Migrator) iterateChunks() error {
 			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
 
 			hasFurtherRange := false
+			expectedRangeSize := int64(0)
 			if err := this.retryOperation(func() (e error) {
-				hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
+				hasFurtherRange, expectedRangeSize, e = this.applier.CalculateNextIterationRangeEndValues()
 				return e
 			}); err != nil {
 				return terminateRowIteration(err)
@@ -1255,6 +1274,19 @@ func (this *Migrator) iterateChunks() error {
 				if err != nil {
 					return err // wrapping call will retry
 				}
+
+				if this.migrationContext.PanicOnWarnings {
+					if len(this.migrationContext.MigrationLastInsertSQLWarnings) > 0 {
+						for _, warning := range this.migrationContext.MigrationLastInsertSQLWarnings {
+							this.migrationContext.Log.Infof("ApplyIterationInsertQuery has SQL warnings! %s", warning)
+						}
+						if expectedRangeSize != rowsAffected {
+							joinedWarnings := strings.Join(this.migrationContext.MigrationLastInsertSQLWarnings, "; ")
+							terminateRowIteration(fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings))
+						}
+					}
+				}
+
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
 				return nil

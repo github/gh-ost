@@ -111,13 +111,12 @@ package logic
 // 	})
 // 	suite.Require().NoError(err)
 
-// 	group := errgroup.Group{}
-// 	group.Go(func() error {
-// 		//nolint:contextcheck
+// group := errgroup.Group{}
+// group.Go(func() error {
 // 		return streamer.StreamEvents(func() bool {
 // 			return streamCtx.Err() != nil
 // 		})
-// 	})
+// })
 
 // 	group.Go(func() error {
 // 		var err error
@@ -142,7 +141,6 @@ package logic
 // 		if err != nil {
 // 			return err
 // 		}
-
 // 		return nil
 // 	})
 
@@ -194,7 +192,6 @@ package logic
 
 // 	group := errgroup.Group{}
 // 	group.Go(func() error {
-// 		//nolint:contextcheck
 // 		return streamer.StreamEvents(func() bool {
 // 			return streamCtx.Err() != nil
 // 		})
