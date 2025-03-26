@@ -1238,8 +1238,9 @@ func (this *Migrator) iterateChunks() error {
 			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
 
 			hasFurtherRange := false
+			expectedRangeSize := int64(0)
 			if err := this.retryOperation(func() (e error) {
-				hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
+				hasFurtherRange, expectedRangeSize, e = this.applier.CalculateNextIterationRangeEndValues()
 				return e
 			}); err != nil {
 				return terminateRowIteration(err)
@@ -1265,6 +1266,19 @@ func (this *Migrator) iterateChunks() error {
 				if err != nil {
 					return err // wrapping call will retry
 				}
+
+				if this.migrationContext.PanicOnWarnings {
+					if len(this.migrationContext.MigrationLastInsertSQLWarnings) > 0 {
+						for _, warning := range this.migrationContext.MigrationLastInsertSQLWarnings {
+							this.migrationContext.Log.Infof("ApplyIterationInsertQuery has SQL warnings! %s", warning)
+						}
+						if expectedRangeSize != rowsAffected {
+							joinedWarnings := strings.Join(this.migrationContext.MigrationLastInsertSQLWarnings, "; ")
+							terminateRowIteration(fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings))
+						}
+					}
+				}
+
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
 				return nil
