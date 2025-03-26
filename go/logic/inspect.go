@@ -188,7 +188,9 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 		column := this.migrationContext.SharedColumns.Columns()[i]
 		mappedColumn := this.migrationContext.MappedSharedColumns.Columns()[i]
 		if column.Name == mappedColumn.Name && column.Type == sql.DateTimeColumnType && mappedColumn.Type == sql.TimestampColumnType {
-			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.migrationContext.ApplierTimeZone)
+			this.migrationContext.MappedSharedColumns.SetConvertDatetimeToTimestamp(column.Name, this.migrationContext.ApplierTimeZone, "+00:00")
+		} else if column.Name == mappedColumn.Name && column.Type == sql.TimestampColumnType && mappedColumn.Type == sql.DateTimeColumnType {
+			this.migrationContext.MappedSharedColumns.SetConvertTimestampToDatetime(column.Name, "+00:00", this.migrationContext.ApplierTimeZone)
 		}
 		if column.Name == mappedColumn.Name && column.Type == sql.EnumColumnType && mappedColumn.Charset != "" {
 			this.migrationContext.MappedSharedColumns.SetEnumToTextConversion(column.Name)
