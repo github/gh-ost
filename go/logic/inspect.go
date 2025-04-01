@@ -214,10 +214,6 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 
 // validateConnection issues a simple can-connect to MySQL
 func (this *Inspector) validateConnection() error {
-	if len(this.connectionConfig.Password) > mysql.MaxReplicationPasswordLength {
-		return fmt.Errorf("MySQL replication length limited to 32 characters. See https://dev.mysql.com/doc/refman/5.7/en/assigning-passwords.html")
-	}
-
 	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
 	this.migrationContext.InspectorMySQLVersion = version
 	return err
