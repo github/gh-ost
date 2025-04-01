@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-mysql-org/go-mysql/utils"
 	"github.com/google/uuid"
 	"github.com/pingcap/errors"
-	"github.com/siddontang/go/hack"
 )
 
 // Like MySQL GTID Interval struct, [start, stop), left closed and right open
@@ -318,7 +318,7 @@ func (s *UUIDSet) MinusInterval(in IntervalSlice) {
 }
 
 func (s *UUIDSet) String() string {
-	return hack.String(s.Bytes())
+	return utils.ByteSliceToString(s.Bytes())
 }
 
 func (s *UUIDSet) encode(w io.Writer) {
@@ -571,7 +571,7 @@ func (s *MysqlGTIDSet) String() string {
 		sep = ","
 	}
 
-	return hack.String(buf.Bytes())
+	return utils.ByteSliceToString(buf.Bytes())
 }
 
 func (s *MysqlGTIDSet) Encode() []byte {

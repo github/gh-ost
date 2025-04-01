@@ -1,27 +1,30 @@
 package utils
 
-import "unsafe"
+import (
+	"math"
+	"unsafe"
+)
 
 func StringToByteSlice(s string) []byte {
-	return *(*[]byte)(unsafe.Pointer(&s))
+	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
 
 func ByteSliceToString(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 func Uint64ToInt64(val uint64) int64 {
-	return *(*int64)(unsafe.Pointer(&val))
+	return int64(val)
 }
 
 func Uint64ToFloat64(val uint64) float64 {
-	return *(*float64)(unsafe.Pointer(&val))
+	return math.Float64frombits(val)
 }
 
 func Int64ToUint64(val int64) uint64 {
-	return *(*uint64)(unsafe.Pointer(&val))
+	return uint64(val)
 }
 
 func Float64ToUint64(val float64) uint64 {
-	return *(*uint64)(unsafe.Pointer(&val))
+	return math.Float64bits(val)
 }
