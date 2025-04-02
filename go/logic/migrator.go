@@ -363,7 +363,7 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	onSuccessFunc := func() error {
 		if err := this.finalCleanup(); err != nil {
-			return nil
+			return nil //nolint:nilerr
 		}
 		if err := this.hooksExecutor.onSuccess(); err != nil {
 			return err
