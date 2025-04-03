@@ -66,6 +66,15 @@ func NewNoStackError(msg string) error {
 	}
 }
 
+// NewNoStackErrorf creates error with error stack and formats according
+// to a format specifier and returns the string as a value that satisfies error.
+func NewNoStackErrorf(format string, args ...interface{}) error {
+	return &fundamental{
+		msg:   fmt.Sprintf(format, args...),
+		stack: &emptyStack,
+	}
+}
+
 // SuspendStack suspends stack generate for error.
 func SuspendStack(err error) error {
 	if err == nil {
