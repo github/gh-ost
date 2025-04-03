@@ -24,6 +24,7 @@ master_port=
 replica_host=
 replica_port=
 original_sql_mode=
+docker=false
 
 OPTIND=1
 while getopts "b:s:d" OPTION
