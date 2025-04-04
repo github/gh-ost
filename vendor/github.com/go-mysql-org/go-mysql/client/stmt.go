@@ -7,6 +7,7 @@ import (
 	"math"
 
 	. "github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/utils"
 	"github.com/pingcap/errors"
 )
 
@@ -146,37 +147,44 @@ func (s *Stmt) write(args ...interface{}) error {
 		length += len(paramValues[i])
 	}
 
-	data := make([]byte, 4, 4+length)
+	data := utils.BytesBufferGet()
+	defer func() {
+		utils.BytesBufferPut(data)
+	}()
+	if data.Len() < length+4 {
+		data.Grow(4 + length)
+	}
 
-	data = append(data, COM_STMT_EXECUTE)
-	data = append(data, byte(s.id), byte(s.id>>8), byte(s.id>>16), byte(s.id>>24))
+	data.Write([]byte{0, 0, 0, 0})
+	data.WriteByte(COM_STMT_EXECUTE)
+	data.Write([]byte{byte(s.id), byte(s.id >> 8), byte(s.id >> 16), byte(s.id >> 24)})
 
 	//flag: CURSOR_TYPE_NO_CURSOR
-	data = append(data, 0x00)
+	data.WriteByte(0x00)
 
 	//iteration-count, always 1
-	data = append(data, 1, 0, 0, 0)
+	data.Write([]byte{1, 0, 0, 0})
 
 	if s.params > 0 {
-		data = append(data, nullBitmap...)
+		data.Write(nullBitmap)
 
 		//new-params-bound-flag
-		data = append(data, newParamBoundFlag)
+		data.WriteByte(newParamBoundFlag)
 
 		if newParamBoundFlag == 1 {
 			//type of each parameter, length: num-params * 2
-			data = append(data, paramTypes...)
+			data.Write(paramTypes)
 
 			//value of each parameter
 			for _, v := range paramValues {
-				data = append(data, v...)
+				data.Write(v)
 			}
 		}
 	}
 
 	s.conn.ResetSequence()
 
-	return s.conn.WritePacket(data)
+	return s.conn.WritePacket(data.Bytes())
 }
 
 func (c *Conn) Prepare(query string) (*Stmt, error) {

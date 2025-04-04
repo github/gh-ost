@@ -61,6 +61,6 @@ func NewError(errCode uint16, message string) *MyError {
 func ErrorCode(errMsg string) (code int) {
 	var tmpStr string
 	// golang scanf doesn't support %*,so I used a temporary variable
-	fmt.Sscanf(errMsg, "%s%d", &tmpStr, &code)
+	_, _ = fmt.Sscanf(errMsg, "%s%d", &tmpStr, &code)
 	return
 }

@@ -21,8 +21,16 @@ import (
 	"go.uber.org/atomic"
 )
 
+var _ fmt.Formatter = (*redactFormatter)(nil)
+
 // RedactLogEnabled defines whether the arguments of Error need to be redacted.
-var RedactLogEnabled atomic.Bool
+var RedactLogEnabled atomic.String
+
+const (
+	RedactLogEnable  string = "ON"
+	RedactLogDisable        = "OFF"
+	RedactLogMarker         = "MARKER"
+)
 
 // ErrCode represents a specific error type in a error class.
 // Same error code can be used in different error classes.
@@ -39,19 +47,21 @@ type RFCErrorCode string
 // var ErrUnavailable = errors.Normalize("Region %d is unavailable", errors.RFCCodeText("Unavailable"))
 //
 // "throw" it at runtime:
-// func Somewhat() error {
-//     ...
-//     if err != nil {
-//         // generate a stackful error use the message template at defining,
-//         // also see FastGen(it's stackless), GenWithStack(it uses custom message template).
-//         return ErrUnavailable.GenWithStackByArgs(region.ID)
-//     }
-// }
+//
+//	func Somewhat() error {
+//	    ...
+//	    if err != nil {
+//	        // generate a stackful error use the message template at defining,
+//	        // also see FastGen(it's stackless), GenWithStack(it uses custom message template).
+//	        return ErrUnavailable.GenWithStackByArgs(region.ID)
+//	    }
+//	}
 //
 // testing whether an error belongs to a prototype:
-// if ErrUnavailable.Equal(err) {
-//     // handle this error.
-// }
+//
+//	if ErrUnavailable.Equal(err) {
+//	    // handle this error.
+//	}
 type Error struct {
 	code ErrCode
 	// codeText is the textual describe of the error code
@@ -63,6 +73,7 @@ type Error struct {
 	// And it is controlled by the global var RedactLogEnabled.
 	// For example, an original error is `Duplicate entry 'PRIMARY' for key 'key'`,
 	// when RedactLogEnabled is ON and redactArgsPos is [0, 1], the error is `Duplicate entry '?' for key '?'`.
+	// when RedactLogEnabled is MARKER and redactArgsPos is [0, 1], the error is `Duplicate entry '‹..›' for key '‹..›'`.
 	redactArgsPos []int
 	// Cause is used to warp some third party error.
 	cause error
@@ -104,6 +115,11 @@ func (e *Error) Location() (file string, line int) {
 // MessageTemplate returns the error message template of this error.
 func (e *Error) MessageTemplate() string {
 	return e.message
+}
+
+// Args returns the message arguments of this error.
+func (e *Error) Args() []interface{} {
+	return e.args
 }
 
 // Error implements error interface.
@@ -202,10 +218,17 @@ func (e *Error) NotEqual(err error) bool {
 
 // RedactErrorArg redacts the args by position if RedactLogEnabled is enabled.
 func RedactErrorArg(args []interface{}, position []int) {
-	if RedactLogEnabled.Load() {
+	switch RedactLogEnabled.Load() {
+	case RedactLogEnable:
 		for _, pos := range position {
 			if len(args) > pos {
 				args[pos] = "?"
+			}
+		}
+	case RedactLogMarker:
+		for _, pos := range position {
+			if len(args) > pos {
+				args[pos] = &redactFormatter{args[pos]}
 			}
 		}
 	}
@@ -253,6 +276,26 @@ func (e *Error) Wrap(err error) *Error {
 		return &newErr
 	}
 	return nil
+}
+
+// Unwrap returns cause of the error.
+// It allows Error to work with errors.Is() and errors.As() from the Go
+// standard package.
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+// Is checks if e has the same error ID with other.
+// It allows Error to work with errors.Is() from the Go standard package.
+func (e *Error) Is(other error) bool {
+	err, ok := other.(*Error)
+	if !ok {
+		return false
+	}
+	return (e == nil && err == nil) || (e != nil && err != nil && e.ID() == err.ID())
 }
 
 func (e *Error) Cause() error {
@@ -313,4 +356,22 @@ func Normalize(message string, opts ...NormalizeOption) *Error {
 		opt(e)
 	}
 	return e
+}
+
+type redactFormatter struct {
+	arg interface{}
+}
+
+func (e *redactFormatter) Format(f fmt.State, verb rune) {
+	origin := fmt.Sprintf(fmt.FormatString(f, verb), e.arg)
+	fmt.Fprintf(f, "‹")
+	for _, c := range origin {
+		if c == '‹' || c == '›' {
+			fmt.Fprintf(f, "%c", c)
+			fmt.Fprintf(f, "%c", c)
+		} else {
+			fmt.Fprintf(f, "%c", c)
+		}
+	}
+	fmt.Fprintf(f, "›")
 }

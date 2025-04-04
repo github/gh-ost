@@ -6,12 +6,14 @@ import (
 	"strings"
 )
 
-// For binlog filename + position based replication
+// Position for binlog filename + position based replication
 type Position struct {
 	Name string
 	Pos  uint32
 }
 
+// Compare the position information between the p and o,
+// if p > o return 1 means the position of p is further back than o.
 func (p Position) Compare(o Position) int {
 	// First compare binlog name
 	nameCmp := CompareBinlogFileName(p.Name, o.Name)
@@ -32,6 +34,9 @@ func (p Position) String() string {
 	return fmt.Sprintf("(%s, %d)", p.Name, p.Pos)
 }
 
+// CompareBinlogFileName compares the binlog filename of a and b.
+// if a>b will return 1.
+// if b>a will return -1.
 func CompareBinlogFileName(a, b string) int {
 	// sometimes it's convenient to construct a `Position` literal with no `Name`
 	if a == "" && b == "" {
@@ -61,9 +66,11 @@ func CompareBinlogFileName(a, b string) int {
 		return n[:i], seq
 	}
 
+	// get the basename(aBase) and the serial number(aSeq)
 	aBase, aSeq := splitBinlogName(a)
 	bBase, bSeq := splitBinlogName(b)
 
+	// aBase and bBase generally will be equal if they are both from the same database configuration.
 	if aBase > bBase {
 		return 1
 	} else if aBase < bBase {

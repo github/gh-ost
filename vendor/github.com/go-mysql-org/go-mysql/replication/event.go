@@ -1,6 +1,7 @@
 package replication
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -145,9 +146,8 @@ func calcVersionProduct(server string) int {
 }
 
 type FormatDescriptionEvent struct {
-	Version uint16
-	//len = 50
-	ServerVersion          []byte
+	Version                uint16
+	ServerVersion          string
 	CreateTimestamp        uint32
 	EventHeaderLength      uint8
 	EventTypeHeaderLengths []byte
@@ -161,8 +161,8 @@ func (e *FormatDescriptionEvent) Decode(data []byte) error {
 	e.Version = binary.LittleEndian.Uint16(data[pos:])
 	pos += 2
 
-	e.ServerVersion = make([]byte, 50)
-	copy(e.ServerVersion, data[pos:])
+	serverVersionRaw := make([]byte, 50)
+	copy(serverVersionRaw, data[pos:])
 	pos += 50
 
 	e.CreateTimestamp = binary.LittleEndian.Uint32(data[pos:])
@@ -175,13 +175,18 @@ func (e *FormatDescriptionEvent) Decode(data []byte) error {
 		return errors.Errorf("invalid event header length %d, must 19", e.EventHeaderLength)
 	}
 
-	server := string(e.ServerVersion)
+	serverVersionLength := bytes.Index(serverVersionRaw, []byte{0x0})
+	if serverVersionLength < 0 {
+		e.ServerVersion = string(serverVersionRaw)
+	} else {
+		e.ServerVersion = string(serverVersionRaw[:serverVersionLength])
+	}
 	checksumProduct := checksumVersionProductMysql
-	if strings.Contains(strings.ToLower(server), "mariadb") {
+	if strings.Contains(strings.ToLower(e.ServerVersion), "mariadb") {
 		checksumProduct = checksumVersionProductMariaDB
 	}
 
-	if calcVersionProduct(string(e.ServerVersion)) >= checksumProduct {
+	if calcVersionProduct(e.ServerVersion) >= checksumProduct {
 		// here, the last 5 bytes is 1 byte check sum alg type and 4 byte checksum if exists
 		e.ChecksumAlgorithm = data[len(data)-5]
 		e.EventTypeHeaderLengths = data[pos : len(data)-5]
@@ -224,34 +229,91 @@ type PreviousGTIDsEvent struct {
 	GTIDSets string
 }
 
+type GtidFormat int
+
+const (
+	GtidFormatClassic = iota
+	GtidFormatTagged
+)
+
+// Decode the number of sids (source identifiers) and if it is using
+// tagged GTIDs or classic (non-tagged) GTIDs.
+//
+// Note that each gtid tag increases the sidno here, so a single UUID
+// might turn up multiple times if there are multipl tags.
+//
+// see also:
+// decode_nsids_format in mysql/mysql-server
+// https://github.com/mysql/mysql-server/blob/61a3a1d8ef15512396b4c2af46e922a19bf2b174/sql/rpl_gtid_set.cc#L1363-L1378
+func decodeSid(data []byte) (format GtidFormat, sidnr uint64) {
+	if data[7] == 1 {
+		format = GtidFormatTagged
+	}
+
+	if format == GtidFormatTagged {
+		masked := make([]byte, 8)
+		copy(masked, data[1:7])
+		sidnr = binary.LittleEndian.Uint64(masked)
+		return
+	}
+	sidnr = binary.LittleEndian.Uint64(data[:8])
+	return
+}
+
 func (e *PreviousGTIDsEvent) Decode(data []byte) error {
-	var previousGTIDSets []string
 	pos := 0
-	uuidCount := binary.LittleEndian.Uint16(data[pos : pos+8])
+
+	format, uuidCount := decodeSid(data)
 	pos += 8
 
-	for i := uint16(0); i < uuidCount; i++ {
+	previousGTIDSets := make([]string, uuidCount)
+
+	currentSetnr := 0
+	var buf strings.Builder
+	for range previousGTIDSets {
 		uuid := e.decodeUuid(data[pos : pos+16])
 		pos += 16
+		var tag string
+		if format == GtidFormatTagged {
+			tagLength := int(data[pos]) / 2
+			pos += 1
+			if tagLength > 0 { // 0 == no tag, >0 == tag
+				tag = string(data[pos : pos+tagLength])
+				pos += tagLength
+			}
+		}
+
+		if len(tag) > 0 {
+			buf.WriteString(":")
+			buf.WriteString(tag)
+		} else {
+			if currentSetnr != 0 {
+				buf.WriteString(",")
+			}
+			buf.WriteString(uuid)
+			currentSetnr += 1
+		}
+
 		sliceCount := binary.LittleEndian.Uint16(data[pos : pos+8])
 		pos += 8
-		var intervals []string
-		for i := uint16(0); i < sliceCount; i++ {
+		for range sliceCount {
+			buf.WriteString(":")
+
 			start := e.decodeInterval(data[pos : pos+8])
 			pos += 8
 			stop := e.decodeInterval(data[pos : pos+8])
 			pos += 8
-			interval := ""
 			if stop == start+1 {
-				interval = fmt.Sprintf("%d", start)
+				fmt.Fprintf(&buf, "%d", start)
 			} else {
-				interval = fmt.Sprintf("%d-%d", start, stop-1)
+				fmt.Fprintf(&buf, "%d-%d", start, stop-1)
 			}
-			intervals = append(intervals, interval)
 		}
-		previousGTIDSets = append(previousGTIDSets, fmt.Sprintf("%s:%s", uuid, strings.Join(intervals, ":")))
+		if len(tag) == 0 {
+			currentSetnr += 1
+		}
 	}
-	e.GTIDSets = strings.Join(previousGTIDSets, ",")
+	e.GTIDSets = buf.String()
 	return nil
 }
 
@@ -297,6 +359,9 @@ type QueryEvent struct {
 	Schema        []byte
 	Query         []byte
 
+	// for mariadb QUERY_COMPRESSED_EVENT
+	compressed bool
+
 	// in fact QueryEvent dosen't have the GTIDSet information, just for beneficial to use
 	GSet GTIDSet
 }
@@ -328,7 +393,15 @@ func (e *QueryEvent) Decode(data []byte) error {
 	//skip 0x00
 	pos++
 
-	e.Query = data[pos:]
+	if e.compressed {
+		decompressedQuery, err := DecompressMariadbData(data[pos:])
+		if err != nil {
+			return err
+		}
+		e.Query = decompressedQuery
+	} else {
+		e.Query = data[pos:]
+	}
 	return nil
 }
 
@@ -449,6 +522,14 @@ func (e *GTIDEvent) Dump(w io.Writer) {
 	fmt.Fprintf(w, "Immediate server version: %d\n", e.ImmediateServerVersion)
 	fmt.Fprintf(w, "Orignal server version: %d\n", e.OriginalServerVersion)
 	fmt.Fprintln(w)
+}
+
+func (e *GTIDEvent) GTIDNext() (GTIDSet, error) {
+	u, err := uuid.FromBytes(e.SID)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMysqlGTIDSet(strings.Join([]string{u.String(), strconv.FormatInt(e.GNO, 10)}, ":"))
 }
 
 // ImmediateCommitTime returns the commit time of this trx on the immediate server
@@ -612,6 +693,10 @@ func (e *MariadbGTIDEvent) Dump(w io.Writer) {
 	fmt.Fprintf(w, "Flags: %v\n", e.Flags)
 	fmt.Fprintf(w, "CommitID: %v\n", e.CommitID)
 	fmt.Fprintln(w)
+}
+
+func (e *MariadbGTIDEvent) GTIDNext() (GTIDSet, error) {
+	return ParseMariadbGTIDSet(e.GTID.String())
 }
 
 type MariadbGTIDListEvent struct {

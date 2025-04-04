@@ -29,3 +29,7 @@ func ParseGTIDSet(flavor string, s string) (GTIDSet, error) {
 		return nil, errors.Errorf("invalid flavor %s", flavor)
 	}
 }
+
+type BinlogGTIDEvent interface {
+	GTIDNext() (GTIDSet, error)
+}

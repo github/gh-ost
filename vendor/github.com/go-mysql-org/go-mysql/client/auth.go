@@ -9,6 +9,7 @@ import (
 	. "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/packet"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/tidb/pkg/parser/charset"
 )
 
 const defaultAuthPluginName = AUTH_NATIVE_PASSWORD
@@ -26,7 +27,11 @@ func authPluginAllowed(pluginName string) bool {
 	return false
 }
 
-// See: http://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::Handshake
+// See:
+//   - https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_handshake_v10.html
+//   - https://github.com/alibaba/canal/blob/0ec46991499a22870dde4ae736b2586cbcbfea94/driver/src/main/java/com/alibaba/otter/canal/parse/driver/mysql/packets/server/HandshakeInitializationPacket.java#L89
+//   - https://github.com/vapor/mysql-nio/blob/main/Sources/MySQLNIO/Protocol/MySQLProtocol%2BHandshakeV10.swift
+//   - https://github.com/github/vitess-gh/blob/70ae1a2b3a116ff6411b0f40852d6e71382f6e07/go/mysql/client.go
 func (c *Conn) readInitialHandshake() error {
 	data, err := c.ReadPacket()
 	if err != nil {
@@ -37,25 +42,37 @@ func (c *Conn) readInitialHandshake() error {
 		return errors.Annotate(c.handleErrorPacket(data), "read initial handshake error")
 	}
 
-	if data[0] < MinProtocolVersion {
-		return errors.Errorf("invalid protocol version %d, must >= 10", data[0])
+	if data[0] != ClassicProtocolVersion {
+		if data[0] == XProtocolVersion {
+			return errors.Errorf(
+				"invalid protocol version %d, expected 10. "+
+					"This might be X Protocol, make sure to connect to the right port",
+				data[0])
+		}
+		return errors.Errorf("invalid protocol version %d, expected 10", data[0])
 	}
+	pos := 1
 
 	// skip mysql version
 	// mysql version end with 0x00
-	pos := 1 + bytes.IndexByte(data[1:], 0x00) + 1
+	version := data[pos : bytes.IndexByte(data[pos:], 0x00)+1]
+	c.serverVersion = string(version)
+	pos += len(version) + 1 /*trailing zero byte*/
 
 	// connection id length is 4
 	c.connectionID = binary.LittleEndian.Uint32(data[pos : pos+4])
 	pos += 4
 
-	c.salt = []byte{}
-	c.salt = append(c.salt, data[pos:pos+8]...)
+	// first 8 bytes of the plugin provided data (scramble)
+	c.salt = append(c.salt[:0], data[pos:pos+8]...)
+	pos += 8
 
-	// skip filter
-	pos += 8 + 1
+	if data[pos] != 0 { // 	0x00 byte, terminating the first part of a scramble
+		return errors.Errorf("expect 0x00 after scramble, got %q", rune(data[pos]))
+	}
+	pos++
 
-	// capability lower 2 bytes
+	// The lower 2 bytes of the Capabilities Flags
 	c.capability = uint32(binary.LittleEndian.Uint16(data[pos : pos+2]))
 	// check protocol
 	if c.capability&CLIENT_PROTOCOL_41 == 0 {
@@ -67,35 +84,55 @@ func (c *Conn) readInitialHandshake() error {
 	pos += 2
 
 	if len(data) > pos {
-		// skip server charset
-		//c.charset = data[pos]
+		// default server a_protocol_character_set, only the lower 8-bits
+		// c.charset = data[pos]
 		pos += 1
 
 		c.status = binary.LittleEndian.Uint16(data[pos : pos+2])
 		pos += 2
-		// capability flags (upper 2 bytes)
+
+		// The upper 2 bytes of the Capabilities Flags
 		c.capability = uint32(binary.LittleEndian.Uint16(data[pos:pos+2]))<<16 | c.capability
 		pos += 2
 
-		// auth_data is end with 0x00, min data length is 13 + 8 = 21
-		// ref to https://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::Handshake
-		maxAuthDataLen := 21
-		if c.capability&CLIENT_PLUGIN_AUTH != 0 && int(data[pos]) > maxAuthDataLen {
-			maxAuthDataLen = int(data[pos])
+		// length of the combined auth_plugin_data (scramble), if auth_plugin_data_len is > 0
+		authPluginDataLen := data[pos]
+		if (c.capability&CLIENT_PLUGIN_AUTH == 0) && (authPluginDataLen > 0) {
+			return errors.Errorf("invalid auth plugin data filler %d", authPluginDataLen)
+		}
+		pos++
+
+		// skip reserved (all [00] ?)
+		pos += 10
+
+		if c.capability&CLIENT_SECURE_CONNECTION != 0 {
+			// Rest of the plugin provided data (scramble)
+
+			// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_handshake_v10.html
+			// $len=MAX(13, length of auth-plugin-data - 8)
+			//
+			// https://github.com/mysql/mysql-server/blob/1bfe02bdad6604d54913c62614bde57a055c8332/sql/auth/sql_authentication.cc#L1641-L1642
+			// the first packet *must* have at least 20 bytes of a scramble.
+			// if a plugin provided less, we pad it to 20 with zeros
+			rest := int(authPluginDataLen) - 8
+			if rest < 13 {
+				rest = 13
+			}
+
+			authPluginDataPart2 := data[pos : pos+rest-1]
+			pos += rest
+
+			c.salt = append(c.salt, authPluginDataPart2...)
 		}
 
-		// skip reserved (all [00])
-		pos += 10 + 1
-
-		// auth_data is end with 0x00, so we need to trim 0x00
-		resetOfAuthDataEndPos := pos + maxAuthDataLen - 8 - 1
-		c.salt = append(c.salt, data[pos:resetOfAuthDataEndPos]...)
-
-		// skip reset of end pos
-		pos = resetOfAuthDataEndPos + 1
-
 		if c.capability&CLIENT_PLUGIN_AUTH != 0 {
-			c.authPluginName = string(data[pos : len(data)-1])
+			c.authPluginName = string(data[pos : pos+bytes.IndexByte(data[pos:], 0x00)])
+			pos += len(c.authPluginName)
+
+			if data[pos] != 0 {
+				return errors.Errorf("expect 0x00 after authPluginName, got %q", rune(data[pos]))
+			}
+			// pos++ // ineffectual
 		}
 	}
 
@@ -171,7 +208,9 @@ func (c *Conn) writeAuthHandshake() error {
 	// in the library are supported here
 	capability |= c.ccaps&CLIENT_FOUND_ROWS | c.ccaps&CLIENT_IGNORE_SPACE |
 		c.ccaps&CLIENT_MULTI_STATEMENTS | c.ccaps&CLIENT_MULTI_RESULTS |
-		c.ccaps&CLIENT_PS_MULTI_RESULTS | c.ccaps&CLIENT_CONNECT_ATTRS
+		c.ccaps&CLIENT_PS_MULTI_RESULTS | c.ccaps&CLIENT_CONNECT_ATTRS |
+		c.ccaps&CLIENT_COMPRESS | c.ccaps&CLIENT_ZSTD_COMPRESSION_ALGORITHM |
+		c.ccaps&CLIENT_LOCAL_FILES
 
 	// To enable TLS / SSL
 	if c.tlsConfig != nil {
@@ -194,14 +233,14 @@ func (c *Conn) writeAuthHandshake() error {
 		capability |= CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA
 	}
 
-	//packet length
-	//capability 4
-	//max-packet size 4
-	//charset 1
-	//reserved all[0] 23
-	//username
-	//auth
-	//mysql_native_password + null-terminated
+	// packet length
+	// capability 4
+	// max-packet size 4
+	// charset 1
+	// reserved all[0] 23
+	// username
+	// auth
+	// mysql_native_password + null-terminated
 	length := 4 + 4 + 1 + 23 + len(c.user) + 1 + len(authRespLEI) + len(auth) + 21 + 1
 	if addNull {
 		length++
@@ -216,6 +255,9 @@ func (c *Conn) writeAuthHandshake() error {
 	if len(attrData) > 0 {
 		capability |= CLIENT_CONNECT_ATTRS
 		length += len(attrData)
+	}
+	if c.ccaps&CLIENT_ZSTD_COMPRESSION_ALGORITHM > 0 {
+		length++
 	}
 
 	data := make([]byte, length+4)
@@ -233,8 +275,19 @@ func (c *Conn) writeAuthHandshake() error {
 	data[11] = 0x00
 
 	// Charset [1 byte]
-	// use default collation id 33 here, is utf-8
-	data[12] = DEFAULT_COLLATION_ID
+	// use default collation id 33 here, is `utf8mb3_general_ci`
+	collationName := c.collation
+	if len(collationName) == 0 {
+		collationName = DEFAULT_COLLATION_NAME
+	}
+	collation, err := charset.GetCollationByName(collationName)
+	if err != nil {
+		return fmt.Errorf("invalid collation name %s", collationName)
+	}
+
+	// the MySQL protocol calls for the collation id to be sent as 1 byte, where only the
+	// lower 8 bits are used in this field.
+	data[12] = byte(collation.ID & 0xff)
 
 	// SSL Connection Request Packet
 	// http://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::SSLRequest
@@ -251,7 +304,7 @@ func (c *Conn) writeAuthHandshake() error {
 		}
 
 		currentSequence := c.Sequence
-		c.Conn = packet.NewConn(tlsConn)
+		c.Conn = packet.NewConnWithTimeout(tlsConn, c.ReadTimeout, c.WriteTimeout, c.BufferSize)
 		c.Sequence = currentSequence
 	}
 
@@ -290,7 +343,12 @@ func (c *Conn) writeAuthHandshake() error {
 
 	// connection attributes
 	if len(attrData) > 0 {
-		copy(data[pos:], attrData)
+		pos += copy(data[pos:], attrData)
+	}
+
+	if c.ccaps&CLIENT_ZSTD_COMPRESSION_ALGORITHM > 0 {
+		// zstd_compression_level
+		data[pos] = 0x03
 	}
 
 	return c.WritePacket(data)
