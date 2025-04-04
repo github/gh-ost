@@ -369,6 +369,9 @@ func (this *Migrator) Migrate() (err error) {
 		} else {
 			this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := this.applier.AttemptInstantDDL(); err == nil {
+				if err := this.finalCleanup(); err != nil {
+					return nil
+				}
 				if err := this.hooksExecutor.onSuccess(); err != nil {
 					return err
 				}
