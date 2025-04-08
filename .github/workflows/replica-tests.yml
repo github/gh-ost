@@ -3,27 +3,6 @@ name: migration tests
 on: [pull_request]
 
 jobs:
-  build:
-
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        version: [mysql-5.7.25]
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version-file: go.mod
-
-    - name: migration tests
-      env:
-        TEST_MYSQL_VERSION: ${{ matrix.version }}
-      run:  script/cibuild-gh-ost-replica-tests
-
   docker-tests:
     runs-on: ubuntu-22.04
     strategy:
@@ -45,5 +24,3 @@ jobs:
       - name: Teardown environment
         if: always()
         run: script/docker-gh-ost-replica-tests down
-
-
