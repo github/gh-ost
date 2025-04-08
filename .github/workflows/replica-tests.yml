@@ -5,11 +5,11 @@ on: [pull_request]
 jobs:
   build:
 
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        version: [mysql-5.7.25,mysql-8.0.16,PerconaServer-8.0.21]
+        version: [mysql-5.7.25]
 
     steps:
     - uses: actions/checkout@v4
@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ['mysql:8.4.3']
+        image: ['mysql/mysql-server:5.7.41','mysql:8.0.41','mysql:8.4.3','percona/percona-server:8.0.41-32']
     env:
       TEST_MYSQL_IMAGE: ${{ matrix.image }}
 
