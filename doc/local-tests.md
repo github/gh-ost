@@ -2,7 +2,7 @@
 
 `gh-ost` is continuously tested in production via `--test-on-replica alter='engine=innodb'`. These tests check the GitHub workload and usage, but not necessarily the general case.
 
-Local tests are an additional layer of tests. They will eventually be part of continuous integration tests.
+Local tests are an additional layer of tests used for continuous integration tests and local development.
 
 Local tests test explicit use cases, such as column renames, mix of time zones, special types and alters. Traits of a single test:
 
@@ -19,4 +19,18 @@ Tests are found under [localtests](https://github.com/github/gh-ost/tree/master/
 
 New data-integrity, synchronization issues or otherwise concerns are expected to be tested by new test cases.
 
-While this is merged work is still ongoing.
+## Run with docker compose
+
+Local tests can be run locally with docker compose using the helper script [script/docker-gh-ost-replica-tests](https://github.com/github/gh-ost/tree/master/script/docker-gh-ost-replica-tests). 
+
+Example usage:
+```shell
+# create primary-replica containers with specified mysql image
+TEST_MYSQL_IMAGE="mysql-server:8.0.16" ./script/docker-gh-ost-replica-tests up
+
+# run all tests
+./script/docker-gh-ost-replica-tests run
+
+# cleanup containers
+./script/docker-gh-ost-replica-tests down
+```
