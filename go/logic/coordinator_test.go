@@ -194,7 +194,7 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 			break
 		}
 
-		err = coord.ProcessEventsUntilDrained()
+		coord.ProcessEventsUntilDrained()
 		suite.Require().NoError(err)
 	}
 
