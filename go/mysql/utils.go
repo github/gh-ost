@@ -19,9 +19,8 @@ import (
 )
 
 const (
-	MaxTableNameLength           = 64
-	MaxReplicationPasswordLength = 32
-	MaxDBPoolConnections         = 3
+	MaxTableNameLength   = 64
+	MaxDBPoolConnections = 3
 )
 
 type ReplicationLagResult struct {

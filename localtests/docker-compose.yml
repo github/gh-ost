@@ -2,12 +2,13 @@ services:
   mysql-primary:
     image: $TEST_MYSQL_IMAGE
     container_name: mysql-primary
-    command: --server-id=1 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON $MYSQL_NATIVE_PASSWORD_FLAG
+    command: --server-id=1 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON --character-set-server=utf8mb4 $MYSQL_NATIVE_PASSWORD_FLAG
     environment:
       MYSQL_ROOT_PASSWORD: opensesame
       MYSQL_ROOT_HOST: '%'
       MYSQL_DATABASE: test
       MYSQL_TCP_PORT: 3307
+      INIT_ROCKSDB: 1 # for percona-server
     ports:
       - '3307:3307'
     expose:
@@ -15,12 +16,13 @@ services:
   mysql-replica:
     image: $TEST_MYSQL_IMAGE
     container_name: mysql-replica
-    command: --server-id=2 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON --log-slave-updates=ON $MYSQL_NATIVE_PASSWORD_FLAG
+    command: --server-id=2 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON --log-slave-updates=ON --character-set-server=utf8mb4 $MYSQL_NATIVE_PASSWORD_FLAG
     environment:
       MYSQL_ROOT_PASSWORD: opensesame
       MYSQL_ROOT_HOST: '%'
       MYSQL_DATABASE: test
       MYSQL_TCP_PORT: 3308
+      INIT_ROCKSDB: 1 # for percona-server
     ports:
       - '3308:3308'
     expose:

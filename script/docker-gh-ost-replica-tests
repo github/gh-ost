@@ -19,8 +19,7 @@ fi
 poll_mysql() {
     CTR=0
     cmd="gh-ost-test-mysql-$1"
-    while ! $cmd -e "select 1;" > /dev/null 2>&1
-    do
+    while ! $cmd -e "select 1;" >/dev/null 2>&1; do
         sleep 1
         CTR=$((CTR + 1))
         if [ $CTR -gt 30 ]; then
@@ -34,23 +33,22 @@ poll_mysql() {
 
 mysql-source() {
     if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
-        gh-ost-test-mysql-master --ssl-mode=required "$@";
+        gh-ost-test-mysql-master --ssl-mode=required "$@"
     else
-        gh-ost-test-mysql-master $@;
+        gh-ost-test-mysql-master "$@"
     fi
 }
 
 mysql-replica() {
     if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
-        gh-ost-test-mysql-replica --ssl-mode=required "$@";
+        gh-ost-test-mysql-replica --ssl-mode=required "$@"
     else
-        gh-ost-test-mysql-replica $@;
+        gh-ost-test-mysql-replica "$@"
     fi
 }
 
-
 setup() {
-    [ -z "$TEST_MYSQL_IMAGE" ] && TEST_MYSQL_IMAGE="mysql:8.0.39"
+    [ -z "$TEST_MYSQL_IMAGE" ] && TEST_MYSQL_IMAGE="mysql:8.0.41"
 
     echo "Starting MySQL $TEST_MYSQL_IMAGE containers..."
     compose_file="$GH_OST_ROOT/localtests/docker-compose.yml"
@@ -60,7 +58,7 @@ setup() {
         MYSQL_PASSWORD_HASHING_ALGORITHM="caching_sha2_password"
         MYSQL_SHA2_RSA_KEYS_FLAG="--caching-sha2-password-auto-generate-rsa-keys=ON"
     fi
-    (TEST_MYSQL_IMAGE="$TEST_MYSQL_IMAGE" MYSQL_SHA2_RSA_KEYS_FLAG="$MYSQL_SHA2_RSA_KEYS_FLAG" envsubst < "$compose_file") > "$compose_file.tmp"
+    (TEST_MYSQL_IMAGE="$TEST_MYSQL_IMAGE" MYSQL_SHA2_RSA_KEYS_FLAG="$MYSQL_SHA2_RSA_KEYS_FLAG" envsubst <"$compose_file") >"$compose_file.tmp"
     docker compose -f "$compose_file.tmp" up -d --wait
 
     echo "Waiting for MySQL..."
