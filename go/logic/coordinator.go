@@ -377,9 +377,11 @@ func (c *Coordinator) ProcessEventsUntilDrained() error {
 
 				switch binlogEvent := ev.Event.(type) {
 				case *replication.GTIDEvent:
+					c.mu.Lock()
 					if c.lowWaterMark == 0 && binlogEvent.SequenceNumber > 0 {
 						c.lowWaterMark = binlogEvent.SequenceNumber - 1
 					}
+					c.mu.Unlock()
 				case *replication.RotateEvent:
 					c.currentCoordinatesMutex.Lock()
 					c.currentCoordinates.LogFile = string(binlogEvent.NextLogName)
