@@ -365,14 +365,14 @@ func (c *Coordinator) ProcessEventsUntilNextChangelogEvent() (*binlog.BinlogDMLE
 
 // ProcessEventsUntilDrained reads binlog events and sends them to the workers to process.
 // It exits when the event queue is empty and all the workers are returned to the workerQueue.
-func (c *Coordinator) ProcessEventsUntilDrained() {
+func (c *Coordinator) ProcessEventsUntilDrained() error {
 	for {
 		select {
 		// Read events from the binlog and submit them to the next worker
 		case ev := <-c.events:
 			{
 				if c.finishedMigrating.Load() {
-					return
+					return nil
 				}
 
 				switch binlogEvent := ev.Event.(type) {
@@ -430,11 +430,12 @@ func (c *Coordinator) ProcessEventsUntilDrained() {
 		default:
 			{
 				if c.busyWorkers.Load() == 0 {
-					return
+					return nil
 				}
 			}
 		}
 	}
+	return nil
 }
 
 func (c *Coordinator) InitializeWorkers(count int) {

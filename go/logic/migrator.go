@@ -1319,7 +1319,9 @@ func (this *Migrator) executeWriteFuncs() error {
 
 		// We give higher priority to event processing.
 		// ProcessEventsUntilDrained will process all events in the queue, and then return once no more events are available.
-		this.trxCoordinator.ProcessEventsUntilDrained()
+		if err := this.trxCoordinator.ProcessEventsUntilDrained(); err != nil {
+			return this.migrationContext.Log.Errore(err)
+		}
 
 		this.throttler.throttle(nil)
 
