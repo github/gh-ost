@@ -435,7 +435,6 @@ func (c *Coordinator) ProcessEventsUntilDrained() error {
 			}
 		}
 	}
-	return nil
 }
 
 func (c *Coordinator) InitializeWorkers(count int) {
