@@ -520,9 +520,9 @@ func (c *Coordinator) MarkTransactionCompleted(sequenceNumber, logPos, eventSize
 		}
 		channelsToNotify = make([]chan struct{}, 0)
 
-		// Schedule any jobs that were waiting for this job to complete
+		// Schedule any jobs that were waiting for this job to complete or for the low watermark
 		for waitingForSequenceNumber, channels := range c.waitingJobs {
-			if waitingForSequenceNumber <= c.lowWaterMark {
+			if waitingForSequenceNumber <= c.lowWaterMark || waitingForSequenceNumber == sequenceNumber {
 				channelsToNotify = append(channelsToNotify, channels...)
 				delete(c.waitingJobs, waitingForSequenceNumber)
 			}
