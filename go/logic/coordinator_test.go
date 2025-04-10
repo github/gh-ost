@@ -153,7 +153,7 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 					return txErr
 				}
 
-				for range rand.IntN(100) {
+				for range rand.IntN(100) + 1 {
 					_, txErr = tx.Exec(fmt.Sprintf("INSERT INTO test.gh_ost_test (name) VALUES ('test-%d')", rand.Int()))
 					if txErr != nil {
 						return txErr
