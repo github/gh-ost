@@ -179,8 +179,8 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 		return streamCtx.Err() != nil
 	}
 	go func() {
-		err = coord.StartStreaming(streamCtx, canStopStreaming)
-		suite.Require().Equal(context.Canceled, err)
+		streamErr := coord.StartStreaming(streamCtx, canStopStreaming)
+		suite.Require().Equal(context.Canceled, streamErr)
 	}()
 
 	// Give streamer some time to start
@@ -199,6 +199,23 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 	}
 
 	fmt.Printf("Time taken: %s\n", time.Since(startAt))
+
+	result, err := suite.db.Exec(`SELECT * FROM (
+    SELECT t1.id,
+    CRC32(CONCAT_WS(';',t1.id,t1.name))
+    AS checksum1,
+    CRC32(CONCAT_WS(';',t2.id,t2.name))
+    AS checksum2
+    FROM test.gh_ost_test t1
+    LEFT JOIN test._gh_ost_test_gho t2
+    ON t1.id = t2.id
+) AS checksums
+WHERE checksums.checksum1 != checksums.checksum2`)
+	suite.Require().NoError(err)
+
+	count, err := result.RowsAffected()
+	suite.Require().NoError(err)
+	suite.Require().Zero(count)
 }
 
 func TestCoordinator(t *testing.T) {
