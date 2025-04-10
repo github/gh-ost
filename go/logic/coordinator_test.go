@@ -29,6 +29,7 @@ type CoordinatorTestSuite struct {
 	db                     *gosql.DB
 	concurrentTransactions int
 	transactionsPerWorker  int
+	transactionSize        int
 }
 
 func (suite *CoordinatorTestSuite) SetupSuite() {
@@ -55,8 +56,9 @@ func (suite *CoordinatorTestSuite) SetupSuite() {
 	suite.Require().NoError(err)
 
 	suite.db = db
-	suite.concurrentTransactions = 100
-	suite.transactionsPerWorker = 1
+	suite.concurrentTransactions = 8
+	suite.transactionsPerWorker = 1000
+	suite.transactionSize = 10
 
 	db.SetMaxOpenConns(suite.concurrentTransactions)
 }
@@ -145,39 +147,49 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 	suite.Require().NoError(err)
 
 	g, _ := errgroup.WithContext(ctx)
-	for range suite.concurrentTransactions {
+	for i := range suite.concurrentTransactions {
 		g.Go(func() error {
+			r := rand.New(rand.NewPCG(uint64(0), uint64(i)))
+			maxID := int64(1)
 			for range suite.transactionsPerWorker {
 				tx, txErr := suite.db.Begin()
 				if txErr != nil {
 					return txErr
 				}
 
-				for range rand.IntN(100) + 1 {
-					_, txErr = tx.Exec(fmt.Sprintf("INSERT INTO test.gh_ost_test (name) VALUES ('test-%d')", rand.Int()))
-					if txErr != nil {
-						return txErr
+				// generate random write queries
+				for range r.IntN(suite.transactionSize) + 1 {
+					switch r.IntN(5) {
+					case 0:
+						_, txErr = tx.Exec(fmt.Sprintf("DELETE FROM test.gh_ost_test WHERE id=%d", r.Int64N(maxID)))
+						if txErr != nil {
+							return txErr
+						}
+					case 1, 2:
+						_, txErr = tx.Exec(fmt.Sprintf("UPDATE test.gh_ost_test SET name='test-%d' WHERE id=%d", r.Int(), r.Int64N(maxID)))
+						if txErr != nil {
+							return txErr
+						}
+					default:
+						res, txErr := tx.Exec(fmt.Sprintf("INSERT INTO test.gh_ost_test (name) VALUES ('test-%d')", r.Int()))
+						if txErr != nil {
+							return txErr
+						}
+						lastID, err := res.LastInsertId()
+						if err != nil {
+							return err
+						}
+						maxID = lastID + 1
 					}
 				}
-
 				txErr = tx.Commit()
 				if txErr != nil {
 					return txErr
 				}
 			}
-
 			return nil
 		})
 	}
-
-	err = g.Wait()
-	suite.Require().NoError(err)
-
-	_, err = suite.db.Exec("UPDATE test.gh_ost_test SET name = 'foobar' WHERE id = 1")
-	suite.Require().NoError(err)
-
-	_, err = suite.db.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test')")
-	suite.Require().NoError(err)
 
 	_, err = applier.WriteChangelogState("completed")
 	suite.Require().NoError(err)
@@ -224,14 +236,16 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 		suite.Require().NoError(err)
 	}
 
+	//err = g.Wait()
+	//suite.Require().NoError(err)
+	g.Wait() // there will be deadlock errors
+
 	fmt.Printf("Time taken: %s\n", time.Since(startAt))
 
 	result, err := suite.db.Exec(`SELECT * FROM (
     SELECT t1.id,
-    CRC32(CONCAT_WS(';',t1.id,t1.name))
-    AS checksum1,
-    CRC32(CONCAT_WS(';',t2.id,t2.name))
-    AS checksum2
+    CRC32(CONCAT_WS(';',t1.id,t1.name)) AS checksum1,
+    CRC32(CONCAT_WS(';',t2.id,t2.name)) AS checksum2
     FROM test.gh_ost_test t1
     LEFT JOIN test._gh_ost_test_gho t2
     ON t1.id = t2.id
