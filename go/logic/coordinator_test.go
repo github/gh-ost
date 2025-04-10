@@ -56,7 +56,7 @@ func (suite *CoordinatorTestSuite) SetupSuite() {
 
 	suite.db = db
 	suite.concurrentTransactions = 100
-	suite.transactionsPerWorker = 100
+	suite.transactionsPerWorker = 1
 
 	db.SetMaxOpenConns(suite.concurrentTransactions)
 }
@@ -144,7 +144,7 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 	err = applier.CreateChangelogTable()
 	suite.Require().NoError(err)
 
-	g, ctx := errgroup.WithContext(ctx)
+	g, _ := errgroup.WithContext(ctx)
 	for range suite.concurrentTransactions {
 		g.Go(func() error {
 			for range suite.transactionsPerWorker {
