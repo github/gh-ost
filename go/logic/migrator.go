@@ -1244,6 +1244,7 @@ func (this *Migrator) iterateChunks() error {
 			return nil
 		}
 		copyRowsFunc := func() error {
+			this.migrationContext.SetNextIterationRangeValues()
 			// Copy task:
 			applyCopyRowsFunc := func() error {
 				if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {

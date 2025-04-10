@@ -6,9 +6,12 @@
 package logic
 
 import (
+	"bytes"
 	"context"
 	gosql "database/sql"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -316,6 +319,8 @@ func (suite *MigratorTestSuite) SetupTest() {
 
 	_, err := suite.db.ExecContext(ctx, "CREATE DATABASE test")
 	suite.Require().NoError(err)
+
+	os.Remove("/tmp/gh-ost.sock")
 }
 
 func (suite *MigratorTestSuite) TearDownTest() {
@@ -377,6 +382,126 @@ func (suite *MigratorTestSuite) TestFoo() {
 	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_del'").Scan(&tableName)
 	suite.Require().NoError(err)
 	suite.Require().Equal("_testing_del", tableName)
+}
+
+func (suite *MigratorTestSuite) TestRetryBatchCopyWithHooks() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, "CREATE TABLE test.test_retry_batch (id INT PRIMARY KEY AUTO_INCREMENT, name TEXT)")
+	suite.Require().NoError(err)
+
+	const initStride = 1000
+	const totalBatches = 3
+	for i := 0; i < totalBatches; i++ {
+		dataSize := 50 * i
+		for j := 0; j < initStride; j++ {
+			_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO test.test_retry_batch (name) VALUES ('%s')", strings.Repeat("a", dataSize)))
+			suite.Require().NoError(err)
+		}
+	}
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("SET GLOBAL max_binlog_cache_size = %d", 1024*8))
+	suite.Require().NoError(err)
+	defer func() {
+		_, err = suite.db.ExecContext(ctx, fmt.Sprintf("SET GLOBAL max_binlog_cache_size = %d", 1024*1024*1024))
+		suite.Require().NoError(err)
+	}()
+
+	tmpDir, err := os.MkdirTemp("", "gh-ost-hooks")
+	suite.Require().NoError(err)
+	defer os.RemoveAll(tmpDir)
+
+	hookScript := filepath.Join(tmpDir, "gh-ost-on-batch-copy-retry")
+	hookContent := `#!/bin/bash
+# Mock hook that reduces chunk size on binlog cache error
+ERROR_MSG="$GH_OST_LAST_BATCH_COPY_ERROR"
+SOCKET_PATH="/tmp/gh-ost.sock"
+
+if ! [[ "$ERROR_MSG" =~ "max_binlog_cache_size" ]]; then
+    echo "Nothing to do for error: $ERROR_MSG"
+    exit 0
+fi
+
+CHUNK_SIZE=$(echo "chunk-size=?" | nc -U $SOCKET_PATH | tr -d '\n')
+
+MIN_CHUNK_SIZE=10
+NEW_CHUNK_SIZE=$(( CHUNK_SIZE * 8 / 10 ))
+if [ $NEW_CHUNK_SIZE -lt $MIN_CHUNK_SIZE ]; then
+    NEW_CHUNK_SIZE=$MIN_CHUNK_SIZE
+fi
+
+if [ $CHUNK_SIZE -eq $NEW_CHUNK_SIZE ]; then
+    echo "Chunk size unchanged: $CHUNK_SIZE"
+    exit 0
+fi
+
+echo "[gh-ost-on-batch-copy-retry]: Changing chunk size from $CHUNK_SIZE to $NEW_CHUNK_SIZE"
+echo "chunk-size=$NEW_CHUNK_SIZE" | nc -U $SOCKET_PATH
+echo "[gh-ost-on-batch-copy-retry]: Done, exiting..."
+`
+	err = os.WriteFile(hookScript, []byte(hookContent), 0755)
+	suite.Require().NoError(err)
+
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.AllowedRunningOnMaster = true
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
+	migrationContext.OriginalTableName = "test_retry_batch"
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.AlterStatementOptions = "MODIFY name LONGTEXT, ENGINE=InnoDB"
+	migrationContext.ReplicaServerId = 99999
+	migrationContext.HeartbeatIntervalMilliseconds = 100
+	migrationContext.ThrottleHTTPIntervalMillis = 100
+	migrationContext.ThrottleHTTPTimeoutMillis = 1000
+	migrationContext.HooksPath = tmpDir
+	migrationContext.ChunkSize = 1000
+	migrationContext.SetDefaultNumRetries(10)
+	migrationContext.ServeSocketFile = "/tmp/gh-ost.sock"
+
+	migrator := NewMigrator(migrationContext, "0.0.0")
+
+	err = migrator.Migrate()
+	suite.Require().NoError(err)
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = origStdout
+	os.Stderr = origStderr
+
+	var bufOut, bufErr bytes.Buffer
+	io.Copy(&bufOut, rOut)
+	io.Copy(&bufErr, rErr)
+
+	outStr := bufOut.String()
+	errStr := bufErr.String()
+
+	suite.Assert().Contains(outStr, "chunk-size: 1000")
+	suite.Assert().Contains(errStr, "[gh-ost-on-batch-copy-retry]: Changing chunk size from 1000 to 800")
+	suite.Assert().Contains(outStr, "chunk-size: 800")
+
+	suite.Assert().Contains(errStr, "[gh-ost-on-batch-copy-retry]: Changing chunk size from 800 to 640")
+	suite.Assert().Contains(outStr, "chunk-size: 640")
+
+	suite.Assert().Contains(errStr, "[gh-ost-on-batch-copy-retry]: Changing chunk size from 640 to 512")
+	suite.Assert().Contains(outStr, "chunk-size: 512")
+
+	var count int
+	err = suite.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test.test_retry_batch").Scan(&count)
+	suite.Require().NoError(err)
+	suite.Assert().Equal(3000, count)
 }
 
 func TestMigratorRetry(t *testing.T) {
