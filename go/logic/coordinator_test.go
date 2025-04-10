@@ -4,6 +4,7 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"testing"
 	"time"
@@ -18,13 +19,16 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"golang.org/x/sync/errgroup"
 )
 
 type CoordinatorTestSuite struct {
 	suite.Suite
 
-	mysqlContainer testcontainers.Container
-	db             *gosql.DB
+	mysqlContainer         testcontainers.Container
+	db                     *gosql.DB
+	concurrentTransactions int
+	transactionsPerWorker  int
 }
 
 func (suite *CoordinatorTestSuite) SetupSuite() {
@@ -51,6 +55,10 @@ func (suite *CoordinatorTestSuite) SetupSuite() {
 	suite.Require().NoError(err)
 
 	suite.db = db
+	suite.concurrentTransactions = 100
+	suite.transactionsPerWorker = 1
+
+	db.SetMaxOpenConns(suite.concurrentTransactions)
 }
 
 func (suite *CoordinatorTestSuite) SetupTest() {
@@ -59,6 +67,9 @@ func (suite *CoordinatorTestSuite) SetupTest() {
 	suite.Require().NoError(err)
 
 	_, err = suite.db.ExecContext(ctx, "SET @@GLOBAL.binlog_transaction_dependency_tracking = WRITESET")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("SET @@GLOBAL.max_connections = %d", suite.concurrentTransactions*2))
 	suite.Require().NoError(err)
 
 	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE test")
@@ -133,19 +144,34 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 	err = applier.CreateChangelogTable()
 	suite.Require().NoError(err)
 
-	//  TODO: use errgroup
-	for i := 0; i < 100; i++ {
-		tx, err := suite.db.Begin()
-		suite.Require().NoError(err)
+	g, _ := errgroup.WithContext(ctx)
+	for range suite.concurrentTransactions {
+		g.Go(func() error {
+			for range suite.transactionsPerWorker {
+				tx, txErr := suite.db.Begin()
+				if txErr != nil {
+					return txErr
+				}
 
-		for j := 0; j < 100; j++ {
-			_, err = tx.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test')")
-			suite.Require().NoError(err)
-		}
+				for range rand.IntN(100) + 1 {
+					_, txErr = tx.Exec(fmt.Sprintf("INSERT INTO test.gh_ost_test (name) VALUES ('test-%d')", rand.Int()))
+					if txErr != nil {
+						return txErr
+					}
+				}
 
-		err = tx.Commit()
-		suite.Require().NoError(err)
+				txErr = tx.Commit()
+				if txErr != nil {
+					return txErr
+				}
+			}
+
+			return nil
+		})
 	}
+
+	err = g.Wait()
+	suite.Require().NoError(err)
 
 	_, err = suite.db.Exec("UPDATE test.gh_ost_test SET name = 'foobar' WHERE id = 1")
 	suite.Require().NoError(err)
@@ -179,8 +205,8 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 		return streamCtx.Err() != nil
 	}
 	go func() {
-		err = coord.StartStreaming(streamCtx, canStopStreaming)
-		suite.Require().Equal(context.Canceled, err)
+		streamErr := coord.StartStreaming(streamCtx, canStopStreaming)
+		suite.Require().Equal(context.Canceled, streamErr)
 	}()
 
 	// Give streamer some time to start
@@ -199,6 +225,23 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 	}
 
 	fmt.Printf("Time taken: %s\n", time.Since(startAt))
+
+	result, err := suite.db.Exec(`SELECT * FROM (
+    SELECT t1.id,
+    CRC32(CONCAT_WS(';',t1.id,t1.name))
+    AS checksum1,
+    CRC32(CONCAT_WS(';',t2.id,t2.name))
+    AS checksum2
+    FROM test.gh_ost_test t1
+    LEFT JOIN test._gh_ost_test_gho t2
+    ON t1.id = t2.id
+) AS checksums
+WHERE checksums.checksum1 != checksums.checksum2`)
+	suite.Require().NoError(err)
+
+	count, err := result.RowsAffected()
+	suite.Require().NoError(err)
+	suite.Require().Zero(count)
 }
 
 func TestCoordinator(t *testing.T) {
