@@ -28,6 +28,7 @@ type CoordinatorTestSuite struct {
 	mysqlContainer         testcontainers.Container
 	db                     *gosql.DB
 	concurrentTransactions int
+	transactionsPerWorker  int
 }
 
 func (suite *CoordinatorTestSuite) SetupSuite() {
@@ -54,10 +55,10 @@ func (suite *CoordinatorTestSuite) SetupSuite() {
 	suite.Require().NoError(err)
 
 	suite.db = db
-	suite.concurrentTransactions = 500
+	suite.concurrentTransactions = 100
+	suite.transactionsPerWorker = 100
 
-	_, err = db.Exec(fmt.Sprintf("SET GLOBAL max_connections = %d", suite.concurrentTransactions*2))
-	suite.Require().NoError(err)
+	db.SetMaxOpenConns(suite.concurrentTransactions)
 }
 
 func (suite *CoordinatorTestSuite) SetupTest() {
@@ -66,6 +67,9 @@ func (suite *CoordinatorTestSuite) SetupTest() {
 	suite.Require().NoError(err)
 
 	_, err = suite.db.ExecContext(ctx, "SET @@GLOBAL.binlog_transaction_dependency_tracking = WRITESET")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("SET @@GLOBAL.max_connections = %d", suite.concurrentTransactions*2))
 	suite.Require().NoError(err)
 
 	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE test")
@@ -143,19 +147,26 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 	g, ctx := errgroup.WithContext(ctx)
 	for range suite.concurrentTransactions {
 		g.Go(func() error {
-			tx, txErr := suite.db.Begin()
-			if txErr != nil {
-				return txErr
-			}
+			for range suite.transactionsPerWorker {
+				tx, txErr := suite.db.Begin()
+				if txErr != nil {
+					return txErr
+				}
 
-			for range 100 {
-				_, txErr = tx.Exec(fmt.Sprintf("INSERT INTO test.gh_ost_test (name) VALUES ('test-%d')", rand.Int()))
+				for range rand.IntN(100) {
+					_, txErr = tx.Exec(fmt.Sprintf("INSERT INTO test.gh_ost_test (name) VALUES ('test-%d')", rand.Int()))
+					if txErr != nil {
+						return txErr
+					}
+				}
+
+				txErr = tx.Commit()
 				if txErr != nil {
 					return txErr
 				}
 			}
 
-			return tx.Commit()
+			return nil
 		})
 	}
 
