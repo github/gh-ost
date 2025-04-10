@@ -584,7 +584,7 @@ func (this *MigrationContext) GetIteration() int64 {
 	return atomic.LoadInt64(&this.Iteration)
 }
 
-func (this *MigrationContext) SetNextIterationRangeValues() {
+func (this *MigrationContext) SetNextIterationRangeMinValues() {
 	this.MigrationIterationRangeMinValues = this.MigrationIterationRangeMaxValues
 	if this.MigrationIterationRangeMinValues == nil {
 		this.MigrationIterationRangeMinValues = this.MigrationRangeMinValues
