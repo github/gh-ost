@@ -4,6 +4,7 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"testing"
 	"time"
@@ -18,13 +19,15 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"golang.org/x/sync/errgroup"
 )
 
 type CoordinatorTestSuite struct {
 	suite.Suite
 
-	mysqlContainer testcontainers.Container
-	db             *gosql.DB
+	mysqlContainer         testcontainers.Container
+	db                     *gosql.DB
+	concurrentTransactions int
 }
 
 func (suite *CoordinatorTestSuite) SetupSuite() {
@@ -51,6 +54,10 @@ func (suite *CoordinatorTestSuite) SetupSuite() {
 	suite.Require().NoError(err)
 
 	suite.db = db
+	suite.concurrentTransactions = 500
+
+	_, err = db.Exec(fmt.Sprintf("SET GLOBAL max_connections = %d", suite.concurrentTransactions*2))
+	suite.Require().NoError(err)
 }
 
 func (suite *CoordinatorTestSuite) SetupTest() {
@@ -133,19 +140,27 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 	err = applier.CreateChangelogTable()
 	suite.Require().NoError(err)
 
-	//  TODO: use errgroup
-	for i := 0; i < 100; i++ {
-		tx, err := suite.db.Begin()
-		suite.Require().NoError(err)
+	g, ctx := errgroup.WithContext(ctx)
+	for range suite.concurrentTransactions {
+		g.Go(func() error {
+			tx, txErr := suite.db.Begin()
+			if txErr != nil {
+				return txErr
+			}
 
-		for j := 0; j < 100; j++ {
-			_, err = tx.Exec("INSERT INTO test.gh_ost_test (name) VALUES ('test')")
-			suite.Require().NoError(err)
-		}
+			for range 100 {
+				_, txErr = tx.Exec(fmt.Sprintf("INSERT INTO test.gh_ost_test (name) VALUES ('test-%d')", rand.Int()))
+				if txErr != nil {
+					return txErr
+				}
+			}
 
-		err = tx.Commit()
-		suite.Require().NoError(err)
+			return tx.Commit()
+		})
 	}
+
+	err = g.Wait()
+	suite.Require().NoError(err)
 
 	_, err = suite.db.Exec("UPDATE test.gh_ost_test SET name = 'foobar' WHERE id = 1")
 	suite.Require().NoError(err)
