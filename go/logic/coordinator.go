@@ -43,7 +43,8 @@ type Coordinator struct {
 	// list of workers
 	workers []*Worker
 
-	// The low water mark. This is the sequence number of the last job that has been committed.
+	// The low water mark. We maintain that all transactions with
+	// sequence number <= lowWaterMark have been completed.
 	lowWaterMark int64
 
 	// This is a map of completed jobs by their sequence numbers.
@@ -194,6 +195,7 @@ func (w *Worker) ProcessEvents() error {
 						if len(dmlEvents) == cap(dmlEvents) {
 							if err := w.applyDMLEvents(dmlEvents); err != nil {
 								w.coordinator.migrationContext.Log.Errore(err)
+								// TODO do something with the err
 							}
 							dmlEvents = dmlEvents[:0]
 						}
@@ -479,10 +481,6 @@ func (c *Coordinator) WaitForTransaction(lastCommitted int64) chan struct{} {
 		return nil
 	}
 
-	if _, ok := c.completedJobs[lastCommitted]; ok {
-		return nil
-	}
-
 	waitChannel := make(chan struct{})
 	c.waitingJobs[lastCommitted] = append(c.waitingJobs[lastCommitted], waitChannel)
 
@@ -503,8 +501,6 @@ func (c *Coordinator) MarkTransactionCompleted(sequenceNumber, logPos, eventSize
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
-		//c.migrationContext.Log.Infof("Coordinator: Marking job as completed: %d\n", sequenceNumber)
-
 		// Mark the job as completed
 		c.completedJobs[sequenceNumber] = &mysql.BinlogCoordinates{LogPos: logPos, EventSize: eventSize}
 
@@ -522,7 +518,7 @@ func (c *Coordinator) MarkTransactionCompleted(sequenceNumber, logPos, eventSize
 
 		// Schedule any jobs that were waiting for this job to complete or for the low watermark
 		for waitingForSequenceNumber, channels := range c.waitingJobs {
-			if waitingForSequenceNumber <= c.lowWaterMark || waitingForSequenceNumber == sequenceNumber {
+			if waitingForSequenceNumber <= c.lowWaterMark {
 				channelsToNotify = append(channelsToNotify, channels...)
 				delete(c.waitingJobs, waitingForSequenceNumber)
 			}
