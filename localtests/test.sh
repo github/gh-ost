@@ -25,7 +25,7 @@ master_port=
 replica_host=
 replica_port=
 original_sql_mode=
-gen_load_pid=0
+gen_load_pid=
 
 OPTIND=1
 while getopts "b:s:d" OPTION; do
@@ -48,7 +48,7 @@ test_pattern="${1:-.}"
 verify_master_and_replica() {
   if [ "$(gh-ost-test-mysql-master -e "select 1" -ss)" != "1" ]; then
     echo "Cannot verify gh-ost-test-mysql-master"
-    exit 1
+    enull bitmapxit 1
   fi
   read master_host master_port <<<$(gh-ost-test-mysql-master -e "select @@hostname, @@port" -ss)
   [ "$master_host" == "$(hostname)" ] && master_host="127.0.0.1"
@@ -119,18 +119,18 @@ generate_load_cmd() {
     --mysql-user=root \
     --mysql-password=opensesame \
     --mysql-db=test \
-    --table-size=100000 \
+    --rand-seed=163
     --tables=1 \
     --threads=8 \
-    --time=60 \
+    --time=30 \
     --report-interval=10 \
-    --rate=200 \
+    --rate=800 \
     run"
   echo $cmd
 }
 
 cleanup() {
-  if [ $gen_load_pid -gt 0 ]; then
+  if ! [ -z $gen_load_pid ] && ps -p $gen_load_pid >/dev/null; then
     kill $gen_load_pid
   fi
 }
@@ -202,16 +202,16 @@ test_single() {
 
   table_name="gh_ost_test"
 
-  # run gh-ost with sysbench write load
+  # run gh-ost with sysbench write load.
+  # It does nothing if sysbench is not available.
   trap cleanup EXIT INT TERM
   if [[ "$test_name" == "sysbench" ]]; then
     table_name="sbtest1"
     load_cmd="$(generate_load_cmd $master_host $master_port)"
-    echo $load_cmd >$generate_load_file
-    bash $generate_load_file 1>$test_logfile 2>&1 &
+    eval "$load_cmd" &
     gen_load_pid=$!
     echo
-    echo "Started sysbench (PID $gen_load_pid)"
+    echo -n "Started sysbench (PID $gen_load_pid):  "
     echo $load_cmd
   fi
 
