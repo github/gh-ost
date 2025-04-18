@@ -35,10 +35,9 @@ type CoordinatorTestSuite struct {
 func (suite *CoordinatorTestSuite) SetupSuite() {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
-		Image:        "mysql:8.0.40",
-		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root-password"},
-		WaitingFor:   wait.ForListeningPort("3306/tcp"),
-		ExposedPorts: []string{"3306/tcp"},
+		Image:      "mysql:8.0.40",
+		Env:        map[string]string{"MYSQL_ROOT_PASSWORD": "root-password"},
+		WaitingFor: wait.ForListeningPort("3306/tcp"),
 	}
 
 	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -206,10 +205,6 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 			return nil
 		})
 	coord.applier = applier
-	coord.currentCoordinates = mysql.BinlogCoordinates{
-		LogFile: "binlog.000001",
-		LogPos:  int64(4),
-	}
 	coord.InitializeWorkers(4)
 
 	streamCtx, cancelStreaming := context.WithCancel(context.Background())
@@ -217,7 +212,10 @@ func (suite *CoordinatorTestSuite) TestApplyDML() {
 		return streamCtx.Err() != nil
 	}
 	go func() {
-		streamErr := coord.StartStreaming(streamCtx, canStopStreaming)
+		streamErr := coord.StartStreaming(streamCtx, mysql.BinlogCoordinates{
+			LogFile: "binlog.000001",
+			LogPos:  int64(4),
+		}, canStopStreaming)
 		suite.Require().Equal(context.Canceled, streamErr)
 	}()
 

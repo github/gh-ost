@@ -1103,7 +1103,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		return
 	}
 
-	currentBinlogCoordinates := *this.trxCoordinator.GetCurrentBinlogCoordinates()
+	currentBinlogCoordinates := *this.trxCoordinator.binlogReader.GetCurrentBinlogCoordinates()
 
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
@@ -1143,12 +1143,11 @@ func (this *Migrator) initiateStreaming() error {
 	if err != nil {
 		return err
 	}
-	this.trxCoordinator.currentCoordinates = *initialCoords
 
 	go func() {
 		this.migrationContext.Log.Debugf("Beginning streaming at coordinates: %+v", *initialCoords)
 		ctx := context.TODO()
-		err := this.trxCoordinator.StartStreaming(ctx, this.canStopStreaming)
+		err := this.trxCoordinator.StartStreaming(ctx, *initialCoords, this.canStopStreaming)
 		if err != nil {
 			this.migrationContext.PanicAbort <- err
 		}
