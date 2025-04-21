@@ -669,8 +669,9 @@ func (this *Migrator) atomicCutOver() (err error) {
 	lockOriginalSessionIdChan := make(chan int64, 2)
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
+        var renameLockSessionId int64
 	go func() {
-		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, &renameLockSessionId); err != nil {
 			this.migrationContext.Log.Errore(err)
 		}
 	}()
@@ -735,6 +736,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// Now that we've found the RENAME blocking, AND the locking connection still alive,
 	// we know it is safe to proceed to release the lock
 
+        renameLockSessionId = renameSessionId
 	okToUnlockTable <- true
 	// BAM! magic table dropped, original table lock is released
 	// -> RENAME released -> queries on original are unblocked.

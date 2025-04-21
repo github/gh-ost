@@ -1099,7 +1099,7 @@ func (this *Applier) RevertAtomicCutOverWaitTimeout() {
 }
 
 // AtomicCutOverMagicLock
-func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
+func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error, renameLockSessionId *int64) error {
 	tx, err := this.db.Begin()
 	if err != nil {
 		tableLocked <- err
@@ -1188,6 +1188,23 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 	if _, err := tx.Exec(query); err != nil {
 		this.migrationContext.Log.Errore(err)
 		// We DO NOT return here because we must `UNLOCK TABLES`!
+	}
+
+	this.migrationContext.Log.Infof("Session renameLockSessionId is %+v", *renameLockSessionId)
+	// checking the lock holded by rename session
+	if *renameLockSessionId > 0 {
+		for i := 0; i <= 50; i++ {
+			err := this.ExpectMetadataLock(*renameLockSessionId)
+			if err == nil {
+				this.migrationContext.Log.Infof("Rename session is pending lock on the origin table !")
+				break
+			} else {
+				if i == 50 {
+					return err
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 	}
 
 	// Tables still locked
@@ -1408,4 +1425,28 @@ func (this *Applier) Teardown() {
 	this.db.Close()
 	this.singletonDB.Close()
 	atomic.StoreInt64(&this.finishedMigrating, 1)
+}
+
+func (this *Applier) ExpectMetadataLock(sessionId int64) error {
+	found := false
+	query := `
+		select /* gh-ost */ m.owner_thread_id
+			from performance_schema.metadata_locks m join performance_schema.threads t 
+			on m.owner_thread_id=t.thread_id
+			where m.object_type = 'TABLE' and m.object_schema = ? and m.object_name = ? 
+			and m.lock_type = 'EXCLUSIVE' and m.lock_status = 'PENDING' 
+			and t.processlist_id = ?
+	`
+	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		found = true
+		return nil
+	}, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, sessionId)
+	if err != nil {
+		return err
+	}
+	if !found {
+		err = fmt.Errorf("cannot find PENDING metadata lock on original table: `%s`.`%s`", this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
+		return this.migrationContext.Log.Errore(err)
+	}
+	return nil
 }
