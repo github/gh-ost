@@ -519,7 +519,7 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 	err = suite.db.QueryRow("select count(*) from test.testing").Scan(&OriginalValue)
 	suite.Require().NoError(err)
 
-	suite.Require().LessOrEqual(delValue, delValue)
+	suite.Require().LessOrEqual(delValue, OriginalValue)
 
 	var tableName, createTableSQL string
 	//nolint:execinquery
