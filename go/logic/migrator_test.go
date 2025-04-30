@@ -497,7 +497,7 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 	go func() {
 		holdConn, err := suite.db.Conn(ctx)
 		suite.Require().NoError(err)
-		_, err = holdConn.ExecContext(ctx, "SELECT *, sleep(5) FROM test._testing_gho WHERE id = 1")
+		_, err = holdConn.ExecContext(ctx, "SELECT *, sleep(2) FROM test._testing_gho WHERE id = 1")
 		suite.Require().NoError(err)
 	}()
 
