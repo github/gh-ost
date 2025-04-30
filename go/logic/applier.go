@@ -1193,20 +1193,17 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 	this.migrationContext.Log.Infof("Session renameLockSessionId is %+v", *renameLockSessionId)
 	// checking the lock holded by rename session
 	if *renameLockSessionId > 0 {
-		for i := 0; i <= 50; i++ {
+		sleepDuration := time.Duration(10*this.migrationContext.CutOverLockTimeoutSeconds) * time.Millisecond
+		for i := 1; i <= 100; i++ {
 			err := this.ExpectMetadataLock(*renameLockSessionId)
 			if err == nil {
 				this.migrationContext.Log.Infof("Rename session is pending lock on the origin table !")
 				break
 			} else {
-				if i == 50 {
-					return err
-				}
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(sleepDuration)
 			}
 		}
 	}
-
 	// Tables still locked
 	this.migrationContext.Log.Infof("Releasing lock from %s.%s, %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),

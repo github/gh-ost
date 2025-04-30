@@ -9,6 +9,7 @@ import (
 	"context"
 	gosql "database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -443,6 +444,91 @@ func TestMigratorRetryWithExponentialBackoff(t *testing.T) {
 	assert.NoError(t, result)
 	assert.Equal(t, sleeps, 99)
 	assert.Equal(t, tries, 100)
+}
+
+func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT PRIMARY KEY, name VARCHAR(64))")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "insert into test.testing values(1,'a')")
+	suite.Require().NoError(err)
+
+	done := make(chan error, 1)
+	go func() {
+		connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+		if err != nil {
+			done <- err
+			return
+		}
+		migrationContext := base.NewMigrationContext()
+		migrationContext.AllowedRunningOnMaster = true
+		migrationContext.ApplierConnectionConfig = connectionConfig
+		migrationContext.InspectorConnectionConfig = connectionConfig
+		migrationContext.DatabaseName = "test"
+		migrationContext.SkipPortValidation = true
+		migrationContext.OriginalTableName = "testing"
+		migrationContext.SetConnectionConfig("innodb")
+		migrationContext.AlterStatementOptions = "ADD COLUMN foobar varchar(255)"
+		migrationContext.ReplicaServerId = 99999
+		migrationContext.HeartbeatIntervalMilliseconds = 100
+		migrationContext.ThrottleHTTPIntervalMillis = 100
+		migrationContext.ThrottleHTTPTimeoutMillis = 1000
+		migrationContext.CutOverLockTimeoutSeconds = 4
+
+		//nolint:dogsled
+		_, filename, _, _ := runtime.Caller(0)
+		migrationContext.ServeSocketFile = filepath.Join(filepath.Dir(filename), "../../tmp/gh-ost.sock")
+		migrationContext.PostponeCutOverFlagFile = filepath.Join(filepath.Dir(filename), "../../tmp/ghost.postpone.flag")
+
+		migrator := NewMigrator(migrationContext, "0.0.0")
+
+		done <- migrator.Migrate()
+	}()
+
+	time.Sleep(2 * time.Second)
+	_, filename, _, _ := runtime.Caller(0)
+	err = os.Remove(filepath.Join(filepath.Dir(filename), "../../tmp/ghost.postpone.flag"))
+	if err != nil {
+		suite.Require().NoError(err)
+	}
+	time.Sleep(1 * time.Second)
+	go func() {
+		holdConn, err := suite.db.Conn(ctx)
+		suite.Require().NoError(err)
+		_, err = holdConn.ExecContext(ctx, "SELECT *, sleep(5) FROM test._testing_gho WHERE id = 1")
+		suite.Require().NoError(err)
+	}()
+
+	dmlConn, err := suite.db.Conn(ctx)
+	suite.Require().NoError(err)
+
+	_, err = dmlConn.ExecContext(ctx, "insert into test.testing(id, name) values(2,'b')")
+	fmt.Println("insert into table original table")
+	suite.Require().NoError(err)
+
+	migrateErr := <-done
+	suite.Require().NoError(migrateErr)
+
+	// Verify the new column was added
+	var delValue, OriginalValue int64
+	err = suite.db.QueryRow("select count(*) from test._testing_del").Scan(&delValue)
+	suite.Require().NoError(err)
+
+	err = suite.db.QueryRow("select count(*) from test.testing").Scan(&OriginalValue)
+	suite.Require().NoError(err)
+
+	suite.Require().LessOrEqual(delValue, delValue)
+
+	var tableName, createTableSQL string
+	//nolint:execinquery
+	err = suite.db.QueryRow("SHOW CREATE TABLE test.testing").Scan(&tableName, &createTableSQL)
+	suite.Require().NoError(err)
+
+	suite.Require().Equal("testing", tableName)
+	suite.Require().Equal("CREATE TABLE `testing` (\n  `id` int NOT NULL,\n  `name` varchar(64) DEFAULT NULL,\n  `foobar` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createTableSQL)
+
 }
 
 func TestMigrator(t *testing.T) {
