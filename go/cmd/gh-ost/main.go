@@ -158,6 +158,7 @@ func main() {
 	flag.CommandLine.SetOutput(os.Stdout)
 
 	flag.Parse()
+	base.HiddenPasswordFromCmdline()
 
 	if *checkFlag {
 		return
