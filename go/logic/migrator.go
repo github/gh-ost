@@ -660,7 +660,10 @@ func (this *Migrator) atomicCutOver() (err error) {
 	defer atomic.StoreInt64(&this.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	okToUnlockTable := make(chan bool, 4)
+	okToDropSentryTable := make(chan bool, 4)
+	dropSentryTableDone := make(chan bool, 2)
 	defer func() {
+		okToDropSentryTable <- true
 		okToUnlockTable <- true
 	}()
 
@@ -670,7 +673,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	go func() {
-		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, okToDropSentryTable, dropSentryTableDone); err != nil {
 			this.migrationContext.Log.Errore(err)
 		}
 	}()
@@ -703,6 +706,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 		if err := this.applier.AtomicCutoverRename(renameSessionIdChan, tablesRenamed); err != nil {
 			// Abort! Release the lock
 			atomic.StoreInt64(&tableRenameKnownToHaveFailed, 1)
+			okToDropSentryTable <- true
 			okToUnlockTable <- true
 		}
 	}()
@@ -720,6 +724,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// Wait for the RENAME to appear in PROCESSLIST
 	if err := this.retryOperation(waitForRename, true); err != nil {
 		// Abort! Release the lock
+		okToDropSentryTable <- true
 		okToUnlockTable <- true
 		return err
 	}
@@ -732,9 +737,20 @@ func (this *Migrator) atomicCutOver() (err error) {
 	}
 	this.migrationContext.Log.Infof("Connection holding lock on original table still exists")
 
+	okToDropSentryTable <- true
+	<-dropSentryTableDone
+
+	if err := this.applier.ValidateGhostTableLocked(renameSessionId); err != nil {
+		// Abort! Kill Rename session and release the lock
+		if err := this.applier.KillRenameSession(renameSessionId); err != nil {
+			this.migrationContext.Log.Errore(err)
+		}
+		okToUnlockTable <- true
+		return err
+	}
+
 	// Now that we've found the RENAME blocking, AND the locking connection still alive,
 	// we know it is safe to proceed to release the lock
-
 	okToUnlockTable <- true
 	// BAM! magic table dropped, original table lock is released
 	// -> RENAME released -> queries on original are unblocked.
@@ -1203,6 +1219,13 @@ func (this *Migrator) initiateApplier() error {
 		}
 	}
 	this.applier.WriteChangelogState(string(GhostTableMigrated))
+
+	if this.migrationContext.AllowSetupMetadataLockInstruments {
+		if err := this.applier.EnableMetadataLockInstrument(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to enable metadata lock instrument, see further error details. Bailing out")
+			return err
+		}
+	}
 	go this.applier.InitiateHeartbeat()
 	return nil
 }
