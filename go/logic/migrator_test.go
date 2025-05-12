@@ -477,17 +477,18 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 		migrationContext.ThrottleHTTPTimeoutMillis = 1000
 		migrationContext.CutOverLockTimeoutSeconds = 4
 
-		//nolint:dogsled
 		_, filename, _, _ := runtime.Caller(0)
 		migrationContext.ServeSocketFile = filepath.Join(filepath.Dir(filename), "../../tmp/gh-ost.sock")
 		migrationContext.PostponeCutOverFlagFile = filepath.Join(filepath.Dir(filename), "../../tmp/ghost.postpone.flag")
 
 		migrator := NewMigrator(migrationContext, "0.0.0")
 
+		//nolint:contextcheck
 		done <- migrator.Migrate()
 	}()
 
 	time.Sleep(2 * time.Second)
+	//nolint:dogsled
 	_, filename, _, _ := runtime.Caller(0)
 	err = os.Remove(filepath.Join(filepath.Dir(filename), "../../tmp/ghost.postpone.flag"))
 	if err != nil {
@@ -528,7 +529,6 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 
 	suite.Require().Equal("testing", tableName)
 	suite.Require().Equal("CREATE TABLE `testing` (\n  `id` int NOT NULL,\n  `name` varchar(64) DEFAULT NULL,\n  `foobar` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createTableSQL)
-
 }
 
 func TestMigrator(t *testing.T) {

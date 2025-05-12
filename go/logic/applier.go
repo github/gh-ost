@@ -416,6 +416,28 @@ func (this *Applier) dropTable(tableName string) error {
 	return nil
 }
 
+func (this *Applier) StateMetadataLockInstrument() error {
+	query := `select /*+ MAX_EXECUTION_TIME(300) */ ENABLED, TIMED from performance_schema.setup_instruments WHERE NAME = 'wait/lock/metadata/sql/mdl'`
+	var enabled, timed string
+	if err := this.db.QueryRow(query).Scan(&enabled, &timed); err != nil {
+		return this.migrationContext.Log.Errorf("query performance_schema.setup_instruments with name wait/lock/metadata/sql/mdl error: %s", err)
+	}
+	if strings.EqualFold(enabled, "YES") && strings.EqualFold(timed, "YES") {
+		this.migrationContext.IsOpenMetadataLockInstruments = true
+		return nil
+	}
+	if !this.migrationContext.AllowSetupMetadataLockInstruments {
+		return nil
+	}
+	this.migrationContext.Log.Infof("instrument wait/lock/metadata/sql/mdl state: enabled %s, timed %s", enabled, timed)
+	if _, err := this.db.Exec(`UPDATE performance_schema.setup_instruments SET ENABLED = 'YES', TIMED = 'YES' WHERE NAME = 'wait/lock/metadata/sql/mdl'`); err != nil {
+		return this.migrationContext.Log.Errorf("enable instrument wait/lock/metadata/sql/mdl error: %s", err)
+	}
+	this.migrationContext.IsOpenMetadataLockInstruments = true
+	this.migrationContext.Log.Infof("instrument wait/lock/metadata/sql/mdl enabled")
+	return nil
+}
+
 // dropTriggers drop the triggers on the applied host
 func (this *Applier) DropTriggersFromGhost() error {
 	if len(this.migrationContext.Triggers) > 0 {
@@ -1192,7 +1214,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 
 	this.migrationContext.Log.Infof("Session renameLockSessionId is %+v", *renameLockSessionId)
 	// checking the lock holded by rename session
-	if *renameLockSessionId > 0 {
+	if *renameLockSessionId > 0 && this.migrationContext.IsOpenMetadataLockInstruments {
 		sleepDuration := time.Duration(10*this.migrationContext.CutOverLockTimeoutSeconds) * time.Millisecond
 		for i := 1; i <= 100; i++ {
 			err := this.ExpectMetadataLock(*renameLockSessionId)

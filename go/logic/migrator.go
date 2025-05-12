@@ -1205,6 +1205,10 @@ func (this *Migrator) initiateApplier() error {
 		}
 	}
 	this.applier.WriteChangelogState(string(GhostTableMigrated))
+	if err := this.applier.StateMetadataLockInstrument(); err != nil {
+		this.migrationContext.Log.Errorf("Unable to enable metadata lock instrument, see further error details. Bailing out")
+		return err
+	}
 	go this.applier.InitiateHeartbeat()
 	return nil
 }
