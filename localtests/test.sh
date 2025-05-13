@@ -142,6 +142,12 @@ test_single() {
   fi
 
   gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
+
+  if [ -f $tests_path/$test_name/before.sql ]; then
+    gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/before.sql
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test < $tests_path/$test_name/before.sql
+  fi
+
   test_create_result=$?
 
   if [ $test_create_result -ne 0 ] ; then
@@ -206,6 +212,11 @@ test_single() {
   if [ -f $tests_path/$test_name/sql_mode ] ; then
     gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
     gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
+  fi
+
+  if [ -f $tests_path/$test_name/after.sql ]; then
+    gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/after.sql
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test < $tests_path/$test_name/after.sql
   fi
 
   if [ -f $tests_path/$test_name/destroy.sql ] ; then

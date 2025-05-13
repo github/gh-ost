@@ -664,10 +664,6 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and this done with copying row chunks)
 func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, expectedRowCount int64, err error) {
-	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
-	if this.migrationContext.MigrationIterationRangeMinValues == nil {
-		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
-	}
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
