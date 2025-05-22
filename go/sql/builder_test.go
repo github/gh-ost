@@ -325,7 +325,7 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 	}
 }
 
-func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
+func TestBuildUniqueKeyRangeEndPreparedQueryViaTemptable(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
 	var chunkSize int64 = 500
