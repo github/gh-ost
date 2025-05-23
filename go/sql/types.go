@@ -325,7 +325,7 @@ func (this *ColumnValues) AbstractValues() []interface{} {
 func (this *ColumnValues) StringColumn(index int) string {
 	val := this.AbstractValues()[index]
 	if ints, ok := val.([]uint8); ok {
-		return string(ints)
+		return fmt.Sprintf("%x", ints)
 	}
 	return fmt.Sprintf("%+v", val)
 }

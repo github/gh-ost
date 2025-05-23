@@ -40,3 +40,12 @@ func TestGetColumn(t *testing.T) {
 		require.Nil(t, column)
 	}
 }
+
+func TestBinaryToString(t *testing.T) {
+	id := []uint8{0x1b, 0x99}
+	col := make([]interface{}, 1)
+	col[0] = id
+	cv := ToColumnValues(col)
+
+	require.Equal(t, "1b99", cv.StringColumn(0))
+}
