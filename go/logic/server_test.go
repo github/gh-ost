@@ -78,8 +78,9 @@ func TestServerCreatePostponeCutOverFlagFile(t *testing.T) {
 		}
 		dir, err := os.MkdirTemp("", "gh-ost-test-")
 		require.NoError(t, err)
+		defer os.RemoveAll(dir)
 
-		filePath := path.Join(dir, "postpone-cut-over.flag")
+		filePath := filepath.Join(dir, "postpone-cut-over.flag")
 
 		err = s.createPostponeCutOverFlagFile(filePath)
 		require.NoError(t, err)
