@@ -1,6 +1,8 @@
 package logic
 
 import (
+	"os"
+	"path"
 	"testing"
 	"time"
 
@@ -64,5 +66,39 @@ func TestServerRunCPUProfile(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, profile)
 		require.Equal(t, int64(0), s.isCPUProfiling)
+	})
+}
+
+func TestServerCreatePostponeCutOverFlagFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success", func(t *testing.T) {
+		s := &Server{
+			migrationContext: base.NewMigrationContext(),
+		}
+		dir, err := os.MkdirTemp("", "gh-ost-test-")
+		require.NoError(t, err)
+
+		filePath := path.Join(dir, "postpone-cut-over.flag")
+
+		err = s.createPostponeCutOverFlagFile(filePath)
+		require.NoError(t, err)
+		require.FileExists(t, filePath)
+	})
+
+	t.Run("file already exists", func(t *testing.T) {
+		s := &Server{
+			migrationContext: base.NewMigrationContext(),
+		}
+		dir, err := os.MkdirTemp("", "gh-ost-test-")
+		require.NoError(t, err)
+
+		filePath := path.Join(dir, "postpone-cut-over.flag")
+		err = base.TouchFile(filePath)
+		require.NoError(t, err)
+
+		err = s.createPostponeCutOverFlagFile(filePath)
+		require.NoError(t, err)
+		require.FileExists(t, filePath)
 	})
 }
