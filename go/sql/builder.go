@@ -251,6 +251,59 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, noWait)
 }
 
+func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
+	if uniqueKeyColumns.Len() == 0 {
+		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+
+	var startRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
+	if includeRangeStartValues {
+		startRangeComparisonSign = GreaterThanOrEqualsComparisonSign
+	}
+	rangeStartComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeStartArgs, startRangeComparisonSign)
+	if err != nil {
+		return "", explodedArgs, err
+	}
+	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+	rangeEndComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeEndArgs, LessThanOrEqualsComparisonSign)
+	if err != nil {
+		return "", explodedArgs, err
+	}
+	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+
+	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
+	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames))
+	for i, column := range uniqueKeyColumns.Columns() {
+		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
+		if column.Type == EnumColumnType {
+			uniqueKeyColumnAscending[i] = fmt.Sprintf("concat(%s) asc", uniqueKeyColumnNames[i])
+		} else {
+			uniqueKeyColumnAscending[i] = fmt.Sprintf("%s asc", uniqueKeyColumnNames[i])
+		}
+	}
+	result = fmt.Sprintf(`
+		select /* gh-ost %s.%s %s */
+			%s
+		from
+			%s.%s
+		where
+			%s and %s
+		order by
+			%s
+		limit 1
+		offset %d`,
+		databaseName, tableName, hint,
+		strings.Join(uniqueKeyColumnNames, ", "),
+		databaseName, tableName,
+		rangeStartComparison, rangeEndComparison,
+		strings.Join(uniqueKeyColumnAscending, ", "),
+		(chunkSize - 1),
+	)
+	return result, explodedArgs, nil
+}
+
 func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
@@ -286,22 +339,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 			uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumnNames[i])
 		}
 	}
-
-	joinedColumnNames := strings.Join(uniqueKeyColumnNames, ", ")
 	result = fmt.Sprintf(`
-		select /* gh-ost %s.%s %s */
-			%s,
-			(select count(*) from (
-				select
-					%s
-				from
-					%s.%s
-				where
-					%s and %s
-				order by
-					%s
-				limit %d
-			) select_osc_chunk)
+		select /* gh-ost %s.%s %s */ %s
 		from (
 			select
 				%s
@@ -316,17 +355,13 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 		order by
 			%s
 		limit 1`,
-		databaseName, tableName, hint, joinedColumnNames,
-		joinedColumnNames, databaseName, tableName,
-		rangeStartComparison, rangeEndComparison,
-		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
-		joinedColumnNames, databaseName, tableName,
+		databaseName, tableName, hint, strings.Join(uniqueKeyColumnNames, ", "),
+		strings.Join(uniqueKeyColumnNames, ", "), databaseName, tableName,
 		rangeStartComparison, rangeEndComparison,
 		strings.Join(uniqueKeyColumnAscending, ", "), chunkSize,
 		strings.Join(uniqueKeyColumnDescending, ", "),
 	)
-	// 2x the explodedArgs for the subquery (CTE would be possible but not supported by MySQL 5)
-	return result, append(explodedArgs, explodedArgs...), nil
+	return result, explodedArgs, nil
 }
 
 func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKey *UniqueKey) (string, error) {

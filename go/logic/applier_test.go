@@ -562,10 +562,9 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySuc
 	err = applier.ReadMigrationRangeValues()
 	suite.Require().NoError(err)
 
-	hasFurtherRange, expectedRangeSize, err := applier.CalculateNextIterationRangeEndValues()
+	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
-	suite.Require().Equal(int64(1), expectedRangeSize)
 
 	_, rowsAffected, _, err := applier.ApplyIterationInsertQuery()
 	suite.Require().NoError(err)
@@ -595,6 +594,67 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySuc
 		Equal(int64(1), migrationContext.TotalDMLEventsApplied)
 	suite.Require().
 		Equal(int64(0), migrationContext.RowsDeltaEstimate)
+}
+
+func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQueryFailsWithTruncationWarning() {
+	ctx := context.Background()
+
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id int not null, name varchar(20), primary key(id))")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test._testing_gho (id INT, name varchar(20), primary key(id));")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "INSERT INTO test.testing (id, name) VALUES (1, 'this string is long')")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
+	migrationContext.OriginalTableName = "testing"
+	migrationContext.AlterStatementOptions = "modify column name varchar(10)"
+	migrationContext.PanicOnWarnings = true
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "name"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "name"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "name"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+	applier := NewApplier(migrationContext)
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	err = applier.CreateChangelogTable()
+	suite.Require().NoError(err)
+
+	err = applier.ReadMigrationRangeValues()
+	suite.Require().NoError(err)
+
+	err = applier.AlterGhost()
+	suite.Require().NoError(err)
+
+	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+	suite.Require().NoError(err)
+	suite.Require().True(hasFurtherRange)
+
+	_, rowsAffected, _, err := applier.ApplyIterationInsertQuery()
+	suite.Equal(int64(1), rowsAffected)
+	suite.Require().NoError(err)
+
+	// Verify the warning was recorded and will cause the migrator to panic
+	suite.Require().NotEmpty(applier.migrationContext.MigrationLastInsertSQLWarnings)
+	suite.Require().Contains(applier.migrationContext.MigrationLastInsertSQLWarnings[0], "Warning: Data truncated for column 'name' at row 1")
 }
 
 func TestApplier(t *testing.T) {
