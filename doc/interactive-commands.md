@@ -41,6 +41,7 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `throttle-control-replicas='replica1,replica2'`: change list of throttle-control replicas, these are replicas `gh-ost` will check. This takes a comma separated list of replica's to check and replaces the previous list.
 - `throttle`: force migration suspend
 - `no-throttle`: cancel forced suspension (though other throttling reasons may still apply)
+- `postpone-cut-over-flag-file=<path>`: Postpone the [cut-over](cut-over.md) phase, writing a cut over flag file to the given path
 - `unpostpone`: at a time where `gh-ost` is postponing the [cut-over](cut-over.md) phase, instruct `gh-ost` to stop postponing and proceed immediately to cut-over.
 - `panic`: immediately panic and abort operation
 
