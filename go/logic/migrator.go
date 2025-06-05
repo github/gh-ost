@@ -1247,9 +1247,8 @@ func (this *Migrator) iterateChunks() error {
 			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
 
 			hasFurtherRange := false
-			expectedRangeSize := int64(0)
 			if err := this.retryOperation(func() (e error) {
-				hasFurtherRange, expectedRangeSize, e = this.applier.CalculateNextIterationRangeEndValues()
+				hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
 				return e
 			}); err != nil {
 				return terminateRowIteration(err)
@@ -1281,10 +1280,8 @@ func (this *Migrator) iterateChunks() error {
 						for _, warning := range this.migrationContext.MigrationLastInsertSQLWarnings {
 							this.migrationContext.Log.Infof("ApplyIterationInsertQuery has SQL warnings! %s", warning)
 						}
-						if expectedRangeSize != rowsAffected {
-							joinedWarnings := strings.Join(this.migrationContext.MigrationLastInsertSQLWarnings, "; ")
-							terminateRowIteration(fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings))
-						}
+						joinedWarnings := strings.Join(this.migrationContext.MigrationLastInsertSQLWarnings, "; ")
+						terminateRowIteration(fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings))
 					}
 				}
 
