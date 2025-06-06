@@ -464,15 +464,15 @@ func (b *DMLDeleteQueryBuilder) BuildQuery(args []interface{}) (string, []interf
 // DMLInsertQueryBuilder can build INSERT queries for DML events.
 // It holds the prepared query statement so it doesn't need to be recreated every time.
 type DMLInsertQueryBuilder struct {
-	tableColumns, sharedColumns *ColumnList
-	preparedStatement           string
+	tableColumns, sharedColumns, uniqueKeyColumns *ColumnList
+	preparedStatement                             string
 }
 
 // NewDMLInsertQueryBuilder creates a new DMLInsertQueryBuilder.
 // It prepares the INSERT query statement.
 // Returns an error if no shared columns are given, the shared columns are not a subset of the table columns,
 // or the prepared statement cannot be built.
-func NewDMLInsertQueryBuilder(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns *ColumnList) (*DMLInsertQueryBuilder, error) {
+func NewDMLInsertQueryBuilder(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns *ColumnList, uniqueKeyColumns *ColumnList) (*DMLInsertQueryBuilder, error) {
 	if !sharedColumns.IsSubsetOf(tableColumns) {
 		return nil, fmt.Errorf("shared columns is not a subset of table columns in NewDMLInsertQueryBuilder")
 	}
@@ -503,6 +503,7 @@ func NewDMLInsertQueryBuilder(databaseName, tableName string, tableColumns, shar
 	return &DMLInsertQueryBuilder{
 		tableColumns:      tableColumns,
 		sharedColumns:     sharedColumns,
+		uniqueKeyColumns:  uniqueKeyColumns,
 		preparedStatement: stmt,
 	}, nil
 }
@@ -510,17 +511,25 @@ func NewDMLInsertQueryBuilder(databaseName, tableName string, tableColumns, shar
 // BuildQuery builds the arguments array for a DML event INSERT query.
 // It returns the query string and the shared arguments array.
 // Returns an error if the number of arguments differs from the number of table columns.
-func (b *DMLInsertQueryBuilder) BuildQuery(args []interface{}) (string, []interface{}, error) {
+func (b *DMLInsertQueryBuilder) BuildQuery(args []interface{}) (string, []interface{}, []interface{}, error) {
 	if len(args) != b.tableColumns.Len() {
-		return "", nil, fmt.Errorf("args count differs from table column count in BuildDMLInsertQuery")
+		return "", nil, nil, fmt.Errorf("args count differs from table column count in BuildDMLInsertQuery")
 	}
+
 	sharedArgs := make([]interface{}, 0, b.sharedColumns.Len())
 	for _, column := range b.sharedColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
 		arg := column.convertArg(args[tableOrdinal], false)
 		sharedArgs = append(sharedArgs, arg)
 	}
-	return b.preparedStatement, sharedArgs, nil
+
+	uniqueKeyArgs := make([]interface{}, 0, b.uniqueKeyColumns.Len())
+	for _, column := range b.uniqueKeyColumns.Columns() {
+		tableOrdinal := b.tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal], true)
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+	}
+	return b.preparedStatement, sharedArgs, uniqueKeyArgs, nil
 }
 
 // DMLUpdateQueryBuilder can build UPDATE queries for DML events.
