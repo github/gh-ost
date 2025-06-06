@@ -926,6 +926,28 @@ func (this *Inspector) readChangelogState(hint string) (string, error) {
 	return result, err
 }
 
+// readCurrentBinlogCoordinates reads master status from hooked server
+func (this *Inspector) readCurrentBinlogCoordinates() (*mysql.BinlogCoordinates, error) {
+	var coords *mysql.BinlogCoordinates
+	query := fmt.Sprintf(`show /* gh-ost readCurrentBinlogCoordinates */ %s`, mysql.ReplicaTermFor(this.migrationContext.InspectorMySQLVersion, "master status"))
+	foundMasterStatus := false
+	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		coords = &mysql.BinlogCoordinates{
+			LogFile: m.GetString("File"),
+			LogPos:  m.GetInt64("Position"),
+		}
+		foundMasterStatus = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !foundMasterStatus {
+		return nil, fmt.Errorf("Got no results from SHOW MASTER STATUS. Bailing out")
+	}
+	return coords, nil
+}
+
 func (this *Inspector) getMasterConnectionConfig() (applierConfig *mysql.ConnectionConfig, err error) {
 	this.migrationContext.Log.Infof("Recursively searching for replication master")
 	visitedKeys := mysql.NewInstanceKeyMap()

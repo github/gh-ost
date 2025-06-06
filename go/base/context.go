@@ -168,6 +168,9 @@ type MigrationContext struct {
 	CutOverType                  CutOver
 	ReplicaServerId              uint
 
+	// Number of workers used by the trx coordinator
+	NumWorkers int
+
 	Hostname                               string
 	AssumeMasterHostname                   string
 	ApplierTimeZone                        string

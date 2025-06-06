@@ -11,10 +11,11 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"os"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -43,21 +44,6 @@ func ReadChangelogState(s string) ChangelogState {
 
 type tableWriteFunc func() error
 
-type applyEventStruct struct {
-	writeFunc *tableWriteFunc
-	dmlEvent  *binlog.BinlogDMLEvent
-}
-
-func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
-	result := &applyEventStruct{writeFunc: writeFunc}
-	return result
-}
-
-func newApplyEventStructByDML(dmlEvent *binlog.BinlogDMLEvent) *applyEventStruct {
-	result := &applyEventStruct{dmlEvent: dmlEvent}
-	return result
-}
-
 type PrintStatusRule int
 
 const (
@@ -74,7 +60,6 @@ type Migrator struct {
 	parser           *sql.AlterTableParser
 	inspector        *Inspector
 	applier          *Applier
-	eventsStreamer   *EventsStreamer
 	server           *Server
 	throttler        *Throttler
 	hooksExecutor    *HooksExecutor
@@ -88,12 +73,12 @@ type Migrator struct {
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive before realizing the copy is complete
-	copyRowsQueue    chan tableWriteFunc
-	applyEventsQueue chan *applyEventStruct
+	copyRowsQueue chan tableWriteFunc
 
 	handledChangelogStates map[string]bool
 
 	finishedMigrating int64
+	trxCoordinator    *Coordinator
 }
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
@@ -102,13 +87,12 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		hooksExecutor:              NewHooksExecutor(context),
 		migrationContext:           context,
 		parser:                     sql.NewAlterTableParser(),
-		ghostTableMigrated:         make(chan bool),
+		ghostTableMigrated:         make(chan bool, 1),
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
 		allEventsUpToLockProcessed: make(chan string),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
 		handledChangelogStates: make(map[string]bool),
 		finishedMigrating:      0,
 	}
@@ -223,17 +207,13 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	case GhostTableMigrated:
 		this.ghostTableMigrated <- true
 	case AllEventsUpToLockProcessed:
-		var applyEventFunc tableWriteFunc = func() error {
-			this.allEventsUpToLockProcessed <- changelogStateString
-			return nil
-		}
 		// at this point we know all events up to lock have been read from the streamer,
 		// because the streamer works sequentially. So those events are either already handled,
 		// or have event functions in applyEventsQueue.
 		// So as not to create a potential deadlock, we write this func to applyEventsQueue
 		// asynchronously, understanding it doesn't really matter.
 		go func() {
-			this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
+			this.allEventsUpToLockProcessed <- changelogStateString
 		}()
 	default:
 		return fmt.Errorf("Unknown changelog state: %+v", changelogState)
@@ -352,12 +332,18 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
+
+	this.trxCoordinator = NewCoordinator(this.migrationContext, this.applier, this.throttler, this.onChangelogEvent)
+
 	if err := this.initiateStreaming(); err != nil {
 		return err
 	}
 	if err := this.initiateApplier(); err != nil {
 		return err
 	}
+
+	this.trxCoordinator.applier = this.applier
+
 	if err := this.createFlagFiles(); err != nil {
 		return err
 	}
@@ -383,9 +369,27 @@ func (this *Migrator) Migrate() (err error) {
 		}
 	}
 
+	this.migrationContext.Log.Infof("starting %d applier workers", this.migrationContext.NumWorkers)
+	this.trxCoordinator.InitializeWorkers(this.migrationContext.NumWorkers)
+
 	initialLag, _ := this.inspector.getReplicationLag()
 	this.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
-	<-this.ghostTableMigrated
+
+waitForGhostTable:
+	for {
+		select {
+		case <-this.ghostTableMigrated:
+			break waitForGhostTable
+		default:
+			dmlEvent, err := this.trxCoordinator.ProcessEventsUntilNextChangelogEvent()
+			if err != nil {
+				return err
+			}
+
+			this.onChangelogEvent(dmlEvent)
+		}
+	}
+
 	this.migrationContext.Log.Debugf("ghost table migrated")
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
 	// When running on replica, this means the replica has those tables. When running
@@ -411,9 +415,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.countTableRows(); err != nil {
 		return err
 	}
-	if err := this.addDMLEventsListener(); err != nil {
-		return err
-	}
+
 	if err := this.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
@@ -423,6 +425,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
+
 	go this.executeWriteFuncs()
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
@@ -435,6 +438,7 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	this.printStatus(ForcePrintStatusRule)
+	this.printWorkerStats()
 
 	if this.migrationContext.IsCountingTableRows() {
 		this.migrationContext.Log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
@@ -754,10 +758,13 @@ func (this *Migrator) atomicCutOver() (err error) {
 
 // initiateServer begins listening on unix socket/tcp for incoming interactive commands
 func (this *Migrator) initiateServer() (err error) {
-	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
+	var printStatus printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
 		this.printStatus(rule, writer)
 	}
-	this.server = NewServer(this.migrationContext, this.hooksExecutor, f)
+	var printWorkers printWorkersFunc = func(writer io.Writer) {
+		this.printWorkerStats(writer)
+	}
+	this.server = NewServer(this.migrationContext, this.hooksExecutor, printStatus, printWorkers)
 	if err := this.server.BindSocketFile(); err != nil {
 		return err
 	}
@@ -1035,6 +1042,29 @@ func (this *Migrator) shouldPrintMigrationStatusHint(rule PrintStatusRule, elaps
 	return shouldPrint
 }
 
+// printWorkerStats prints cumulative stats from the trxCoordinator workers.
+func (this *Migrator) printWorkerStats(writers ...io.Writer) {
+	writers = append(writers, os.Stdout)
+	mw := io.MultiWriter(writers...)
+
+	busyWorkers := this.trxCoordinator.busyWorkers.Load()
+	totalWorkers := cap(this.trxCoordinator.workerQueue)
+	fmt.Fprintf(mw, "# %d/%d workers are busy\n", busyWorkers, totalWorkers)
+
+	stats := this.trxCoordinator.GetWorkerStats()
+	for id, stat := range stats {
+		fmt.Fprintf(mw,
+			"Worker %d; Waited: %s; Busy: %s; DML Applied: %d (%.2f/s), Trx Applied: %d (%.2f/s)\n",
+			id,
+			base.PrettifyDurationOutput(stat.waitTime),
+			base.PrettifyDurationOutput(stat.busyTime),
+			stat.dmlEventsApplied,
+			stat.dmlRate,
+			stat.executedJobs,
+			stat.trxRate)
+	}
+}
+
 // printStatus prints the progress status, and optionally additionally detailed
 // dump of configuration.
 // `rule` indicates the type of output expected.
@@ -1073,12 +1103,12 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		return
 	}
 
-	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
+	currentBinlogCoordinates := *this.trxCoordinator.binlogReader.GetCurrentBinlogCoordinates()
 
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
-		len(this.applyEventsQueue), cap(this.applyEventsQueue),
+		len(this.trxCoordinator.events), cap(this.trxCoordinator.events),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates,
 		this.migrationContext.GetCurrentLagDuration().Seconds(),
@@ -1109,22 +1139,15 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 // initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (this *Migrator) initiateStreaming() error {
-	this.eventsStreamer = NewEventsStreamer(this.migrationContext)
-	if err := this.eventsStreamer.InitDBConnections(); err != nil {
+	initialCoords, err := this.inspector.readCurrentBinlogCoordinates()
+	if err != nil {
 		return err
 	}
-	this.eventsStreamer.AddListener(
-		false,
-		this.migrationContext.DatabaseName,
-		this.migrationContext.GetChangelogTableName(),
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			return this.onChangelogEvent(dmlEvent)
-		},
-	)
 
 	go func() {
-		this.migrationContext.Log.Debugf("Beginning streaming")
-		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
+		this.migrationContext.Log.Debugf("Beginning streaming at coordinates: %+v", *initialCoords)
+		ctx := context.TODO()
+		err := this.trxCoordinator.StartStreaming(ctx, *initialCoords, this.canStopStreaming)
 		if err != nil {
 			this.migrationContext.PanicAbort <- err
 		}
@@ -1138,25 +1161,9 @@ func (this *Migrator) initiateStreaming() error {
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}
-			this.migrationContext.SetRecentBinlogCoordinates(*this.eventsStreamer.GetCurrentBinlogCoordinates())
 		}
 	}()
 	return nil
-}
-
-// addDMLEventsListener begins listening for binlog events on the original table,
-// and creates & enqueues a write task per such event.
-func (this *Migrator) addDMLEventsListener() error {
-	err := this.eventsStreamer.AddListener(
-		false,
-		this.migrationContext.DatabaseName,
-		this.migrationContext.OriginalTableName,
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			this.applyEventsQueue <- newApplyEventStructByDML(dmlEvent)
-			return nil
-		},
-	)
-	return err
 }
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
@@ -1174,7 +1181,7 @@ func (this *Migrator) initiateThrottler() {
 
 func (this *Migrator) initiateApplier() error {
 	this.applier = NewApplier(this.migrationContext)
-	if err := this.applier.InitDBConnections(); err != nil {
+	if err := this.applier.InitDBConnections(this.migrationContext.NumWorkers); err != nil {
 		return err
 	}
 	if err := this.applier.ValidateOrDropExistingTables(); err != nil {
@@ -1293,57 +1300,6 @@ func (this *Migrator) iterateChunks() error {
 	}
 }
 
-func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
-	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
-		if eventStruct.writeFunc != nil {
-			if err := this.retryOperation(*eventStruct.writeFunc); err != nil {
-				return this.migrationContext.Log.Errore(err)
-			}
-		}
-		return nil
-	}
-	if eventStruct.dmlEvent == nil {
-		return handleNonDMLEventStruct(eventStruct)
-	}
-	if eventStruct.dmlEvent != nil {
-		dmlEvents := [](*binlog.BinlogDMLEvent){}
-		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
-		var nonDmlStructToApply *applyEventStruct
-
-		availableEvents := len(this.applyEventsQueue)
-		batchSize := int(atomic.LoadInt64(&this.migrationContext.DMLBatchSize))
-		if availableEvents > batchSize-1 {
-			// The "- 1" is because we already consumed one event: the original event that led to this function getting called.
-			// So, if DMLBatchSize==1 we wish to not process any further events
-			availableEvents = batchSize - 1
-		}
-		for i := 0; i < availableEvents; i++ {
-			additionalStruct := <-this.applyEventsQueue
-			if additionalStruct.dmlEvent == nil {
-				// Not a DML. We don't group this, and we don't batch any further
-				nonDmlStructToApply = additionalStruct
-				break
-			}
-			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
-		}
-		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
-		var applyEventFunc tableWriteFunc = func() error {
-			return this.applier.ApplyDMLEventQueries(dmlEvents)
-		}
-		if err := this.retryOperation(applyEventFunc); err != nil {
-			return this.migrationContext.Log.Errore(err)
-		}
-		if nonDmlStructToApply != nil {
-			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
-			// We need to handle it!
-			if err := handleNonDMLEventStruct(nonDmlStructToApply); err != nil {
-				return this.migrationContext.Log.Errore(err)
-			}
-		}
-	}
-	return nil
-}
-
 // executeWriteFuncs writes data via applier: both the rowcopy and the events backlog.
 // This is where the ghost table gets the data. The function fills the data single-threaded.
 // Both event backlog and rowcopy events are polled; the backlog events have precedence.
@@ -1352,6 +1308,7 @@ func (this *Migrator) executeWriteFuncs() error {
 		this.migrationContext.Log.Debugf("Noop operation; not really executing write funcs")
 		return nil
 	}
+
 	for {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return nil
@@ -1359,40 +1316,36 @@ func (this *Migrator) executeWriteFuncs() error {
 
 		this.throttler.throttle(nil)
 
-		// We give higher priority to event processing, then secondary priority to
-		// rowcopy
+		// We give higher priority to event processing.
+		// ProcessEventsUntilDrained will process all events in the queue, and then return once no more events are available.
+		if err := this.trxCoordinator.ProcessEventsUntilDrained(); err != nil {
+			return this.migrationContext.Log.Errore(err)
+		}
+
+		this.throttler.throttle(nil)
+
+		// And secondary priority to rowcopy
 		select {
-		case eventStruct := <-this.applyEventsQueue:
+		case copyRowsFunc := <-this.copyRowsQueue:
 			{
-				if err := this.onApplyEventStruct(eventStruct); err != nil {
-					return err
+				copyRowsStartTime := time.Now()
+				// Retries are handled within the copyRowsFunc
+				if err := copyRowsFunc(); err != nil {
+					return this.migrationContext.Log.Errore(err)
+				}
+				if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
+					copyRowsDuration := time.Since(copyRowsStartTime)
+					sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
+					sleepTime := time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond
+					time.Sleep(sleepTime)
 				}
 			}
 		default:
 			{
-				select {
-				case copyRowsFunc := <-this.copyRowsQueue:
-					{
-						copyRowsStartTime := time.Now()
-						// Retries are handled within the copyRowsFunc
-						if err := copyRowsFunc(); err != nil {
-							return this.migrationContext.Log.Errore(err)
-						}
-						if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
-							copyRowsDuration := time.Since(copyRowsStartTime)
-							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
-							sleepTime := time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond
-							time.Sleep(sleepTime)
-						}
-					}
-				default:
-					{
-						// Hmmmmm... nothing in the queue; no events, but also no row copy.
-						// This is possible upon load. Let's just sleep it over.
-						this.migrationContext.Log.Debugf("Getting nothing in the write queue. Sleeping...")
-						time.Sleep(time.Second)
-					}
-				}
+				// Hmmmmm... nothing in the queue; no events, but also no row copy.
+				// This is possible upon load. Let's just sleep it over.
+				this.migrationContext.Log.Debugf("Getting nothing in the write queue. Sleeping...")
+				time.Sleep(time.Second)
 			}
 		}
 	}
@@ -1415,10 +1368,6 @@ func (this *Migrator) finalCleanup() error {
 			this.migrationContext.Log.Errore(err)
 		}
 	}
-	if err := this.eventsStreamer.Close(); err != nil {
-		this.migrationContext.Log.Errore(err)
-	}
-
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
 		return err
 	}
@@ -1444,6 +1393,16 @@ func (this *Migrator) finalCleanup() error {
 func (this *Migrator) teardown() {
 	atomic.StoreInt64(&this.finishedMigrating, 1)
 
+	if this.trxCoordinator != nil {
+		this.migrationContext.Log.Infof("Tearing down coordinator")
+		this.trxCoordinator.Teardown()
+	}
+
+	if this.throttler != nil {
+		this.migrationContext.Log.Infof("Tearing down throttler")
+		this.throttler.Teardown()
+	}
+
 	if this.inspector != nil {
 		this.migrationContext.Log.Infof("Tearing down inspector")
 		this.inspector.Teardown()
@@ -1452,15 +1411,5 @@ func (this *Migrator) teardown() {
 	if this.applier != nil {
 		this.migrationContext.Log.Infof("Tearing down applier")
 		this.applier.Teardown()
-	}
-
-	if this.eventsStreamer != nil {
-		this.migrationContext.Log.Infof("Tearing down streamer")
-		this.eventsStreamer.Teardown()
-	}
-
-	if this.throttler != nil {
-		this.migrationContext.Log.Infof("Tearing down throttler")
-		this.throttler.Teardown()
 	}
 }
