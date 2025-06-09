@@ -31,6 +31,7 @@ type ConnectionConfig struct {
 	Timeout              float64
 	TransactionIsolation string
 	Charset              string
+	IsMariaDB            bool
 }
 
 func NewConnectionConfig() *ConnectionConfig {
@@ -51,6 +52,7 @@ func (this *ConnectionConfig) DuplicateCredentials(key InstanceKey) *ConnectionC
 		Timeout:              this.Timeout,
 		TransactionIsolation: this.TransactionIsolation,
 		Charset:              this.Charset,
+		IsMariaDB:            this.IsMariaDB,
 	}
 
 	if this.tlsConfig != nil {
@@ -152,12 +154,19 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 		this.Charset = "utf8mb4,utf8,latin1"
 	}
 
+	var isolationParam string
+	if this.IsMariaDB {
+		isolationParam = fmt.Sprintf("tx_isolation=%q", this.TransactionIsolation)
+	} else {
+		isolationParam = fmt.Sprintf("transaction_isolation=%q", this.TransactionIsolation)
+	}
+
 	connectionParams := []string{
 		"autocommit=true",
 		"interpolateParams=true",
 		fmt.Sprintf("charset=%s", this.Charset),
 		fmt.Sprintf("tls=%s", tlsOption),
-		fmt.Sprintf("transaction_isolation=%q", this.TransactionIsolation),
+		isolationParam,
 		fmt.Sprintf("timeout=%fs", this.Timeout),
 		fmt.Sprintf("readTimeout=%fs", this.Timeout),
 		fmt.Sprintf("writeTimeout=%fs", this.Timeout),
