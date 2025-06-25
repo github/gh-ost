@@ -104,7 +104,7 @@ func MustExtractDockerHost(ctx context.Context) string {
 //
 //  1. Docker host from the "tc.host" property in the ~/.testcontainers.properties file.
 //  2. The TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE environment variable.
-//  3. Using a Docker client, check if the Info().OperativeSystem is "Docker Desktop" and return the default docker socket path for rootless docker.
+//  3. Using a Docker client, check if the Info().OperatingSystem is "Docker Desktop" and return the default docker socket path for rootless docker.
 //  4. Else, Get the current Docker Host from the existing strategies: see MustExtractDockerHost.
 //  5. If the socket contains the unix schema, the schema is removed (e.g. unix:///var/run/docker.sock -> /var/run/docker.sock)
 //  6. Else, the default location of the docker socket is used (/var/run/docker.sock)
@@ -240,7 +240,7 @@ func isHostNotSet(err error) bool {
 }
 
 // dockerHostFromEnv returns the docker host from the DOCKER_HOST environment variable, if it's not empty
-func dockerHostFromEnv(ctx context.Context) (string, error) {
+func dockerHostFromEnv(_ context.Context) (string, error) {
 	if dockerHostPath := os.Getenv("DOCKER_HOST"); dockerHostPath != "" {
 		return dockerHostPath, nil
 	}
@@ -263,7 +263,7 @@ func dockerHostFromContext(ctx context.Context) (string, error) {
 }
 
 // dockerHostFromProperties returns the docker host from the ~/.testcontainers.properties file, if it's not empty
-func dockerHostFromProperties(ctx context.Context) (string, error) {
+func dockerHostFromProperties(_ context.Context) (string, error) {
 	cfg := config.Read()
 	socketPath := cfg.Host
 	if socketPath != "" {
@@ -285,7 +285,7 @@ func dockerSocketOverridePath() (string, error) {
 
 // dockerSocketPath returns the docker socket from the default docker socket path, if it's not empty
 // and the socket exists
-func dockerSocketPath(ctx context.Context) (string, error) {
+func dockerSocketPath(_ context.Context) (string, error) {
 	if fileExists(DockerSocketPath) {
 		return DockerSocketPathWithSchema, nil
 	}
@@ -294,7 +294,7 @@ func dockerSocketPath(ctx context.Context) (string, error) {
 }
 
 // testcontainersHostFromProperties returns the testcontainers host from the ~/.testcontainers.properties file, if it's not empty
-func testcontainersHostFromProperties(ctx context.Context) (string, error) {
+func testcontainersHostFromProperties(_ context.Context) (string, error) {
 	cfg := config.Read()
 	testcontainersHost := cfg.TestcontainersHost
 	if testcontainersHost != "" {
@@ -309,10 +309,15 @@ func testcontainersHostFromProperties(ctx context.Context) (string, error) {
 	return "", ErrTestcontainersHostNotSetInProperties
 }
 
+// DockerEnvFile is the file that is created when running inside a container.
+// It's a variable to allow testing.
+// TODO: Remove this once context rework is done, which eliminates need for the default network creation.
+var DockerEnvFile = "/.dockerenv"
+
 // InAContainer returns true if the code is running inside a container
 // See https://github.com/docker/docker/blob/a9fa38b1edf30b23cae3eade0be48b3d4b1de14b/daemon/initlayer/setup_unix.go#L25
 func InAContainer() bool {
-	return inAContainer("/.dockerenv")
+	return inAContainer(DockerEnvFile)
 }
 
 func inAContainer(path string) bool {

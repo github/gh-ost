@@ -1,10 +1,12 @@
 package wait
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -13,6 +15,21 @@ var (
 	_ Strategy        = (*LogStrategy)(nil)
 	_ StrategyTimeout = (*LogStrategy)(nil)
 )
+
+// PermanentError is a special error that will stop the wait and return an error.
+type PermanentError struct {
+	err error
+}
+
+// Error implements the error interface.
+func (e *PermanentError) Error() string {
+	return e.err.Error()
+}
+
+// NewPermanentError creates a new PermanentError.
+func NewPermanentError(err error) *PermanentError {
+	return &PermanentError{err: err}
+}
 
 // LogStrategy will wait until a given log entry shows up in the docker logs
 type LogStrategy struct {
@@ -24,6 +41,18 @@ type LogStrategy struct {
 	IsRegexp     bool
 	Occurrence   int
 	PollInterval time.Duration
+
+	// check is the function that will be called to check if the log entry is present.
+	check func([]byte) error
+
+	// submatchCallback is a callback that will be called with the sub matches of the regexp.
+	submatchCallback func(pattern string, matches [][][]byte) error
+
+	// re is the optional compiled regexp.
+	re *regexp.Regexp
+
+	// log byte slice version of [LogStrategy.Log] used for count checks.
+	log []byte
 }
 
 // NewLogStrategy constructs with polling interval of 100 milliseconds and startup timeout of 60 seconds by default
@@ -43,6 +72,18 @@ func NewLogStrategy(log string) *LogStrategy {
 // AsRegexp can be used to change the default behavior of the log strategy to use regexp instead of plain text
 func (ws *LogStrategy) AsRegexp() *LogStrategy {
 	ws.IsRegexp = true
+	return ws
+}
+
+// Submatch configures a function that will be called with the result of
+// [regexp.Regexp.FindAllSubmatch], allowing the caller to process the results.
+// If the callback returns nil, the strategy will be considered successful.
+// Returning a [PermanentError] will stop the wait and return an error, otherwise
+// it will retry until the timeout is reached.
+// [LogStrategy.Occurrence] is ignored if this option is set.
+func (ws *LogStrategy) Submatch(callback func(pattern string, matches [][][]byte) error) *LogStrategy {
+	ws.submatchCallback = callback
+
 	return ws
 }
 
@@ -89,57 +130,85 @@ func (ws *LogStrategy) WaitUntilReady(ctx context.Context, target StrategyTarget
 		timeout = *ws.timeout
 	}
 
+	switch {
+	case ws.submatchCallback != nil:
+		ws.re = regexp.MustCompile(ws.Log)
+		ws.check = ws.checkSubmatch
+	case ws.IsRegexp:
+		ws.re = regexp.MustCompile(ws.Log)
+		ws.check = ws.checkRegexp
+	default:
+		ws.log = []byte(ws.Log)
+		ws.check = ws.checkCount
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	length := 0
-
-LOOP:
+	var lastLen int
+	var lastError error
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return errors.Join(lastError, ctx.Err())
 		default:
 			checkErr := checkTarget(ctx, target)
 
 			reader, err := target.Logs(ctx)
 			if err != nil {
+				// TODO: fix as this will wait for timeout if the logs are not available.
 				time.Sleep(ws.PollInterval)
 				continue
 			}
 
 			b, err := io.ReadAll(reader)
 			if err != nil {
+				// TODO: fix as this will wait for timeout if the logs are not readable.
 				time.Sleep(ws.PollInterval)
 				continue
 			}
 
-			logs := string(b)
-
-			switch {
-			case length == len(logs) && checkErr != nil:
+			if lastLen == len(b) && checkErr != nil {
+				// Log length hasn't changed so we're not making progress.
 				return checkErr
-			case checkLogsFn(ws, b):
-				break LOOP
-			default:
-				length = len(logs)
+			}
+
+			if err := ws.check(b); err != nil {
+				var errPermanent *PermanentError
+				if errors.As(err, &errPermanent) {
+					return err
+				}
+
+				lastError = err
+				lastLen = len(b)
 				time.Sleep(ws.PollInterval)
 				continue
 			}
+
+			return nil
 		}
+	}
+}
+
+// checkCount checks if the log entry is present in the logs using a string count.
+func (ws *LogStrategy) checkCount(b []byte) error {
+	if count := bytes.Count(b, ws.log); count < ws.Occurrence {
+		return fmt.Errorf("%q matched %d times, expected %d", ws.Log, count, ws.Occurrence)
 	}
 
 	return nil
 }
 
-func checkLogsFn(ws *LogStrategy, b []byte) bool {
-	if ws.IsRegexp {
-		re := regexp.MustCompile(ws.Log)
-		occurrences := re.FindAll(b, -1)
-
-		return len(occurrences) >= ws.Occurrence
+// checkRegexp checks if the log entry is present in the logs using a regexp count.
+func (ws *LogStrategy) checkRegexp(b []byte) error {
+	if matches := ws.re.FindAll(b, -1); len(matches) < ws.Occurrence {
+		return fmt.Errorf("`%s` matched %d times, expected %d", ws.Log, len(matches), ws.Occurrence)
 	}
 
-	logs := string(b)
-	return strings.Count(logs, ws.Log) >= ws.Occurrence
+	return nil
+}
+
+// checkSubmatch checks if the log entry is present in the logs using a regexp sub match callback.
+func (ws *LogStrategy) checkSubmatch(b []byte) error {
+	return ws.submatchCallback(ws.Log, ws.re.FindAllSubmatch(b, -1))
 }

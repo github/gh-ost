@@ -9,6 +9,7 @@ import (
 
 	"github.com/testcontainers/testcontainers-go/internal/config"
 	"github.com/testcontainers/testcontainers-go/internal/core"
+	"github.com/testcontainers/testcontainers-go/log"
 )
 
 // possible provider types
@@ -24,8 +25,8 @@ type (
 
 	// GenericProviderOptions defines options applicable to all providers
 	GenericProviderOptions struct {
-		Logger         Logging
-		DefaultNetwork string
+		Logger         log.Logger
+		defaultNetwork string
 	}
 
 	// GenericProviderOption defines a common interface to modify GenericProviderOptions
@@ -96,7 +97,7 @@ type ContainerProvider interface {
 // GetProvider provides the provider implementation for a certain type
 func (t ProviderType) GetProvider(opts ...GenericProviderOption) (GenericProvider, error) {
 	opt := &GenericProviderOptions{
-		Logger: Logger,
+		Logger: log.Default(),
 	}
 
 	for _, o := range opts {
@@ -131,7 +132,7 @@ func (t ProviderType) GetProvider(opts ...GenericProviderOption) (GenericProvide
 func NewDockerProvider(provOpts ...DockerProviderOption) (*DockerProvider, error) {
 	o := &DockerProviderOptions{
 		GenericProviderOptions: &GenericProviderOptions{
-			Logger: Logger,
+			Logger: log.Default(),
 		},
 	}
 

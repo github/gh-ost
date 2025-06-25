@@ -50,13 +50,13 @@ func NewHTTPStrategy(path string) *HTTPStrategy {
 		Port:                   "",
 		Path:                   path,
 		StatusCodeMatcher:      defaultStatusCodeMatcher,
-		ResponseMatcher:        func(body io.Reader) bool { return true },
+		ResponseMatcher:        func(_ io.Reader) bool { return true },
 		UseTLS:                 false,
 		TLSConfig:              nil,
 		Method:                 http.MethodGet,
 		Body:                   nil,
 		Headers:                map[string]string{},
-		ResponseHeadersMatcher: func(headers http.Header) bool { return true },
+		ResponseHeadersMatcher: func(_ http.Header) bool { return true },
 		PollInterval:           defaultPollInterval(),
 		UserInfo:               nil,
 	}
@@ -208,7 +208,7 @@ func (ws *HTTPStrategy) WaitUntilReady(ctx context.Context, target StrategyTarge
 		}
 
 		if lowestPort == "" {
-			return errors.New("No exposed tcp ports or mapped ports - cannot wait for status")
+			return errors.New("no exposed tcp ports or mapped ports - cannot wait for status")
 		}
 
 		mappedPort, _ = nat.NewPort(lowestPort.Proto(), hostPort)
@@ -229,7 +229,7 @@ func (ws *HTTPStrategy) WaitUntilReady(ctx context.Context, target StrategyTarge
 		}
 
 		if mappedPort.Proto() != "tcp" {
-			return errors.New("Cannot use HTTP client on non-TCP ports")
+			return errors.New("cannot use HTTP client on non-TCP ports")
 		}
 	}
 
