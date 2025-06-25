@@ -30,7 +30,7 @@ func NewExecStrategy(cmd []string) *ExecStrategy {
 	return &ExecStrategy{
 		cmd:             cmd,
 		ExitCodeMatcher: defaultExitCodeMatcher,
-		ResponseMatcher: func(body io.Reader) bool { return true },
+		ResponseMatcher: func(_ io.Reader) bool { return true },
 		PollInterval:    defaultPollInterval(),
 	}
 }

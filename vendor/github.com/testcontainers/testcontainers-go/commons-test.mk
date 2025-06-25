@@ -6,7 +6,7 @@ define go_install
 endef
 
 $(GOBIN)/golangci-lint:
-	$(call go_install,github.com/golangci/golangci-lint/cmd/golangci-lint@v1.61.0)
+	$(call go_install,github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.0.2)
 
 $(GOBIN)/gotestsum:
 	$(call go_install,gotest.tools/gotestsum@latest)
@@ -30,7 +30,7 @@ dependencies-scan:
 
 .PHONY: lint
 lint: $(GOBIN)/golangci-lint
-	golangci-lint run --out-format=colored-line-number --path-prefix=. --verbose -c $(ROOT_DIR)/.golangci.yml --fix
+	golangci-lint run --verbose -c $(ROOT_DIR)/.golangci.yml --fix
 
 .PHONY: generate
 generate: $(GOBIN)/mockery
@@ -47,7 +47,8 @@ test-%: $(GOBIN)/gotestsum
 		-- \
 		-v \
 		-coverprofile=coverage.out \
-		-timeout=30m
+		-timeout=30m \
+		-race
 
 .PHONY: tools
 tools:
