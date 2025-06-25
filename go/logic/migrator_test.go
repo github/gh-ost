@@ -393,7 +393,7 @@ func (suite *MigratorTestSuite) TestCopierIntPK() {
 	migrationContext.ChunkSize = chunkSize
 
 	// fill with some rows
-	numRows := int64(2222)
+	numRows := int64(3421)
 	for i := range numRows {
 		_, err = suite.db.ExecContext(ctx,
 			fmt.Sprintf("INSERT INTO %s (id, name, age) VALUES (%d, 'user-%d', %d)", getTestTableName(), i, i, i%99))
@@ -413,24 +413,93 @@ func (suite *MigratorTestSuite) TestCopierIntPK() {
 		atomic.StoreInt64(&migrator.rowCopyCompleteFlag, 1)
 	}()
 
-	copiedRows := int64(0)
 	for {
 		if atomic.LoadInt64(&migrator.rowCopyCompleteFlag) == 1 {
+			suite.Assert().Equal((numRows/chunkSize)+1, migrator.migrationContext.GetIteration())
 			return
 		}
 		select {
 		case copyRowsFunc := <-migrator.copyRowsQueue:
 			{
 				suite.Require().NoError(copyRowsFunc())
-				copiedRows += migrationContext.ChunkSize
-				copiedRows = min(copiedRows, numRows)
 
 				// check ghost table has expected number of rows
 				var ghostRows int64
 				suite.db.QueryRowContext(ctx,
 					fmt.Sprintf(`SELECT COUNT(*) FROM %s`, getTestGhostTableName()),
 				).Scan(&ghostRows)
-				suite.Assert().Equal(copiedRows, ghostRows)
+				suite.Assert().Equal(migrator.migrationContext.TotalRowsCopied, ghostRows)
+			}
+		default:
+			time.Sleep(time.Second)
+		}
+	}
+}
+
+func (suite *MigratorTestSuite) TestCopierCompositePK() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT UNSIGNED, t CHAR(32), PRIMARY KEY (t, id));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.AlterStatementOptions = "ENGINE=InnoDB"
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "t"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "t"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "t"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"t", "id"}),
+	}
+
+	chunkSize := int64(100)
+	migrationContext.ChunkSize = chunkSize
+
+	// fill with some rows
+	numRows := int64(2049)
+	for i := range numRows {
+		query := fmt.Sprintf(`INSERT INTO %s (id, t) VALUES (FLOOR(100000000 * RAND(%d)), MD5(RAND(%d)))`, getTestTableName(), i, i)
+		_, err = suite.db.ExecContext(ctx, query)
+		suite.Require().NoError(err)
+	}
+
+	migrator := NewMigrator(migrationContext, "0.0.0")
+	suite.Require().NoError(migrator.initiateApplier())
+	suite.Require().NoError(migrator.applier.prepareQueries())
+	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues())
+
+	go migrator.iterateChunks()
+	go func() {
+		if err := <-migrator.rowCopyComplete; err != nil {
+			migrator.migrationContext.PanicAbort <- err
+		}
+		atomic.StoreInt64(&migrator.rowCopyCompleteFlag, 1)
+	}()
+
+	for {
+		if atomic.LoadInt64(&migrator.rowCopyCompleteFlag) == 1 {
+			suite.Assert().Equal((numRows/chunkSize)+1, migrator.migrationContext.GetIteration())
+			return
+		}
+		select {
+		case copyRowsFunc := <-migrator.copyRowsQueue:
+			{
+				suite.Require().NoError(copyRowsFunc())
+
+				// check ghost table has expected number of rows
+				var ghostRows int64
+				suite.db.QueryRowContext(ctx,
+					fmt.Sprintf(`SELECT COUNT(*) FROM %s`, getTestGhostTableName()),
+				).Scan(&ghostRows)
+				suite.Assert().Equal(migrator.migrationContext.TotalRowsCopied, ghostRows)
 			}
 		default:
 			time.Sleep(time.Second)
