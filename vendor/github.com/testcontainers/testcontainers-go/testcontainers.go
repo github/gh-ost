@@ -18,7 +18,7 @@ func ExtractDockerSocket() string {
 //
 //  1. Docker host from the "tc.host" property in the ~/.testcontainers.properties file.
 //  2. The TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE environment variable.
-//  3. Using a Docker client, check if the Info().OperativeSystem is "Docker Desktop" and return the default docker socket path for rootless docker.
+//  3. Using a Docker client, check if the Info().OperatingSystem is "Docker Desktop" and return the default docker socket path for rootless docker.
 //  4. Else, Get the current Docker Host from the existing strategies: see MustExtractDockerHost.
 //  5. If the socket contains the unix schema, the schema is removed (e.g. unix:///var/run/docker.sock -> /var/run/docker.sock)
 //  6. Else, the default location of the docker socket is used (/var/run/docker.sock)

@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/docker/go-connections/nat"
+
+	"github.com/testcontainers/testcontainers-go/log"
 )
 
 const (
@@ -126,7 +127,7 @@ func (hp *HostPortStrategy) WaitUntilReady(ctx context.Context, target StrategyT
 	}
 
 	if internalPort == "" {
-		return fmt.Errorf("no port to wait for")
+		return errors.New("no port to wait for")
 	}
 
 	var port nat.Port
@@ -161,10 +162,10 @@ func (hp *HostPortStrategy) WaitUntilReady(ctx context.Context, target StrategyT
 	if err = internalCheck(ctx, internalPort, target); err != nil {
 		switch {
 		case errors.Is(err, errShellNotExecutable):
-			log.Println("Shell not executable in container, only external port validated")
+			log.Printf("Shell not executable in container, only external port validated")
 			return nil
 		case errors.Is(err, errShellNotFound):
-			log.Println("Shell not found in container")
+			log.Printf("Shell not found in container")
 			return nil
 		default:
 			return fmt.Errorf("internal check: %w", err)
@@ -219,7 +220,7 @@ func internalCheck(ctx context.Context, internalPort nat.Port, target StrategyTa
 			return fmt.Errorf("%w, host port waiting failed", err)
 		}
 
-		// Docker has a issue which override exit code 127 to 126 due to:
+		// Docker has an issue which override exit code 127 to 126 due to:
 		// https://github.com/moby/moby/issues/45795
 		// Handle both to ensure compatibility with Docker and Podman for now.
 		switch exitCode {
