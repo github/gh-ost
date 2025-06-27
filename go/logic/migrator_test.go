@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
 
-	"fmt"
+	"runtime"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -577,36 +577,29 @@ func TestMigratorRetryWithExponentialBackoff(t *testing.T) {
 func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 	ctx := context.Background()
 
-	_, err := suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT PRIMARY KEY, name VARCHAR(64))")
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, name VARCHAR(64))", getTestTableName()))
 	suite.Require().NoError(err)
 
-	_, err = suite.db.ExecContext(ctx, "insert into test.testing values(1,'a')")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("insert into %s values(1,'a')", getTestTableName()))
 	suite.Require().NoError(err)
 
 	done := make(chan error, 1)
 	go func() {
-		connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+		connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 		if err != nil {
 			done <- err
 			return
 		}
-		migrationContext := base.NewMigrationContext()
-		migrationContext.AllowedRunningOnMaster = true
+		migrationContext := newTestMigrationContext()
 		migrationContext.ApplierConnectionConfig = connectionConfig
 		migrationContext.InspectorConnectionConfig = connectionConfig
-		migrationContext.DatabaseName = "test"
-		migrationContext.SkipPortValidation = true
-		migrationContext.OriginalTableName = "testing"
 		migrationContext.SetConnectionConfig("innodb")
+		migrationContext.AllowSetupMetadataLockInstruments = true
 		migrationContext.AlterStatementOptions = "ADD COLUMN foobar varchar(255)"
-		migrationContext.ReplicaServerId = 99999
 		migrationContext.HeartbeatIntervalMilliseconds = 100
-		migrationContext.ThrottleHTTPIntervalMillis = 100
-		migrationContext.ThrottleHTTPTimeoutMillis = 1000
 		migrationContext.CutOverLockTimeoutSeconds = 4
 
 		_, filename, _, _ := runtime.Caller(0)
-		migrationContext.ServeSocketFile = filepath.Join(filepath.Dir(filename), "../../tmp/gh-ost.sock")
 		migrationContext.PostponeCutOverFlagFile = filepath.Join(filepath.Dir(filename), "../../tmp/ghost.postpone.flag")
 
 		migrator := NewMigrator(migrationContext, "0.0.0")
@@ -633,7 +626,7 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 	dmlConn, err := suite.db.Conn(ctx)
 	suite.Require().NoError(err)
 
-	_, err = dmlConn.ExecContext(ctx, "insert into test.testing(id, name) values(2,'b')")
+	_, err = dmlConn.ExecContext(ctx, fmt.Sprintf("insert into %s (id, name) values(2,'b')", getTestTableName()))
 	fmt.Println("insert into table original table")
 	suite.Require().NoError(err)
 
@@ -642,20 +635,22 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 
 	// Verify the new column was added
 	var delValue, OriginalValue int64
-	err = suite.db.QueryRow("select count(*) from test._testing_del").Scan(&delValue)
+	err = suite.db.QueryRow(
+		fmt.Sprintf("select count(*) from %s._%s_del", testMysqlDatabase, testMysqlTableName),
+	).Scan(&delValue)
 	suite.Require().NoError(err)
 
-	err = suite.db.QueryRow("select count(*) from test.testing").Scan(&OriginalValue)
+	err = suite.db.QueryRow("select count(*) from " + getTestTableName()).Scan(&OriginalValue)
 	suite.Require().NoError(err)
 
 	suite.Require().LessOrEqual(delValue, OriginalValue)
 
 	var tableName, createTableSQL string
 	//nolint:execinquery
-	err = suite.db.QueryRow("SHOW CREATE TABLE test.testing").Scan(&tableName, &createTableSQL)
+	err = suite.db.QueryRow("SHOW CREATE TABLE "+getTestTableName()).Scan(&tableName, &createTableSQL)
 	suite.Require().NoError(err)
 
-	suite.Require().Equal("testing", tableName)
+	suite.Require().Equal(testMysqlTableName, tableName)
 	suite.Require().Equal("CREATE TABLE `testing` (\n  `id` int NOT NULL,\n  `name` varchar(64) DEFAULT NULL,\n  `foobar` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createTableSQL)
 }
 
