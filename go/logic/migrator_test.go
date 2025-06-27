@@ -336,6 +336,7 @@ func (suite *MigratorTestSuite) TestMigrateEmpty() {
 	migrationContext.ApplierConnectionConfig = connectionConfig
 	migrationContext.InspectorConnectionConfig = connectionConfig
 	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.InitiallyDropOldTable = true
 
 	migrationContext.AlterStatementOptions = "ADD COLUMN foobar varchar(255), ENGINE=InnoDB"
 
