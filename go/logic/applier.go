@@ -416,6 +416,28 @@ func (this *Applier) dropTable(tableName string) error {
 	return nil
 }
 
+func (this *Applier) StateMetadataLockInstrument() error {
+	query := `select /*+ MAX_EXECUTION_TIME(300) */ ENABLED, TIMED from performance_schema.setup_instruments WHERE NAME = 'wait/lock/metadata/sql/mdl'`
+	var enabled, timed string
+	if err := this.db.QueryRow(query).Scan(&enabled, &timed); err != nil {
+		return this.migrationContext.Log.Errorf("query performance_schema.setup_instruments with name wait/lock/metadata/sql/mdl error: %s", err)
+	}
+	if strings.EqualFold(enabled, "YES") && strings.EqualFold(timed, "YES") {
+		this.migrationContext.IsOpenMetadataLockInstruments = true
+		return nil
+	}
+	if !this.migrationContext.AllowSetupMetadataLockInstruments {
+		return nil
+	}
+	this.migrationContext.Log.Infof("instrument wait/lock/metadata/sql/mdl state: enabled %s, timed %s", enabled, timed)
+	if _, err := this.db.Exec(`UPDATE performance_schema.setup_instruments SET ENABLED = 'YES', TIMED = 'YES' WHERE NAME = 'wait/lock/metadata/sql/mdl'`); err != nil {
+		return this.migrationContext.Log.Errorf("enable instrument wait/lock/metadata/sql/mdl error: %s", err)
+	}
+	this.migrationContext.IsOpenMetadataLockInstruments = true
+	this.migrationContext.Log.Infof("instrument wait/lock/metadata/sql/mdl enabled")
+	return nil
+}
+
 // dropTriggers drop the triggers on the applied host
 func (this *Applier) DropTriggersFromGhost() error {
 	if len(this.migrationContext.Triggers) > 0 {
@@ -1091,7 +1113,7 @@ func (this *Applier) RevertAtomicCutOverWaitTimeout() {
 }
 
 // AtomicCutOverMagicLock
-func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error) error {
+func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked chan<- error, okToUnlockTable <-chan bool, tableUnlocked chan<- error, renameLockSessionId *int64) error {
 	tx, err := this.db.Begin()
 	if err != nil {
 		tableLocked <- err
@@ -1182,6 +1204,20 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 		// We DO NOT return here because we must `UNLOCK TABLES`!
 	}
 
+	this.migrationContext.Log.Infof("Session renameLockSessionId is %+v", *renameLockSessionId)
+	// Checking the lock is held by rename session
+	if *renameLockSessionId > 0 && this.migrationContext.IsOpenMetadataLockInstruments {
+		sleepDuration := time.Duration(10*this.migrationContext.CutOverLockTimeoutSeconds) * time.Millisecond
+		for i := 1; i <= 100; i++ {
+			err := this.ExpectMetadataLock(*renameLockSessionId)
+			if err == nil {
+				this.migrationContext.Log.Infof("Rename session is pending lock on the origin table !")
+				break
+			} else {
+				time.Sleep(sleepDuration)
+			}
+		}
+	}
 	// Tables still locked
 	this.migrationContext.Log.Infof("Releasing lock from %s.%s, %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
@@ -1400,4 +1436,28 @@ func (this *Applier) Teardown() {
 	this.db.Close()
 	this.singletonDB.Close()
 	atomic.StoreInt64(&this.finishedMigrating, 1)
+}
+
+func (this *Applier) ExpectMetadataLock(sessionId int64) error {
+	found := false
+	query := `
+		select /* gh-ost */ m.owner_thread_id
+			from performance_schema.metadata_locks m join performance_schema.threads t 
+			on m.owner_thread_id=t.thread_id
+			where m.object_type = 'TABLE' and m.object_schema = ? and m.object_name = ? 
+			and m.lock_type = 'EXCLUSIVE' and m.lock_status = 'PENDING' 
+			and t.processlist_id = ?
+	`
+	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+		found = true
+		return nil
+	}, this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName, sessionId)
+	if err != nil {
+		return err
+	}
+	if !found {
+		err = fmt.Errorf("cannot find PENDING metadata lock on original table: `%s`.`%s`", this.migrationContext.DatabaseName, this.migrationContext.OriginalTableName)
+		return this.migrationContext.Log.Errore(err)
+	}
+	return nil
 }
