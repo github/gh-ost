@@ -10,11 +10,9 @@ import (
 	"context"
 	gosql "database/sql"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,12 +22,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
+	"github.com/testcontainers/testcontainers-go/modules/mysql"
+
+	"fmt"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/sql"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func TestMigratorOnChangelogEvent(t *testing.T) {
@@ -283,22 +284,17 @@ type MigratorTestSuite struct {
 
 func (suite *MigratorTestSuite) SetupSuite() {
 	ctx := context.Background()
-	req := testcontainers.ContainerRequest{
-		Image:        "mysql:8.0.40",
-		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root-password"},
-		ExposedPorts: []string{"3306/tcp"},
-		WaitingFor:   wait.ForListeningPort("3306/tcp"),
-	}
-
-	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
+	mysqlContainer, err := mysql.Run(ctx,
+		testMysqlContainerImage,
+		mysql.WithDatabase(testMysqlDatabase),
+		mysql.WithUsername(testMysqlUser),
+		mysql.WithPassword(testMysqlPass),
+		testcontainers.WithWaitStrategy(wait.ForExposedPort()),
+	)
 	suite.Require().NoError(err)
 
 	suite.mysqlContainer = mysqlContainer
-
-	dsn, err := GetDSN(ctx, mysqlContainer)
+	dsn, err := mysqlContainer.ConnectionString(ctx)
 	suite.Require().NoError(err)
 
 	db, err := gosql.Open("mysql", dsn)
@@ -308,16 +304,14 @@ func (suite *MigratorTestSuite) SetupSuite() {
 }
 
 func (suite *MigratorTestSuite) TeardownSuite() {
-	ctx := context.Background()
-
 	suite.Assert().NoError(suite.db.Close())
-	suite.Assert().NoError(suite.mysqlContainer.Terminate(ctx))
+	suite.Assert().NoError(testcontainers.TerminateContainer(suite.mysqlContainer))
 }
 
 func (suite *MigratorTestSuite) SetupTest() {
 	ctx := context.Background()
 
-	_, err := suite.db.ExecContext(ctx, "CREATE DATABASE test")
+	_, err := suite.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabase)
 	suite.Require().NoError(err)
 
 	os.Remove("/tmp/gh-ost.sock")
@@ -326,36 +320,27 @@ func (suite *MigratorTestSuite) SetupTest() {
 func (suite *MigratorTestSuite) TearDownTest() {
 	ctx := context.Background()
 
-	_, err := suite.db.ExecContext(ctx, "DROP DATABASE test")
+	_, err := suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestTableName())
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestGhostTableName())
 	suite.Require().NoError(err)
 }
 
-func (suite *MigratorTestSuite) TestFoo() {
+func (suite *MigratorTestSuite) TestMigrateEmpty() {
 	ctx := context.Background()
 
-	_, err := suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT PRIMARY KEY, name VARCHAR(64))")
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, name VARCHAR(64))", getTestTableName()))
 	suite.Require().NoError(err)
 
-	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
-	migrationContext := base.NewMigrationContext()
-	migrationContext.AllowedRunningOnMaster = true
+	migrationContext := newTestMigrationContext()
 	migrationContext.ApplierConnectionConfig = connectionConfig
 	migrationContext.InspectorConnectionConfig = connectionConfig
-	migrationContext.DatabaseName = "test"
-	migrationContext.SkipPortValidation = true
-	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
-	migrationContext.AlterStatementOptions = "ADD COLUMN foobar varchar(255), ENGINE=InnoDB"
-	migrationContext.ReplicaServerId = 99999
-	migrationContext.HeartbeatIntervalMilliseconds = 100
-	migrationContext.ThrottleHTTPIntervalMillis = 100
-	migrationContext.ThrottleHTTPTimeoutMillis = 1000
 
-	//nolint:dogsled
-	_, filename, _, _ := runtime.Caller(0)
-	migrationContext.ServeSocketFile = filepath.Join(filepath.Dir(filename), "../../tmp/gh-ost.sock")
+	migrationContext.AlterStatementOptions = "ADD COLUMN foobar varchar(255), ENGINE=InnoDB"
 
 	migrator := NewMigrator(migrationContext, "0.0.0")
 
@@ -365,7 +350,7 @@ func (suite *MigratorTestSuite) TestFoo() {
 	// Verify the new column was added
 	var tableName, createTableSQL string
 	//nolint:execinquery
-	err = suite.db.QueryRow("SHOW CREATE TABLE test.testing").Scan(&tableName, &createTableSQL)
+	err = suite.db.QueryRow("SHOW CREATE TABLE "+getTestTableName()).Scan(&tableName, &createTableSQL)
 	suite.Require().NoError(err)
 
 	suite.Require().Equal("testing", tableName)
@@ -450,7 +435,7 @@ echo "[gh-ost-on-batch-copy-retry]: Done, exiting..."
 	os.Stdout = wOut
 	os.Stderr = wErr
 
-	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
 	migrationContext := base.NewMigrationContext()
@@ -502,6 +487,148 @@ echo "[gh-ost-on-batch-copy-retry]: Done, exiting..."
 	err = suite.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test.test_retry_batch").Scan(&count)
 	suite.Require().NoError(err)
 	suite.Assert().Equal(3000, count)
+}
+
+func (suite *MigratorTestSuite) TestCopierIntPK() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, name VARCHAR(64), age INT);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.AlterStatementOptions = "ENGINE=InnoDB"
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "name", "age"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "name", "age"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "name", "age"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+
+	chunkSize := int64(73)
+	migrationContext.ChunkSize = chunkSize
+
+	// fill with some rows
+	numRows := int64(3421)
+	for i := range numRows {
+		_, err = suite.db.ExecContext(ctx,
+			fmt.Sprintf("INSERT INTO %s (id, name, age) VALUES (%d, 'user-%d', %d)", getTestTableName(), i, i, i%99))
+		suite.Require().NoError(err)
+	}
+
+	migrator := NewMigrator(migrationContext, "0.0.0")
+	suite.Require().NoError(migrator.initiateApplier())
+	suite.Require().NoError(migrator.applier.prepareQueries())
+	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues())
+
+	go migrator.iterateChunks()
+	go func() {
+		if err := <-migrator.rowCopyComplete; err != nil {
+			migrator.migrationContext.PanicAbort <- err
+		}
+		atomic.StoreInt64(&migrator.rowCopyCompleteFlag, 1)
+	}()
+
+	for {
+		if atomic.LoadInt64(&migrator.rowCopyCompleteFlag) == 1 {
+			suite.Assert().Equal((numRows/chunkSize)+1, migrator.migrationContext.GetIteration())
+			return
+		}
+		select {
+		case copyRowsFunc := <-migrator.copyRowsQueue:
+			{
+				suite.Require().NoError(copyRowsFunc())
+
+				// check ghost table has expected number of rows
+				var ghostRows int64
+				suite.db.QueryRowContext(ctx,
+					fmt.Sprintf(`SELECT COUNT(*) FROM %s`, getTestGhostTableName()),
+				).Scan(&ghostRows)
+				suite.Assert().Equal(migrator.migrationContext.TotalRowsCopied, ghostRows)
+			}
+		default:
+			time.Sleep(time.Second)
+		}
+	}
+}
+
+func (suite *MigratorTestSuite) TestCopierCompositePK() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT UNSIGNED, t CHAR(32), PRIMARY KEY (t, id));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.AlterStatementOptions = "ENGINE=InnoDB"
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "t"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "t"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "t"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"t", "id"}),
+	}
+
+	chunkSize := int64(100)
+	migrationContext.ChunkSize = chunkSize
+
+	// fill with some rows
+	numRows := int64(2049)
+	for i := range numRows {
+		query := fmt.Sprintf(`INSERT INTO %s (id, t) VALUES (FLOOR(100000000 * RAND(%d)), MD5(RAND(%d)))`, getTestTableName(), i, i)
+		_, err = suite.db.ExecContext(ctx, query)
+		suite.Require().NoError(err)
+	}
+
+	migrator := NewMigrator(migrationContext, "0.0.0")
+	suite.Require().NoError(migrator.initiateApplier())
+	suite.Require().NoError(migrator.applier.prepareQueries())
+	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues())
+
+	go migrator.iterateChunks()
+	go func() {
+		if err := <-migrator.rowCopyComplete; err != nil {
+			migrator.migrationContext.PanicAbort <- err
+		}
+		atomic.StoreInt64(&migrator.rowCopyCompleteFlag, 1)
+	}()
+
+	for {
+		if atomic.LoadInt64(&migrator.rowCopyCompleteFlag) == 1 {
+			suite.Assert().Equal((numRows/chunkSize)+1, migrator.migrationContext.GetIteration())
+			return
+		}
+		select {
+		case copyRowsFunc := <-migrator.copyRowsQueue:
+			{
+				suite.Require().NoError(copyRowsFunc())
+
+				// check ghost table has expected number of rows
+				var ghostRows int64
+				suite.db.QueryRowContext(ctx,
+					fmt.Sprintf(`SELECT COUNT(*) FROM %s`, getTestGhostTableName()),
+				).Scan(&ghostRows)
+				suite.Assert().Equal(migrator.migrationContext.TotalRowsCopied, ghostRows)
+			}
+		default:
+			time.Sleep(time.Second)
+		}
+	}
 }
 
 func TestMigratorRetry(t *testing.T) {

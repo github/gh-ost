@@ -663,7 +663,7 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and this done with copying row chunks)
-func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, expectedRowCount int64, err error) {
+func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
@@ -680,36 +680,32 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			fmt.Sprintf("iteration:%d", this.migrationContext.GetIteration()),
 		)
 		if err != nil {
-			return hasFurtherRange, expectedRowCount, err
+			return hasFurtherRange, err
 		}
 
 		rows, err := this.db.Query(query, explodedArgs...)
 		if err != nil {
-			return hasFurtherRange, expectedRowCount, err
+			return hasFurtherRange, err
 		}
 		defer rows.Close()
 
-		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len() + 1)
+		iterationRangeMaxValues := sql.NewColumnValues(this.migrationContext.UniqueKey.Len())
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
-				return hasFurtherRange, expectedRowCount, err
+				return hasFurtherRange, err
 			}
-
-			expectedRowCount = (*iterationRangeMaxValues.ValuesPointers[len(iterationRangeMaxValues.ValuesPointers)-1].(*interface{})).(int64)
-			iterationRangeMaxValues = sql.ToColumnValues(iterationRangeMaxValues.AbstractValues()[:len(iterationRangeMaxValues.AbstractValues())-1])
-
-			hasFurtherRange = expectedRowCount > 0
+			hasFurtherRange = true
 		}
 		if err = rows.Err(); err != nil {
-			return hasFurtherRange, expectedRowCount, err
+			return hasFurtherRange, err
 		}
 		if hasFurtherRange {
 			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
-			return hasFurtherRange, expectedRowCount, nil
+			return hasFurtherRange, nil
 		}
 	}
 	this.migrationContext.Log.Debugf("Iteration complete: no further range to iterate")
-	return hasFurtherRange, expectedRowCount, nil
+	return hasFurtherRange, nil
 }
 
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
