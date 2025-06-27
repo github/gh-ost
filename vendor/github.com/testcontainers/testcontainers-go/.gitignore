@@ -8,13 +8,15 @@ site/
 src/mkdocs-codeinclude-plugin
 src/pip-delete-this-directory.txt
 .idea/
+.build/
 .DS_Store
 
 TEST-*.xml
-
-tcvenv
 
 **/go.work
 
 # VS Code settings
 .vscode
+
+# Environment variables
+.env
