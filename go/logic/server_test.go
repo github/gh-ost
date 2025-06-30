@@ -80,7 +80,7 @@ func TestServerCreatePostponeCutOverFlagFile(t *testing.T) {
 		require.NoError(t, err)
 		defer os.RemoveAll(dir)
 
-		filePath := filepath.Join(dir, "postpone-cut-over.flag")
+		filePath := path.Join(dir, "postpone-cut-over.flag")
 
 		err = s.createPostponeCutOverFlagFile(filePath)
 		require.NoError(t, err)
