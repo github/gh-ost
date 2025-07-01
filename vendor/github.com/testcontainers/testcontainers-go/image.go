@@ -4,7 +4,7 @@ import (
 	"context"
 )
 
-// ImageInfo represents a summary information of an image
+// ImageInfo represents summary information of an image
 type ImageInfo struct {
 	ID   string
 	Name string

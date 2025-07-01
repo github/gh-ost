@@ -2,7 +2,9 @@ package exec
 
 import (
 	"bytes"
+	"fmt"
 	"io"
+	"sync"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -60,6 +62,43 @@ func WithEnv(env []string) ProcessOption {
 	})
 }
 
+// safeBuffer is a goroutine safe buffer.
+type safeBuffer struct {
+	mtx sync.Mutex
+	buf bytes.Buffer
+	err error
+}
+
+// Error sets an error for the next read.
+func (sb *safeBuffer) Error(err error) {
+	sb.mtx.Lock()
+	defer sb.mtx.Unlock()
+
+	sb.err = err
+}
+
+// Write writes p to the buffer.
+// It is safe for concurrent use by multiple goroutines.
+func (sb *safeBuffer) Write(p []byte) (n int, err error) {
+	sb.mtx.Lock()
+	defer sb.mtx.Unlock()
+
+	return sb.buf.Write(p)
+}
+
+// Read reads up to len(p) bytes into p from the buffer.
+// It is safe for concurrent use by multiple goroutines.
+func (sb *safeBuffer) Read(p []byte) (n int, err error) {
+	sb.mtx.Lock()
+	defer sb.mtx.Unlock()
+
+	if sb.err != nil {
+		return 0, sb.err
+	}
+
+	return sb.buf.Read(p)
+}
+
 // Multiplexed returns a [ProcessOption] that configures the command execution
 // to combine stdout and stderr into a single stream without Docker's multiplexing headers.
 func Multiplexed() ProcessOption {
@@ -73,13 +112,14 @@ func Multiplexed() ProcessOption {
 
 		done := make(chan struct{})
 
-		var outBuff bytes.Buffer
-		var errBuff bytes.Buffer
+		var outBuff safeBuffer
+		var errBuff safeBuffer
 		go func() {
+			defer close(done)
 			if _, err := stdcopy.StdCopy(&outBuff, &errBuff, opts.Reader); err != nil {
+				outBuff.Error(fmt.Errorf("copying output: %w", err))
 				return
 			}
-			close(done)
 		}()
 
 		<-done

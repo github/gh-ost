@@ -11,11 +11,11 @@ import (
 	"github.com/magiconair/properties"
 )
 
-const ReaperDefaultImage = "testcontainers/ryuk:0.10.2"
+const ReaperDefaultImage = "testcontainers/ryuk:0.11.0"
 
 var (
 	tcConfig     Config
-	tcConfigOnce *sync.Once = new(sync.Once)
+	tcConfigOnce = new(sync.Once)
 )
 
 // testcontainersConfig {
@@ -68,17 +68,17 @@ type Config struct {
 
 	// RyukReconnectionTimeout is the time to wait before attempting to reconnect to the Garbage Collector container.
 	//
-	// Environment variable: TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT
+	// Environment variable: RYUK_RECONNECTION_TIMEOUT
 	RyukReconnectionTimeout time.Duration `properties:"ryuk.reconnection.timeout,default=10s"`
 
 	// RyukConnectionTimeout is the time to wait before timing out when connecting to the Garbage Collector container.
 	//
-	// Environment variable: TESTCONTAINERS_RYUK_CONNECTION_TIMEOUT
+	// Environment variable: RYUK_CONNECTION_TIMEOUT
 	RyukConnectionTimeout time.Duration `properties:"ryuk.connection.timeout,default=1m"`
 
 	// RyukVerbose is a flag to enable or disable verbose logging for the Garbage Collector.
 	//
-	// Environment variable: TESTCONTAINERS_RYUK_VERBOSE
+	// Environment variable: RYUK_VERBOSE
 	RyukVerbose bool `properties:"ryuk.verbose,default=false"`
 
 	// TestcontainersHost is the address of the Testcontainers host.
@@ -126,17 +126,17 @@ func read() Config {
 			config.RyukPrivileged = ryukPrivilegedEnv == "true"
 		}
 
-		ryukVerboseEnv := os.Getenv("TESTCONTAINERS_RYUK_VERBOSE")
+		ryukVerboseEnv := readTestcontainersEnv("RYUK_VERBOSE")
 		if parseBool(ryukVerboseEnv) {
 			config.RyukVerbose = ryukVerboseEnv == "true"
 		}
 
-		ryukReconnectionTimeoutEnv := os.Getenv("TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT")
+		ryukReconnectionTimeoutEnv := readTestcontainersEnv("RYUK_RECONNECTION_TIMEOUT")
 		if timeout, err := time.ParseDuration(ryukReconnectionTimeoutEnv); err == nil {
 			config.RyukReconnectionTimeout = timeout
 		}
 
-		ryukConnectionTimeoutEnv := os.Getenv("TESTCONTAINERS_RYUK_CONNECTION_TIMEOUT")
+		ryukConnectionTimeoutEnv := readTestcontainersEnv("RYUK_CONNECTION_TIMEOUT")
 		if timeout, err := time.ParseDuration(ryukConnectionTimeoutEnv); err == nil {
 			config.RyukConnectionTimeout = timeout
 		}
@@ -167,4 +167,19 @@ func read() Config {
 func parseBool(input string) bool {
 	_, err := strconv.ParseBool(input)
 	return err == nil
+}
+
+// readTestcontainersEnv reads the environment variable with the given name.
+// It checks for the environment variable with the given name first, and then
+// checks for the environment variable with the given name prefixed with "TESTCONTAINERS_".
+func readTestcontainersEnv(envVar string) string {
+	value := os.Getenv(envVar)
+	if value != "" {
+		return value
+	}
+
+	// TODO: remove this prefix after the next major release
+	const prefix string = "TESTCONTAINERS_"
+
+	return os.Getenv(prefix + envVar)
 }
