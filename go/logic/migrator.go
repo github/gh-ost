@@ -1375,18 +1375,8 @@ func (this *Migrator) executeWriteFuncs() error {
 				}
 			}
 		case copyRowsFunc := <-this.copyRowsQueue:
-		priority:
-			for {
-				select {
-				case eventStruct := <-this.applyEventsQueue:
-					{
-						if err := this.onApplyEventStruct(eventStruct); err != nil {
-							return err
-						}
-					}
-				default:
-					break priority
-				}
+			if err := this.drainApplierEventQueue(); err != nil {
+				return this.migrationContext.Log.Errore(err)
 			}
 			{
 				copyRowsStartTime := time.Now()
@@ -1397,10 +1387,26 @@ func (this *Migrator) executeWriteFuncs() error {
 				if niceRatio := this.migrationContext.GetNiceRatio(); niceRatio > 0 {
 					copyRowsDuration := time.Since(copyRowsStartTime)
 					sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
-					sleepTime := time.Duration(time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond)
+					sleepTime := time.Duration(sleepTimeNanosecondFloat64) * time.Nanosecond
 					time.Sleep(sleepTime)
 				}
 			}
+		}
+	}
+}
+
+func (this *Migrator) drainApplierEventQueue() error {
+	for {
+		select {
+		case eventStruct := <-this.applyEventsQueue:
+			{
+				this.throttler.throttle(nil)
+				if err := this.onApplyEventStruct(eventStruct); err != nil {
+					return err
+				}
+			}
+		default:
+			return nil
 		}
 	}
 }
