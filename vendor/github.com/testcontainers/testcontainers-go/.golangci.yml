@@ -1,0 +1,89 @@
+formatters:
+  enable:
+    - gci
+    - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/testcontainers)
+linters:
+  enable:
+    - errorlint
+    - gocritic
+    - misspell
+    - nakedret
+    - nolintlint
+    - perfsprint
+    - revive
+    - testifylint
+    - thelper
+    - usestdlibvars
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+  settings:
+    errorlint:
+      asserts: true
+      comparison: true
+      errorf: true
+      errorf-multi: true
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+          arguments:
+            - allowTypesBefore: '*testing.T'
+        - name: context-keys-type
+        - name: dot-imports
+        - name: early-return
+          arguments:
+            - preserveScope
+        - name: empty-block
+        - name: error-naming
+          disabled: true
+        - name: error-return
+        - name: error-strings
+          disabled: true
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+          arguments:
+            - preserveScope
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+          disabled: true
+        - name: superfluous-else
+          arguments:
+            - preserveScope
+        - name: time-naming
+        - name: unexported-return
+          disabled: true
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: use-any
+        - name: var-declaration
+        - name: var-naming
+          arguments:
+            - - ID
+            - - VM
+            - - upperCaseConst: true
+    staticcheck:
+      checks:
+        - all
+    testifylint:
+      disable:
+        - float-compare
+        - go-require
+      enable-all: true
+output:
+  formats:
+    text:
+      path: stdout
+  path-prefix: .
+version: "2"

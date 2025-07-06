@@ -10,26 +10,27 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
 )
 
 const (
-	transactionIsolation = "REPEATABLE-READ"
-	TLS_CONFIG_KEY       = "ghost"
+	TLS_CONFIG_KEY = "ghost"
 )
 
 // ConnectionConfig is the minimal configuration required to connect to a MySQL server
 type ConnectionConfig struct {
-	Key        InstanceKey
-	User       string
-	Password   string
-	ImpliedKey *InstanceKey
-	tlsConfig  *tls.Config
-	Timeout    float64
+	Key                  InstanceKey
+	User                 string
+	Password             string
+	ImpliedKey           *InstanceKey
+	tlsConfig            *tls.Config
+	Timeout              float64
+	TransactionIsolation string
+	Charset              string
 }
 
 func NewConnectionConfig() *ConnectionConfig {
@@ -43,12 +44,24 @@ func NewConnectionConfig() *ConnectionConfig {
 // DuplicateCredentials creates a new connection config with given key and with same credentials as this config
 func (this *ConnectionConfig) DuplicateCredentials(key InstanceKey) *ConnectionConfig {
 	config := &ConnectionConfig{
-		Key:       key,
-		User:      this.User,
-		Password:  this.Password,
-		tlsConfig: this.tlsConfig,
-		Timeout:   this.Timeout,
+		Key:                  key,
+		User:                 this.User,
+		Password:             this.Password,
+		tlsConfig:            this.tlsConfig,
+		Timeout:              this.Timeout,
+		TransactionIsolation: this.TransactionIsolation,
+		Charset:              this.Charset,
 	}
+
+	if this.tlsConfig != nil {
+		config.tlsConfig = &tls.Config{
+			ServerName:         key.Hostname,
+			Certificates:       this.tlsConfig.Certificates,
+			RootCAs:            this.tlsConfig.RootCAs,
+			InsecureSkipVerify: this.tlsConfig.InsecureSkipVerify,
+		}
+	}
+
 	config.ImpliedKey = &config.Key
 	return config
 }
@@ -77,7 +90,7 @@ func (this *ConnectionConfig) UseTLS(caCertificatePath, clientCertificate, clien
 		}
 	} else {
 		rootCertPool = x509.NewCertPool()
-		pem, err := ioutil.ReadFile(caCertificatePath)
+		pem, err := os.ReadFile(caCertificatePath)
 		if err != nil {
 			return err
 		}
@@ -100,7 +113,20 @@ func (this *ConnectionConfig) UseTLS(caCertificatePath, clientCertificate, clien
 		InsecureSkipVerify: allowInsecure,
 	}
 
-	return mysql.RegisterTLSConfig(TLS_CONFIG_KEY, this.tlsConfig)
+	return this.RegisterTLSConfig()
+}
+
+func (this *ConnectionConfig) RegisterTLSConfig() error {
+	if this.tlsConfig == nil {
+		return nil
+	}
+	if this.tlsConfig.ServerName == "" {
+		return errors.New("tlsConfig.ServerName cannot be empty")
+	}
+
+	var tlsOption = GetDBTLSConfigKey(this.tlsConfig.ServerName)
+
+	return mysql.RegisterTLSConfig(tlsOption, this.tlsConfig)
 }
 
 func (this *ConnectionConfig) TLSConfig() *tls.Config {
@@ -119,18 +145,27 @@ func (this *ConnectionConfig) GetDBUri(databaseName string) string {
 	// simplify construction of the DSN below.
 	tlsOption := "false"
 	if this.tlsConfig != nil {
-		tlsOption = TLS_CONFIG_KEY
+		tlsOption = GetDBTLSConfigKey(this.tlsConfig.ServerName)
 	}
+
+	if this.Charset == "" {
+		this.Charset = "utf8mb4,utf8,latin1"
+	}
+
 	connectionParams := []string{
 		"autocommit=true",
-		"charset=utf8mb4,utf8,latin1",
 		"interpolateParams=true",
+		fmt.Sprintf("charset=%s", this.Charset),
 		fmt.Sprintf("tls=%s", tlsOption),
-		fmt.Sprintf("transaction_isolation=%q", transactionIsolation),
+		fmt.Sprintf("transaction_isolation=%q", this.TransactionIsolation),
 		fmt.Sprintf("timeout=%fs", this.Timeout),
 		fmt.Sprintf("readTimeout=%fs", this.Timeout),
 		fmt.Sprintf("writeTimeout=%fs", this.Timeout),
 	}
 
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s", this.User, this.Password, hostname, this.Key.Port, databaseName, strings.Join(connectionParams, "&"))
+}
+
+func GetDBTLSConfigKey(tlsServerName string) string {
+	return fmt.Sprintf("%s-%s", TLS_CONFIG_KEY, tlsServerName)
 }

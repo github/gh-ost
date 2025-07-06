@@ -60,9 +60,9 @@ func (s *BinlogStreamer) GetEventWithStartTime(ctx context.Context, startTime ti
 // DumpEvents dumps all left events
 func (s *BinlogStreamer) DumpEvents() []*BinlogEvent {
 	count := len(s.ch)
-	events := make([]*BinlogEvent, 0, count)
-	for i := 0; i < count; i++ {
-		events = append(events, <-s.ch)
+	events := make([]*BinlogEvent, count)
+	for i := range events {
+		events[i] = <-s.ch
 	}
 	return events
 }
@@ -84,11 +84,40 @@ func (s *BinlogStreamer) closeWithError(err error) {
 	}
 }
 
-func newBinlogStreamer() *BinlogStreamer {
+func NewBinlogStreamer() *BinlogStreamer {
+	return NewBinlogStreamerWithChanSize(10240)
+}
+
+func NewBinlogStreamerWithChanSize(chanSize int) *BinlogStreamer {
 	s := new(BinlogStreamer)
 
-	s.ch = make(chan *BinlogEvent, 10240)
+	if chanSize <= 0 {
+		chanSize = 10240
+	}
+
+	s.ch = make(chan *BinlogEvent, chanSize)
 	s.ech = make(chan error, 4)
 
 	return s
+}
+
+// AddEventToStreamer adds a binlog event to the streamer. You can use it when you want to add an event to the streamer manually.
+// can be used in replication handlers
+func (s *BinlogStreamer) AddEventToStreamer(ev *BinlogEvent) error {
+	select {
+	case s.ch <- ev:
+		return nil
+	case err := <-s.ech:
+		return err
+	}
+}
+
+// AddErrorToStreamer adds an error to the streamer.
+func (s *BinlogStreamer) AddErrorToStreamer(err error) bool {
+	select {
+	case s.ech <- err:
+		return true
+	default:
+		return false
+	}
 }

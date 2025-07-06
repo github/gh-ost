@@ -6,11 +6,12 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/pem"
+	"fmt"
+
+	"github.com/pingcap/errors"
 
 	. "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/utils"
-	"github.com/pingcap/errors"
-	"github.com/siddontang/go/hack"
 )
 
 func (c *Conn) readUntilEOF() (err error) {
@@ -28,7 +29,6 @@ func (c *Conn) readUntilEOF() (err error) {
 			return
 		}
 	}
-	return
 }
 
 func (c *Conn) isEOFPacket(data []byte) bool {
@@ -39,7 +39,7 @@ func (c *Conn) handleOKPacket(data []byte) (*Result, error) {
 	var n int
 	var pos = 1
 
-	r := &Result{Resultset: &Resultset{}}
+	r := NewResultReserveResultset(0)
 
 	r.AffectedRows, _, n = LengthEncodedInt(data[pos:])
 	pos += n
@@ -52,17 +52,17 @@ func (c *Conn) handleOKPacket(data []byte) (*Result, error) {
 		pos += 2
 
 		//todo:strict_mode, check warnings as error
-		//Warnings := binary.LittleEndian.Uint16(data[pos:])
-		//pos += 2
+		r.Warnings = binary.LittleEndian.Uint16(data[pos:])
+		// pos += 2
 	} else if c.capability&CLIENT_TRANSACTIONS > 0 {
 		r.Status = binary.LittleEndian.Uint16(data[pos:])
 		c.status = r.Status
-		pos += 2
+		// pos += 2
 	}
 
-	//new ok package will check CLIENT_SESSION_TRACK too, but I don't support it now.
+	// new ok package will check CLIENT_SESSION_TRACK too, but I don't support it now.
 
-	//skip info
+	// skip info
 	return r, nil
 }
 
@@ -75,13 +75,13 @@ func (c *Conn) handleErrorPacket(data []byte) error {
 	pos += 2
 
 	if c.capability&CLIENT_PROTOCOL_41 > 0 {
-		//skip '#'
+		// skip '#'
 		pos++
-		e.State = hack.String(data[pos : pos+5])
+		e.State = utils.ByteSliceToString(data[pos : pos+5])
 		pos += 5
 	}
 
-	e.Message = hack.String(data[pos:])
+	e.Message = utils.ByteSliceToString(data[pos:])
 
 	return e
 }
@@ -89,11 +89,11 @@ func (c *Conn) handleErrorPacket(data []byte) error {
 func (c *Conn) handleAuthResult() error {
 	data, switchToPlugin, err := c.readAuthResult()
 	if err != nil {
-		return err
+		return fmt.Errorf("readAuthResult: %w", err)
 	}
 	// handle auth switch, only support 'sha256_password', and 'caching_sha2_password'
 	if switchToPlugin != "" {
-		//fmt.Printf("now switching auth plugin to '%s'\n", switchToPlugin)
+		// fmt.Printf("now switching auth plugin to '%s'\n", switchToPlugin)
 		if data == nil {
 			data = c.salt
 		} else {
@@ -127,9 +127,8 @@ func (c *Conn) handleAuthResult() error {
 			return nil // auth already succeeded
 		}
 		if data[0] == CACHE_SHA2_FAST_AUTH {
-			if _, err = c.readOK(); err == nil {
-				return nil // auth successful
-			}
+			_, err = c.readOK()
+			return err
 		} else if data[0] == CACHE_SHA2_FULL_AUTH {
 			// need full authentication
 			if c.tlsConfig != nil || c.proto == "unix" {
@@ -141,6 +140,8 @@ func (c *Conn) handleAuthResult() error {
 					return err
 				}
 			}
+			_, err = c.readOK()
+			return err
 		} else {
 			return errors.Errorf("invalid packet %x", data[0])
 		}
@@ -167,7 +168,7 @@ func (c *Conn) handleAuthResult() error {
 func (c *Conn) readAuthResult() ([]byte, string, error) {
 	data, err := c.ReadPacket()
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("ReadPacket: %w", err)
 	}
 
 	// see: https://insidemysql.com/preparing-your-community-connector-for-mysql-8-part-2-sha256/
@@ -215,38 +216,42 @@ func (c *Conn) readOK() (*Result, error) {
 }
 
 func (c *Conn) readResult(binary bool) (*Result, error) {
-	firstPkgBuf, err := c.ReadPacketReuseMem(utils.ByteSliceGet(16)[:0])
-	defer utils.ByteSlicePut(firstPkgBuf)
-
+	bs := utils.ByteSliceGet(16)
+	defer utils.ByteSlicePut(bs)
+	var err error
+	bs.B, err = c.ReadPacketReuseMem(bs.B[:0])
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	if firstPkgBuf[0] == OK_HEADER {
-		return c.handleOKPacket(firstPkgBuf)
-	} else if firstPkgBuf[0] == ERR_HEADER {
-		return nil, c.handleErrorPacket(append([]byte{}, firstPkgBuf...))
-	} else if firstPkgBuf[0] == LocalInFile_HEADER {
+	switch bs.B[0] {
+	case OK_HEADER:
+		return c.handleOKPacket(bs.B)
+	case ERR_HEADER:
+		return nil, c.handleErrorPacket(bytes.Repeat(bs.B, 1))
+	case LocalInFile_HEADER:
 		return nil, ErrMalformPacket
+	default:
+		return c.readResultset(bs.B, binary)
 	}
-
-	return c.readResultset(firstPkgBuf, binary)
 }
 
-func (c *Conn) readResultStreaming(binary bool, result *Result, perRowCb SelectPerRowCallback) error {
-	firstPkgBuf, err := c.ReadPacketReuseMem(utils.ByteSliceGet(16)[:0])
-	defer utils.ByteSlicePut(firstPkgBuf)
-
+func (c *Conn) readResultStreaming(binary bool, result *Result, perRowCb SelectPerRowCallback, perResCb SelectPerResultCallback) error {
+	bs := utils.ByteSliceGet(16)
+	defer utils.ByteSlicePut(bs)
+	var err error
+	bs.B, err = c.ReadPacketReuseMem(bs.B[:0])
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	if firstPkgBuf[0] == OK_HEADER {
+	switch bs.B[0] {
+	case OK_HEADER:
 		// https://dev.mysql.com/doc/internals/en/com-query-response.html
 		// 14.6.4.1 COM_QUERY Response
 		// If the number of columns in the resultset is 0, this is a OK_Packet.
 
-		okResult, err := c.handleOKPacket(firstPkgBuf)
+		okResult, err := c.handleOKPacket(bs.B)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -254,19 +259,20 @@ func (c *Conn) readResultStreaming(binary bool, result *Result, perRowCb SelectP
 		result.Status = okResult.Status
 		result.AffectedRows = okResult.AffectedRows
 		result.InsertId = okResult.InsertId
+		result.Warnings = okResult.Warnings
 		if result.Resultset == nil {
 			result.Resultset = NewResultset(0)
 		} else {
 			result.Reset(0)
 		}
 		return nil
-	} else if firstPkgBuf[0] == ERR_HEADER {
-		return c.handleErrorPacket(append([]byte{}, firstPkgBuf...))
-	} else if firstPkgBuf[0] == LocalInFile_HEADER {
+	case ERR_HEADER:
+		return c.handleErrorPacket(bytes.Repeat(bs.B, 1))
+	case LocalInFile_HEADER:
 		return ErrMalformPacket
+	default:
+		return c.readResultsetStreaming(bs.B, binary, result, perRowCb, perResCb)
 	}
-
-	return c.readResultsetStreaming(firstPkgBuf, binary, result, perRowCb)
 }
 
 func (c *Conn) readResultset(data []byte, binary bool) (*Result, error) {
@@ -277,9 +283,7 @@ func (c *Conn) readResultset(data []byte, binary bool) (*Result, error) {
 		return nil, ErrMalformPacket
 	}
 
-	result := &Result{
-		Resultset: NewResultset(int(count)),
-	}
+	result := NewResultReserveResultset(int(count))
 
 	if err := c.readResultColumns(result); err != nil {
 		return nil, errors.Trace(err)
@@ -292,7 +296,7 @@ func (c *Conn) readResultset(data []byte, binary bool) (*Result, error) {
 	return result, nil
 }
 
-func (c *Conn) readResultsetStreaming(data []byte, binary bool, result *Result, perRowCb SelectPerRowCallback) error {
+func (c *Conn) readResultsetStreaming(data []byte, binary bool, result *Result, perRowCb SelectPerRowCallback, perResCb SelectPerResultCallback) error {
 	columnCount, _, n := LengthEncodedInt(data)
 
 	if n-len(data) != 0 {
@@ -306,34 +310,46 @@ func (c *Conn) readResultsetStreaming(data []byte, binary bool, result *Result, 
 		result.Reset(int(columnCount))
 	}
 
+	// this is a streaming resultset
+	result.Resultset.Streaming = StreamingSelect
+
 	if err := c.readResultColumns(result); err != nil {
 		return errors.Trace(err)
+	}
+
+	if perResCb != nil {
+		if err := perResCb(result); err != nil {
+			return err
+		}
 	}
 
 	if err := c.readResultRowsStreaming(result, binary, perRowCb); err != nil {
 		return errors.Trace(err)
 	}
 
+	// this resultset is done streaming
+	result.Resultset.StreamingDone = true
+
 	return nil
 }
 
 func (c *Conn) readResultColumns(result *Result) (err error) {
-	var i int = 0
+	var i = 0
 	var data []byte
 
 	for {
 		rawPkgLen := len(result.RawPkg)
 		result.RawPkg, err = c.ReadPacketReuseMem(result.RawPkg)
 		if err != nil {
-			return
+			return err
 		}
 		data = result.RawPkg[rawPkgLen:]
 
 		// EOF Packet
 		if c.isEOFPacket(data) {
 			if c.capability&CLIENT_PROTOCOL_41 > 0 {
-				//result.Warnings = binary.LittleEndian.Uint16(data[1:])
-				//todo add strict_mode, warning will be treat as error
+				result.Warnings = binary.LittleEndian.Uint16(data[1:])
+				// todo add strict_mode, warning will be treat as error
 				result.Status = binary.LittleEndian.Uint16(data[3:])
 				c.status = result.Status
 			}
@@ -342,7 +358,7 @@ func (c *Conn) readResultColumns(result *Result) (err error) {
 				err = ErrMalformPacket
 			}
 
-			return
+			return err
 		}
 
 		if result.Fields[i] == nil {
@@ -350,10 +366,10 @@ func (c *Conn) readResultColumns(result *Result) (err error) {
 		}
 		err = result.Fields[i].Parse(data)
 		if err != nil {
-			return
+			return err
 		}
 
-		result.FieldNames[hack.String(result.Fields[i].Name)] = i
+		result.FieldNames[utils.ByteSliceToString(result.Fields[i].Name)] = i
 
 		i++
 	}
@@ -366,15 +382,15 @@ func (c *Conn) readResultRows(result *Result, isBinary bool) (err error) {
 		rawPkgLen := len(result.RawPkg)
 		result.RawPkg, err = c.ReadPacketReuseMem(result.RawPkg)
 		if err != nil {
-			return
+			return err
 		}
 		data = result.RawPkg[rawPkgLen:]
 
 		// EOF Packet
 		if c.isEOFPacket(data) {
 			if c.capability&CLIENT_PROTOCOL_41 > 0 {
-				//result.Warnings = binary.LittleEndian.Uint16(data[1:])
-				//todo add strict_mode, warning will be treat as error
+				result.Warnings = binary.LittleEndian.Uint16(data[1:])
+				// todo add strict_mode, warning will be treat as error
 				result.Status = binary.LittleEndian.Uint16(data[3:])
 				c.status = result.Status
 			}
@@ -415,13 +431,13 @@ func (c *Conn) readResultRowsStreaming(result *Result, isBinary bool, perRowCb S
 	for {
 		data, err = c.ReadPacketReuseMem(data[:0])
 		if err != nil {
-			return
+			return err
 		}
 
 		// EOF Packet
 		if c.isEOFPacket(data) {
 			if c.capability&CLIENT_PROTOCOL_41 > 0 {
-				// result.Warnings = binary.LittleEndian.Uint16(data[1:])
+				result.Warnings = binary.LittleEndian.Uint16(data[1:])
 				// todo add strict_mode, warning will be treat as error
 				result.Status = binary.LittleEndian.Uint16(data[3:])
 				c.status = result.Status

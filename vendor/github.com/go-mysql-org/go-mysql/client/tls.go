@@ -13,16 +13,28 @@ func NewClientTLSConfig(caPem, certPem, keyPem []byte, insecureSkipVerify bool, 
 		panic("failed to add ca PEM")
 	}
 
-	cert, err := tls.X509KeyPair(certPem, keyPem)
-	if err != nil {
-		panic(err)
+	var config *tls.Config
+
+	// Allow cert and key to be optional
+	// Send through `make([]byte, 0)` for "nil"
+	if string(certPem) != "" && string(keyPem) != "" {
+		cert, err := tls.X509KeyPair(certPem, keyPem)
+		if err != nil {
+			panic(err)
+		}
+		config = &tls.Config{
+			RootCAs:            pool,
+			Certificates:       []tls.Certificate{cert},
+			InsecureSkipVerify: insecureSkipVerify,
+			ServerName:         serverName,
+		}
+	} else {
+		config = &tls.Config{
+			RootCAs:            pool,
+			InsecureSkipVerify: insecureSkipVerify,
+			ServerName:         serverName,
+		}
 	}
 
-	config := &tls.Config{
-		Certificates:       []tls.Certificate{cert},
-		RootCAs:            pool,
-		InsecureSkipVerify: insecureSkipVerify,
-		ServerName:         serverName,
-	}
 	return config
 }

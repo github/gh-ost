@@ -17,6 +17,7 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `help`: shows a brief list of available commands
 - `status`: returns a detailed status summary of migration progress and configuration
 - `sup`: returns a brief status summary of migration progress
+- `cpu-profile`: returns a base64-encoded [`runtime/pprof`](https://pkg.go.dev/runtime/pprof) CPU profile using a duration, default: `30s`. Comma-separated options `gzip` and/or `block` (blocked profile) may follow the profile duration
 - `coordinates`: returns recent (though not exactly up to date) binary log coordinates of the inspected server
 - `applier`: returns the hostname of the applier
 - `inspector`: returns the hostname of the inspector
@@ -40,6 +41,7 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `throttle-control-replicas='replica1,replica2'`: change list of throttle-control replicas, these are replicas `gh-ost` will check. This takes a comma separated list of replica's to check and replaces the previous list.
 - `throttle`: force migration suspend
 - `no-throttle`: cancel forced suspension (though other throttling reasons may still apply)
+- `postpone-cut-over-flag-file=<path>`: Postpone the [cut-over](cut-over.md) phase, writing a cut over flag file to the given path
 - `unpostpone`: at a time where `gh-ost` is postponing the [cut-over](cut-over.md) phase, instruct `gh-ost` to stop postponing and proceed immediately to cut-over.
 - `panic`: immediately panic and abort operation
 
@@ -59,7 +61,7 @@ $ echo status | nc -U /tmp/gh-ost.test.sample_data_0.sock
 # Throttle additional flag file: /tmp/gh-ost.throttle
 # Serving on unix socket: /tmp/gh-ost.test.sample_data_0.sock
 # Serving on TCP port: 10001
-Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 40s(copy), 41s(total); streamer: mysql-bin.000550:49942; ETA: throttled, flag-file
+Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Time: 41s(total), 40s(copy); streamer: mysql-bin.000550:49942; Lag: 0.01s, HeartbeatLag: 0.01s, State: throttled, flag-file; ETA: N/A
 ```
 
 ```shell
@@ -87,5 +89,5 @@ $ echo status | nc -U /tmp/gh-ost.test.sample_data_0.sock
 # Throttle additional flag file: /tmp/gh-ost.throttle
 # Serving on unix socket: /tmp/gh-ost.test.sample_data_0.sock
 # Serving on TCP port: 10001
-Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 59s(copy), 59s(total); streamer: mysql-bin.000551:68067; ETA: throttled, commanded by user
+Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Time: 59s(total), 59s(copy); streamer: mysql-bin.000551:68067; Lag: 0.01s, HeartbeatLag: 0.01s, State: throttled, commanded by user; ETA: N/A
 ```

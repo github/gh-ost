@@ -21,11 +21,11 @@ func (c *Conn) writeCommandBuf(command byte, arg []byte) error {
 
 	length := len(arg) + 1
 	data := utils.ByteSliceGet(length + 4)
-	data[4] = command
+	data.B[4] = command
 
-	copy(data[5:], arg)
+	copy(data.B[5:], arg)
 
-	err := c.WritePacket(data)
+	err := c.WritePacket(data.B)
 
 	utils.ByteSlicePut(data)
 
@@ -39,19 +39,23 @@ func (c *Conn) writeCommandStr(command byte, arg string) error {
 func (c *Conn) writeCommandUint32(command byte, arg uint32) error {
 	c.ResetSequence()
 
-	return c.WritePacket([]byte{
-		0x05, //5 bytes long
-		0x00,
-		0x00,
-		0x00, //sequence
+	buf := utils.ByteSliceGet(9)
 
-		command,
+	buf.B[0] = 0x05 //5 bytes long
+	buf.B[1] = 0x00
+	buf.B[2] = 0x00
+	buf.B[3] = 0x00 //sequence
 
-		byte(arg),
-		byte(arg >> 8),
-		byte(arg >> 16),
-		byte(arg >> 24),
-	})
+	buf.B[4] = command
+
+	buf.B[5] = byte(arg)
+	buf.B[6] = byte(arg >> 8)
+	buf.B[7] = byte(arg >> 16)
+	buf.B[8] = byte(arg >> 24)
+
+	err := c.WritePacket(buf.B)
+	utils.ByteSlicePut(buf)
+	return err
 }
 
 func (c *Conn) writeCommandStrStr(command byte, arg1 string, arg2 string) error {

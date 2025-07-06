@@ -150,7 +150,7 @@ func (this *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 			// when running on replica, the heartbeat injection is also done on the replica.
 			// This means we will always get a good heartbeat value.
 			// When running on replica, we should instead check the `SHOW SLAVE STATUS` output.
-			if lag, err := mysql.GetReplicationLagFromSlaveStatus(this.inspector.informationSchemaDb); err != nil {
+			if lag, err := mysql.GetReplicationLagFromSlaveStatus(this.inspector.dbVersion, this.inspector.informationSchemaDb); err != nil {
 				return this.migrationContext.Log.Errore(err)
 			} else {
 				atomic.StoreInt64(&this.migrationContext.CurrentLag, int64(lag))
@@ -215,8 +215,10 @@ func (this *Throttler) collectControlReplicasLag() {
 		}
 		lagResults := make(chan *mysql.ReplicationLagResult, instanceKeyMap.Len())
 		for replicaKey := range *instanceKeyMap {
-			connectionConfig := this.migrationContext.InspectorConnectionConfig.Duplicate()
-			connectionConfig.Key = replicaKey
+			connectionConfig := this.migrationContext.InspectorConnectionConfig.DuplicateCredentials(replicaKey)
+			if err := connectionConfig.RegisterTLSConfig(); err != nil {
+				return &mysql.ReplicationLagResult{Err: err}
+			}
 
 			lagResult := &mysql.ReplicationLagResult{Key: connectionConfig.Key}
 			go func() {
@@ -284,7 +286,7 @@ func (this *Throttler) criticalLoadIsMet() (met bool, variableName string, value
 	return false, variableName, value, threshold, nil
 }
 
-// collectReplicationLag reads the latest changelog heartbeat value
+// collectThrottleHTTPStatus reads the latest changelog heartbeat value
 func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<- bool) {
 	collectFunc := func() (sleep bool, err error) {
 		if atomic.LoadInt64(&this.migrationContext.HibernateUntil) > 0 {
@@ -308,6 +310,8 @@ func (this *Throttler) collectThrottleHTTPStatus(firstThrottlingCollected chan<-
 		if err != nil {
 			return false, err
 		}
+		defer resp.Body.Close()
+
 		atomic.StoreInt64(&this.migrationContext.ThrottleHTTPStatusCode, int64(resp.StatusCode))
 		return false, nil
 	}
@@ -432,7 +436,7 @@ func (this *Throttler) collectGeneralThrottleMetrics() error {
 	return setThrottle(false, "", base.NoThrottleReasonHint)
 }
 
-// initiateThrottlerMetrics initiates the various processes that collect measurements
+// initiateThrottlerCollection initiates the various processes that collect measurements
 // that may affect throttling. There are several components, all running independently,
 // that collect such metrics.
 func (this *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan<- bool) {

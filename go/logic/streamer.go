@@ -36,6 +36,7 @@ const (
 type EventsStreamer struct {
 	connectionConfig         *mysql.ConnectionConfig
 	db                       *gosql.DB
+	dbVersion                string
 	migrationContext         *base.MigrationContext
 	initialBinlogCoordinates *mysql.BinlogCoordinates
 	listeners                [](*BinlogEventListener)
@@ -107,9 +108,11 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 	if this.db, _, err = mysql.GetDB(this.migrationContext.Uuid, EventsStreamerUri); err != nil {
 		return err
 	}
-	if _, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name); err != nil {
+	version, err := base.ValidateConnection(this.db, this.connectionConfig, this.migrationContext, this.name)
+	if err != nil {
 		return err
 	}
+	this.dbVersion = version
 	if err := this.readCurrentBinlogCoordinates(); err != nil {
 		return err
 	}
@@ -140,7 +143,8 @@ func (this *EventsStreamer) GetReconnectBinlogCoordinates() *mysql.BinlogCoordin
 
 // readCurrentBinlogCoordinates reads master status from hooked server
 func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
-	query := `show /* gh-ost readCurrentBinlogCoordinates */ master status`
+	binaryLogStatusTerm := mysql.ReplicaTermFor(this.dbVersion, "master status")
+	query := fmt.Sprintf("show /* gh-ost readCurrentBinlogCoordinates */ %s", binaryLogStatusTerm)
 	foundMasterStatus := false
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
 		this.initialBinlogCoordinates = &mysql.BinlogCoordinates{
@@ -155,7 +159,7 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 		return err
 	}
 	if !foundMasterStatus {
-		return fmt.Errorf("Got no results from SHOW MASTER STATUS. Bailing out")
+		return fmt.Errorf("Got no results from SHOW %s. Bailing out", strings.ToUpper(binaryLogStatusTerm))
 	}
 	this.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", *this.initialBinlogCoordinates)
 	return nil
@@ -193,7 +197,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			} else {
 				successiveFailures = 0
 			}
-			if successiveFailures > this.migrationContext.MaxRetries() {
+			if successiveFailures >= this.migrationContext.MaxRetries() {
 				return fmt.Errorf("%d successive failures in streamer reconnect at coordinates %+v", successiveFailures, this.GetReconnectBinlogCoordinates())
 			}
 

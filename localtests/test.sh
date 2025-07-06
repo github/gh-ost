@@ -11,6 +11,8 @@ tests_path=$(dirname $0)
 test_logfile=/tmp/gh-ost-test.log
 default_ghost_binary=/tmp/gh-ost-test
 ghost_binary=""
+docker=false
+storage_engine=innodb
 exec_command_file=/tmp/gh-ost-test.bash
 ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
@@ -24,12 +26,15 @@ replica_port=
 original_sql_mode=
 
 OPTIND=1
-while getopts "b:" OPTION
+while getopts "b:s:d" OPTION
 do
   case $OPTION in
     b)
-      ghost_binary="$OPTARG"
-    ;;
+      ghost_binary="$OPTARG";;
+    s)
+      storage_engine="$OPTARG";;
+    d)
+      docker=true;;
   esac
 done
 shift $((OPTIND-1))
@@ -78,9 +83,18 @@ echo_dot() {
 }
 
 start_replication() {
-  gh-ost-test-mysql-replica -e "stop slave; start slave;"
+  mysql_version="$(gh-ost-test-mysql-replica -e  "select @@version")"
+  if [[ $mysql_version =~ "8.4" ]]; then
+    seconds_behind_source="Seconds_Behind_Source"
+    replica_terminology="replica"
+  else
+    seconds_behind_source="Seconds_Behind_Master"
+    replica_terminology="slave"
+  fi
+  gh-ost-test-mysql-replica -e "stop $replica_terminology; start $replica_terminology;"
+
   num_attempts=0
-  while gh-ost-test-mysql-replica -e "show slave status\G" | grep Seconds_Behind_Master | grep -q NULL ; do
+  while gh-ost-test-mysql-replica -e "show $replica_terminology status\G" | grep $seconds_behind_source | grep -q NULL ; do
     ((num_attempts=num_attempts+1))
     if [ $num_attempts -gt 10 ] ; then
       echo
@@ -96,10 +110,21 @@ test_single() {
   local test_name
   test_name="$1"
 
+  if [ "$docker" = true ]; then
+    master_host="0.0.0.0"
+    master_port="3307"
+    replica_host="0.0.0.0"
+    replica_port="3308"
+  fi
+
   if [ -f $tests_path/$test_name/ignore_versions ] ; then
     ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
     mysql_version=$(gh-ost-test-mysql-master -s -s -e "select @@version")
+    mysql_version_comment=$(gh-ost-test-mysql-master -s -s -e "select @@version_comment")
     if echo "$mysql_version" | egrep -q "^${ignore_versions}" ; then
+      echo -n "Skipping: $test_name"
+      return 0
+    elif echo "$mysql_version_comment" | egrep -i -q "^${ignore_versions}" ; then
       echo -n "Skipping: $test_name"
       return 0
     fi
@@ -117,6 +142,14 @@ test_single() {
   fi
 
   gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/create.sql
+  test_create_result=$?
+
+  if [ $test_create_result -ne 0 ] ; then
+    echo
+    echo "ERROR $test_name create failure. cat $tests_path/$test_name/create.sql:"
+    cat $tests_path/$test_name/create.sql
+    return 1
+  fi
 
   extra_args=""
   if [ -f $tests_path/$test_name/extra_args ] ; then
@@ -146,7 +179,8 @@ test_single() {
     --assume-master-host=${master_host}:${master_port}
     --database=test \
     --table=gh_ost_test \
-    --alter='engine=innodb' \
+    --storage-engine=${storage_engine} \
+    --alter='engine=${storage_engine}' \
     --exact-rowcount \
     --assume-rbr \
     --initially-drop-old-table \
@@ -255,9 +289,10 @@ build_binary() {
 
 test_all() {
   build_binary
-  find $tests_path ! -path . -type d -mindepth 1 -maxdepth 1 | cut -d "/" -f 3 | egrep "$test_pattern" | while read test_name ; do
-    test_single "$test_name"
-    if [ $? -ne 0 ] ; then
+  test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | sort)
+  while read -r test_dir; do
+    test_name=$(basename "$test_dir")
+    if ! test_single "$test_name" ; then
       create_statement=$(gh-ost-test-mysql-replica test -t -e "show create table _gh_ost_test_gho \G")
       echo "$create_statement" >> $test_logfile
       echo "+ FAIL"
@@ -266,8 +301,13 @@ test_all() {
       echo
       echo "+ pass"
     fi
-    gh-ost-test-mysql-replica -e "start slave"
-  done
+    mysql_version="$(gh-ost-test-mysql-replica -e  "select @@version")"
+    replica_terminology="slave"
+    if [[ $mysql_version =~ "8.4" ]]; then
+      replica_terminology="replica"
+    fi
+    gh-ost-test-mysql-replica -e "start $replica_terminology"
+  done <<< "$test_dirs"
 }
 
 verify_master_and_replica

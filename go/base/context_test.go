@@ -6,13 +6,13 @@
 package base
 
 import (
-	"io/ioutil"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/openark/golib/log"
-	test "github.com/openark/golib/tests"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -23,22 +23,22 @@ func TestGetTableNames(t *testing.T) {
 	{
 		context := NewMigrationContext()
 		context.OriginalTableName = "some_table"
-		test.S(t).ExpectEquals(context.GetOldTableName(), "_some_table_del")
-		test.S(t).ExpectEquals(context.GetGhostTableName(), "_some_table_gho")
-		test.S(t).ExpectEquals(context.GetChangelogTableName(), "_some_table_ghc")
+		require.Equal(t, "_some_table_del", context.GetOldTableName())
+		require.Equal(t, "_some_table_gho", context.GetGhostTableName())
+		require.Equal(t, "_some_table_ghc", context.GetChangelogTableName(), "_some_table_ghc")
 	}
 	{
 		context := NewMigrationContext()
 		context.OriginalTableName = "a123456789012345678901234567890123456789012345678901234567890"
-		test.S(t).ExpectEquals(context.GetOldTableName(), "_a1234567890123456789012345678901234567890123456789012345678_del")
-		test.S(t).ExpectEquals(context.GetGhostTableName(), "_a1234567890123456789012345678901234567890123456789012345678_gho")
-		test.S(t).ExpectEquals(context.GetChangelogTableName(), "_a1234567890123456789012345678901234567890123456789012345678_ghc")
+		require.Equal(t, "_a1234567890123456789012345678901234567890123456789012345678_del", context.GetOldTableName())
+		require.Equal(t, "_a1234567890123456789012345678901234567890123456789012345678_gho", context.GetGhostTableName())
+		require.Equal(t, "_a1234567890123456789012345678901234567890123456789012345678_ghc", context.GetChangelogTableName())
 	}
 	{
 		context := NewMigrationContext()
 		context.OriginalTableName = "a123456789012345678901234567890123456789012345678901234567890123"
 		oldTableName := context.GetOldTableName()
-		test.S(t).ExpectEquals(oldTableName, "_a1234567890123456789012345678901234567890123456789012345678_del")
+		require.Equal(t, "_a1234567890123456789012345678901234567890123456789012345678_del", oldTableName)
 	}
 	{
 		context := NewMigrationContext()
@@ -47,15 +47,77 @@ func TestGetTableNames(t *testing.T) {
 		longForm := "Jan 2, 2006 at 3:04pm (MST)"
 		context.StartTime, _ = time.Parse(longForm, "Feb 3, 2013 at 7:54pm (PST)")
 		oldTableName := context.GetOldTableName()
-		test.S(t).ExpectEquals(oldTableName, "_a1234567890123456789012345678901234567890123_20130203195400_del")
+		require.Equal(t, "_a1234567890123456789012345678901234567890123_20130203195400_del", oldTableName)
 	}
 	{
 		context := NewMigrationContext()
 		context.OriginalTableName = "foo_bar_baz"
 		context.ForceTmpTableName = "tmp"
-		test.S(t).ExpectEquals(context.GetOldTableName(), "_tmp_del")
-		test.S(t).ExpectEquals(context.GetGhostTableName(), "_tmp_gho")
-		test.S(t).ExpectEquals(context.GetChangelogTableName(), "_tmp_ghc")
+		require.Equal(t, "_tmp_del", context.GetOldTableName())
+		require.Equal(t, "_tmp_gho", context.GetGhostTableName())
+		require.Equal(t, "_tmp_ghc", context.GetChangelogTableName())
+	}
+}
+
+func TestGetTriggerNames(t *testing.T) {
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_gho"
+		require.Equal(t, "my_trigger"+context.TriggerSuffix, context.GetGhostTriggerName("my_trigger"))
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_gho"
+		context.RemoveTriggerSuffix = true
+		require.Equal(t, "my_trigger"+context.TriggerSuffix, context.GetGhostTriggerName("my_trigger"))
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_gho"
+		context.RemoveTriggerSuffix = true
+		require.Equal(t, "my_trigger", context.GetGhostTriggerName("my_trigger_gho"))
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_gho"
+		context.RemoveTriggerSuffix = false
+		require.Equal(t, "my_trigger_gho_gho", context.GetGhostTriggerName("my_trigger_gho"))
+	}
+}
+
+func TestValidateGhostTriggerLengthBelowMaxLength(t *testing.T) {
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_gho"
+		require.True(t, context.ValidateGhostTriggerLengthBelowMaxLength("my_trigger"))
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		require.False(t, context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4))) // 64 characters + "_ghost"
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		require.True(t, context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 3))) // 48 characters + "_ghost"
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		context.RemoveTriggerSuffix = true
+		require.True(t, context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4))) // 64 characters + "_ghost" removed
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		context.RemoveTriggerSuffix = true
+		require.False(t, context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4)+"X")) // 65 characters + "_ghost" not removed
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		context.RemoveTriggerSuffix = true
+		require.True(t, context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4)+"_ghost")) // 70 characters + last "_ghost"  removed
 	}
 }
 
@@ -68,7 +130,7 @@ func TestReadConfigFile(t *testing.T) {
 		}
 	}
 	{
-		f, err := ioutil.TempFile("", t.Name())
+		f, err := os.CreateTemp("", t.Name())
 		if err != nil {
 			t.Fatalf("Failed to create tmp file: %v", err)
 		}
@@ -82,7 +144,7 @@ func TestReadConfigFile(t *testing.T) {
 		}
 	}
 	{
-		f, err := ioutil.TempFile("", t.Name())
+		f, err := os.CreateTemp("", t.Name())
 		if err != nil {
 			t.Fatalf("Failed to create tmp file: %v", err)
 		}
@@ -102,7 +164,7 @@ func TestReadConfigFile(t *testing.T) {
 		}
 	}
 	{
-		f, err := ioutil.TempFile("", t.Name())
+		f, err := os.CreateTemp("", t.Name())
 		if err != nil {
 			t.Fatalf("Failed to create tmp file: %v", err)
 		}

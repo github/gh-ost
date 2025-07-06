@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"syscall"
 
 	"github.com/github/gh-ost/go/base"
@@ -22,7 +23,7 @@ import (
 	"golang.org/x/term"
 )
 
-var AppVersion string
+var AppVersion, GitCommit string
 
 // acceptSignals registers for OS signals
 func acceptSignals(migrationContext *base.MigrationContext) {
@@ -57,6 +58,7 @@ func main() {
 	flag.StringVar(&migrationContext.CliMasterPassword, "master-password", "", "MySQL password on master, if different from that on replica. Requires --assume-master-host")
 	flag.StringVar(&migrationContext.ConfigFile, "conf", "", "Config file")
 	askPass := flag.Bool("ask-pass", false, "prompt for MySQL password")
+	charset := flag.String("charset", "utf8mb4,utf8,latin1", "The default charset for the database connection is utf8mb4, utf8, latin1.")
 
 	flag.BoolVar(&migrationContext.UseTLS, "ssl", false, "Enable SSL encrypted connections to MySQL hosts")
 	flag.StringVar(&migrationContext.TLSCACertificate, "ssl-ca", "", "CA certificate in PEM format for TLS connections to MySQL hosts. Requires --ssl")
@@ -67,6 +69,9 @@ func main() {
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
 	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
+	flag.BoolVar(&migrationContext.AttemptInstantDDL, "attempt-instant-ddl", false, "Attempt to use instant DDL for this migration first")
+	storageEngine := flag.String("storage-engine", "innodb", "Specify table storage engine (default: 'innodb'). When 'rocksdb': the session transaction isolation level is changed from REPEATABLE_READ to READ_COMMITTED.")
+
 	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
 	flag.BoolVar(&migrationContext.ConcurrentCountTableRows, "concurrent-rowcount", true, "(with --exact-rowcount), when true (default): count rows after row-copy begins, concurrently, and adjust row estimate later on; when false: first count rows, then start row copy")
 	flag.BoolVar(&migrationContext.AllowedRunningOnMaster, "allow-on-master", false, "allow this migration to run directly on master. Preferably it would run on a replica")
@@ -103,7 +108,8 @@ func main() {
 	chunkSize := flag.Int64("chunk-size", 1000, "amount of rows to handle in each iteration (allowed range: 10-100,000)")
 	dmlBatchSize := flag.Int64("dml-batch-size", 10, "batch size for DML events to apply in a single transaction (range 1-100)")
 	defaultRetries := flag.Int64("default-retries", 60, "Default number of retries for various operations before panicking")
-	cutOverLockTimeoutSeconds := flag.Int64("cut-over-lock-timeout-seconds", 3, "Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout)")
+	flag.BoolVar(&migrationContext.PanicOnWarnings, "panic-on-warnings", false, "Panic when SQL warnings are encountered when copying a batch indicating data loss")
+	cutOverLockTimeoutSeconds := flag.Int64("cut-over-lock-timeout-seconds", 3, "Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout) or attempting instant DDL")
 	niceRatio := flag.Float64("nice-ratio", 0, "force being 'nice', imply sleep time per chunk time; range: [0.0..100.0]. Example values: 0 is aggressive. 1: for every 1ms spent copying rows, sleep additional 1ms (effectively doubling runtime); 0.7: for every 10ms spend in a rowcopy chunk, spend 7ms sleeping immediately after")
 
 	maxLagMillis := flag.Int64("max-lag-millis", 1500, "replication lag at which to throttle operation")
@@ -131,6 +137,12 @@ func main() {
 	flag.Int64Var(&migrationContext.HooksStatusIntervalSec, "hooks-status-interval", 60, "how many seconds to wait between calling onStatus hook")
 
 	flag.UintVar(&migrationContext.ReplicaServerId, "replica-server-id", 99999, "server id used by gh-ost process. Default: 99999")
+	flag.BoolVar(&migrationContext.AllowSetupMetadataLockInstruments, "allow-setup-metadata-lock-instruments", false, "validate rename session hold the MDL of original table before unlock tables in cut-over phase")
+	flag.IntVar(&migrationContext.BinlogSyncerMaxReconnectAttempts, "binlogsyncer-max-reconnect-attempts", 0, "when master node fails, the maximum number of binlog synchronization attempts to reconnect. 0 is unlimited")
+
+	flag.BoolVar(&migrationContext.IncludeTriggers, "include-triggers", false, "When true, the triggers (if exist) will be created on the new table")
+	flag.StringVar(&migrationContext.TriggerSuffix, "trigger-suffix", "", "Add a suffix to the trigger name (i.e '_v2'). Requires '--include-triggers'")
+	flag.BoolVar(&migrationContext.RemoveTriggerSuffix, "remove-trigger-suffix-if-exists", false, "Remove given suffix from name of trigger. Requires '--include-triggers' and '--trigger-suffix'")
 
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")
@@ -156,12 +168,15 @@ func main() {
 		flag.PrintDefaults()
 		return
 	}
+
+	if AppVersion == "" {
+		AppVersion = "unversioned"
+	}
+	if GitCommit == "" {
+		GitCommit = "unknown"
+	}
 	if *version {
-		appVersion := AppVersion
-		if appVersion == "" {
-			appVersion = "unversioned"
-		}
-		fmt.Println(appVersion)
+		fmt.Printf("%s (git commit: %s)\n", AppVersion, GitCommit)
 		return
 	}
 
@@ -179,6 +194,12 @@ func main() {
 		// Override!!
 		migrationContext.Log.SetLevel(log.ERROR)
 	}
+
+	if err := migrationContext.SetConnectionConfig(*storageEngine); err != nil {
+		migrationContext.Log.Fatale(err)
+	}
+
+	migrationContext.SetConnectionCharset(*charset)
 
 	if migrationContext.AlterStatement == "" {
 		log.Fatal("--alter must be provided and statement must not be empty")
@@ -243,7 +264,23 @@ func main() {
 		migrationContext.Log.Fatal("--ssl-allow-insecure requires --ssl")
 	}
 	if *replicationLagQuery != "" {
-		migrationContext.Log.Warning("--replication-lag-query is deprecated")
+		migrationContext.Log.Warningf("--replication-lag-query is deprecated")
+	}
+	if migrationContext.IncludeTriggers && migrationContext.TriggerSuffix == "" {
+		migrationContext.Log.Fatalf("--trigger-suffix must be used with --include-triggers")
+	}
+	if !migrationContext.IncludeTriggers && migrationContext.TriggerSuffix != "" {
+		migrationContext.Log.Fatalf("--trigger-suffix cannot be be used without --include-triggers")
+	}
+	if migrationContext.TriggerSuffix != "" {
+		regex := regexp.MustCompile(`^[\da-zA-Z_]+$`)
+
+		if !regex.Match([]byte(migrationContext.TriggerSuffix)) {
+			migrationContext.Log.Fatalf("--trigger-suffix must contain only alpha numeric characters and underscore (0-9,a-z,A-Z,_)")
+		}
+	}
+	if *storageEngine == "rocksdb" {
+		migrationContext.Log.Warning("RocksDB storage engine support is experimental")
 	}
 
 	switch *cutOver {
@@ -297,7 +334,7 @@ func main() {
 		migrationContext.Log.Errore(err)
 	}
 
-	log.Infof("starting gh-ost %+v", AppVersion)
+	log.Infof("starting gh-ost %+v (git commit: %s)", AppVersion, GitCommit)
 	acceptSignals(migrationContext)
 
 	migrator := logic.NewMigrator(migrationContext, AppVersion)

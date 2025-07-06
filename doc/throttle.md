@@ -89,8 +89,8 @@ The first check to suggest throttling stops the check; the status message will n
 The throttle status is printed as part of the periodic [status message](understanding-output.md):
 
 ```
-Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 41s(copy), 41s(total); streamer: mysql-bin.000551:47983; ETA: throttled, flag-file
-Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Elapsed: 42s(copy), 42s(total); streamer: mysql-bin.000551:49370; ETA: throttled, commanded by user
+Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Time: 41s(total), 41s(copy); streamer: mysql-bin.000551:47983; Lag: 0.01s, HeartbeatLag: 0.01s, State: throttled, flag-file; ETA: N/A
+Copy: 0/2915 0.0%; Applied: 0; Backlog: 0/100; Time: 42s(total), 42s(copy); streamer: mysql-bin.000551:49370; Lag: 0.01s, HeartbeatLag: 0.01s, State: throttled, commanded by user; ETA: N/A
 ```
 
 ### How long can you throttle for?

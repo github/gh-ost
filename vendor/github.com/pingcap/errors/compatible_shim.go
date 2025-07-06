@@ -63,7 +63,6 @@ func init() {
 	}
 }
 
-
 // MarshalJSON implements json.Marshaler interface.
 // aware that this function cannot save a 'registered' status,
 // since we cannot access the registry when unmarshaling,

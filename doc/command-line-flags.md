@@ -45,6 +45,25 @@ If you happen to _know_ your servers use RBR (Row Based Replication, i.e. `binlo
 Skipping this step means `gh-ost` would not need the `SUPER` privilege in order to operate.
 You may want to use this on Amazon RDS.
 
+### attempt-instant-ddl
+
+MySQL 8.0 supports "instant DDL" for some operations. If an alter statement can be completed with instant DDL, only a metadata change is required internally. Instant operations include:
+
+- Adding a column
+- Dropping a column
+- Dropping an index
+- Extending a varchar column
+- Adding a virtual generated column
+
+It is not reliable to parse the `ALTER` statement to determine if it is instant or not. This is because the table might be in an older row format, or have some other incompatibility that is difficult to identify.
+
+`--attempt-instant-ddl` is disabled by default, but the risks of enabling it are relatively minor: `gh-ost` may need to acquire a metadata lock at the start of the operation. This is not a problem for most scenarios, but it could be a problem for users that start the DDL during a period with long running transactions.
+
+`gh-ost` will automatically fallback to the normal DDL process if the attempt to use instant DDL is unsuccessful.
+
+### binlogsyncer-max-reconnect-attempts
+`--binlogsyncer-max-reconnect-attempts=0`, the maximum number of attempts to re-establish a broken inspector connection for sync binlog. `0` or `negative number` means infinite retry, default `0`
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
@@ -171,6 +190,8 @@ When using [Connect to replica, migrate on master](cheatsheet.md#a-connect-to-re
 
 When [`--throttle-control-replicas`](#throttle-control-replicas) is provided, throttling also considers lag on specified hosts. Lag measurements on listed hosts is done by querying `gh-ost`'s _changelog_ table, where `gh-ost` injects a heartbeat.
 
+When using on master or when `--allow-on-master` is provided, `max-lag-millis` is also considered a threshold for starting the cutover stage of the migration. If the row copy is complete and the heartbeat lag is less than `max-lag-millis` cutover phase of the migration will start. 
+
 See also: [Sub-second replication lag throttling](subsecond-lag.md)
 
 ### max-load
@@ -180,6 +201,12 @@ List of metrics and threshold values; topping the threshold of any will cause th
 ### migrate-on-replica
 
 Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but otherwise will make no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
+
+### panic-on-warnings
+
+When this flag is set, `gh-ost` will panic when SQL warnings indicating data loss are encountered when copying data. This flag helps prevent data loss scenarios with migrations touching unique keys, column collation and types, as well as `NOT NULL` constraints, where `MySQL` will silently drop inserted rows that no longer satisfy the updated constraint (also dependent on the configured `sql_mode`).
+
+While `panic-on-warnings` is currently disabled by defaults, it will default to `true` in a future version of `gh-ost`.
 
 ### postpone-cut-over-flag-file
 
@@ -229,6 +256,21 @@ Allows `gh-ost` to connect to the MySQL servers using encrypted connections, but
 ### ssl-key
 
 `--ssl-key=/path/to/ssl-key.key`: SSL private key file (in PEM format).
+
+### storage-engine
+Default is `innodb`, and `rocksdb` support is currently experimental. InnoDB and RocksDB are both transactional engines, supporting both shared and exclusive row locks.
+
+But RocksDB currently lacks a few features support compared to InnoDB:
+- Gap Locks
+- Foreign Key
+- Generated Columns
+- Spatial
+- Geometry
+
+When `--storage-engine=rocksdb`, `gh-ost` will make some changes necessary (e.g. sets isolation level to `READ_COMMITTED`) to support RocksDB.
+
+### charset
+The default charset for the database connection is utf8mb4, utf8, latin1. The ability to specify character set and collation is supported, eg: utf8mb4_general_ci,utf8_general_ci,latin1. 
 
 ### test-on-replica
 

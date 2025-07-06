@@ -2,11 +2,13 @@ package client
 
 import (
 	"context"
+	"log"
 	"math"
 	"math/rand"
 	"sync"
 	"time"
 
+	"github.com/go-mysql-org/go-mysql/utils"
 	"github.com/pingcap/errors"
 )
 
@@ -42,6 +44,9 @@ type (
 		}
 
 		readyConnection chan Connection
+		ctx             context.Context
+		cancel          context.CancelFunc
+		wg              sync.WaitGroup
 	}
 
 	ConnectionStats struct {
@@ -74,11 +79,85 @@ var (
 	MaxNewConnectionAtOnce = 5
 )
 
+// NewPoolWithOptions initializes new connection pool and uses params: addr, user, password, dbName and options.
+func NewPoolWithOptions(
+	addr string,
+	user string,
+	password string,
+	dbName string,
+	options ...PoolOption,
+) (*Pool, error) {
+	po := getDefaultPoolOptions()
+
+	po.addr = addr
+	po.user = user
+	po.password = password
+	po.dbName = dbName
+
+	for _, o := range options {
+		o(&po)
+	}
+
+	if po.minAlive > po.maxAlive {
+		po.minAlive = po.maxAlive
+	}
+	if po.maxIdle > po.maxAlive {
+		po.maxIdle = po.maxAlive
+	}
+	if po.maxIdle <= po.minAlive {
+		po.maxIdle = po.minAlive
+	}
+
+	pool := &Pool{
+		logFunc:  po.logFunc,
+		minAlive: po.minAlive,
+		maxAlive: po.maxAlive,
+		maxIdle:  po.maxIdle,
+
+		idleCloseTimeout: Timestamp(math.Ceil(DefaultIdleTimeout.Seconds())),
+		idlePingTimeout:  Timestamp(math.Ceil(MaxIdleTimeoutWithoutPing.Seconds())),
+
+		connect: func() (*Conn, error) {
+			return Connect(addr, user, password, dbName, po.connOptions...)
+		},
+
+		readyConnection: make(chan Connection),
+	}
+
+	pool.ctx, pool.cancel = context.WithCancel(context.Background())
+
+	pool.synchro.idleConnections = make([]Connection, 0, pool.maxIdle)
+
+	pool.wg.Add(1)
+	go pool.newConnectionProducer()
+
+	if pool.minAlive > 0 {
+		go pool.startNewConnections(pool.minAlive)
+	}
+
+	pool.wg.Add(1)
+	go pool.closeOldIdleConnections()
+
+	if po.newPoolPingTimeout > 0 {
+		ctx, cancel := context.WithTimeout(pool.ctx, po.newPoolPingTimeout)
+		err := pool.checkConnection(ctx)
+		cancel()
+		if err != nil {
+			pool.Close()
+			return nil, errors.Errorf("checkConnection: %s", err)
+		}
+	}
+
+	return pool, nil
+}
+
 // NewPool initializes new connection pool and uses params: addr, user, password, dbName and options.
-//     minAlive specifies the minimum number of open connections that the pool will try to maintain.
-//     maxAlive specifies the maximum number of open connections
-//       (for internal reasons, may be greater by 1 inside newConnectionProducer).
-//     maxIdle specifies the maximum number of idle connections (see DefaultIdleTimeout).
+// minAlive specifies the minimum number of open connections that the pool will try to maintain.
+// maxAlive specifies the maximum number of open connections (for internal reasons,
+// may be greater by 1 inside newConnectionProducer).
+// maxIdle specifies the maximum number of idle connections (see DefaultIdleTimeout).
+//
+// Deprecated: use NewPoolWithOptions
 func NewPool(
 	logFunc LogFunc,
 	minAlive int,
@@ -88,44 +167,20 @@ func NewPool(
 	user string,
 	password string,
 	dbName string,
-	options ...func(conn *Conn),
+	options ...Option,
 ) *Pool {
-	if minAlive > maxAlive {
-		minAlive = maxAlive
+	pool, err := NewPoolWithOptions(
+		addr,
+		user,
+		password,
+		dbName,
+		WithLogFunc(logFunc),
+		WithPoolLimits(minAlive, maxAlive, maxIdle),
+		WithConnOptions(options...),
+	)
+	if err != nil {
+		pool.logFunc(`Pool: NewPool: %s`, err.Error())
 	}
-	if maxIdle > maxAlive {
-		maxIdle = maxAlive
-	}
-	if maxIdle <= minAlive {
-		maxIdle = minAlive
-	}
-
-	pool := &Pool{
-		logFunc:  logFunc,
-		minAlive: minAlive,
-		maxAlive: maxAlive,
-		maxIdle:  maxIdle,
-
-		idleCloseTimeout: Timestamp(math.Ceil(DefaultIdleTimeout.Seconds())),
-		idlePingTimeout:  Timestamp(math.Ceil(MaxIdleTimeoutWithoutPing.Seconds())),
-
-		connect: func() (*Conn, error) {
-			return Connect(addr, user, password, dbName, options...)
-		},
-
-		readyConnection: make(chan Connection),
-	}
-
-	pool.synchro.idleConnections = make([]Connection, 0, pool.maxIdle)
-
-	go pool.newConnectionProducer()
-
-	if pool.minAlive > 0 {
-		pool.logFunc(`Pool: Setup %d new connections (minimal pool size)...`, pool.minAlive)
-		pool.startNewConnections(pool.minAlive)
-	}
-
-	go pool.closeOldIdleConnections()
 
 	return pool
 }
@@ -143,6 +198,9 @@ func (pool *Pool) GetStats(stats *ConnectionStats) {
 // GetConn returns connection from the pool or create new
 func (pool *Pool) GetConn(ctx context.Context) (*Conn, error) {
 	for {
+		if pool.ctx.Err() != nil {
+			return nil, errors.Errorf("failed get conn, pool closed")
+		}
 		connection, err := pool.getConnection(ctx)
 		if err != nil {
 			return nil, err
@@ -190,7 +248,7 @@ func (pool *Pool) putConnection(connection Connection) {
 }
 
 func (pool *Pool) nowTs() Timestamp {
-	return Timestamp(time.Now().Unix())
+	return Timestamp(utils.Now().Unix())
 }
 
 func (pool *Pool) getConnection(ctx context.Context) (Connection, error) {
@@ -224,6 +282,8 @@ func (pool *Pool) putConnectionUnsafe(connection Connection) {
 }
 
 func (pool *Pool) newConnectionProducer() {
+	defer pool.wg.Done()
+
 	var connection Connection
 	var err error
 
@@ -252,12 +312,30 @@ func (pool *Pool) newConnectionProducer() {
 				pool.synchro.stats.TotalCount-- // Bad luck, should try again
 				pool.synchro.Unlock()
 
-				time.Sleep(time.Duration(10+rand.Intn(90)) * time.Millisecond)
-				continue
+				pool.logFunc("Cannot establish new db connection: %s", err.Error())
+
+				timer := time.NewTimer(
+					time.Duration(10+rand.Intn(90)) * time.Millisecond,
+				)
+
+				select {
+				case <-timer.C:
+					continue
+				case <-pool.ctx.Done():
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return
+				}
 			}
 		}
 
-		pool.readyConnection <- connection
+		select {
+		case pool.readyConnection <- connection:
+		case <-pool.ctx.Done():
+			pool.closeConn(connection.conn)
+			return
+		}
 	}
 }
 
@@ -293,19 +371,26 @@ func (pool *Pool) getIdleConnectionUnsafe() Connection {
 }
 
 func (pool *Pool) closeOldIdleConnections() {
+	defer pool.wg.Done()
+
 	var toPing []Connection
 
 	ticker := time.NewTicker(5 * time.Second)
 
-	for range ticker.C {
-		toPing = pool.getOldIdleConnections(toPing[:0])
-		if len(toPing) == 0 {
-			continue
-		}
-		pool.recheckConnections(toPing)
+	for {
+		select {
+		case <-pool.ctx.Done():
+			return
+		case <-ticker.C:
+			toPing = pool.getOldIdleConnections(toPing[:0])
+			if len(toPing) == 0 {
+				continue
+			}
+			pool.recheckConnections(toPing)
 
-		if !pool.spawnConnectionsIfNeeded() {
-			pool.closeIdleConnectionsIfCan()
+			if !pool.spawnConnectionsIfNeeded() {
+				pool.closeIdleConnectionsIfCan()
+			}
 		}
 	}
 }
@@ -447,6 +532,8 @@ func (pool *Pool) closeConn(conn *Conn) {
 }
 
 func (pool *Pool) startNewConnections(count int) {
+	pool.logFunc(`Pool: Setup %d new connections (minimal pool size)...`, count)
+
 	connections := make([]Connection, 0, count)
 	for i := 0; i < count; i++ {
 		if conn, err := pool.createNewConnection(); err == nil {
@@ -454,6 +541,8 @@ func (pool *Pool) startNewConnections(count int) {
 			pool.synchro.stats.TotalCount++
 			pool.synchro.Unlock()
 			connections = append(connections, conn)
+		} else {
+			pool.logFunc(`Pool: createNewConnection: %s`, err)
 		}
 	}
 
@@ -465,12 +554,60 @@ func (pool *Pool) startNewConnections(count int) {
 }
 
 func (pool *Pool) ping(conn *Conn) error {
-	deadline := time.Now().Add(100 * time.Millisecond)
-	_ = conn.SetWriteDeadline(deadline)
-	_ = conn.SetReadDeadline(deadline)
+	deadline := utils.Now().Add(100 * time.Millisecond)
+	_ = conn.SetDeadline(deadline)
 	err := conn.Ping()
 	if err != nil {
 		pool.logFunc(`Pool: ping query fail: %s`, err.Error())
+	} else {
+		_ = conn.SetDeadline(time.Time{})
 	}
 	return err
+}
+
+// Close only shutdown idle connections. we couldn't control the connection which not in the pool.
+// So before call Close, Call PutConn to put all connections that in use back to connection pool first.
+func (pool *Pool) Close() {
+	pool.cancel()
+	//wait newConnectionProducer exit.
+	pool.wg.Wait()
+	//close idle connections
+	pool.synchro.Lock()
+	for _, connection := range pool.synchro.idleConnections {
+		pool.synchro.stats.TotalCount--
+		_ = connection.conn.Close()
+	}
+	pool.synchro.idleConnections = nil
+	pool.synchro.Unlock()
+}
+
+// checkConnection tries to connect and ping DB server
+func (pool *Pool) checkConnection(ctx context.Context) error {
+	errChan := make(chan error, 1)
+
+	go func() {
+		conn, err := pool.connect()
+		if err == nil {
+			err = conn.Ping()
+			_ = conn.Close()
+		}
+		errChan <- err
+	}()
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// getDefaultPoolOptions returns pool config for low load services
+func getDefaultPoolOptions() poolOptions {
+	return poolOptions{
+		logFunc:  log.Printf,
+		minAlive: 1,
+		maxAlive: 10,
+		maxIdle:  2,
+	}
 }

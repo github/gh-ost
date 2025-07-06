@@ -7,7 +7,7 @@ const (
 
 var (
 	//binlog header [ fe `bin` ]
-	BinLogFileHeader []byte = []byte{0xfe, 0x62, 0x69, 0x6e}
+	BinLogFileHeader = []byte{0xfe, 0x62, 0x69, 0x6e}
 
 	SemiSyncIndicator byte = 0xef
 )
@@ -35,7 +35,7 @@ const (
 
 const (
 	BINLOG_ROW_IMAGE_FULL    = "FULL"
-	BINLOG_ROW_IAMGE_MINIMAL = "MINIMAL"
+	BINLOG_ROW_IMAGE_MINIMAL = "MINIMAL"
 	BINLOG_ROW_IMAGE_NOBLOB  = "NOBLOB"
 )
 
@@ -47,6 +47,9 @@ const (
 	BINLOG_MARIADB_FL_WAITED                      /*16 = FL_WAITED is set if a row lock wait (or other wait) is detected during the execution of the transaction*/
 	BINLOG_MARIADB_FL_DDL                         /*32 - FL_DDL is set for event group containing DDL*/
 )
+
+// See `Log_event_type` in binlog_event.h
+// https://github.com/mysql/mysql-server/blob/trunk/libs/mysql/binlog/event/binlog_event.h
 
 type EventType byte
 
@@ -90,6 +93,10 @@ const (
 	TRANSACTION_CONTEXT_EVENT
 	VIEW_CHANGE_EVENT
 	XA_PREPARE_LOG_EVENT
+	PARTIAL_UPDATE_ROWS_EVENT
+	TRANSACTION_PAYLOAD_EVENT
+	HEARTBEAT_LOG_EVENT_V2
+	GTID_TAGGED_LOG_EVENT
 )
 
 const (
@@ -98,6 +105,11 @@ const (
 	MARIADB_BINLOG_CHECKPOINT_EVENT
 	MARIADB_GTID_EVENT
 	MARIADB_GTID_LIST_EVENT
+	MARIADB_START_ENCRYPTION_EVENT
+	MARIADB_QUERY_COMPRESSED_EVENT
+	MARIADB_WRITE_ROWS_COMPRESSED_EVENT_V1
+	MARIADB_UPDATE_ROWS_COMPRESSED_EVENT_V1
+	MARIADB_DELETE_ROWS_COMPRESSED_EVENT_V1
 )
 
 func (e EventType) String() string {
@@ -188,6 +200,24 @@ func (e EventType) String() string {
 		return "ViewChangeEvent"
 	case XA_PREPARE_LOG_EVENT:
 		return "XAPrepareLogEvent"
+	case PARTIAL_UPDATE_ROWS_EVENT:
+		return "PartialUpdateRowsEvent"
+	case TRANSACTION_PAYLOAD_EVENT:
+		return "TransactionPayloadEvent"
+	case HEARTBEAT_LOG_EVENT_V2:
+		return "HeartbeatLogEventV2"
+	case GTID_TAGGED_LOG_EVENT:
+		return "Gtid_tagged_log_event"
+	case MARIADB_START_ENCRYPTION_EVENT:
+		return "MariadbStartEncryptionEvent"
+	case MARIADB_QUERY_COMPRESSED_EVENT:
+		return "MariadbQueryCompressedEvent"
+	case MARIADB_WRITE_ROWS_COMPRESSED_EVENT_V1:
+		return "MariadbWriteRowsCompressedEventV1"
+	case MARIADB_UPDATE_ROWS_COMPRESSED_EVENT_V1:
+		return "MariadbUpdateRowsCompressedEventV1"
+	case MARIADB_DELETE_ROWS_COMPRESSED_EVENT_V1:
+		return "MariadbDeleteRowsCompressedEventV1"
 
 	default:
 		return "UnknownEvent"
@@ -216,4 +246,18 @@ const (
 	TABLE_MAP_OPT_META_PRIMARY_KEY_WITH_PREFIX
 	TABLE_MAP_OPT_META_ENUM_AND_SET_DEFAULT_CHARSET
 	TABLE_MAP_OPT_META_ENUM_AND_SET_COLUMN_CHARSET
+	TABLE_MAP_OPT_META_COLUMN_VISIBILITY
+)
+
+type IntVarEventType byte
+
+const (
+	INVALID IntVarEventType = iota
+	LAST_INSERT_ID
+	INSERT_ID
+)
+
+const (
+	ENUM_EXTRA_ROW_INFO_TYPECODE_NDB byte = iota
+	ENUM_EXTRA_ROW_INFO_TYPECODE_PARTITION
 )

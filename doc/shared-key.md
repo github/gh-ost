@@ -29,7 +29,7 @@ CREATE TABLE tbl (
 
 (This is also the definition of the _ghost_ table, except that that table would be called `_tbl_gho`). 
 
-In this migration, the _before_ and _after_ versions contain the same unique not-null key (the PRIMARY KEY). To run this migration, `gh-ost` would iterate through the `tbl` table using the primary key, copy rows from `tbl` to the _ghost_ table `_tbl_gho` in primary key order, while also applying the binlog event writes from `tble` onto `_tbl_gho`.
+In this migration, the _before_ and _after_ versions contain the same unique not-null key (the PRIMARY KEY). To run this migration, `gh-ost` would iterate through the `tbl` table using the primary key, copy rows from `tbl` to the _ghost_ table `_tbl_gho` in primary key order, while also applying the binlog event writes from `tbl` onto `_tbl_gho`.
 
 The applying of the binlog events is what requires the shared unique key. For example, an `UPDATE` statement to `tbl` translates to a `REPLACE` statement which `gh-ost` applies to `_tbl_gho`. A `REPLACE` statement expects to insert or replace an existing row based on its row's values and the table's unique key constraints. In particular, if inserting that row would result in a unique key violation (e.g., a row with that primary key already exists), it would _replace_ that existing row with the new values.
 

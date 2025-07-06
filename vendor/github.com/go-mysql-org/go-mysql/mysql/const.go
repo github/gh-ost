@@ -1,9 +1,10 @@
 package mysql
 
 const (
-	MinProtocolVersion byte   = 10
-	MaxPayloadLen      int    = 1<<24 - 1
-	TimeFormat         string = "2006-01-02 15:04:05"
+	ClassicProtocolVersion byte   = 10
+	XProtocolVersion       byte   = 11
+	MaxPayloadLen          int    = 1<<24 - 1
+	TimeFormat             string = "2006-01-02 15:04:05"
 )
 
 const (
@@ -20,6 +21,7 @@ const (
 const (
 	AUTH_MYSQL_OLD_PASSWORD    = "mysql_old_password"
 	AUTH_NATIVE_PASSWORD       = "mysql_native_password"
+	AUTH_CLEAR_PASSWORD        = "mysql_clear_password"
 	AUTH_CACHING_SHA2_PASSWORD = "caching_sha2_password"
 	AUTH_SHA256_PASSWORD       = "sha256_password"
 )
@@ -75,6 +77,8 @@ const (
 )
 
 const (
+	// https://dev.mysql.com/doc/dev/mysql-server/latest/group__group__cs__capabilities__flags.html
+
 	CLIENT_LONG_PASSWORD uint32 = 1 << iota
 	CLIENT_FOUND_ROWS
 	CLIENT_LONG_FLAG
@@ -97,6 +101,16 @@ const (
 	CLIENT_PLUGIN_AUTH
 	CLIENT_CONNECT_ATTRS
 	CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA
+	CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS
+	CLIENT_SESSION_TRACK
+	CLIENT_DEPRECATE_EOF
+	CLIENT_OPTIONAL_RESULTSET_METADATA
+	CLIENT_ZSTD_COMPRESSION_ALGORITHM
+	CLIENT_QUERY_ATTRIBUTES
+	MULTI_FACTOR_AUTHENTICATION
+	CLIENT_CAPABILITY_EXTENSION
+	CLIENT_SSL_VERIFY_SERVER_CERT
+	CLIENT_REMEMBER_OPTIONS
 )
 
 const (
@@ -118,7 +132,7 @@ const (
 	MYSQL_TYPE_VARCHAR
 	MYSQL_TYPE_BIT
 
-	//mysql 5.6
+	// mysql 5.6
 	MYSQL_TYPE_TIMESTAMP2
 	MYSQL_TYPE_DATETIME2
 	MYSQL_TYPE_TIME2
@@ -157,13 +171,33 @@ const (
 )
 
 const (
+	DEFAULT_ADDR                  = "127.0.0.1:3306"
+	DEFAULT_IPV6_ADDR             = "[::1]:3306"
+	DEFAULT_USER                  = "root"
+	DEFAULT_PASSWORD              = ""
+	DEFAULT_FLAVOR                = "mysql"
 	DEFAULT_CHARSET               = "utf8"
 	DEFAULT_COLLATION_ID   uint8  = 33
 	DEFAULT_COLLATION_NAME string = "utf8_general_ci"
+)
+
+const (
+	DEFAULT_DUMP_EXECUTION_PATH = "mysqldump"
 )
 
 // Like vitess, use flavor for different MySQL versions,
 const (
 	MySQLFlavor   = "mysql"
 	MariaDBFlavor = "mariadb"
+)
+
+const (
+	MYSQL_OPTION_MULTI_STATEMENTS_ON = iota
+	MYSQL_OPTION_MULTI_STATEMENTS_OFF
+)
+
+const (
+	MYSQL_COMPRESS_NONE = iota
+	MYSQL_COMPRESS_ZLIB
+	MYSQL_COMPRESS_ZSTD
 )

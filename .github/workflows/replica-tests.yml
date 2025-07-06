@@ -3,22 +3,24 @@ name: migration tests
 on: [pull_request]
 
 jobs:
-  build:
-
-    runs-on: ubuntu-latest
+  docker-tests:
+    runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false
       matrix:
-        version: [mysql-5.7.25,mysql-8.0.16]
+        image: ['mysql/mysql-server:5.7.41','mysql:8.0.41','mysql:8.4.3','percona/percona-server:8.0.41-32']
+    env:
+      TEST_MYSQL_IMAGE: ${{ matrix.image }}
 
     steps:
-    - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v1
-      with:
-        go-version: 1.17
+      - name: Setup environment
+        run: script/docker-gh-ost-replica-tests up
 
-    - name: migration tests
-      env:
-        TEST_MYSQL_VERSION: ${{ matrix.version }}
-      run:  script/cibuild-gh-ost-replica-tests
+      - name: Run tests
+        run: script/docker-gh-ost-replica-tests run
+
+      - name: Teardown environment
+        if: always()
+        run: script/docker-gh-ost-replica-tests down

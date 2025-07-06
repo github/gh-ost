@@ -29,7 +29,7 @@ mkdir -p "$BUILD_ARTIFACT_DIR"/gh-ost
 cp ${tarball}.gz "$BUILD_ARTIFACT_DIR"/gh-ost/
 
 ### HACK HACK HACK HACK ###
-# blame @carlosmn, @mattr and @timvaillancourt-
-# Allow builds on buster to also be used for stretch
-stretch_tarball_name=$(echo $(basename "${tarball}") | sed s/-buster-/-stretch-/)
-cp ${tarball}.gz "$BUILD_ARTIFACT_DIR/gh-ost/${stretch_tarball_name}.gz"
+# blame @carlosmn, @mattr, @timvaillancourt and @rashiq
+# Allow builds on buster to also be used for focal
+focal_tarball_name=$(echo $(basename "${tarball}") | sed s/-bullseye-/-focal-/)
+cp ${tarball}.gz "$BUILD_ARTIFACT_DIR/gh-ost/${focal_tarball_name}.gz"

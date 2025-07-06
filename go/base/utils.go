@@ -63,18 +63,27 @@ func StringContainsAll(s string, substrings ...string) bool {
 
 func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, migrationContext *MigrationContext, name string) (string, error) {
 	versionQuery := `select @@global.version`
-	var port, extraPort int
+
 	var version string
 	if err := db.QueryRow(versionQuery).Scan(&version); err != nil {
 		return "", err
 	}
+
+	if migrationContext.SkipPortValidation {
+		return version, nil
+	}
+
+	var extraPort int
+
 	extraPortQuery := `select @@global.extra_port`
-	if err := db.QueryRow(extraPortQuery).Scan(&extraPort); err != nil { // nolint:staticcheck
+	if err := db.QueryRow(extraPortQuery).Scan(&extraPort); err != nil { //nolint:staticcheck
 		// swallow this error. not all servers support extra_port
 	}
+
 	// AliyunRDS set users port to "NULL", replace it by gh-ost param
 	// GCP set users port to "NULL", replace it by gh-ost param
 	// Azure MySQL set users port to a different value by design, replace it by gh-ost para
+	var port int
 	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform || migrationContext.AzureMySQL {
 		port = connectionConfig.Key.Port
 	} else {

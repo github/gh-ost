@@ -13,10 +13,13 @@ import (
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"sync"
+
+	"filippo.io/edwards25519"
 )
 
 // server pub keys registry
@@ -33,27 +36,26 @@ var (
 // Note: The provided rsa.PublicKey instance is exclusively owned by the driver
 // after registering it and may not be modified.
 //
-//  data, err := ioutil.ReadFile("mykey.pem")
-//  if err != nil {
-//  	log.Fatal(err)
-//  }
+//	data, err := os.ReadFile("mykey.pem")
+//	if err != nil {
+//		log.Fatal(err)
+//	}
 //
-//  block, _ := pem.Decode(data)
-//  if block == nil || block.Type != "PUBLIC KEY" {
-//  	log.Fatal("failed to decode PEM block containing public key")
-//  }
+//	block, _ := pem.Decode(data)
+//	if block == nil || block.Type != "PUBLIC KEY" {
+//		log.Fatal("failed to decode PEM block containing public key")
+//	}
 //
-//  pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-//  if err != nil {
-//  	log.Fatal(err)
-//  }
+//	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
 //
-//  if rsaPubKey, ok := pub.(*rsa.PublicKey); ok {
-//  	mysql.RegisterServerPubKey("mykey", rsaPubKey)
-//  } else {
-//  	log.Fatal("not a RSA public key")
-//  }
-//
+//	if rsaPubKey, ok := pub.(*rsa.PublicKey); ok {
+//		mysql.RegisterServerPubKey("mykey", rsaPubKey)
+//	} else {
+//		log.Fatal("not a RSA public key")
+//	}
 func RegisterServerPubKey(name string, pubKey *rsa.PublicKey) {
 	serverPubKeyLock.Lock()
 	if serverPubKeyRegistry == nil {
@@ -226,6 +228,44 @@ func encryptPassword(password string, seed []byte, pub *rsa.PublicKey) ([]byte, 
 	return rsa.EncryptOAEP(sha1, rand.Reader, pub, plain, nil)
 }
 
+// authEd25519 does ed25519 authentication used by MariaDB.
+func authEd25519(scramble []byte, password string) ([]byte, error) {
+	// Derived from https://github.com/MariaDB/server/blob/d8e6bb00888b1f82c031938f4c8ac5d97f6874c3/plugin/auth_ed25519/ref10/sign.c
+	// Code style is from https://cs.opensource.google/go/go/+/refs/tags/go1.21.5:src/crypto/ed25519/ed25519.go;l=207
+	h := sha512.Sum512([]byte(password))
+
+	s, err := edwards25519.NewScalar().SetBytesWithClamping(h[:32])
+	if err != nil {
+		return nil, err
+	}
+	A := (&edwards25519.Point{}).ScalarBaseMult(s)
+
+	mh := sha512.New()
+	mh.Write(h[32:])
+	mh.Write(scramble)
+	messageDigest := mh.Sum(nil)
+	r, err := edwards25519.NewScalar().SetUniformBytes(messageDigest)
+	if err != nil {
+		return nil, err
+	}
+
+	R := (&edwards25519.Point{}).ScalarBaseMult(r)
+
+	kh := sha512.New()
+	kh.Write(R.Bytes())
+	kh.Write(A.Bytes())
+	kh.Write(scramble)
+	hramDigest := kh.Sum(nil)
+	k, err := edwards25519.NewScalar().SetUniformBytes(hramDigest)
+	if err != nil {
+		return nil, err
+	}
+
+	S := k.MultiplyAdd(k, s, r)
+
+	return append(R.Bytes(), S.Bytes()...), nil
+}
+
 func (mc *mysqlConn) sendEncryptedPassword(seed []byte, pub *rsa.PublicKey) error {
 	enc, err := encryptPassword(mc.cfg.Passwd, seed, pub)
 	if err != nil {
@@ -274,7 +314,9 @@ func (mc *mysqlConn) auth(authData []byte, plugin string) ([]byte, error) {
 		if len(mc.cfg.Passwd) == 0 {
 			return []byte{0}, nil
 		}
-		if mc.cfg.tls != nil || mc.cfg.Net == "unix" {
+		// unlike caching_sha2_password, sha256_password does not accept
+		// cleartext password on unix transport.
+		if mc.cfg.TLS != nil {
 			// write cleartext auth packet
 			return append([]byte(mc.cfg.Passwd), 0), nil
 		}
@@ -289,8 +331,14 @@ func (mc *mysqlConn) auth(authData []byte, plugin string) ([]byte, error) {
 		enc, err := encryptPassword(mc.cfg.Passwd, authData, pubKey)
 		return enc, err
 
+	case "client_ed25519":
+		if len(authData) != 32 {
+			return nil, ErrMalformPkt
+		}
+		return authEd25519(authData, mc.cfg.Passwd)
+
 	default:
-		errLog.Print("unknown auth plugin:", plugin)
+		mc.log("unknown auth plugin:", plugin)
 		return nil, ErrUnknownPlugin
 	}
 }
@@ -337,7 +385,7 @@ func (mc *mysqlConn) handleAuthResult(oldAuthData []byte, plugin string) error {
 
 	switch plugin {
 
-	// https://insidemysql.com/preparing-your-community-connector-for-mysql-8-part-2-sha256/
+	// https://dev.mysql.com/blog-archive/preparing-your-community-connector-for-mysql-8-part-2-sha256/
 	case "caching_sha2_password":
 		switch len(authData) {
 		case 0:
@@ -345,12 +393,12 @@ func (mc *mysqlConn) handleAuthResult(oldAuthData []byte, plugin string) error {
 		case 1:
 			switch authData[0] {
 			case cachingSha2PasswordFastAuthSuccess:
-				if err = mc.readResultOK(); err == nil {
+				if err = mc.resultUnchanged().readResultOK(); err == nil {
 					return nil // auth successful
 				}
 
 			case cachingSha2PasswordPerformFullAuthentication:
-				if mc.cfg.tls != nil || mc.cfg.Net == "unix" {
+				if mc.cfg.TLS != nil || mc.cfg.Net == "unix" {
 					// write cleartext auth packet
 					err = mc.writeAuthSwitchPacket(append([]byte(mc.cfg.Passwd), 0))
 					if err != nil {
@@ -365,16 +413,23 @@ func (mc *mysqlConn) handleAuthResult(oldAuthData []byte, plugin string) error {
 							return err
 						}
 						data[4] = cachingSha2PasswordRequestPublicKey
-						mc.writePacket(data)
+						err = mc.writePacket(data)
+						if err != nil {
+							return err
+						}
 
-						// parse public key
 						if data, err = mc.readPacket(); err != nil {
 							return err
 						}
 
+						if data[0] != iAuthMoreData {
+							return fmt.Errorf("unexpected resp from server for caching_sha2_password, perform full authentication")
+						}
+
+						// parse public key
 						block, rest := pem.Decode(data[1:])
 						if block == nil {
-							return fmt.Errorf("No Pem data found, data: %s", rest)
+							return fmt.Errorf("no pem data found, data: %s", rest)
 						}
 						pkix, err := x509.ParsePKIXPublicKey(block.Bytes)
 						if err != nil {
@@ -389,7 +444,7 @@ func (mc *mysqlConn) handleAuthResult(oldAuthData []byte, plugin string) error {
 						return err
 					}
 				}
-				return mc.readResultOK()
+				return mc.resultUnchanged().readResultOK()
 
 			default:
 				return ErrMalformPkt
@@ -404,6 +459,10 @@ func (mc *mysqlConn) handleAuthResult(oldAuthData []byte, plugin string) error {
 			return nil // auth successful
 		default:
 			block, _ := pem.Decode(authData)
+			if block == nil {
+				return fmt.Errorf("no Pem data found, data: %s", authData)
+			}
+
 			pub, err := x509.ParsePKIXPublicKey(block.Bytes)
 			if err != nil {
 				return err
@@ -414,7 +473,7 @@ func (mc *mysqlConn) handleAuthResult(oldAuthData []byte, plugin string) error {
 			if err != nil {
 				return err
 			}
-			return mc.readResultOK()
+			return mc.resultUnchanged().readResultOK()
 		}
 
 	default:

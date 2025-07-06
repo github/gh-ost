@@ -1,15 +1,15 @@
 #!/bin/bash
 
-PREFERRED_GO_VERSION=go1.17.11
-SUPPORTED_GO_VERSIONS='go1.1[567]'
+PREFERRED_GO_VERSION=go1.23.0
+SUPPORTED_GO_VERSIONS='go1.2[01234]'
 
 GO_PKG_DARWIN=${PREFERRED_GO_VERSION}.darwin-amd64.pkg
-GO_PKG_DARWIN_SHA=4f924c534230de8f0e1c7369f611c0310efd21fc2d9438b13bc2703af9dda25a
+GO_PKG_DARWIN_SHA=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
 GO_PKG_LINUX=${PREFERRED_GO_VERSION}.linux-amd64.tar.gz
-GO_PKG_LINUX_SHA=d69a4fe2694f795d8e525c72b497ededc209cb7185f4c3b62d7a98dd6227b3fe
+GO_PKG_LINUX_SHA=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
-export ROOTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+export ROOTDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd $ROOTDIR
 
 # If Go isn't installed globally, setup environment variables for local install.
@@ -29,13 +29,13 @@ fi
 if [ -z "$(which go)" ] || [ -z "$(go version | grep "$SUPPORTED_GO_VERSIONS")" ]; then
   [ -d "$GODIR" ] && rm -rf $GODIR
   mkdir -p "$GODIR"
-  cd "$GODIR";
+  cd "$GODIR"
 
   if [ $(uname -s) = "Darwin" ]; then
     curl -L -O https://dl.google.com/go/$GO_PKG_DARWIN
     shasum -a256 $GO_PKG_DARWIN | grep $GO_PKG_DARWIN_SHA
     xar -xf $GO_PKG_DARWIN
-    cpio -i < com.googlecode.go.pkg/Payload
+    cpio -i <com.googlecode.go.pkg/Payload
   else
     curl -L -O https://dl.google.com/go/$GO_PKG_LINUX
     shasum -a256 $GO_PKG_LINUX | grep $GO_PKG_LINUX_SHA

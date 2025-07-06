@@ -32,9 +32,15 @@ type TimezoneConversion struct {
 	ToTimezone string
 }
 
+type CharacterSetConversion struct {
+	ToCharset   string
+	FromCharset string
+}
+
 type Column struct {
 	Name                 string
 	IsUnsigned           bool
+	IsVirtual            bool
 	Charset              string
 	Type                 ColumnType
 	EnumValues           string
@@ -43,17 +49,22 @@ type Column struct {
 	// add Octet length for binary type, fix bytes with suffix "00" get clipped in mysql binlog.
 	// https://github.com/github/gh-ost/issues/909
 	BinaryOctetLength uint
+	charsetConversion *CharacterSetConversion
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
 	if s, ok := arg.(string); ok {
-		// string, charset conversion
-		if encoding, ok := charsetEncodingMap[this.Charset]; ok {
-			arg, _ = encoding.NewDecoder().String(s)
+		arg2Bytes := []byte(s)
+		// convert to bytes if character string without charsetConversion.
+		if this.Charset != "" && this.charsetConversion == nil {
+			arg = arg2Bytes
+		} else {
+			if encoding, ok := charsetEncodingMap[this.Charset]; ok {
+				arg, _ = encoding.NewDecoder().String(s)
+			}
 		}
 
 		if this.Type == BinaryColumnType && isUniqueKeyColumn {
-			arg2Bytes := []byte(arg.(string))
 			size := len(arg2Bytes)
 			if uint(size) < this.BinaryOctetLength {
 				buf := bytes.NewBuffer(arg2Bytes)
@@ -234,16 +245,31 @@ func (this *ColumnList) IsSubsetOf(other *ColumnList) bool {
 	return true
 }
 
+func (this *ColumnList) FilterBy(f func(Column) bool) *ColumnList {
+	filteredCols := make([]Column, 0, len(this.columns))
+	for _, column := range this.columns {
+		if f(column) {
+			filteredCols = append(filteredCols, column)
+		}
+	}
+	return &ColumnList{Ordinals: this.Ordinals, columns: filteredCols}
+}
+
 func (this *ColumnList) Len() int {
 	return len(this.columns)
 }
 
+func (this *ColumnList) SetCharsetConversion(columnName string, fromCharset string, toCharset string) {
+	this.GetColumn(columnName).charsetConversion = &CharacterSetConversion{FromCharset: fromCharset, ToCharset: toCharset}
+}
+
 // UniqueKey is the combination of a key's name and columns
 type UniqueKey struct {
-	Name            string
-	Columns         ColumnList
-	HasNullable     bool
-	IsAutoIncrement bool
+	Name             string
+	NameInGhostTable string // Name of the corresponding key in the Ghost table in case it is being renamed
+	Columns          ColumnList
+	HasNullable      bool
+	IsAutoIncrement  bool
 }
 
 // IsPrimary checks if this unique key is primary
@@ -299,7 +325,7 @@ func (this *ColumnValues) AbstractValues() []interface{} {
 func (this *ColumnValues) StringColumn(index int) string {
 	val := this.AbstractValues()[index]
 	if ints, ok := val.([]uint8); ok {
-		return string(ints)
+		return fmt.Sprintf("%x", ints)
 	}
 	return fmt.Sprintf("%+v", val)
 }

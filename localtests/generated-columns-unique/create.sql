@@ -3,6 +3,7 @@ create table gh_ost_test (
   id int auto_increment,
   `idb` varchar(36) CHARACTER SET utf8mb4 GENERATED ALWAYS AS (json_unquote(json_extract(`jsonobj`,_utf8mb4'$._id'))) STORED NOT NULL,
   `jsonobj` json NOT NULL,
+  updated datetime DEFAULT NULL,
   PRIMARY KEY (`id`,`idb`)
 ) auto_increment=1;
 
@@ -25,6 +26,11 @@ begin
   insert into gh_ost_test (id, jsonobj) values (null, '{"_id":13}');
   insert into gh_ost_test (id, jsonobj) values (null, '{"_id":17}');
   insert into gh_ost_test (id, jsonobj) values (null, '{"_id":19}');
-  insert into gh_ost_test (id, jsonobj) values (null, '{"_id":23}');
-  insert into gh_ost_test (id, jsonobj) values (null, '{"_id":27}');
+
+  update gh_ost_test set updated=NOW() where idb=5;
+  update gh_ost_test set updated=NOW() where idb=7;
+  update gh_ost_test set updated=NOW() where idb=11;
+  update gh_ost_test set updated=NOW() where idb=13;
+  update gh_ost_test set updated=NOW() where idb=17;
+  update gh_ost_test set updated=NOW() where idb=19;
 end ;;

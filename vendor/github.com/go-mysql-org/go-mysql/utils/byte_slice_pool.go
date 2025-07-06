@@ -2,35 +2,29 @@ package utils
 
 import "sync"
 
+type ByteSlice struct {
+	B []byte
+}
+
 var (
 	byteSlicePool = sync.Pool{
 		New: func() interface{} {
-			return []byte{}
+			return new(ByteSlice)
 		},
 	}
-	byteSliceChan = make(chan []byte, 10)
 )
 
-func ByteSliceGet(length int) (data []byte) {
-	select {
-	case data = <-byteSliceChan:
-	default:
-		data = byteSlicePool.Get().([]byte)[:0]
-	}
-
-	if cap(data) < length {
-		data = make([]byte, length)
+func ByteSliceGet(length int) *ByteSlice {
+	data := byteSlicePool.Get().(*ByteSlice)
+	if cap(data.B) < length {
+		data.B = make([]byte, length)
 	} else {
-		data = data[:length]
+		data.B = data.B[:length]
 	}
-
 	return data
 }
 
-func ByteSlicePut(data []byte) {
-	select {
-	case byteSliceChan <- data:
-	default:
-		byteSlicePool.Put(data) //nolint:staticcheck
-	}
+func ByteSlicePut(data *ByteSlice) {
+	data.B = data.B[:0]
+	byteSlicePool.Put(data)
 }

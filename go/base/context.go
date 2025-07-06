@@ -14,8 +14,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
-	uuid "github.com/satori/go.uuid"
+	uuid "github.com/google/uuid"
 
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
@@ -101,6 +102,12 @@ type MigrationContext struct {
 	AliyunRDS                bool
 	GoogleCloudPlatform      bool
 	AzureMySQL               bool
+	AttemptInstantDDL        bool
+
+	// SkipPortValidation allows skipping the port validation in `ValidateConnection`
+	// This is useful when connecting to a MySQL instance where the external port
+	// may not match the internal port.
+	SkipPortValidation bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -144,6 +151,7 @@ type MigrationContext struct {
 	HooksHintOwner                      string
 	HooksHintToken                      string
 	HooksStatusIntervalSec              int64
+	PanicOnWarnings                     bool
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -163,6 +171,7 @@ type MigrationContext struct {
 	Hostname                               string
 	AssumeMasterHostname                   string
 	ApplierTimeZone                        string
+	ApplierWaitTimeout                     int64
 	TableEngine                            string
 	RowsEstimate                           int64
 	RowsDeltaEstimate                      int64
@@ -187,6 +196,7 @@ type MigrationContext struct {
 	CurrentLag                             int64
 	currentProgress                        uint64
 	etaNanoseonds                          int64
+	EtaRowsPerSecond                       int64
 	ThrottleHTTPIntervalMillis             int64
 	ThrottleHTTPStatusCode                 int64
 	ThrottleHTTPTimeoutMillis              int64
@@ -222,6 +232,7 @@ type MigrationContext struct {
 	ColumnRenameMap                  map[string]string
 	DroppedColumnsMap                map[string]bool
 	MappedSharedColumns              *sql.ColumnList
+	MigrationLastInsertSQLWarnings   []string
 	MigrationRangeMinValues          *sql.ColumnValues
 	MigrationRangeMaxValues          *sql.ColumnValues
 	Iteration                        int64
@@ -229,7 +240,16 @@ type MigrationContext struct {
 	MigrationIterationRangeMaxValues *sql.ColumnValues
 	ForceTmpTableName                string
 
+	IncludeTriggers     bool
+	RemoveTriggerSuffix bool
+	TriggerSuffix       string
+	Triggers            []mysql.Trigger
+
 	recentBinlogCoordinates mysql.BinlogCoordinates
+
+	BinlogSyncerMaxReconnectAttempts  int
+	AllowSetupMetadataLockInstruments bool
+	IsOpenMetadataLockInstruments     bool
 
 	Log Logger
 }
@@ -266,7 +286,7 @@ type ContextConfig struct {
 
 func NewMigrationContext() *MigrationContext {
 	return &MigrationContext{
-		Uuid:                                uuid.NewV4().String(),
+		Uuid:                                uuid.NewString(),
 		defaultNumRetries:                   60,
 		ChunkSize:                           1000,
 		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
@@ -287,6 +307,28 @@ func NewMigrationContext() *MigrationContext {
 		PanicAbort:                          make(chan error),
 		Log:                                 NewDefaultLogger(),
 	}
+}
+
+func (this *MigrationContext) SetConnectionConfig(storageEngine string) error {
+	var transactionIsolation string
+	switch storageEngine {
+	case "rocksdb":
+		transactionIsolation = "READ-COMMITTED"
+	default:
+		transactionIsolation = "REPEATABLE-READ"
+	}
+	this.InspectorConnectionConfig.TransactionIsolation = transactionIsolation
+	this.ApplierConnectionConfig.TransactionIsolation = transactionIsolation
+	return nil
+}
+
+func (this *MigrationContext) SetConnectionCharset(charset string) {
+	if charset == "" {
+		charset = "utf8mb4,utf8,latin1"
+	}
+
+	this.InspectorConnectionConfig.Charset = charset
+	this.ApplierConnectionConfig.Charset = charset
 }
 
 func getSafeTableName(baseName string, suffix string) string {
@@ -424,6 +466,10 @@ func (this *MigrationContext) IsTransactionalTable() bool {
 			return true
 		}
 	case "tokudb":
+		{
+			return true
+		}
+	case "rocksdb":
 		{
 			return true
 		}
@@ -743,7 +789,7 @@ func (this *MigrationContext) ReadMaxLoad(maxLoadList string) error {
 	return nil
 }
 
-// ReadMaxLoad parses the `--max-load` flag, which is in multiple key-value format,
+// ReadCriticalLoad parses the `--max-load` flag, which is in multiple key-value format,
 // such as: 'Threads_running=100,Threads_connected=500'
 // It only applies changes in case there's no parsing error.
 func (this *MigrationContext) ReadCriticalLoad(criticalLoadList string) error {
@@ -858,7 +904,7 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if cfg.Section("osc").HasKey("chunk_size") {
 		this.config.Osc.Chunk_Size, err = cfg.Section("osc").Key("chunk_size").Int64()
 		if err != nil {
-			return fmt.Errorf("Unable to read osc chunk size: %s", err.Error())
+			return fmt.Errorf("Unable to read osc chunk size: %w", err)
 		}
 	}
 
@@ -873,7 +919,7 @@ func (this *MigrationContext) ReadConfigFile() error {
 	if cfg.Section("osc").HasKey("max_lag_millis") {
 		this.config.Osc.Max_Lag_Millis, err = cfg.Section("osc").Key("max_lag_millis").Int64()
 		if err != nil {
-			return fmt.Errorf("Unable to read max lag millis: %s", err.Error())
+			return fmt.Errorf("Unable to read max lag millis: %w", err)
 		}
 	}
 
@@ -887,4 +933,21 @@ func (this *MigrationContext) ReadConfigFile() error {
 	}
 
 	return nil
+}
+
+// getGhostTriggerName generates the name of a ghost trigger, based on original trigger name
+// or a given trigger name
+func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
+	if this.RemoveTriggerSuffix && strings.HasSuffix(triggerName, this.TriggerSuffix) {
+		return strings.TrimSuffix(triggerName, this.TriggerSuffix)
+	}
+	// else
+	return triggerName + this.TriggerSuffix
+}
+
+// validateGhostTriggerLength check if the ghost trigger name length is not more than 64 characters
+func (this *MigrationContext) ValidateGhostTriggerLengthBelowMaxLength(triggerName string) bool {
+	ghostTriggerName := this.GetGhostTriggerName(triggerName)
+
+	return utf8.RuneCountInString(ghostTriggerName) <= mysql.MaxTableNameLength
 }
