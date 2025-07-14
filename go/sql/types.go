@@ -53,14 +53,22 @@ type Column struct {
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
+	var arg2Bytes []byte
 	if s, ok := arg.(string); ok {
-		arg2Bytes := []byte(s)
-		// convert to bytes if character string without charsetConversion.
+		arg2Bytes = []byte(s)
+	} else if b, ok := arg.([]uint8); ok {
+		arg2Bytes = b
+	} else {
+		arg2Bytes = nil
+	}
+
+	if arg2Bytes != nil {
 		if this.Charset != "" && this.charsetConversion == nil {
 			arg = arg2Bytes
 		} else {
 			if encoding, ok := charsetEncodingMap[this.Charset]; ok {
-				arg, _ = encoding.NewDecoder().String(s)
+				decodedBytes, _ := encoding.NewDecoder().Bytes(arg2Bytes)
+				arg = string(decodedBytes)
 			}
 		}
 
