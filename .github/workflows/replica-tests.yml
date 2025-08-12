@@ -13,7 +13,7 @@ jobs:
       TEST_MYSQL_IMAGE: ${{ matrix.image }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup environment
         run: script/docker-gh-ost-replica-tests up
