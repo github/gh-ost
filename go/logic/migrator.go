@@ -352,6 +352,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
+	go this.initiateInspectorHealthCheck()
 	if err := this.initiateStreaming(); err != nil {
 		return err
 	}
@@ -769,6 +770,21 @@ func (this *Migrator) initiateServer() (err error) {
 
 	go this.server.Serve()
 	return nil
+}
+
+func (this *Migrator) initiateInspectorHealthCheck() {
+	ticker := time.Tick(10 * time.Second)
+	for range ticker {
+		lastUptime := atomic.LoadInt64(&this.migrationContext.InspectorUptimeSeconds)
+		if uptime, err := this.inspector.readUptime(); err != nil {
+			log.Errore(err)
+		} else {
+			if uptime < lastUptime {
+				this.migrationContext.PanicAbort <- fmt.Errorf("Inspector Uptime is %+v, less than previously measured uptime %+v. Has the inspector been restarted? Bailing out.", uptime, lastUptime)
+			}
+			atomic.StoreInt64(&this.migrationContext.InspectorUptimeSeconds, uptime)
+		}
+	}
 }
 
 // initiateInspector connects, validates and inspects the "inspector" server.
