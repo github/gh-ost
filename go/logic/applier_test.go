@@ -62,8 +62,8 @@ func TestApplierGenerateSqlModeQuery(t *testing.T) {
 }
 
 func TestApplierUpdateModifiesUniqueKeyColumns(t *testing.T) {
-	columns := sql.NewColumnList([]string{"id", "item_id"})
-	columnValues := sql.ToColumnValues([]interface{}{123456, 42})
+	columns := sql.NewColumnList([]string{"id", "item_id", "item_text"})
+	columnValues := sql.ToColumnValues([]interface{}{123456, 42, []uint8{116, 101, 115, 116}})
 
 	migrationContext := base.NewMigrationContext()
 	migrationContext.OriginalTableColumns = columns
