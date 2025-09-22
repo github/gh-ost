@@ -27,6 +27,7 @@ type GoMySQLReader struct {
 	binlogStreamer           *replication.BinlogStreamer
 	currentCoordinates       mysql.BinlogCoordinates
 	currentCoordinatesMutex  *sync.Mutex
+	useGTID                  bool
 	LastAppliedRowsEventHint mysql.BinlogCoordinates
 }
 
@@ -60,11 +61,16 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 
 	this.currentCoordinates = coordinates
 	this.migrationContext.Log.Infof("Connecting binlog streamer at %+v", this.currentCoordinates)
-	// Start sync with specified binlog file and position
-	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{
-		Name: this.currentCoordinates.LogFile,
-		Pos:  uint32(this.currentCoordinates.LogPos),
-	})
+
+	// Start sync with specified GTID set or binlog file and position
+	if this.migrationContext.UseGTID {
+		this.binlogStreamer, err = this.binlogSyncer.StartSyncGTID(this.currentCoordinates.ExecutedGTIDSet)
+	} else {
+		this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{
+			Name: this.currentCoordinates.LogFile,
+			Pos:  uint32(this.currentCoordinates.LogPos)},
+		)
+	}
 
 	return err
 }
@@ -148,16 +154,21 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			this.currentCoordinates.EventSize = int64(ev.Header.EventSize)
 		}()
 
-		switch binlogEvent := ev.Event.(type) {
+		switch event := ev.Event.(type) {
+		case *replication.GTIDEvent:
+			// TODO: convert *replication.GTIDEvent -> mysql.GTIDSet
+			if this.migrationContext.UseGTID {
+				this.migrationContext.Log.Info("TODO: handle GTID event in binlog stream!")
+			}
 		case *replication.RotateEvent:
 			func() {
 				this.currentCoordinatesMutex.Lock()
 				defer this.currentCoordinatesMutex.Unlock()
-				this.currentCoordinates.LogFile = string(binlogEvent.NextLogName)
+				this.currentCoordinates.LogFile = string(event.NextLogName)
 			}()
-			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), binlogEvent.NextLogName)
+			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), event.NextLogName)
 		case *replication.RowsEvent:
-			if err := this.handleRowsEvent(ev, binlogEvent, entriesChannel); err != nil {
+			if err := this.handleRowsEvent(ev, event, entriesChannel); err != nil {
 				return err
 			}
 		}

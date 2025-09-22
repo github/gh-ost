@@ -10,13 +10,16 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
 // BinlogCoordinates described binary log coordinates in the form of log file & log position.
 type BinlogCoordinates struct {
-	LogFile   string
-	LogPos    int64
-	EventSize int64
+	ExecutedGTIDSet gomysql.GTIDSet
+	LogFile         string
+	LogPos          int64
+	EventSize       int64
 }
 
 // ParseBinlogCoordinates will parse an InstanceKey from a string representation such as 127.0.0.1:3306

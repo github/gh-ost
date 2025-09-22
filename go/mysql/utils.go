@@ -14,6 +14,7 @@ import (
 
 	"github.com/github/gh-ost/go/sql"
 
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/openark/golib/log"
 	"github.com/openark/golib/sqlutils"
 )
@@ -181,6 +182,12 @@ func GetSelfBinlogCoordinates(dbVersion string, db *gosql.DB) (selfBinlogCoordin
 		selfBinlogCoordinates = &BinlogCoordinates{
 			LogFile: m.GetString("File"),
 			LogPos:  m.GetInt64("Position"),
+		}
+		if execGtidSet := m.GetString("Executed_Gtid_Set"); execGtidSet != "" {
+			selfBinlogCoordinates.ExecutedGTIDSet, err = gomysql.ParseMysqlGTIDSet(execGtidSet)
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	})
