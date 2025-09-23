@@ -8,6 +8,7 @@ package logic
 import (
 	gosql "database/sql"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -1294,7 +1295,8 @@ func (this *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEv
 		tableOrdinal := this.migrationContext.OriginalTableColumns.Ordinals[column.Name]
 		whereColumnValue := dmlEvent.WhereColumnValues.AbstractValues()[tableOrdinal]
 		newColumnValue := dmlEvent.NewColumnValues.AbstractValues()[tableOrdinal]
-		if newColumnValue != whereColumnValue {
+
+		if !reflect.DeepEqual(whereColumnValue, newColumnValue) {
 			return column.Name, true
 		}
 	}
