@@ -39,7 +39,7 @@ type EventsStreamer struct {
 	db                       *gosql.DB
 	dbVersion                string
 	migrationContext         *base.MigrationContext
-	initialBinlogCoordinates *mysql.BinlogCoordinates
+	initialBinlogCoordinates mysql.BinlogCoordinates
 	listeners                [](*BinlogEventListener)
 	listenersMutex           *sync.Mutex
 	eventsChannel            chan *binlog.BinlogEntry
@@ -125,25 +125,28 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 }
 
 // initBinlogReader creates and connects the reader: we hook up to a MySQL server as a replica
-func (this *EventsStreamer) initBinlogReader(binlogCoordinates *mysql.BinlogCoordinates) error {
+func (this *EventsStreamer) initBinlogReader(binlogCoordinates mysql.BinlogCoordinates) error {
 	goMySQLReader := binlog.NewGoMySQLReader(this.migrationContext)
-	if err := goMySQLReader.ConnectBinlogStreamer(*binlogCoordinates); err != nil {
+	if err := goMySQLReader.ConnectBinlogStreamer(binlogCoordinates); err != nil {
 		return err
 	}
 	this.binlogReader = goMySQLReader
 	return nil
 }
 
-func (this *EventsStreamer) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinates {
+func (this *EventsStreamer) GetCurrentBinlogCoordinates() mysql.BinlogCoordinates {
 	return this.binlogReader.GetCurrentBinlogCoordinates()
 }
 
-func (this *EventsStreamer) GetReconnectBinlogCoordinates() *mysql.BinlogCoordinates {
+func (this *EventsStreamer) GetReconnectBinlogCoordinates() mysql.BinlogCoordinates {
 	current := this.GetCurrentBinlogCoordinates()
-	if current.GTIDSet != nil {
-		return &mysql.BinlogCoordinates{GTIDSet: current.GTIDSet}
+	switch coords := current.(type) {
+	case *mysql.FileBinlogCoordinates:
+		return &mysql.FileBinlogCoordinates{LogFile: coords.LogFile, LogPos: 4}
+	case *mysql.GTIDBinlogCoordinates:
+		return &mysql.GTIDBinlogCoordinates{GTIDSet: coords.GTIDSet}
 	}
-	return &mysql.BinlogCoordinates{LogFile: current.LogFile, LogPos: 4}
+	return nil
 }
 
 // readCurrentBinlogCoordinates reads master status from hooked server
@@ -152,19 +155,20 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	query := fmt.Sprintf("show /* gh-ost readCurrentBinlogCoordinates */ %s", binaryLogStatusTerm)
 	foundMasterStatus := false
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
-		this.initialBinlogCoordinates = &mysql.BinlogCoordinates{
-			LogFile: m.GetString("File"),
-			LogPos:  m.GetInt64("Position"),
-		}
-		if execGtidSet := m.GetString("Executed_Gtid_Set"); execGtidSet != "" && this.migrationContext.UseGTIDs {
+		if this.migrationContext.UseGTIDs {
+			execGtidSet := m.GetString("Executed_Gtid_Set")
 			gtidSet, err := gomysql.ParseMysqlGTIDSet(execGtidSet)
 			if err != nil {
 				return err
 			}
-			this.initialBinlogCoordinates.GTIDSet = gtidSet.(*gomysql.MysqlGTIDSet)
+			this.initialBinlogCoordinates = &mysql.GTIDBinlogCoordinates{GTIDSet: gtidSet.(*gomysql.MysqlGTIDSet)}
+		} else {
+			this.initialBinlogCoordinates = &mysql.FileBinlogCoordinates{
+				LogFile: m.GetString("File"),
+				LogPos:  m.GetInt64("Position"),
+			}
 		}
 		foundMasterStatus = true
-
 		return nil
 	})
 	if err != nil {
@@ -173,7 +177,7 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	if !foundMasterStatus {
 		return fmt.Errorf("Got no results from SHOW %s. Bailing out", strings.ToUpper(binaryLogStatusTerm))
 	}
-	this.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", *this.initialBinlogCoordinates)
+	this.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", this.initialBinlogCoordinates)
 	return nil
 }
 
@@ -204,7 +208,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
 
 			// See if there's retry overflow
-			if this.binlogReader.LastAppliedRowsEventHint.Equals(&lastAppliedRowsEventHint) {
+			if this.binlogReader.LastAppliedRowsEventHint.Equals(lastAppliedRowsEventHint) {
 				successiveFailures += 1
 			} else {
 				successiveFailures = 0

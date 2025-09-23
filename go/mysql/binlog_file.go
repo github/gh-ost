@@ -175,6 +175,14 @@ func (this *FileBinlogCoordinates) DetachedCoordinates() (isDetached bool, detac
 	return true, detachedCoordinatesSubmatch[1], detachedCoordinatesSubmatch[2]
 }
 
+func (this *FileBinlogCoordinates) Clone() BinlogCoordinates {
+	return &FileBinlogCoordinates{
+		LogPos:    this.LogPos,
+		LogFile:   this.LogFile,
+		EventSize: this.EventSize,
+	}
+}
+
 // IsLogPosOverflowBeyond4Bytes returns true if the coordinate endpos is overflow beyond 4 bytes.
 // The binlog event end_log_pos field type is defined as uint32, 4 bytes.
 // https://github.com/go-mysql-org/go-mysql/blob/master/replication/event.go

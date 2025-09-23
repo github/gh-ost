@@ -993,7 +993,7 @@ func (this *Applier) StopReplication() error {
 	if err != nil {
 		return err
 	}
-	this.migrationContext.Log.Infof("Replication IO thread at %+v. SQL thread is at %+v", *readBinlogCoordinates, *executeBinlogCoordinates)
+	this.migrationContext.Log.Infof("Replication IO thread at %+v. SQL thread is at %+v", readBinlogCoordinates, executeBinlogCoordinates)
 	return nil
 }
 

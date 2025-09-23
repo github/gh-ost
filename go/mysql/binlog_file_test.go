@@ -19,10 +19,10 @@ func init() {
 }
 
 func TestBinlogCoordinates(t *testing.T) {
-	c1 := BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 104}
-	c2 := BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 104}
-	c3 := BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 5000}
-	c4 := BinlogCoordinates{LogFile: "mysql-bin.00112", LogPos: 104}
+	c1 := FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 104}
+	c2 := FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 104}
+	c3 := FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 5000}
+	c4 := FileBinlogCoordinates{LogFile: "mysql-bin.00112", LogPos: 104}
 
 	gtidSet1, _ := gomysql.ParseMysqlGTIDSet("3E11FA47-71CA-11E1-9E33-C80AA9429562:23")
 	gtidSet2, _ := gomysql.ParseMysqlGTIDSet("3E11FA47-71CA-11E1-9E33-C80AA9429562:100")
@@ -48,12 +48,12 @@ func TestBinlogCoordinates(t *testing.T) {
 48e2bc1d-d66d-11e8-bf56-a0369f9437b8:1,
 492e2980-4518-11e9-92c6-e4434b3eca94:1-4926754399`)
 
-	c5 := BinlogCoordinates{GTIDSet: gtidSet1.(*gomysql.MysqlGTIDSet)}
-	c6 := BinlogCoordinates{GTIDSet: gtidSet1.(*gomysql.MysqlGTIDSet)}
-	c7 := BinlogCoordinates{GTIDSet: gtidSet2.(*gomysql.MysqlGTIDSet)}
-	c8 := BinlogCoordinates{GTIDSet: gtidSet3.(*gomysql.MysqlGTIDSet)}
-	c9 := BinlogCoordinates{GTIDSet: gtidSetBig1.(*gomysql.MysqlGTIDSet)}
-	c10 := BinlogCoordinates{GTIDSet: gtidSetBig2.(*gomysql.MysqlGTIDSet)}
+	c5 := GTIDBinlogCoordinates{GTIDSet: gtidSet1.(*gomysql.MysqlGTIDSet)}
+	c6 := GTIDBinlogCoordinates{GTIDSet: gtidSet1.(*gomysql.MysqlGTIDSet)}
+	c7 := GTIDBinlogCoordinates{GTIDSet: gtidSet2.(*gomysql.MysqlGTIDSet)}
+	c8 := GTIDBinlogCoordinates{GTIDSet: gtidSet3.(*gomysql.MysqlGTIDSet)}
+	c9 := GTIDBinlogCoordinates{GTIDSet: gtidSetBig1.(*gomysql.MysqlGTIDSet)}
+	c10 := GTIDBinlogCoordinates{GTIDSet: gtidSetBig2.(*gomysql.MysqlGTIDSet)}
 
 	require.True(t, c5.Equals(&c6))
 	require.True(t, c1.Equals(&c2))
@@ -73,64 +73,64 @@ func TestBinlogCoordinates(t *testing.T) {
 	require.True(t, c6.SmallerThanOrEquals(&c7))
 	require.True(t, c7.SmallerThanOrEquals(&c8))
 	require.True(t, c9.SmallerThanOrEquals(&c9))
-	require.True(t, c10.SmallerThanOrEquals(&c9))
+	require.True(t, c9.SmallerThanOrEquals(&c10))
 }
 
 func TestBinlogCoordinatesAsKey(t *testing.T) {
 	m := make(map[BinlogCoordinates]bool)
 
-	c1 := BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 104}
-	c2 := BinlogCoordinates{LogFile: "mysql-bin.00022", LogPos: 104}
-	c3 := BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 104}
-	c4 := BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 222}
+	c1 := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 104}
+	c2 := &FileBinlogCoordinates{LogFile: "mysql-bin.00022", LogPos: 104}
+	c3 := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 104}
+	c4 := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 222}
 
 	m[c1] = true
 	m[c2] = true
 	m[c3] = true
 	m[c4] = true
 
-	require.Len(t, m, 3)
+	require.Len(t, m, 4)
 }
 
 func TestIsLogPosOverflowBeyond4Bytes(t *testing.T) {
 	{
-		var preCoordinates *BinlogCoordinates
-		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 10321, EventSize: 1100}
+		var preCoordinates *FileBinlogCoordinates
+		curCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 10321, EventSize: 1100}
 		require.False(t, curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
 	}
 	{
-		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 1100, EventSize: 1100}
-		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1100)), EventSize: 1100}
+		preCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: 1100, EventSize: 1100}
+		curCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1100)), EventSize: 1100}
 		require.False(t, curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
 	}
 	{
-		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00016", LogPos: 1100, EventSize: 1100}
-		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1100)), EventSize: 1100}
+		preCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00016", LogPos: 1100, EventSize: 1100}
+		curCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1100)), EventSize: 1100}
 		require.False(t, curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
 	}
 	{
-		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32 - 1001, EventSize: 1000}
-		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
+		preCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32 - 1001, EventSize: 1000}
+		curCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
 		require.False(t, curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
 	}
 	{
-		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32 - 1000, EventSize: 1000}
-		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
+		preCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32 - 1000, EventSize: 1000}
+		curCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
 		require.False(t, curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
 	}
 	{
-		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32 - 999, EventSize: 1000}
-		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
+		preCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32 - 999, EventSize: 1000}
+		curCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
 		require.True(t, curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
 	}
 	{
-		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(math.MaxUint32 - 500)), EventSize: 1000}
-		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
+		preCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(math.MaxUint32 - 500)), EventSize: 1000}
+		curCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
 		require.True(t, curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
 	}
 	{
-		preCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32, EventSize: 1000}
-		curCoordinates := &BinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
+		preCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: math.MaxUint32, EventSize: 1000}
+		curCoordinates := &FileBinlogCoordinates{LogFile: "mysql-bin.00017", LogPos: int64(uint32(preCoordinates.LogPos + 1000)), EventSize: 1000}
 		require.True(t, curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
 	}
 }

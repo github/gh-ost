@@ -44,12 +44,12 @@ func (this *GTIDBinlogCoordinates) Equals(other BinlogCoordinates) bool {
 		return false
 	}
 
-	otherBinlogCoordinates := &GTIDBinlogCoordinates{}
-	if err := binlogCoordinatesToImplementation(other, otherBinlogCoordinates); err != nil {
-		panic(err)
+	otherCoords, ok := other.(*GTIDBinlogCoordinates)
+	if !ok {
+		return false
 	}
 
-	return this.GTIDSet.Equal(otherBinlogCoordinates.GTIDSet)
+	return this.GTIDSet.Equal(otherCoords.GTIDSet)
 }
 
 // IsEmpty returns true if the GTID set is empty.
@@ -59,14 +59,17 @@ func (this *GTIDBinlogCoordinates) IsEmpty() bool {
 
 // SmallerThan returns true if this coordinate is strictly smaller than the other.
 func (this *GTIDBinlogCoordinates) SmallerThan(other BinlogCoordinates) bool {
-	otherBinlogCoordinates := &GTIDBinlogCoordinates{}
-	if err := binlogCoordinatesToImplementation(other, otherBinlogCoordinates); err != nil {
-		panic(err)
+	if other == nil || this.IsEmpty() || other.IsEmpty() {
+		return false
+	}
+	otherCoords, ok := other.(*GTIDBinlogCoordinates)
+	if !ok {
+		return false
 	}
 
 	// if 'this' does not contain the same sets we assume we are behind 'other'.
 	// there are probably edge cases where this isn't true
-	return !this.GTIDSet.Contain(other.GTIDSet)
+	return !this.GTIDSet.Contain(otherCoords.GTIDSet)
 }
 
 // SmallerThanOrEquals returns true if this coordinate is the same or equal to the other one.
@@ -85,4 +88,15 @@ func (this *GTIDBinlogCoordinates) Update(update interface{}) error {
 		return errors.New("unsupported update")
 	}
 	return nil
+}
+
+func (this *GTIDBinlogCoordinates) Clone() BinlogCoordinates {
+	out := &GTIDBinlogCoordinates{}
+	if this.GTIDSet != nil {
+		out.GTIDSet = this.GTIDSet.Clone().(*gomysql.MysqlGTIDSet)
+	}
+	if this.UUIDSet != nil {
+		out.UUIDSet = this.UUIDSet.Clone()
+	}
+	return out
 }
