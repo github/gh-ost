@@ -29,7 +29,7 @@ type BinlogEventListener struct {
 
 const (
 	EventsChannelBufferSize       = 1
-	ReconnectStreamerSleepSeconds = 5
+	ReconnectStreamerSleepSeconds = 1
 )
 
 // EventsStreamer reads data from binary logs and streams it on. It acts as a publisher,
@@ -192,8 +192,8 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 		}
 	}()
 	// The next should block and execute forever, unless there's a serious error
-	var successiveFailures int64
-	var lastAppliedRowsEventHint mysql.BinlogCoordinates
+	var successiveFailures int
+	var reconnectCoords mysql.BinlogCoordinates
 	for {
 		if canStopStreaming() {
 			return nil
@@ -208,22 +208,25 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
 
 			// See if there's retry overflow
-			if this.binlogReader.LastAppliedRowsEventHint.Equals(lastAppliedRowsEventHint) {
+			if this.binlogReader.LastTrxCoords.SmallerThanOrEquals(reconnectCoords) {
 				successiveFailures += 1
 			} else {
 				successiveFailures = 0
 			}
-			if successiveFailures >= this.migrationContext.MaxRetries() {
+			if successiveFailures >= this.migrationContext.BinlogSyncerMaxReconnectAttempts {
 				return fmt.Errorf("%d successive failures in streamer reconnect at coordinates %+v", successiveFailures, this.GetReconnectBinlogCoordinates())
 			}
 
-			// Reposition at same binlog file.
-			lastAppliedRowsEventHint = this.binlogReader.LastAppliedRowsEventHint
-			this.migrationContext.Log.Infof("Reconnecting... Will resume at %+v", lastAppliedRowsEventHint)
-			if err := this.initBinlogReader(this.GetReconnectBinlogCoordinates()); err != nil {
+			// Reposition at same coordinates
+			reconnectCoords = this.binlogReader.LastTrxCoords.Clone()
+			if reconnectCoords.IsEmpty() {
+				// no transactions were handled yet
+				reconnectCoords = this.initialBinlogCoordinates.Clone()
+			}
+			this.migrationContext.Log.Infof("Reconnecting EventsStreamer... Will resume at %+v", reconnectCoords)
+			if err := this.initBinlogReader(reconnectCoords); err != nil {
 				return err
 			}
-			this.binlogReader.LastAppliedRowsEventHint = lastAppliedRowsEventHint
 		}
 	}
 }
