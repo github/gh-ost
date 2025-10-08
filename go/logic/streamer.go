@@ -224,7 +224,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 				reconnectCoords = this.initialBinlogCoordinates.Clone()
 			}
 			this.migrationContext.Log.Infof("Reconnecting EventsStreamer... Will resume at %+v", reconnectCoords)
-			this.binlogReader.Close()
+			_ = this.binlogReader.Close()
 			if err := this.initBinlogReader(reconnectCoords); err != nil {
 				return err
 			}
