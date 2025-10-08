@@ -18,8 +18,8 @@ ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
 throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
-table_name="gh_ost_test"
-ghost_table_name="_gh_ost_test_gho"
+table_name=
+ghost_table_name=
 
 master_host=
 master_port=
@@ -215,6 +215,8 @@ test_single() {
     echo_dot
     sleep 1
 
+    table_name="gh_ost_test"
+    ghost_table_name="_gh_ost_test_gho"
     trap cleanup EXIT INT TERM
     # test with sysbench oltp write load
     if [[ "$test_name" == "sysbench" ]]; then
