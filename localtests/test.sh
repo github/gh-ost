@@ -134,7 +134,7 @@ sysbench_run_cmd() {
     --mysql-user=root \
     --mysql-password=opensesame \
     --mysql-db=test \
-    --rand-seed=163
+    --rand-seed=163 \
     --tables=1 \
     --threads=2 \
     --time=30 \
