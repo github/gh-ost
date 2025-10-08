@@ -173,7 +173,7 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			}
 			this.currentCoordinatesMutex.Lock()
 			coords := this.currentCoordinates.(*mysql.GTIDBinlogCoordinates)
-			coords.GTIDSet.AddGTID(sid, event.GNO)
+			coords.GTIDSet.AddSet(gomysql.NewUUIDSet(sid, gomysql.Interval{Start: event.GNO, Stop: event.GNO + 1}))
 			this.currentCoordinatesMutex.Unlock()
 		case *replication.RotateEvent:
 			if this.migrationContext.UseGTIDs {
