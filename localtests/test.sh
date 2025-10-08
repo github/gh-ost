@@ -20,6 +20,8 @@ ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
 throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
+table_name=
+ghost_table_name=
 
 master_host=
 master_port=
@@ -27,6 +29,7 @@ replica_host=
 replica_port=
 original_sql_mode=
 current_gtid_mode=
+sysbench_pid=
 
 OPTIND=1
 while getopts "b:s:dtg" OPTION; do
@@ -138,6 +141,45 @@ start_replication() {
     done
 }
 
+sysbench_prepare() {
+    local mysql_host="$1"
+    local mysql_port="$2"
+    sysbench oltp_write_only \
+        --mysql-host="$mysql_host" \
+        --mysql-port="$mysql_port" \
+        --mysql-user=root \
+        --mysql-password=opensesame \
+        --mysql-db=test \
+        --tables=1 \
+        --table-size=10000 \
+        prepare
+}
+
+sysbench_run_cmd() {
+    local mysql_host="$1"
+    local mysql_port="$2"
+    cmd="sysbench oltp_write_only \
+    --mysql-host="$mysql_host" \
+    --mysql-port="$mysql_port" \
+    --mysql-user=root \
+    --mysql-password=opensesame \
+    --mysql-db=test \
+    --rand-seed=163 \
+    --tables=1 \
+    --threads=2 \
+    --time=30 \
+    --report-interval=10 \
+    --rate=500 \
+    run"
+    echo $cmd
+}
+
+cleanup() {
+    if ! [ -z $sysbench_pid ] && ps -p $sysbench_pid >/dev/null; then
+        kill $sysbench_pid
+    fi
+}
+
 test_single() {
     local test_name
     test_name="$1"
@@ -208,6 +250,29 @@ test_single() {
     # graceful sleep for replica to catch up
     echo_dot
     sleep 1
+
+    table_name="gh_ost_test"
+    ghost_table_name="_gh_ost_test_gho"
+    trap cleanup EXIT INT TERM
+    # test with sysbench oltp write load
+    if [[ "$test_name" == "sysbench" ]]; then
+        if ! command -v sysbench &>/dev/null; then
+            echo "skipping"
+            return 0
+        fi
+        table_name="sbtest1"
+        ghost_table_name="_${table_name}_gho"
+        echo "Preparing sysbench..."
+        sysbench_prepare "$master_host" "$master_port"
+
+        load_cmd="$(sysbench_run_cmd $master_host $master_port)"
+        eval "$load_cmd" &
+        sysbench_pid=$!
+        echo
+        echo -n "Started sysbench (PID $sysbench_pid):  "
+        echo $load_cmd
+    fi
+
     #
     cmd="$ghost_binary \
     --user=gh-ost \
@@ -216,14 +281,14 @@ test_single() {
     --port=$replica_port \
     --assume-master-host=${master_host}:${master_port}
     --database=test \
-    --table=gh_ost_test \
+    --table=${table_name} \
     --storage-engine=${storage_engine} \
     --alter='engine=${storage_engine}' \
     --exact-rowcount \
     --assume-rbr \
     --initially-drop-old-table \
     --initially-drop-ghost-table \
-    --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _gh_ost_test_ghc' \
+    --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _${table_name}_ghc' \
     --throttle-flag-file=$throttle_flag_file \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
@@ -240,6 +305,7 @@ test_single() {
     bash $exec_command_file 1>$test_logfile 2>&1
 
     execution_result=$?
+    cleanup
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
         gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
@@ -277,7 +343,7 @@ test_single() {
         return 1
     fi
 
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "show create table _gh_ost_test_gho\G" -ss >$ghost_structure_output_file
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "show create table ${ghost_table_name}\G" -ss >$ghost_structure_output_file
 
     if [ -f $tests_path/$test_name/expect_table_structure ]; then
         expected_table_structure="$(cat $tests_path/$test_name/expect_table_structure)"
@@ -290,14 +356,14 @@ test_single() {
     fi
 
     echo_dot
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test ${order_by}" -ss >$orig_content_output_file
-    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho ${order_by}" -ss >$ghost_content_output_file
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from ${table_name} ${order_by}" -ss >$orig_content_output_file
+    gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from ${ghost_table_name} ${order_by}" -ss >$ghost_content_output_file
     orig_checksum=$(cat $orig_content_output_file | md5sum)
     ghost_checksum=$(cat $ghost_content_output_file | md5sum)
 
     if [ "$orig_checksum" != "$ghost_checksum" ]; then
-        gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from gh_ost_test" -ss >$orig_content_output_file
-        gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from _gh_ost_test_gho" -ss >$ghost_content_output_file
+        gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from ${table_name}" -ss >$orig_content_output_file
+        gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from ${ghost_table_name}" -ss >$ghost_content_output_file
         echo "ERROR $test_name: checksum mismatch"
         echo "---"
         diff $orig_content_output_file $ghost_content_output_file
@@ -331,7 +397,7 @@ test_all() {
     while read -r test_dir; do
         test_name=$(basename "$test_dir")
         if ! test_single "$test_name"; then
-            create_statement=$(gh-ost-test-mysql-replica test -t -e "show create table _gh_ost_test_gho \G")
+            create_statement=$(gh-ost-test-mysql-replica test -t -e "show create table ${ghost_table_name} \G")
             echo "$create_statement" >>$test_logfile
             echo "+ FAIL"
             return 1

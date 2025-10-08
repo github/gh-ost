@@ -15,6 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install sysbench
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sysbench
+
       - name: Setup environment
         run: script/docker-gh-ost-replica-tests up
 
