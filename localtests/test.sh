@@ -269,6 +269,7 @@ test_single() {
     bash $exec_command_file 1>$test_logfile 2>&1
 
     execution_result=$?
+    cleanup
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
         gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
