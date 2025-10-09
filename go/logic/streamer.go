@@ -214,7 +214,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 				successiveFailures = 0
 			}
 			if this.migrationContext.BinlogSyncerMaxReconnectAttempts > 0 && successiveFailures >= this.migrationContext.BinlogSyncerMaxReconnectAttempts {
-				return fmt.Errorf("%d successive failures in streamer reconnect at coordinates %+v", successiveFailures, this.GetReconnectBinlogCoordinates())
+				return fmt.Errorf("%d successive failures in streamer reconnect at coordinates %+v", successiveFailures, reconnectCoords)
 			}
 
 			// Reposition at same coordinates
