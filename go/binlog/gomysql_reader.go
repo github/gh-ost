@@ -28,9 +28,8 @@ type GoMySQLReader struct {
 	binlogStreamer          *replication.BinlogStreamer
 	currentCoordinates      mysql.BinlogCoordinates
 	currentCoordinatesMutex *sync.Mutex
-	// LastTrxCoords tracks the coordinates of the last transaction read.
-	// It is the GTID set of the transaction, or the coordinates of
-	// the transaction's XID event if using file coordinates.
+	// LastTrxCoords are the coordinates of the last transaction completely read.
+	// If using the file coordinates it is binlog position of the transaction's XID event.
 	LastTrxCoords mysql.BinlogCoordinates
 }
 
@@ -50,7 +49,7 @@ func NewGoMySQLReader(migrationContext *base.MigrationContext) *GoMySQLReader {
 			TLSConfig:               connectionConfig.TLSConfig(),
 			UseDecimal:              true,
 			TimestampStringLocation: time.UTC,
-			DisableRetrySync:        true, // we implement our own reconnect.
+			MaxReconnectAttempts:    migrationContext.BinlogSyncerMaxReconnectAttempts,
 		}),
 	}
 }
@@ -90,10 +89,9 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 	this.currentCoordinatesMutex.Lock()
 	currentCoords := this.currentCoordinates
 	this.currentCoordinatesMutex.Unlock()
-	lastTrx := this.LastTrxCoords
 
-	if currentCoords.SmallerThan(lastTrx) {
-		this.migrationContext.Log.Debugf("Skipping handled transaction %+v (last trx is %+v)", currentCoords, lastTrx)
+	if currentCoords.SmallerThan(this.LastTrxCoords) {
+		this.migrationContext.Log.Debugf("Skipping handled transaction %+v (last trx is %+v)", currentCoords, this.LastTrxCoords)
 	}
 
 	dml := ToEventDML(ev.Header.EventType.String())
@@ -151,7 +149,8 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			return err
 		}
 
-		// update binlog coords if using file-based coords
+		// Update binlog coords if using file-based coords.
+		// GTID coordinates are updated on receiving GTID events.
 		if !this.migrationContext.UseGTIDs {
 			this.currentCoordinatesMutex.Lock()
 			coords := this.currentCoordinates.(*mysql.FileBinlogCoordinates)

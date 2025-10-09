@@ -63,7 +63,7 @@ create_toxiproxy() {
         -H "Content-Type: application/json" \
         -d '{"name": "limit_data_downstream",
             "type": "limit_data",
-            "attributes": {"bytes": 40000}}'
+            "attributes": {"bytes": 1000000}}'
     echo
 }
 

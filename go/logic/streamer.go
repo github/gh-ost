@@ -191,13 +191,16 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			}
 		}
 	}()
-	// The next should block and execute forever, unless there's a serious error
+	// The next should block and execute forever, unless there's a serious error.
 	var successiveFailures int
 	var reconnectCoords mysql.BinlogCoordinates
 	for {
 		if canStopStreaming() {
 			return nil
 		}
+		// We will reconnect the binlog streamer at the coordinates
+		// of the last trx that was read completely from the streamer.
+		// Since row event application is idempotent, it's OK if we reapply some events.
 		if err := this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel); err != nil {
 			if canStopStreaming() {
 				return nil
@@ -208,11 +211,6 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
 
 			// See if there's retry overflow
-			if this.binlogReader.LastTrxCoords.SmallerThanOrEquals(reconnectCoords) {
-				successiveFailures += 1
-			} else {
-				successiveFailures = 0
-			}
 			if this.migrationContext.BinlogSyncerMaxReconnectAttempts > 0 && successiveFailures >= this.migrationContext.BinlogSyncerMaxReconnectAttempts {
 				return fmt.Errorf("%d successive failures in streamer reconnect at coordinates %+v", successiveFailures, reconnectCoords)
 			}
@@ -223,6 +221,12 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			} else {
 				reconnectCoords = this.initialBinlogCoordinates.Clone()
 			}
+			if !reconnectCoords.SmallerThan(this.GetCurrentBinlogCoordinates()) {
+				successiveFailures += 1
+			} else {
+				successiveFailures = 0
+			}
+
 			this.migrationContext.Log.Infof("Reconnecting EventsStreamer... Will resume at %+v", reconnectCoords)
 			_ = this.binlogReader.Close()
 			if err := this.initBinlogReader(reconnectCoords); err != nil {
