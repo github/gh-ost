@@ -165,14 +165,9 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 			this.currentCoordinatesMutex.Unlock()
 		}
 
-		// gomysql.BinlogSyncer keeps track of the streamer's GTID coordinates
-		// but doesn't expose them, so we have to duplicate the work to track the coords.
 		switch event := ev.Event.(type) {
 		case *replication.GTIDEvent:
 			if !this.migrationContext.UseGTIDs {
-				continue
-			}
-			if this.LastTrxCoords.IsEmpty() {
 				continue
 			}
 			sid, err := uuid.FromBytes(event.SID)
@@ -180,7 +175,9 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 				return err
 			}
 			this.currentCoordinatesMutex.Lock()
-			this.currentCoordinates = this.LastTrxCoords.Clone()
+			if this.LastTrxCoords != nil {
+				this.currentCoordinates = this.LastTrxCoords.Clone()
+			}
 			coords := this.currentCoordinates.(*mysql.GTIDBinlogCoordinates)
 			trxGset := gomysql.NewUUIDSet(sid, gomysql.Interval{Start: event.GNO, Stop: event.GNO + 1})
 			coords.GTIDSet.AddSet(trxGset)

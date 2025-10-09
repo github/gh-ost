@@ -218,9 +218,9 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			}
 
 			// Reposition at same coordinates
-			reconnectCoords = this.binlogReader.LastTrxCoords.Clone()
-			if reconnectCoords.IsEmpty() {
-				// no transactions were handled yet
+			if this.binlogReader.LastTrxCoords != nil {
+				reconnectCoords = this.binlogReader.LastTrxCoords.Clone()
+			} else {
 				reconnectCoords = this.initialBinlogCoordinates.Clone()
 			}
 			this.migrationContext.Log.Infof("Reconnecting EventsStreamer... Will resume at %+v", reconnectCoords)

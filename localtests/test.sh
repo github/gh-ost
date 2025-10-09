@@ -274,7 +274,7 @@ test_single() {
     fi
 
     #
-    cmd="$ghost_binary \
+    cmd="GOTRACEBACK=crash $ghost_binary \
     --user=gh-ost \
     --password=gh-ost \
     --host=$replica_host \
