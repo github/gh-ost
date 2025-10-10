@@ -46,9 +46,6 @@ while getopts "b:s:dtg" OPTION; do
     d)
         docker=true
         ;;
-    t)
-        toxiproxy=true
-        ;;
     g)
         gtid=true
         ;;
