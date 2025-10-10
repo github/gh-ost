@@ -6,8 +6,6 @@
 package mysql
 
 import (
-	"errors"
-
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
@@ -75,19 +73,6 @@ func (this *GTIDBinlogCoordinates) SmallerThan(other BinlogCoordinates) bool {
 // SmallerThanOrEquals returns true if this coordinate is the same or equal to the other one.
 func (this *GTIDBinlogCoordinates) SmallerThanOrEquals(other BinlogCoordinates) bool {
 	return this.Equals(other) || this.SmallerThan(other)
-}
-
-func (this *GTIDBinlogCoordinates) Update(update interface{}) error {
-	switch u := update.(type) {
-	case *gomysql.UUIDSet:
-		this.GTIDSet.AddSet(u)
-		this.UUIDSet = u
-	case *gomysql.MysqlGTIDSet:
-		this.GTIDSet = u
-	default:
-		return errors.New("unsupported update")
-	}
-	return nil
 }
 
 func (this *GTIDBinlogCoordinates) Clone() BinlogCoordinates {

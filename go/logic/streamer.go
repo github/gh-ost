@@ -138,17 +138,6 @@ func (this *EventsStreamer) GetCurrentBinlogCoordinates() mysql.BinlogCoordinate
 	return this.binlogReader.GetCurrentBinlogCoordinates()
 }
 
-func (this *EventsStreamer) GetReconnectBinlogCoordinates() mysql.BinlogCoordinates {
-	current := this.GetCurrentBinlogCoordinates()
-	switch coords := current.(type) {
-	case *mysql.FileBinlogCoordinates:
-		return &mysql.FileBinlogCoordinates{LogFile: coords.LogFile, LogPos: 4}
-	case *mysql.GTIDBinlogCoordinates:
-		return &mysql.GTIDBinlogCoordinates{GTIDSet: coords.GTIDSet}
-	}
-	return nil
-}
-
 // readCurrentBinlogCoordinates reads master status from hooked server
 func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	binaryLogStatusTerm := mysql.ReplicaTermFor(this.dbVersion, "master status")
