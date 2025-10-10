@@ -575,6 +575,7 @@ func (this *Applier) InitiateHeartbeat() {
 			continue
 		}
 		if err := injectHeartbeat(); err != nil {
+			this.migrationContext.PanicAbort <- fmt.Errorf("injectHeartbeat writing failed %d times, last error: %w", numSuccessiveFailures, err)
 			return
 		}
 	}
