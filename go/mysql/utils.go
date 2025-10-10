@@ -173,12 +173,12 @@ func GetReplicationBinlogCoordinates(dbVersion string, db *gosql.DB, gtid bool) 
 			}
 		} else {
 			readBinlogCoordinates = NewFileBinlogCoordinates(
-				m.GetString("Master_Log_File"),
-				m.GetInt64("Read_Master_Log_Pos"),
+				m.GetString(ReplicaTermFor(dbVersion, "Master_Log_File")),
+				m.GetInt64(ReplicaTermFor(dbVersion, "Read_Master_Log_Pos")),
 			)
 			executeBinlogCoordinates = NewFileBinlogCoordinates(
-				m.GetString("Relay_Master_Log_File"),
-				m.GetInt64("Exec_Master_Log_Pos"),
+				m.GetString(ReplicaTermFor(dbVersion, "Relay_Master_Log_File")),
+				m.GetInt64(ReplicaTermFor(dbVersion, "Exec_Master_Log_Pos")),
 			)
 		}
 		return nil

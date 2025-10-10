@@ -384,7 +384,7 @@ func (this *Inspector) applyBinlogFormat() error {
 
 // validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
-	query := `select @@global.log_bin, @@global.binlog_format`
+	query := `select /* gh-ost */@@global.log_bin, @@global.binlog_format`
 	var hasBinaryLogs bool
 	if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat); err != nil {
 		return err
