@@ -34,3 +34,11 @@ TEST_MYSQL_IMAGE="mysql-server:8.0.16" ./script/docker-gh-ost-replica-tests up
 # cleanup containers
 ./script/docker-gh-ost-replica-tests down
 ```
+
+Pass the `-t` flag to run the tests with a toxiproxy between gh-ost and the MySQL replica. This simulates network conditions where MySQL connections are closed unexpectedly.
+
+```shell
+# run tests with toxiproxy
+./script/docker-gh-ost-replica-tests up -t
+./script/docker-gh-ost-replica-tests run -t
+```
