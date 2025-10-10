@@ -40,6 +40,9 @@ while getopts "b:s:dtg" OPTION; do
     s)
         storage_engine="$OPTARG"
         ;;
+    t)
+        toxiproxy=true
+        ;;
     d)
         docker=true
         ;;
@@ -183,6 +186,7 @@ cleanup() {
 test_single() {
     local test_name
     test_name="$1"
+
     if [ -f $tests_path/$test_name/ignore_versions ]; then
         ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
         mysql_version=$(gh-ost-test-mysql-master -s -s -e "select @@version")
