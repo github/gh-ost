@@ -86,14 +86,7 @@ func (this *GoMySQLReader) GetCurrentBinlogCoordinates() mysql.BinlogCoordinates
 }
 
 func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
-	this.currentCoordinatesMutex.Lock()
-	currentCoords := this.currentCoordinates
-	this.currentCoordinatesMutex.Unlock()
-
-	if currentCoords.SmallerThan(this.LastTrxCoords) {
-		this.migrationContext.Log.Debugf("Skipping handled transaction %+v (last trx is %+v)", currentCoords, this.LastTrxCoords)
-	}
-
+	currentCoords := this.GetCurrentBinlogCoordinates()
 	dml := ToEventDML(ev.Header.EventType.String())
 	if dml == NotDML {
 		return fmt.Errorf("Unknown DML type: %s", ev.Header.EventType.String())
