@@ -73,6 +73,11 @@ func (this *Inspector) InitDBConnections() (err error) {
 	if err := this.validateBinlogs(); err != nil {
 		return err
 	}
+	if this.migrationContext.UseGTIDs {
+		if err := this.validateGTIDConfig(); err != nil {
+			return err
+		}
+	}
 	if err := this.applyBinlogFormat(); err != nil {
 		return err
 	}
@@ -379,7 +384,7 @@ func (this *Inspector) applyBinlogFormat() error {
 
 // validateBinlogs checks that binary log configuration is good to go
 func (this *Inspector) validateBinlogs() error {
-	query := `select /* gh-ost */ @@global.log_bin, @@global.binlog_format`
+	query := `select /* gh-ost */@@global.log_bin, @@global.binlog_format`
 	var hasBinaryLogs bool
 	if err := this.db.QueryRow(query).Scan(&hasBinaryLogs, &this.migrationContext.OriginalBinlogFormat); err != nil {
 		return err
@@ -415,6 +420,22 @@ func (this *Inspector) validateBinlogs() error {
 	}
 
 	this.migrationContext.Log.Infof("binary logs validated on %s", this.connectionConfig.Key.String())
+	return nil
+}
+
+// validateGTIDConfig checks that the GTID configuration is good to go
+func (this *Inspector) validateGTIDConfig() error {
+	var gtidMode, enforceGtidConsistency string
+	query := `select @@global.gtid_mode, @@global.enforce_gtid_consistency`
+	if err := this.db.QueryRow(query).Scan(&gtidMode, &enforceGtidConsistency); err != nil {
+		return err
+	}
+	enforceGtidConsistency = strings.ToUpper(enforceGtidConsistency)
+	if strings.ToUpper(gtidMode) != "ON" || (enforceGtidConsistency != "ON" && enforceGtidConsistency != "1") {
+		return fmt.Errorf("%s must have gtid_mode=ON and enforce_gtid_consistency=ON to use GTID support", this.connectionConfig.Key.String())
+	}
+
+	this.migrationContext.Log.Infof("gtid config validated on %s", this.connectionConfig.Key.String())
 	return nil
 }
 

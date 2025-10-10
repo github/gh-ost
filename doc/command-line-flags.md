@@ -160,6 +160,10 @@ Table name prefix to be used on the temporary tables.
 
 Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
 
+### gtid
+
+Add this flag to enable support for [MySQL replication GTIDs](https://dev.mysql.com/doc/refman/5.7/en/replication-gtids-concepts.html) for replication positioning. This requires `gtid_mode` and `enforce_gtid_consistency` to be set to `ON`.
+
 ### heartbeat-interval-millis
 
 Default 100. See [`subsecond-lag`](subsecond-lag.md) for details.

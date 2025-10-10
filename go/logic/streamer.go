@@ -16,6 +16,7 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/openark/golib/sqlutils"
 )
 
@@ -28,7 +29,7 @@ type BinlogEventListener struct {
 
 const (
 	EventsChannelBufferSize       = 1
-	ReconnectStreamerSleepSeconds = 5
+	ReconnectStreamerSleepSeconds = 1
 )
 
 // EventsStreamer reads data from binary logs and streams it on. It acts as a publisher,
@@ -38,7 +39,7 @@ type EventsStreamer struct {
 	db                       *gosql.DB
 	dbVersion                string
 	migrationContext         *base.MigrationContext
-	initialBinlogCoordinates *mysql.BinlogCoordinates
+	initialBinlogCoordinates mysql.BinlogCoordinates
 	listeners                [](*BinlogEventListener)
 	listenersMutex           *sync.Mutex
 	eventsChannel            chan *binlog.BinlogEntry
@@ -124,21 +125,17 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 }
 
 // initBinlogReader creates and connects the reader: we hook up to a MySQL server as a replica
-func (this *EventsStreamer) initBinlogReader(binlogCoordinates *mysql.BinlogCoordinates) error {
+func (this *EventsStreamer) initBinlogReader(binlogCoordinates mysql.BinlogCoordinates) error {
 	goMySQLReader := binlog.NewGoMySQLReader(this.migrationContext)
-	if err := goMySQLReader.ConnectBinlogStreamer(*binlogCoordinates); err != nil {
+	if err := goMySQLReader.ConnectBinlogStreamer(binlogCoordinates); err != nil {
 		return err
 	}
 	this.binlogReader = goMySQLReader
 	return nil
 }
 
-func (this *EventsStreamer) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinates {
+func (this *EventsStreamer) GetCurrentBinlogCoordinates() mysql.BinlogCoordinates {
 	return this.binlogReader.GetCurrentBinlogCoordinates()
-}
-
-func (this *EventsStreamer) GetReconnectBinlogCoordinates() *mysql.BinlogCoordinates {
-	return &mysql.BinlogCoordinates{LogFile: this.GetCurrentBinlogCoordinates().LogFile, LogPos: 4}
 }
 
 // readCurrentBinlogCoordinates reads master status from hooked server
@@ -147,12 +144,20 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	query := fmt.Sprintf("show /* gh-ost readCurrentBinlogCoordinates */ %s", binaryLogStatusTerm)
 	foundMasterStatus := false
 	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
-		this.initialBinlogCoordinates = &mysql.BinlogCoordinates{
-			LogFile: m.GetString("File"),
-			LogPos:  m.GetInt64("Position"),
+		if this.migrationContext.UseGTIDs {
+			execGtidSet := m.GetString("Executed_Gtid_Set")
+			gtidSet, err := gomysql.ParseMysqlGTIDSet(execGtidSet)
+			if err != nil {
+				return err
+			}
+			this.initialBinlogCoordinates = &mysql.GTIDBinlogCoordinates{GTIDSet: gtidSet.(*gomysql.MysqlGTIDSet)}
+		} else {
+			this.initialBinlogCoordinates = &mysql.FileBinlogCoordinates{
+				LogFile: m.GetString("File"),
+				LogPos:  m.GetInt64("Position"),
+			}
 		}
 		foundMasterStatus = true
-
 		return nil
 	})
 	if err != nil {
@@ -161,7 +166,7 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 	if !foundMasterStatus {
 		return fmt.Errorf("Got no results from SHOW %s. Bailing out", strings.ToUpper(binaryLogStatusTerm))
 	}
-	this.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", *this.initialBinlogCoordinates)
+	this.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", this.initialBinlogCoordinates)
 	return nil
 }
 
@@ -175,13 +180,16 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			}
 		}
 	}()
-	// The next should block and execute forever, unless there's a serious error
-	var successiveFailures int64
-	var lastAppliedRowsEventHint mysql.BinlogCoordinates
+	// The next should block and execute forever, unless there's a serious error.
+	var successiveFailures int
+	var reconnectCoords mysql.BinlogCoordinates
 	for {
 		if canStopStreaming() {
 			return nil
 		}
+		// We will reconnect the binlog streamer at the coordinates
+		// of the last trx that was read completely from the streamer.
+		// Since row event application is idempotent, it's OK if we reapply some events.
 		if err := this.binlogReader.StreamEvents(canStopStreaming, this.eventsChannel); err != nil {
 			if canStopStreaming() {
 				return nil
@@ -192,22 +200,27 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 			time.Sleep(ReconnectStreamerSleepSeconds * time.Second)
 
 			// See if there's retry overflow
-			if this.binlogReader.LastAppliedRowsEventHint.Equals(&lastAppliedRowsEventHint) {
+			if this.migrationContext.BinlogSyncerMaxReconnectAttempts > 0 && successiveFailures >= this.migrationContext.BinlogSyncerMaxReconnectAttempts {
+				return fmt.Errorf("%d successive failures in streamer reconnect at coordinates %+v", successiveFailures, reconnectCoords)
+			}
+
+			// Reposition at same coordinates
+			if this.binlogReader.LastTrxCoords != nil {
+				reconnectCoords = this.binlogReader.LastTrxCoords.Clone()
+			} else {
+				reconnectCoords = this.initialBinlogCoordinates.Clone()
+			}
+			if !reconnectCoords.SmallerThan(this.GetCurrentBinlogCoordinates()) {
 				successiveFailures += 1
 			} else {
 				successiveFailures = 0
 			}
-			if successiveFailures >= this.migrationContext.MaxRetries() {
-				return fmt.Errorf("%d successive failures in streamer reconnect at coordinates %+v", successiveFailures, this.GetReconnectBinlogCoordinates())
-			}
 
-			// Reposition at same binlog file.
-			lastAppliedRowsEventHint = this.binlogReader.LastAppliedRowsEventHint
-			this.migrationContext.Log.Infof("Reconnecting... Will resume at %+v", lastAppliedRowsEventHint)
-			if err := this.initBinlogReader(this.GetReconnectBinlogCoordinates()); err != nil {
+			this.migrationContext.Log.Infof("Reconnecting EventsStreamer... Will resume at %+v", reconnectCoords)
+			_ = this.binlogReader.Close()
+			if err := this.initBinlogReader(reconnectCoords); err != nil {
 				return err
 			}
-			this.binlogReader.LastAppliedRowsEventHint = lastAppliedRowsEventHint
 		}
 	}
 }
