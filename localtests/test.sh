@@ -12,6 +12,7 @@ test_logfile=/tmp/gh-ost-test.log
 default_ghost_binary=/tmp/gh-ost-test
 ghost_binary=""
 docker=false
+toxiproxy=false
 storage_engine=innodb
 exec_command_file=/tmp/gh-ost-test.bash
 ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
@@ -29,13 +30,16 @@ original_sql_mode=
 sysbench_pid=
 
 OPTIND=1
-while getopts "b:s:d" OPTION; do
+while getopts "b:s:dt" OPTION; do
     case $OPTION in
     b)
         ghost_binary="$OPTARG"
         ;;
     s)
         storage_engine="$OPTARG"
+        ;;
+    t)
+        toxiproxy=true
         ;;
     d)
         docker=true
@@ -75,6 +79,20 @@ verify_master_and_replica() {
     read replica_host replica_port <<<$(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
     [ "$replica_host" == "$(hostname)" ] && replica_host="127.0.0.1"
     echo "# replica verified at $replica_host:$replica_port"
+
+    if [ "$docker" = true ]; then
+        master_host="0.0.0.0"
+        master_port="3307"
+        echo "# using docker master at $master_host:$master_port"
+        replica_host="0.0.0.0"
+        if [ "$toxiproxy" = true ]; then
+            replica_port="23308"
+            echo "# using toxiproxy replica at $replica_host:$replica_port"
+        else
+            replica_port="3308"
+            echo "# using docker replica at $replica_host:$replica_port"
+        fi
+    fi
 }
 
 exec_cmd() {
@@ -154,13 +172,6 @@ test_single() {
     local test_name
     test_name="$1"
 
-    if [ "$docker" = true ]; then
-        master_host="0.0.0.0"
-        master_port="3307"
-        replica_host="0.0.0.0"
-        replica_port="3308"
-    fi
-
     if [ -f $tests_path/$test_name/ignore_versions ]; then
         ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
         mysql_version=$(gh-ost-test-mysql-master -s -s -e "select @@version")
@@ -198,6 +209,9 @@ test_single() {
     extra_args=""
     if [ -f $tests_path/$test_name/extra_args ]; then
         extra_args=$(cat $tests_path/$test_name/extra_args)
+    fi
+    if [ "$toxiproxy" = true ]; then
+        extra_args+=" --skip-port-validation"
     fi
     orig_columns="*"
     ghost_columns="*"
