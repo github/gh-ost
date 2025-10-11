@@ -13,6 +13,7 @@ default_ghost_binary=/tmp/gh-ost-test
 ghost_binary=""
 docker=false
 toxiproxy=false
+gtid=false
 storage_engine=innodb
 exec_command_file=/tmp/gh-ost-test.bash
 ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
@@ -27,10 +28,11 @@ master_port=
 replica_host=
 replica_port=
 original_sql_mode=
+current_gtid_mode=
 sysbench_pid=
 
 OPTIND=1
-while getopts "b:s:dt" OPTION; do
+while getopts "b:s:dtg" OPTION; do
     case $OPTION in
     b)
         ghost_binary="$OPTARG"
@@ -43,6 +45,9 @@ while getopts "b:s:dt" OPTION; do
         ;;
     d)
         docker=true
+        ;;
+    g)
+        gtid=true
         ;;
     esac
 done
@@ -64,6 +69,13 @@ verify_master_and_replica() {
     fi
     original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
     echo "sql_mode on master is ${original_sql_mode}"
+
+    current_gtid_mode=$(gh-ost-test-mysql-master -s -s -e "select @@global.gtid_mode" 2>/dev/null || echo unsupported)
+    current_enforce_gtid_consistency=$(gh-ost-test-mysql-master -s -s -e "select @@global.enforce_gtid_consistency" 2>/dev/null || echo unsupported)
+    current_master_server_uuid=$(gh-ost-test-mysql-master -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
+    current_replica_server_uuid=$(gh-ost-test-mysql-replica -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
+    echo "gtid_mode on master is ${current_gtid_mode} with enforce_gtid_consistency=${current_enforce_gtid_consistency}"
+    echo "server_uuid on master is ${current_master_server_uuid}, replica is ${current_replica_server_uuid}"
 
     echo "Gracefully sleeping for 3 seconds while replica is setting up..."
     sleep 3
@@ -191,6 +203,14 @@ test_single() {
     start_replication
     echo_dot
 
+    if [ -f $tests_path/$test_name/gtid_mode ]; then
+        target_gtid_mode=$(cat $tests_path/$test_name/gtid_mode)
+        if [ "$current_gtid_mode" != "$target_gtid_mode" ]; then
+            echo "gtid_mode is ${current_gtid_mode}, expected ${target_gtid_mode}"
+            exit 1
+        fi
+    fi
+
     if [ -f $tests_path/$test_name/sql_mode ]; then
         gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
         gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
@@ -209,6 +229,9 @@ test_single() {
     extra_args=""
     if [ -f $tests_path/$test_name/extra_args ]; then
         extra_args=$(cat $tests_path/$test_name/extra_args)
+    fi
+    if [ "$gtid" = true ]; then
+        extra_args+=" --gtid"
     fi
     if [ "$toxiproxy" = true ]; then
         extra_args+=" --skip-port-validation"
@@ -252,7 +275,7 @@ test_single() {
     fi
 
     #
-    cmd="$ghost_binary \
+    cmd="GOTRACEBACK=crash $ghost_binary \
     --user=gh-ost \
     --password=gh-ost \
     --host=$replica_host \

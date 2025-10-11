@@ -1,5 +1,5 @@
 /*
-   Copyright 2016 GitHub Inc.
+   Copyright 2022 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -159,28 +159,43 @@ func GetMasterConnectionConfigSafe(dbVersion string, connectionConfig *Connectio
 	return GetMasterConnectionConfigSafe(dbVersion, masterConfig, visitedKeys, allowMasterMaster)
 }
 
-func GetReplicationBinlogCoordinates(dbVersion string, db *gosql.DB) (readBinlogCoordinates *BinlogCoordinates, executeBinlogCoordinates *BinlogCoordinates, err error) {
+func GetReplicationBinlogCoordinates(dbVersion string, db *gosql.DB, gtid bool) (readBinlogCoordinates, executeBinlogCoordinates BinlogCoordinates, err error) {
 	showReplicaStatusQuery := fmt.Sprintf("show %s", ReplicaTermFor(dbVersion, `slave status`))
 	err = sqlutils.QueryRowsMap(db, showReplicaStatusQuery, func(m sqlutils.RowMap) error {
-		readBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString(ReplicaTermFor(dbVersion, "Master_Log_File")),
-			LogPos:  m.GetInt64(ReplicaTermFor(dbVersion, "Read_Master_Log_Pos")),
-		}
-		executeBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString(ReplicaTermFor(dbVersion, "Relay_Master_Log_File")),
-			LogPos:  m.GetInt64(ReplicaTermFor(dbVersion, "Exec_Master_Log_Pos")),
+		if gtid {
+			executeBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Executed_Gtid_Set"))
+			if err != nil {
+				return err
+			}
+			readBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Retrieved_Gtid_Set"))
+			if err != nil {
+				return err
+			}
+		} else {
+			readBinlogCoordinates = NewFileBinlogCoordinates(
+				m.GetString(ReplicaTermFor(dbVersion, "Master_Log_File")),
+				m.GetInt64(ReplicaTermFor(dbVersion, "Read_Master_Log_Pos")),
+			)
+			executeBinlogCoordinates = NewFileBinlogCoordinates(
+				m.GetString(ReplicaTermFor(dbVersion, "Relay_Master_Log_File")),
+				m.GetInt64(ReplicaTermFor(dbVersion, "Exec_Master_Log_Pos")),
+			)
 		}
 		return nil
 	})
 	return readBinlogCoordinates, executeBinlogCoordinates, err
 }
 
-func GetSelfBinlogCoordinates(dbVersion string, db *gosql.DB) (selfBinlogCoordinates *BinlogCoordinates, err error) {
+func GetSelfBinlogCoordinates(dbVersion string, db *gosql.DB, gtid bool) (selfBinlogCoordinates BinlogCoordinates, err error) {
 	binaryLogStatusTerm := ReplicaTermFor(dbVersion, "master status")
 	err = sqlutils.QueryRowsMap(db, fmt.Sprintf("show %s", binaryLogStatusTerm), func(m sqlutils.RowMap) error {
-		selfBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("File"),
-			LogPos:  m.GetInt64("Position"),
+		if gtid {
+			selfBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Executed_Gtid_Set"))
+		} else {
+			selfBinlogCoordinates = NewFileBinlogCoordinates(
+				m.GetString("File"),
+				m.GetInt64("Position"),
+			)
 		}
 		return nil
 	})
