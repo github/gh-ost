@@ -66,9 +66,10 @@ type Applier struct {
 	finishedMigrating int64
 	name              string
 
-	dmlDeleteQueryBuilder *sql.DMLDeleteQueryBuilder
-	dmlInsertQueryBuilder *sql.DMLInsertQueryBuilder
-	dmlUpdateQueryBuilder *sql.DMLUpdateQueryBuilder
+	dmlDeleteQueryBuilder        *sql.DMLDeleteQueryBuilder
+	dmlInsertQueryBuilder        *sql.DMLInsertQueryBuilder
+	dmlUpdateQueryBuilder        *sql.DMLUpdateQueryBuilder
+	checkpointInsertQueryBuilder *sql.CheckpointInsertQueryBuilder
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -140,6 +141,13 @@ func (this *Applier) prepareQueries() (err error) {
 		this.migrationContext.OriginalTableColumns,
 		this.migrationContext.SharedColumns,
 		this.migrationContext.MappedSharedColumns,
+		&this.migrationContext.UniqueKey.Columns,
+	); err != nil {
+		return err
+	}
+	if this.checkpointInsertQueryBuilder, err = sql.NewCheckpointQueryBuilder(
+		this.migrationContext.DatabaseName,
+		this.migrationContext.GetCheckpointTableName(),
 		&this.migrationContext.UniqueKey.Columns,
 	); err != nil {
 		return err
@@ -400,6 +408,38 @@ func (this *Applier) CreateChangelogTable() error {
 	return nil
 }
 
+// Create the checkpoint table to store the chunk copy and applier state.
+func (this *Applier) CreateCheckpointTable() error {
+	if err := this.DropCheckpointTable(); err != nil {
+		return err
+	}
+	colDefs := []string{
+		"`gh_ost_chk_id` bigint auto_increment primary key",
+		"`gh_ost_chk_coords` varchar(4096)",
+		"`gh_ost_chk_iteration` bigint",
+	}
+	for _, col := range this.migrationContext.UniqueKey.Columns.Columns() {
+		if col.MySQLType == "" {
+			return fmt.Errorf("CreateCheckpoinTable: column %s has no type information. applyColumnTypes must be called", sql.EscapeName(col.Name))
+		}
+		colDef := fmt.Sprintf("%s %s", sql.EscapeName(col.Name), col.MySQLType)
+		if !col.Nullable {
+			colDef += " NOT NULL"
+		}
+		colDefs = append(colDefs, colDef)
+	}
+	query := fmt.Sprintf("create /* gh-ost */ table %s.%s (\n %s\n)",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetCheckpointTableName()),
+		strings.Join(colDefs, ",\n "),
+	)
+	this.migrationContext.Log.Infof("Created checkpoint table")
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		return err
+	}
+	return nil
+}
+
 // dropTable drops a given table on the applied host
 func (this *Applier) dropTable(tableName string) error {
 	query := fmt.Sprintf(`drop /* gh-ost */ table if exists %s.%s`,
@@ -494,6 +534,11 @@ func (this *Applier) DropChangelogTable() error {
 	return this.dropTable(this.migrationContext.GetChangelogTableName())
 }
 
+// DropCheckpointTable drops the checkpoint table on applier host
+func (this *Applier) DropCheckpointTable() error {
+	return this.dropTable(this.migrationContext.GetCheckpointTableName())
+}
+
 // DropOldTable drops the _Old table on the applier host
 func (this *Applier) DropOldTable() error {
 	return this.dropTable(this.migrationContext.GetOldTableName())
@@ -540,6 +585,42 @@ func (this *Applier) WriteAndLogChangelog(hint, value string) (string, error) {
 
 func (this *Applier) WriteChangelogState(value string) (string, error) {
 	return this.WriteAndLogChangelog("state", value)
+}
+
+// WriteCheckpoints writes a checkpoint to the _ghk table.
+func (this *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
+	var insertId int64
+	uniqueKeyArgs := sqlutils.Args(chk.IterationRangeMin.AbstractValues()...)
+	query, uniqueKeyArgs, err := this.checkpointInsertQueryBuilder.BuildQuery(uniqueKeyArgs)
+	if err != nil {
+		return insertId, err
+	}
+	args := sqlutils.Args(chk.LastTrxCoords.String(), chk.Iteration)
+	args = append(args, uniqueKeyArgs...)
+	res, err := this.db.Exec(query, args...)
+	if err != nil {
+		return insertId, err
+	}
+	return res.LastInsertId()
+}
+
+func (this *Applier) ReadLastCheckpoint(chk *Checkpoint) error {
+	rows, err := this.db.Query(fmt.Sprintf(`select /* gh-ost */ * from %s.%s order by id desc limit 1`, this.migrationContext.DatabaseName, this.migrationContext.GetCheckpointTableName()))
+	if err != nil {
+		return err
+	}
+	var coordStr string
+	ptrs := []interface{}{&chk.Id, &coordStr, &chk.Iteration}
+	ptrs = append(ptrs, chk.IterationRangeMin.ValuesPointers...)
+	for rows.Next() {
+		rows.Scan(ptrs...)
+	}
+	gtidCoords, err := mysql.NewGTIDBinlogCoordinates(coordStr)
+	if err != nil {
+		return err
+	}
+	chk.LastTrxCoords = gtidCoords
+	return nil
 }
 
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
@@ -686,7 +767,7 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // CalculateNextIterationRangeEndValues reads the next-iteration-range-end unique key values,
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
-// iterating the range (and this done with copying row chunks)
+// iterating the range (and thus done with copying row chunks)
 func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {

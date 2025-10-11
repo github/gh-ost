@@ -91,8 +91,6 @@ type Migrator struct {
 	copyRowsQueue    chan tableWriteFunc
 	applyEventsQueue chan *applyEventStruct
 
-	handledChangelogStates map[string]bool
-
 	finishedMigrating int64
 }
 
@@ -107,10 +105,9 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		rowCopyComplete:            make(chan error),
 		allEventsUpToLockProcessed: make(chan string),
 
-		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
-		handledChangelogStates: make(map[string]bool),
-		finishedMigrating:      0,
+		copyRowsQueue:     make(chan tableWriteFunc),
+		applyEventsQueue:  make(chan *applyEventStruct, base.MaxEventsBatchSize),
+		finishedMigrating: 0,
 	}
 	return migrator
 }
@@ -394,10 +391,17 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
 		return err
 	}
+
+	if this.migrationContext.Checkpoint {
+		if err := this.applier.CreateCheckpointTable(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to create checkpoint table, see further error deatils.")
+		}
+	}
 	// We can prepare some of the queries on the applier
 	if err := this.applier.prepareQueries(); err != nil {
 		return err
 	}
+
 	// Validation complete! We're good to execute this migration
 	if err := this.hooksExecutor.onValidated(); err != nil {
 		return err
@@ -1190,7 +1194,6 @@ func (this *Migrator) initiateApplier() error {
 		this.migrationContext.Log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
 		return err
 	}
-
 	if err := this.applier.AlterGhost(); err != nil {
 		this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
 		return err

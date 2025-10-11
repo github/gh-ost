@@ -101,6 +101,50 @@ func BuildEqualsPreparedComparison(columns []string) (result string, err error) 
 	return BuildEqualsComparison(columns, values)
 }
 
+// It holds the prepared query statement so it doesn't need to be recreated every time.
+type CheckpointInsertQueryBuilder struct {
+	uniqueKeyColumns  *ColumnList
+	preparedStatement string
+}
+
+func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns *ColumnList) (*CheckpointInsertQueryBuilder, error) {
+	if uniqueKeyColumns.Len() == 0 {
+		return nil, fmt.Errorf("Got 0 columns in BuildSetCheckpointInsertQuery")
+	}
+	values := buildColumnsPreparedValues(uniqueKeyColumns)
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+	stmt := fmt.Sprintf(`
+		insert /* gh-ost */
+		into %s.%s
+			(gh_ost_chk_coords, gh_ost_chk_iteration, %s)
+		values
+			(?, ?, %s)`,
+		databaseName, tableName,
+		strings.Join(uniqueKeyColumns.Names(), ", "),
+		strings.Join(values, ", "),
+	)
+
+	b := &CheckpointInsertQueryBuilder{
+		uniqueKeyColumns:  uniqueKeyColumns,
+		preparedStatement: stmt,
+	}
+	return b, nil
+}
+
+// BuildQuery builds the insert query.
+func (b *CheckpointInsertQueryBuilder) BuildQuery(uniqueKeyArgs []interface{}) (string, []interface{}, error) {
+	if len(uniqueKeyArgs) != b.uniqueKeyColumns.Len() {
+		return "", nil, fmt.Errorf("args count differs from unique key column count")
+	}
+	convertedArgs := make([]interface{}, 0, b.uniqueKeyColumns.Len()+1)
+	for _, column := range b.uniqueKeyColumns.Columns() {
+		arg := column.convertArg(column, true)
+		convertedArgs = append(convertedArgs, arg)
+	}
+	return b.preparedStatement, uniqueKeyArgs, nil
+}
+
 func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 	if columns.Len() == 0 {
 		return "", fmt.Errorf("Got 0 columns in BuildSetPreparedClause")

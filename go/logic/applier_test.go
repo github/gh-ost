@@ -15,12 +15,13 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/mysql"
+	testmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 
 	"fmt"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -207,11 +208,11 @@ type ApplierTestSuite struct {
 
 func (suite *ApplierTestSuite) SetupSuite() {
 	ctx := context.Background()
-	mysqlContainer, err := mysql.Run(ctx,
+	mysqlContainer, err := testmysql.Run(ctx,
 		testMysqlContainerImage,
-		mysql.WithDatabase(testMysqlDatabase),
-		mysql.WithUsername(testMysqlUser),
-		mysql.WithPassword(testMysqlPass),
+		testmysql.WithDatabase(testMysqlDatabase),
+		testmysql.WithUsername(testMysqlUser),
+		testmysql.WithPassword(testMysqlPass),
 		testcontainers.WithWaitStrategy(wait.ForExposedPort()),
 	)
 	suite.Require().NoError(err)
@@ -629,6 +630,85 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQueryFai
 	// Verify the warning was recorded and will cause the migrator to panic
 	suite.Require().NotEmpty(applier.migrationContext.MigrationLastInsertSQLWarnings)
 	suite.Require().Contains(applier.migrationContext.MigrationLastInsertSQLWarnings[0], "Warning: Data truncated for column 'name' at row 1")
+}
+
+func (suite *ApplierTestSuite) TestWriteCheckpoint() {
+	ctx := context.Background()
+
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id int not null, id2 char(4) CHARACTER SET utf8mb4, primary key(id, id2))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, id2 char(4) CHARACTER SET utf8mb4, name varchar(20), primary key(id, id2));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, id2) VALUES (?,?), (?,?)", getTestTableName()), 201, "為政以德", 212, "君子不器")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.AlterStatementOptions = "add column name varchar(20)"
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "id2"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "id2"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "id2"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id", "id2"}),
+	}
+
+	inspector := NewInspector(migrationContext)
+	suite.Require().NoError(inspector.InitDBConnections())
+
+	err = inspector.applyColumnTypes(testMysqlDatabase, testMysqlTableName, &migrationContext.UniqueKey.Columns)
+	suite.Require().NoError(err)
+	migrationContext.Log.Infof("%+v", migrationContext.UniqueKey.Columns)
+
+	//suite.Require().Equal("int", migrationContext.UniqueKey.Columns.GetColumn("id").MySQLType)
+
+	applier := NewApplier(migrationContext)
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	err = applier.CreateChangelogTable()
+	suite.Require().NoError(err)
+
+	err = applier.CreateCheckpointTable()
+	suite.Require().NoError(err)
+
+	err = applier.prepareQueries()
+	suite.Require().NoError(err)
+
+	err = applier.ReadMigrationRangeValues()
+	suite.Require().NoError(err)
+
+	coords, err := mysql.NewGTIDBinlogCoordinates(`08dc06d7-c27c-11ea-b204-e4434b77a5ce:1-1497873603,0b4ff540-a712-11ea-9857-e4434b2a1c98:1-4315312982,19636248-246d-11e9-ab0d-0263df733a8e:1`)
+	suite.Require().NoError(err)
+
+	chk := &Checkpoint{
+		LastTrxCoords:     coords,
+		IterationRangeMin: applier.migrationContext.MigrationRangeMaxValues,
+		Iteration:         2,
+	}
+	id, err := applier.WriteCheckpoint(chk)
+	suite.Require().NoError(err)
+	suite.Require().Equal(int64(1), id)
+
+	gotChk := &Checkpoint{IterationRangeMin: sql.NewColumnValues(2)}
+	err = applier.ReadLastCheckpoint(gotChk)
+	suite.Require().NoError(err)
+
+	suite.Require().Equal(chk.Iteration, gotChk.Iteration)
+	suite.Require().Equal(chk.LastTrxCoords.String(), gotChk.LastTrxCoords.String())
+	suite.Require().Equal(chk.IterationRangeMin.String(), gotChk.IterationRangeMin.String())
 }
 
 func TestApplier(t *testing.T) {

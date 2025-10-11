@@ -153,6 +153,7 @@ type MigrationContext struct {
 	HooksHintToken                      string
 	HooksStatusIntervalSec              int64
 	PanicOnWarnings                     bool
+	Checkpoint                          bool
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -377,6 +378,15 @@ func (this *MigrationContext) GetChangelogTableName() string {
 		return getSafeTableName(this.ForceTmpTableName, "ghc")
 	} else {
 		return getSafeTableName(this.OriginalTableName, "ghc")
+	}
+}
+
+// GetCheckpointTableName generates the name of checkpoint table.
+func (this *MigrationContext) GetCheckpointTableName() string {
+	if this.ForceTmpTableName != "" {
+		return getSafeTableName(this.ForceTmpTableName, "ghk")
+	} else {
+		return getSafeTableName(this.OriginalTableName, "ghk")
 	}
 }
 
