@@ -643,7 +643,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, id2 char(4) CHARACTER SET utf8mb4, name varchar(20), primary key(id, id2));", getTestGhostTableName()))
 	suite.Require().NoError(err)
 
-	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, id2) VALUES (?,?), (?,?)", getTestTableName()), 201, "為政以德", 212, "君子不器")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, id2) VALUES (?,?), (?,?), (?,?)", getTestTableName()), 411, "君子懷德", 411, "小人懷土", 212, "君子不器")
 	suite.Require().NoError(err)
 
 	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
@@ -658,6 +658,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "id2"})
 	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "id2"})
 	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "id2"})
+	migrationContext.Checkpoint = true
 	migrationContext.UniqueKey = &sql.UniqueKey{
 		Name:             "PRIMARY",
 		NameInGhostTable: "PRIMARY",
@@ -669,9 +670,6 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 
 	err = inspector.applyColumnTypes(testMysqlDatabase, testMysqlTableName, &migrationContext.UniqueKey.Columns)
 	suite.Require().NoError(err)
-	migrationContext.Log.Infof("%+v", migrationContext.UniqueKey.Columns)
-
-	//suite.Require().Equal("int", migrationContext.UniqueKey.Columns.GetColumn("id").MySQLType)
 
 	applier := NewApplier(migrationContext)
 
@@ -690,6 +688,12 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	err = applier.ReadMigrationRangeValues()
 	suite.Require().NoError(err)
 
+	// checkpoint table is empty
+	gotChk := &Checkpoint{IterationRangeMin: sql.NewColumnValues(2)}
+	err = applier.ReadLastCheckpoint(gotChk)
+	suite.Require().ErrorIs(err, NoCheckpointFoundError)
+
+	// write a checkpoint and read it back
 	coords, err := mysql.NewGTIDBinlogCoordinates(`08dc06d7-c27c-11ea-b204-e4434b77a5ce:1-1497873603,0b4ff540-a712-11ea-9857-e4434b2a1c98:1-4315312982,19636248-246d-11e9-ab0d-0263df733a8e:1`)
 	suite.Require().NoError(err)
 
@@ -702,7 +706,6 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(1), id)
 
-	gotChk := &Checkpoint{IterationRangeMin: sql.NewColumnValues(2)}
 	err = applier.ReadLastCheckpoint(gotChk)
 	suite.Require().NoError(err)
 

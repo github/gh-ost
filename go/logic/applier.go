@@ -21,6 +21,7 @@ import (
 	"context"
 	"database/sql/driver"
 
+	"errors"
 	"github.com/github/gh-ost/go/mysql"
 	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/sqlutils"
@@ -30,6 +31,9 @@ const (
 	GhostChangelogTableComment = "gh-ost changelog"
 	atomicCutOverMagicHint     = "ghost-cut-over-sentry"
 )
+
+// NoCheckpointFoundError is returned when an empty checkpoint table is queried.
+var NoCheckpointFoundError = errors.New("no checkpoint found in _ghk table")
 
 type dmlBuildResult struct {
 	query     string
@@ -145,12 +149,14 @@ func (this *Applier) prepareQueries() (err error) {
 	); err != nil {
 		return err
 	}
-	if this.checkpointInsertQueryBuilder, err = sql.NewCheckpointQueryBuilder(
-		this.migrationContext.DatabaseName,
-		this.migrationContext.GetCheckpointTableName(),
-		&this.migrationContext.UniqueKey.Columns,
-	); err != nil {
-		return err
+	if this.migrationContext.Checkpoint {
+		if this.checkpointInsertQueryBuilder, err = sql.NewCheckpointQueryBuilder(
+			this.migrationContext.DatabaseName,
+			this.migrationContext.GetCheckpointTableName(),
+			&this.migrationContext.UniqueKey.Columns,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -605,15 +611,17 @@ func (this *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 }
 
 func (this *Applier) ReadLastCheckpoint(chk *Checkpoint) error {
-	rows, err := this.db.Query(fmt.Sprintf(`select /* gh-ost */ * from %s.%s order by id desc limit 1`, this.migrationContext.DatabaseName, this.migrationContext.GetCheckpointTableName()))
-	if err != nil {
-		return err
-	}
+	row := this.db.QueryRow(fmt.Sprintf(`select /* gh-ost */ * from %s.%s order by id desc limit 1`, this.migrationContext.DatabaseName, this.migrationContext.GetCheckpointTableName()))
+
 	var coordStr string
 	ptrs := []interface{}{&chk.Id, &coordStr, &chk.Iteration}
 	ptrs = append(ptrs, chk.IterationRangeMin.ValuesPointers...)
-	for rows.Next() {
-		rows.Scan(ptrs...)
+	err := row.Scan(ptrs...)
+	if err != nil {
+		if errors.Is(err, gosql.ErrNoRows) {
+			return NoCheckpointFoundError
+		}
+		return err
 	}
 	gtidCoords, err := mysql.NewGTIDBinlogCoordinates(coordStr)
 	if err != nil {
