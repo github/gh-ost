@@ -26,7 +26,6 @@ var (
 	ErrMigratorUnsupportedRenameAlter = errors.New("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
 	ErrMigrationNotAllowedOnMaster    = errors.New("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (this reduces load from the master). To proceed please provide --allow-on-master.")
 	RetrySleepFn                      = time.Sleep
-	checkpointInterval                = 10 * time.Second // 5 * time.Minute
 	checkpointTimeout                 = 2 * time.Second
 )
 
@@ -423,11 +422,12 @@ func (this *Migrator) Migrate() (err error) {
 		if err != nil {
 			return this.migrationContext.Log.Errorf("No checkpoint found, unable to resume: %+v", err)
 		}
-		this.migrationContext.Log.Infof("Resuming from checkpoint coords=%+v range_min=%+v range_max=%+v",
-			lastCheckpoint.LastTrxCoords, lastCheckpoint.IterationRangeMin.String(), lastCheckpoint.IterationRangeMax.String())
+		this.migrationContext.Log.Infof("Resuming from checkpoint coords=%+v range_min=%+v range_max=%+v iteration=%d",
+			lastCheckpoint.LastTrxCoords, lastCheckpoint.IterationRangeMin.String(), lastCheckpoint.IterationRangeMax.String(), lastCheckpoint.Iteration)
 
 		this.migrationContext.MigrationIterationRangeMinValues = lastCheckpoint.IterationRangeMin
 		this.migrationContext.MigrationIterationRangeMaxValues = lastCheckpoint.IterationRangeMax
+		this.migrationContext.Iteration = lastCheckpoint.Iteration
 		this.migrationContext.InitialStreamerCoords = lastCheckpoint.LastTrxCoords
 		if err := this.initiateStreaming(); err != nil {
 			return err
@@ -1435,6 +1435,7 @@ func (this *Migrator) checkpointLoop() {
 		this.migrationContext.Log.Debugf("Noop operation; not really checkpointing")
 		return
 	}
+	checkpointInterval := time.Duration(this.migrationContext.CheckpointIntervalSeconds) * time.Second
 	ticker := time.NewTicker(checkpointInterval)
 	for t := range ticker.C {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
@@ -1450,8 +1451,8 @@ func (this *Migrator) checkpointLoop() {
 				this.migrationContext.Log.Errorf("error attempting checkpoint: %+v", err)
 			}
 		} else {
-			this.migrationContext.Log.Infof("checkpoint success at coords=%+v range_min=%+v range_max=%+v",
-				chk.LastTrxCoords.DisplayString(), chk.IterationRangeMin.String(), chk.IterationRangeMax.String())
+			this.migrationContext.Log.Infof("checkpoint success at coords=%+v range_min=%+v range_max=%+v iteration=%d",
+				chk.LastTrxCoords.DisplayString(), chk.IterationRangeMin.String(), chk.IterationRangeMax.String(), chk.Iteration)
 		}
 		cancel()
 	}

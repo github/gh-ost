@@ -155,6 +155,7 @@ type MigrationContext struct {
 	HooksStatusIntervalSec              int64
 	PanicOnWarnings                     bool
 	Checkpoint                          bool
+	CheckpointIntervalSeconds           int64
 
 	DropServeSocket bool
 	ServeSocketFile string
