@@ -201,20 +201,20 @@ func (this *Migrator) canStopStreaming() bool {
 }
 
 // onChangelogEvent is called when a binlog event operation on the changelog table is intercepted.
-func (this *Migrator) onChangelogEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+func (this *Migrator) onChangelogEvent(dmlEntry *binlog.BinlogEntry) (err error) {
 	// Hey, I created the changelog table, I know the type of columns it has!
-	switch hint := dmlEvent.NewColumnValues.StringColumn(2); hint {
+	switch hint := dmlEntry.DmlEvent.NewColumnValues.StringColumn(2); hint {
 	case "state":
-		return this.onChangelogStateEvent(dmlEvent)
+		return this.onChangelogStateEvent(dmlEntry)
 	case "heartbeat":
-		return this.onChangelogHeartbeatEvent(dmlEvent)
+		return this.onChangelogHeartbeatEvent(dmlEntry)
 	default:
 		return nil
 	}
 }
 
-func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
-	changelogStateString := dmlEvent.NewColumnValues.StringColumn(3)
+func (this *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err error) {
+	changelogStateString := dmlEntry.DmlEvent.NewColumnValues.StringColumn(3)
 	changelogState := ReadChangelogState(changelogStateString)
 	this.migrationContext.Log.Infof("Intercepted changelog state %s", changelogState)
 	switch changelogState {
@@ -242,14 +242,17 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	return nil
 }
 
-func (this *Migrator) onChangelogHeartbeatEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
-	changelogHeartbeatString := dmlEvent.NewColumnValues.StringColumn(3)
+func (this *Migrator) onChangelogHeartbeatEvent(dmlEntry *binlog.BinlogEntry) (err error) {
+	changelogHeartbeatString := dmlEntry.DmlEvent.NewColumnValues.StringColumn(3)
 
 	heartbeatTime, err := time.Parse(time.RFC3339Nano, changelogHeartbeatString)
 	if err != nil {
 		return this.migrationContext.Log.Errore(err)
 	} else {
 		this.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
+		this.applier.CurrentCoordinatesMutex.Lock()
+		this.applier.CurrentCoordinates = dmlEntry.Coordinates
+		this.applier.CurrentCoordinatesMutex.Unlock()
 		return nil
 	}
 }
@@ -411,7 +414,7 @@ func (this *Migrator) Migrate() (err error) {
 	// inspectOriginalAndGhostTables must be called before creating checkpoint table.
 	if this.migrationContext.Checkpoint && !this.migrationContext.Resume {
 		if err := this.applier.CreateCheckpointTable(); err != nil {
-			this.migrationContext.Log.Errorf("Unable to create checkpoint table, see further error deatils.")
+			this.migrationContext.Log.Errorf("Unable to create checkpoint table, see further error details.")
 		}
 
 	}
@@ -1157,7 +1160,7 @@ func (this *Migrator) initiateStreaming() error {
 		this.migrationContext.DatabaseName,
 		this.migrationContext.GetChangelogTableName(),
 		func(dmlEntry *binlog.BinlogEntry) error {
-			return this.onChangelogEvent(dmlEntry.DmlEvent)
+			return this.onChangelogEvent(dmlEntry)
 		},
 	)
 

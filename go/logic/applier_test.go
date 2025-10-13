@@ -691,7 +691,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 
 	// checkpoint table is empty
 	_, err = applier.ReadLastCheckpoint()
-	suite.Require().ErrorIs(err, NoCheckpointFoundError)
+	suite.Require().ErrorIs(err, ErrNoCheckpointFound)
 
 	// write a checkpoint and read it back
 	coords := mysql.NewFileBinlogCoordinates("mysql-bin.000003", int64(219202907))
