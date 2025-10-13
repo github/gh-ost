@@ -10,6 +10,7 @@ import (
 	gosql "database/sql"
 	"errors"
 	"fmt"
+	"math/big"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -718,6 +719,19 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 				continue
 			}
 
+			if strings.Contains(columnType, "int") {
+				column.CompareValueFunc = func(a interface{}, b interface{}) (int, error) {
+					_a := new(big.Int)
+					if _a, _ = _a.SetString(fmt.Sprintf("%+v", a), 10); a == nil {
+						return 0, fmt.Errorf("CompareValueFunc err, %+v convert int is nil", a)
+					}
+					_b := new(big.Int)
+					if _b, _ = _b.SetString(fmt.Sprintf("%+v", b), 10); b == nil {
+						return 0, fmt.Errorf("CompareValueFunc err, %+v convert int is nil", b)
+					}
+					return _a.Cmp(_b), nil
+				}
+			}
 			if strings.Contains(columnType, "unsigned") {
 				column.IsUnsigned = true
 			}
