@@ -114,7 +114,6 @@ func TestMigratorOnChangelogEvent(t *testing.T) {
 				NewColumnValues: columnValues},
 			Coordinates: mysql.NewFileBinlogCoordinates("mysql-bin.000004", int64(4)),
 		}))
-
 	})
 
 	t.Run("state-ReadMigrationRangeValues", func(t *testing.T) {
