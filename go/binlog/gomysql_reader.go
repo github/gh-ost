@@ -17,17 +17,20 @@ import (
 
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
+	uuid "github.com/google/uuid"
 	"golang.org/x/net/context"
 )
 
 type GoMySQLReader struct {
-	migrationContext         *base.MigrationContext
-	connectionConfig         *mysql.ConnectionConfig
-	binlogSyncer             *replication.BinlogSyncer
-	binlogStreamer           *replication.BinlogStreamer
-	currentCoordinates       mysql.BinlogCoordinates
-	currentCoordinatesMutex  *sync.Mutex
-	LastAppliedRowsEventHint mysql.BinlogCoordinates
+	migrationContext        *base.MigrationContext
+	connectionConfig        *mysql.ConnectionConfig
+	binlogSyncer            *replication.BinlogSyncer
+	binlogStreamer          *replication.BinlogStreamer
+	currentCoordinates      mysql.BinlogCoordinates
+	currentCoordinatesMutex *sync.Mutex
+	// LastTrxCoords are the coordinates of the last transaction completely read.
+	// If using the file coordinates it is binlog position of the transaction's XID event.
+	LastTrxCoords mysql.BinlogCoordinates
 }
 
 func NewGoMySQLReader(migrationContext *base.MigrationContext) *GoMySQLReader {
@@ -35,7 +38,6 @@ func NewGoMySQLReader(migrationContext *base.MigrationContext) *GoMySQLReader {
 	return &GoMySQLReader{
 		migrationContext:        migrationContext,
 		connectionConfig:        connectionConfig,
-		currentCoordinates:      mysql.BinlogCoordinates{},
 		currentCoordinatesMutex: &sync.Mutex{},
 		binlogSyncer: replication.NewBinlogSyncer(replication.BinlogSyncerConfig{
 			ServerID:                uint32(migrationContext.ReplicaServerId),
@@ -46,8 +48,8 @@ func NewGoMySQLReader(migrationContext *base.MigrationContext) *GoMySQLReader {
 			Password:                connectionConfig.Password,
 			TLSConfig:               connectionConfig.TLSConfig(),
 			UseDecimal:              true,
-			MaxReconnectAttempts:    migrationContext.BinlogSyncerMaxReconnectAttempts,
 			TimestampStringLocation: time.UTC,
+			MaxReconnectAttempts:    migrationContext.BinlogSyncerMaxReconnectAttempts,
 		}),
 	}
 }
@@ -58,35 +60,33 @@ func (this *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordin
 		return this.migrationContext.Log.Errorf("Empty coordinates at ConnectBinlogStreamer()")
 	}
 
+	this.currentCoordinatesMutex.Lock()
+	defer this.currentCoordinatesMutex.Unlock()
 	this.currentCoordinates = coordinates
-	this.migrationContext.Log.Infof("Connecting binlog streamer at %+v", this.currentCoordinates)
-	// Start sync with specified binlog file and position
-	this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{
-		Name: this.currentCoordinates.LogFile,
-		Pos:  uint32(this.currentCoordinates.LogPos),
-	})
+	this.migrationContext.Log.Infof("Connecting binlog streamer at %+v", coordinates)
 
+	// Start sync with specified GTID set or binlog file and position
+	if this.migrationContext.UseGTIDs {
+		coords := coordinates.(*mysql.GTIDBinlogCoordinates)
+		this.binlogStreamer, err = this.binlogSyncer.StartSyncGTID(coords.GTIDSet)
+	} else {
+		coords := this.currentCoordinates.(*mysql.FileBinlogCoordinates)
+		this.binlogStreamer, err = this.binlogSyncer.StartSync(gomysql.Position{
+			Name: coords.LogFile,
+			Pos:  uint32(coords.LogPos)},
+		)
+	}
 	return err
 }
 
-func (this *GoMySQLReader) GetCurrentBinlogCoordinates() *mysql.BinlogCoordinates {
+func (this *GoMySQLReader) GetCurrentBinlogCoordinates() mysql.BinlogCoordinates {
 	this.currentCoordinatesMutex.Lock()
 	defer this.currentCoordinatesMutex.Unlock()
-	returnCoordinates := this.currentCoordinates
-	return &returnCoordinates
+	return this.currentCoordinates.Clone()
 }
 
-// StreamEvents
 func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
-	if this.currentCoordinates.IsLogPosOverflowBeyond4Bytes(&this.LastAppliedRowsEventHint) {
-		return fmt.Errorf("Unexpected rows event at %+v, the binlog end_log_pos is overflow 4 bytes", this.currentCoordinates)
-	}
-
-	if this.currentCoordinates.SmallerThanOrEquals(&this.LastAppliedRowsEventHint) {
-		this.migrationContext.Log.Debugf("Skipping handled query at %+v", this.currentCoordinates)
-		return nil
-	}
-
+	currentCoords := this.GetCurrentBinlogCoordinates()
 	dml := ToEventDML(ev.Header.EventType.String())
 	if dml == NotDML {
 		return fmt.Errorf("Unknown DML type: %s", ev.Header.EventType.String())
@@ -97,7 +97,7 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 			// We do both at the same time
 			continue
 		}
-		binlogEntry := NewBinlogEntryAt(this.currentCoordinates)
+		binlogEntry := NewBinlogEntryAt(currentCoords)
 		binlogEntry.DmlEvent = NewBinlogDMLEvent(
 			string(rowsEvent.Table.Schema),
 			string(rowsEvent.Table.Table),
@@ -118,13 +118,13 @@ func (this *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEven
 				binlogEntry.DmlEvent.WhereColumnValues = sql.ToColumnValues(row)
 			}
 		}
+
 		// The channel will do the throttling. Whoever is reading from the channel
 		// decides whether action is taken synchronously (meaning we wait before
 		// next iteration) or asynchronously (we keep pushing more events)
 		// In reality, reads will be synchronous
 		entriesChannel <- binlogEntry
 	}
-	this.LastAppliedRowsEventHint = this.currentCoordinates
 	return nil
 }
 
@@ -141,23 +141,56 @@ func (this *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesCha
 		if err != nil {
 			return err
 		}
-		func() {
-			this.currentCoordinatesMutex.Lock()
-			defer this.currentCoordinatesMutex.Unlock()
-			this.currentCoordinates.LogPos = int64(ev.Header.LogPos)
-			this.currentCoordinates.EventSize = int64(ev.Header.EventSize)
-		}()
 
-		switch binlogEvent := ev.Event.(type) {
+		// Update binlog coords if using file-based coords.
+		// GTID coordinates are updated on receiving GTID events.
+		if !this.migrationContext.UseGTIDs {
+			this.currentCoordinatesMutex.Lock()
+			coords := this.currentCoordinates.(*mysql.FileBinlogCoordinates)
+			prevCoords := coords.Clone().(*mysql.FileBinlogCoordinates)
+			coords.LogPos = int64(ev.Header.LogPos)
+			coords.EventSize = int64(ev.Header.EventSize)
+			if coords.IsLogPosOverflowBeyond4Bytes(prevCoords) {
+				this.currentCoordinatesMutex.Unlock()
+				return fmt.Errorf("Unexpected rows event at %+v, the binlog end_log_pos is overflow 4 bytes", coords)
+			}
+			this.currentCoordinatesMutex.Unlock()
+		}
+
+		switch event := ev.Event.(type) {
+		case *replication.GTIDEvent:
+			if !this.migrationContext.UseGTIDs {
+				continue
+			}
+			sid, err := uuid.FromBytes(event.SID)
+			if err != nil {
+				return err
+			}
+			this.currentCoordinatesMutex.Lock()
+			if this.LastTrxCoords != nil {
+				this.currentCoordinates = this.LastTrxCoords.Clone()
+			}
+			coords := this.currentCoordinates.(*mysql.GTIDBinlogCoordinates)
+			trxGset := gomysql.NewUUIDSet(sid, gomysql.Interval{Start: event.GNO, Stop: event.GNO + 1})
+			coords.GTIDSet.AddSet(trxGset)
+			this.currentCoordinatesMutex.Unlock()
 		case *replication.RotateEvent:
-			func() {
-				this.currentCoordinatesMutex.Lock()
-				defer this.currentCoordinatesMutex.Unlock()
-				this.currentCoordinates.LogFile = string(binlogEvent.NextLogName)
-			}()
-			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", this.currentCoordinates.LogFile, int64(ev.Header.LogPos), binlogEvent.NextLogName)
+			if this.migrationContext.UseGTIDs {
+				continue
+			}
+			this.currentCoordinatesMutex.Lock()
+			coords := this.currentCoordinates.(*mysql.FileBinlogCoordinates)
+			coords.LogFile = string(event.NextLogName)
+			this.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", coords.LogFile, int64(ev.Header.LogPos), event.NextLogName)
+			this.currentCoordinatesMutex.Unlock()
+		case *replication.XIDEvent:
+			if this.migrationContext.UseGTIDs {
+				this.LastTrxCoords = &mysql.GTIDBinlogCoordinates{GTIDSet: event.GSet.(*gomysql.MysqlGTIDSet)}
+			} else {
+				this.LastTrxCoords = this.currentCoordinates.Clone()
+			}
 		case *replication.RowsEvent:
-			if err := this.handleRowsEvent(ev, binlogEvent, entriesChannel); err != nil {
+			if err := this.handleRowsEvent(ev, event, entriesChannel); err != nil {
 				return err
 			}
 		}

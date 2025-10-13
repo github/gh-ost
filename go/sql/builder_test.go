@@ -325,7 +325,34 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 	}
 }
 
-func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
+func TestBuildUniqueKeyRangeEndPreparedQueryViaOffset(t *testing.T) {
+	databaseName := "mydb"
+	originalTableName := "tbl"
+	var chunkSize int64 = 500
+	{
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+		rangeStartArgs := []interface{}{3, 17}
+		rangeEndArgs := []interface{}{103, 117}
+
+		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		require.NoError(t, err)
+		expected := `
+			select /* gh-ost mydb.tbl test */
+				name, position
+			from
+				mydb.tbl
+			where
+				((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
+			order by
+				name asc, position asc
+			limit 1
+			offset 499`
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
+	}
+}
+
+func TestBuildUniqueKeyRangeEndPreparedQueryViaTemptable(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
 	var chunkSize int64 = 500
@@ -337,7 +364,8 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		require.NoError(t, err)
 		expected := `
-			select /* gh-ost mydb.tbl test */ name, position
+			select /* gh-ost mydb.tbl test */
+				name, position
 			from (
 				select
 					name, position
@@ -346,7 +374,8 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 				where ((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
 				order by
 					name asc, position asc
-				limit 500) select_osc_chunk
+				limit 500
+			) select_osc_chunk
 			order by
 				name desc, position desc
 			limit 1`

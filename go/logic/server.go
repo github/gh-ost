@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -97,6 +97,16 @@ func (this *Server) runCPUProfile(args string) (io.Reader, error) {
 	pprof.StopCPUProfile()
 	this.migrationContext.Log.Infof("Captured %d byte runtime/pprof CPU profile (gzip=%v)", buf.Len(), useGzip)
 	return &buf, nil
+}
+
+func (this *Server) createPostponeCutOverFlagFile(filePath string) (err error) {
+	if !base.FileExists(filePath) {
+		if err := base.TouchFile(filePath); err != nil {
+			return fmt.Errorf("Failed to create postpone cut-over flag file %s: %w", filePath, err)
+		}
+		this.migrationContext.Log.Infof("Created postpone-cut-over-flag-file: %s", filePath)
+	}
+	return nil
 }
 
 func (this *Server) BindSocketFile() (err error) {
@@ -222,6 +232,7 @@ throttle-http=<URL>                  # Set a new throttle URL
 throttle-control-replicas=<replicas> # Set a new comma delimited list of throttle control replicas
 throttle                             # Force throttling
 no-throttle                          # End forced throttling (other throttling may still apply)
+postpone-cut-over-flag-file=<path>   # Postpone the cut-over phase, writing a cut over flag file to the given path
 unpostpone                           # Bail out a cut-over postpone; proceed to cut-over
 panic                                # panic and quit without cleanup
 help                                 # This message
@@ -393,6 +404,19 @@ help                                 # This message
 				return NoPrintStatusRule, err
 			}
 			atomic.StoreInt64(&this.migrationContext.ThrottleCommandedByUser, 0)
+			return ForcePrintStatusAndHintRule, nil
+		}
+	case "postpone-cut-over-flag-file":
+		{
+			if arg == "" {
+				err := fmt.Errorf("User commanded 'postpone-cut-over-flag-file' without specifying file path")
+				return NoPrintStatusRule, err
+			}
+			if err := this.createPostponeCutOverFlagFile(arg); err != nil {
+				return NoPrintStatusRule, err
+			}
+			this.migrationContext.PostponeCutOverFlagFile = arg
+			fmt.Fprintf(writer, "Postponed\n")
 			return ForcePrintStatusAndHintRule, nil
 		}
 	case "unpostpone", "no-postpone", "cut-over":

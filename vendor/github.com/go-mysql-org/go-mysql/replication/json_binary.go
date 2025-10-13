@@ -1,13 +1,14 @@
 package replication
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 
-	. "github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/utils"
+	"github.com/goccy/go-json"
 	"github.com/pingcap/errors"
-	"github.com/siddontang/go/hack"
+
+	. "github.com/go-mysql-org/go-mysql/mysql"
 )
 
 const (
@@ -44,6 +45,60 @@ const (
 	jsonbValueEntrySizeLarge = 1 + jsonbLargeOffsetSize
 )
 
+var (
+	ErrCorruptedJSONDiff = fmt.Errorf("corrupted JSON diff") // ER_CORRUPTED_JSON_DIFF
+)
+
+type (
+	// JsonDiffOperation is an enum that describes what kind of operation a JsonDiff object represents.
+	// https://github.com/mysql/mysql-server/blob/8.0/sql/json_diff.h
+	JsonDiffOperation byte
+)
+
+const (
+	// The JSON value in the given path is replaced with a new value.
+	//
+	// It has the same effect as `JSON_REPLACE(col, path, value)`.
+	JsonDiffOperationReplace = JsonDiffOperation(iota)
+
+	// Add a new element at the given path.
+	//
+	//  If the path specifies an array element, it has the same effect as `JSON_ARRAY_INSERT(col, path, value)`.
+	//
+	//  If the path specifies an object member, it has the same effect as `JSON_INSERT(col, path, value)`.
+	JsonDiffOperationInsert
+
+	// The JSON value at the given path is removed from an array or object.
+	//
+	// It has the same effect as `JSON_REMOVE(col, path)`.
+	JsonDiffOperationRemove
+)
+
+type (
+	JsonDiff struct {
+		Op    JsonDiffOperation
+		Path  string
+		Value string
+	}
+)
+
+func (op JsonDiffOperation) String() string {
+	switch op {
+	case JsonDiffOperationReplace:
+		return "Replace"
+	case JsonDiffOperationInsert:
+		return "Insert"
+	case JsonDiffOperationRemove:
+		return "Remove"
+	default:
+		return fmt.Sprintf("Unknown(%d)", op)
+	}
+}
+
+func (jd *JsonDiff) String() string {
+	return fmt.Sprintf("json_diff(op:%s path:%s value:%s)", jd.Op, jd.Path, jd.Value)
+}
+
 func jsonbGetOffsetSize(isSmall bool) int {
 	if isSmall {
 		return jsonbSmallOffsetSize
@@ -71,11 +126,6 @@ func jsonbGetValueEntrySize(isSmall bool) int {
 // decodeJsonBinary decodes the JSON binary encoding data and returns
 // the common JSON encoding data.
 func (e *RowsEvent) decodeJsonBinary(data []byte) ([]byte, error) {
-	// Sometimes, we can insert a NULL JSON even we set the JSON field as NOT NULL.
-	// If we meet this case, we can return an empty slice.
-	if len(data) == 0 {
-		return []byte{}, nil
-	}
 	d := jsonBinaryDecoder{
 		useDecimal:      e.useDecimal,
 		ignoreDecodeErr: e.ignoreJSONDecodeErr,
@@ -193,7 +243,7 @@ func (d *jsonBinaryDecoder) decodeObjectOrArray(data []byte, isSmall bool, isObj
 				return nil
 			}
 
-			keys[i] = hack.String(data[keyOffset : keyOffset+keyLength])
+			keys[i] = utils.ByteSliceToString(data[keyOffset : keyOffset+keyLength])
 		}
 	}
 
@@ -361,7 +411,7 @@ func (d *jsonBinaryDecoder) decodeString(data []byte) string {
 
 	data = data[n:]
 
-	v := hack.String(data[0:l])
+	v := utils.ByteSliceToString(data[0:l])
 	return v
 }
 
@@ -389,7 +439,7 @@ func (d *jsonBinaryDecoder) decodeOpaque(data []byte) interface{} {
 	case MYSQL_TYPE_DATE, MYSQL_TYPE_DATETIME, MYSQL_TYPE_TIMESTAMP:
 		return d.decodeDateTime(data)
 	default:
-		return hack.String(data)
+		return utils.ByteSliceToString(data)
 	}
 }
 
@@ -490,4 +540,44 @@ func (d *jsonBinaryDecoder) decodeVariableLength(data []byte) (int, int) {
 	d.err = errors.New("decode variable length failed")
 
 	return 0, 0
+}
+
+func (e *RowsEvent) decodeJsonPartialBinary(data []byte) (*JsonDiff, error) {
+	// see Json_diff_vector::read_binary() in mysql-server/sql/json_diff.cc
+	operationNumber := JsonDiffOperation(data[0])
+	switch operationNumber {
+	case JsonDiffOperationReplace:
+	case JsonDiffOperationInsert:
+	case JsonDiffOperationRemove:
+	default:
+		return nil, ErrCorruptedJSONDiff
+	}
+	data = data[1:]
+
+	pathLength, _, n := LengthEncodedInt(data)
+	data = data[n:]
+
+	path := data[:pathLength]
+	data = data[pathLength:]
+
+	diff := &JsonDiff{
+		Op:   operationNumber,
+		Path: string(path),
+		// Value will be filled below
+	}
+
+	if operationNumber == JsonDiffOperationRemove {
+		return diff, nil
+	}
+
+	valueLength, _, n := LengthEncodedInt(data)
+	data = data[n:]
+
+	d, err := e.decodeJsonBinary(data[:valueLength])
+	if err != nil {
+		return nil, fmt.Errorf("cannot read json diff for field %q: %w", path, err)
+	}
+	diff.Value = string(d)
+
+	return diff, nil
 }

@@ -8,17 +8,18 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/siddontang/go-log/loggers"
 
 	"github.com/google/uuid"
 	"github.com/pingcap/errors"
 	"github.com/siddontang/go-log/log"
+	"github.com/siddontang/go-log/loggers"
 
 	"github.com/go-mysql-org/go-mysql/client"
 	. "github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/utils"
 )
 
 var (
@@ -58,7 +59,7 @@ type BinlogSyncerConfig struct {
 	TLSConfig *tls.Config
 
 	// Use replication.Time structure for timestamp and datetime.
-	// We will use Local location for timestamp and UTC location for datatime.
+	// We will use Local location for timestamp and UTC location for datetime.
 	ParseTime bool
 
 	// If ParseTime is false, convert TIMESTAMP into this specified timezone. If
@@ -121,10 +122,24 @@ type BinlogSyncerConfig struct {
 
 	RowsEventDecodeFunc func(*RowsEvent, []byte) error
 
+	TableMapOptionalMetaDecodeFunc func([]byte) error
+
 	DiscardGTIDSet bool
+
+	EventCacheCount int
+
+	// SynchronousEventHandler is used for synchronous event handling.
+	// This should not be used together with StartBackupWithHandler.
+	// If this is not nil, GetEvent does not need to be called.
+	SynchronousEventHandler EventHandler
 }
 
-// BinlogSyncer syncs binlog event from server.
+// EventHandler defines the interface for processing binlog events.
+type EventHandler interface {
+	HandleEvent(e *BinlogEvent) error
+}
+
+// BinlogSyncer syncs binlog events from the server.
 type BinlogSyncer struct {
 	m sync.RWMutex
 
@@ -153,7 +168,7 @@ type BinlogSyncer struct {
 	retryCount int
 }
 
-// NewBinlogSyncer creates the BinlogSyncer with cfg.
+// NewBinlogSyncer creates the BinlogSyncer with the given configuration.
 func NewBinlogSyncer(cfg BinlogSyncerConfig) *BinlogSyncer {
 	if cfg.Logger == nil {
 		streamHandler, _ := log.NewStreamHandler(os.Stdout)
@@ -166,8 +181,11 @@ func NewBinlogSyncer(cfg BinlogSyncerConfig) *BinlogSyncer {
 		dialer := &net.Dialer{}
 		cfg.Dialer = dialer.DialContext
 	}
+	if cfg.EventCacheCount == 0 {
+		cfg.EventCacheCount = 10240
+	}
 
-	// Clear the Password to avoid outputing it in log.
+	// Clear the Password to avoid outputting it in logs.
 	pass := cfg.Password
 	cfg.Password = ""
 	cfg.Logger.Infof("create BinlogSyncer with config %+v", cfg)
@@ -184,6 +202,7 @@ func NewBinlogSyncer(cfg BinlogSyncerConfig) *BinlogSyncer {
 	b.parser.SetUseDecimal(b.cfg.UseDecimal)
 	b.parser.SetVerifyChecksum(b.cfg.VerifyChecksum)
 	b.parser.SetRowsEventDecodeFunc(b.cfg.RowsEventDecodeFunc)
+	b.parser.SetTableMapOptionalMetaDecodeFunc(b.cfg.TableMapOptionalMetaDecodeFunc)
 	b.running = false
 	b.ctx, b.cancel = context.WithCancel(context.Background())
 
@@ -209,7 +228,7 @@ func (b *BinlogSyncer) close() {
 	b.cancel()
 
 	if b.c != nil {
-		err := b.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		err := b.c.SetReadDeadline(utils.Now().Add(100 * time.Millisecond))
 		if err != nil {
 			b.cfg.Logger.Warnf(`could not set read deadline: %s`, err)
 		}
@@ -270,7 +289,7 @@ func (b *BinlogSyncer) registerSlave() error {
 
 	//set read timeout
 	if b.cfg.ReadTimeout > 0 {
-		_ = b.c.SetReadDeadline(time.Now().Add(b.cfg.ReadTimeout))
+		_ = b.c.SetReadDeadline(utils.Now().Add(b.cfg.ReadTimeout))
 	}
 
 	if b.cfg.RecvBufferSize > 0 {
@@ -329,21 +348,21 @@ func (b *BinlogSyncer) registerSlave() error {
 		}
 	}
 
+	serverUUID, err := uuid.NewUUID()
+	if err != nil {
+		b.cfg.Logger.Errorf("failed to get new uuid %v", err)
+		return errors.Trace(err)
+	}
+	if _, err = b.c.Execute(fmt.Sprintf("SET @slave_uuid = '%s', @replica_uuid = '%s'", serverUUID, serverUUID)); err != nil {
+		b.cfg.Logger.Errorf("failed to set @slave_uuid = '%s', err: %v", serverUUID, err)
+		return errors.Trace(err)
+	}
+
 	if err = b.writeRegisterSlaveCommand(); err != nil {
 		return errors.Trace(err)
 	}
 
 	if _, err = b.c.ReadOKPacket(); err != nil {
-		return errors.Trace(err)
-	}
-
-	serverUUID, err := uuid.NewUUID()
-	if err != nil {
-		b.cfg.Logger.Errorf("failed to get new uud %v", err)
-		return errors.Trace(err)
-	}
-	if _, err = b.c.Execute(fmt.Sprintf("SET @slave_uuid = '%s', @replica_uuid = '%s'", serverUUID, serverUUID)); err != nil {
-		b.cfg.Logger.Errorf("failed to set @slave_uuid = '%s', err: %v", serverUUID, err)
 		return errors.Trace(err)
 	}
 
@@ -387,13 +406,15 @@ func (b *BinlogSyncer) prepare() error {
 		return errors.Trace(err)
 	}
 
+	b.cfg.Logger.Infof("Connected to %s %s server", b.cfg.Flavor, b.c.GetServerVersion())
+
 	return nil
 }
 
 func (b *BinlogSyncer) startDumpStream() *BinlogStreamer {
 	b.running = true
 
-	s := NewBinlogStreamer()
+	s := NewBinlogStreamerWithChanSize(b.cfg.EventCacheCount)
 
 	b.wg.Add(1)
 	go b.onStream(s)
@@ -403,6 +424,18 @@ func (b *BinlogSyncer) startDumpStream() *BinlogStreamer {
 // GetNextPosition returns the next position of the syncer
 func (b *BinlogSyncer) GetNextPosition() Position {
 	return b.nextPos
+}
+
+func (b *BinlogSyncer) checkFlavor() {
+	serverVersion := b.c.GetServerVersion()
+	if b.cfg.Flavor != MariaDBFlavor &&
+		strings.Contains(b.c.GetServerVersion(), "MariaDB") {
+		// Setting the flavor to `mysql` causes MariaDB to try and behave
+		// in a MySQL compatible way. In this mode MariaDB won't use
+		// MariaDB specific binlog event types, but may used dummy events instead.
+		b.cfg.Logger.Errorf("misconfigured flavor (%s) for server %s",
+			b.cfg.Flavor, serverVersion)
+	}
 }
 
 // StartSync starts syncing from the `pos` position.
@@ -419,6 +452,8 @@ func (b *BinlogSyncer) StartSync(pos Position) (*BinlogStreamer, error) {
 	if err := b.prepareSyncPos(pos); err != nil {
 		return nil, errors.Trace(err)
 	}
+
+	b.checkFlavor()
 
 	return b.startDumpStream(), nil
 }
@@ -457,6 +492,8 @@ func (b *BinlogSyncer) StartSyncGTID(gset GTIDSet) (*BinlogStreamer, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	b.checkFlavor()
 
 	return b.startDumpStream(), nil
 }
@@ -559,7 +596,7 @@ func (b *BinlogSyncer) writeRegisterSlaveCommand() error {
 	hostname := b.localHostname()
 
 	// This should be the name of slave host not the host we are connecting to.
-	data := make([]byte, 4+1+4+1+len(hostname)+1+len(b.cfg.User)+1+len(b.cfg.Password)+2+4+4)
+	data := make([]byte, 4+1+4+1+len(hostname)+1+len(b.cfg.User)+1+2+4+4)
 	pos := 4
 
 	data[pos] = COM_REGISTER_SLAVE
@@ -579,10 +616,8 @@ func (b *BinlogSyncer) writeRegisterSlaveCommand() error {
 	n = copy(data[pos:], b.cfg.User)
 	pos += n
 
-	data[pos] = uint8(len(b.cfg.Password))
+	data[pos] = uint8(0)
 	pos++
-	n = copy(data[pos:], b.cfg.Password)
-	pos += n
 
 	binary.LittleEndian.PutUint16(data[pos:], b.cfg.Port)
 	pos += 2
@@ -730,12 +765,18 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 					b.retryCount++
 					if err = b.retrySync(); err != nil {
 						if b.cfg.MaxReconnectAttempts > 0 && b.retryCount >= b.cfg.MaxReconnectAttempts {
-							b.cfg.Logger.Errorf("retry sync err: %v, exceeded max retries (%d)", err, b.cfg.MaxReconnectAttempts)
+							b.cfg.Logger.Errorf(
+								"retry sync err: %v, exceeded max retries (%d)",
+								err, b.cfg.MaxReconnectAttempts,
+							)
 							s.closeWithError(err)
 							return
 						}
 
-						b.cfg.Logger.Errorf("retry sync err: %v, wait 1s and retry again", err)
+						b.cfg.Logger.Errorf(
+							"retry sync err: %v, wait 1s and retry again (retries: %d/%d)",
+							err, b.retryCount, b.cfg.MaxReconnectAttempts,
+						)
 						continue
 					}
 				}
@@ -749,7 +790,7 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 
 		//set read timeout
 		if b.cfg.ReadTimeout > 0 {
-			_ = b.c.SetReadDeadline(time.Now().Add(b.cfg.ReadTimeout))
+			_ = b.c.SetReadDeadline(utils.Now().Add(b.cfg.ReadTimeout))
 		}
 
 		// Reset retry count on successful packet receieve
@@ -757,7 +798,16 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 
 		switch data[0] {
 		case OK_HEADER:
-			if err = b.parseEvent(s, data); err != nil {
+			// Parse the event
+			e, needACK, err := b.parseEvent(data)
+			if err != nil {
+				s.closeWithError(err)
+				return
+			}
+
+			// Handle the event and send ACK if necessary
+			err = b.handleEventAndACK(s, e, needACK)
+			if err != nil {
 				s.closeWithError(err)
 				return
 			}
@@ -778,39 +828,45 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 	}
 }
 
-func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
-	//skip OK byte, 0x00
+// parseEvent parses the raw data into a BinlogEvent.
+// It only handles parsing and does not perform any side effects.
+// Returns the parsed BinlogEvent, a boolean indicating if an ACK is needed, and an error if the
+// parsing fails
+func (b *BinlogSyncer) parseEvent(data []byte) (event *BinlogEvent, needACK bool, err error) {
+	// Skip OK byte (0x00)
 	data = data[1:]
 
-	needACK := false
-	if b.cfg.SemiSyncEnabled && (data[0] == SemiSyncIndicator) {
+	needACK = false
+	if b.cfg.SemiSyncEnabled && data[0] == SemiSyncIndicator {
 		needACK = data[1] == 0x01
-		//skip semi sync header
+		// Skip semi-sync header
 		data = data[2:]
 	}
 
-	e, err := b.parser.Parse(data)
+	// Parse the event using the BinlogParser
+	event, err = b.parser.Parse(data)
 	if err != nil {
-		return errors.Trace(err)
+		return nil, false, errors.Trace(err)
 	}
 
+	return event, needACK, nil
+}
+
+// handleEventAndACK processes an event and sends an ACK if necessary.
+func (b *BinlogSyncer) handleEventAndACK(s *BinlogStreamer, e *BinlogEvent, needACK bool) error {
+	// Update the next position based on the event's LogPos
 	if e.Header.LogPos > 0 {
 		// Some events like FormatDescriptionEvent return 0, ignore.
 		b.nextPos.Pos = e.Header.LogPos
 	}
 
-	getCurrentGtidSet := func() GTIDSet {
-		if b.currGset == nil {
-			return nil
-		}
-		return b.currGset.Clone()
-	}
-
+	// Handle event types to update positions and GTID sets
 	switch event := e.Event.(type) {
 	case *RotateEvent:
 		b.nextPos.Name = string(event.NextLogName)
 		b.nextPos.Pos = uint32(event.Position)
 		b.cfg.Logger.Infof("rotate to %s", b.nextPos)
+
 	case *GTIDEvent:
 		if b.prevGset == nil {
 			break
@@ -818,13 +874,20 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 		if b.currGset == nil {
 			b.currGset = b.prevGset.Clone()
 		}
-		u, _ := uuid.FromBytes(event.SID)
+		u, err := uuid.FromBytes(event.SID)
+		if err != nil {
+			return errors.Trace(err)
+		}
 		b.currGset.(*MysqlGTIDSet).AddGTID(u, event.GNO)
 		if b.prevMySQLGTIDEvent != nil {
-			u, _ = uuid.FromBytes(b.prevMySQLGTIDEvent.SID)
+			u, err = uuid.FromBytes(b.prevMySQLGTIDEvent.SID)
+			if err != nil {
+				return errors.Trace(err)
+			}
 			b.prevGset.(*MysqlGTIDSet).AddGTID(u, b.prevMySQLGTIDEvent.GNO)
 		}
 		b.prevMySQLGTIDEvent = event
+
 	case *MariadbGTIDEvent:
 		if b.prevGset == nil {
 			break
@@ -833,29 +896,39 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 			b.currGset = b.prevGset.Clone()
 		}
 		prev := b.currGset.Clone()
-		err = b.currGset.(*MariadbGTIDSet).AddSet(&event.GTID)
+		err := b.currGset.(*MariadbGTIDSet).AddSet(&event.GTID)
 		if err != nil {
 			return errors.Trace(err)
 		}
-		// right after reconnect we will see same gtid as we saw before, thus currGset will not get changed
+		// Right after reconnect we may see the same GTID as before; update prevGset if currGset changed
 		if !b.currGset.Equal(prev) {
 			b.prevGset = prev
 		}
+
 	case *XIDEvent:
 		if !b.cfg.DiscardGTIDSet {
-			event.GSet = getCurrentGtidSet()
+			event.GSet = b.getCurrentGtidSet()
 		}
+
 	case *QueryEvent:
 		if !b.cfg.DiscardGTIDSet {
-			event.GSet = getCurrentGtidSet()
+			event.GSet = b.getCurrentGtidSet()
 		}
 	}
 
-	needStop := false
-	select {
-	case s.ch <- e:
-	case <-b.ctx.Done():
-		needStop = true
+	// Use SynchronousEventHandler if it's set
+	if b.cfg.SynchronousEventHandler != nil {
+		err := b.cfg.SynchronousEventHandler.HandleEvent(e)
+		if err != nil {
+			return errors.Trace(err)
+		}
+	} else {
+		// Asynchronous mode: send the event to the streamer channel
+		select {
+		case s.ch <- e:
+		case <-b.ctx.Done():
+			return errors.New("sync is being closed...")
+		}
 	}
 
 	if needACK {
@@ -865,10 +938,14 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 		}
 	}
 
-	if needStop {
-		return errors.New("sync is been closing...")
-	}
+	return nil
+}
 
+// getCurrentGtidSet returns a clone of the current GTID set.
+func (b *BinlogSyncer) getCurrentGtidSet() GTIDSet {
+	if b.currGset != nil {
+		return b.currGset.Clone()
+	}
 	return nil
 }
 
@@ -889,8 +966,13 @@ func (b *BinlogSyncer) newConnection(ctx context.Context) (*client.Conn, error) 
 	defer cancel()
 
 	return client.ConnectWithDialer(timeoutCtx, "", addr, b.cfg.User, b.cfg.Password,
-		"", b.cfg.Dialer, func(c *client.Conn) {
+		"", b.cfg.Dialer, func(c *client.Conn) error {
 			c.SetTLSConfig(b.cfg.TLSConfig)
+			c.SetAttributes(map[string]string{"_client_role": "binary_log_listener"})
+			if b.cfg.ReadTimeout > 0 {
+				c.ReadTimeout = b.cfg.ReadTimeout
+			}
+			return nil
 		})
 }
 

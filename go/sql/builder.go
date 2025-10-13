@@ -275,15 +275,12 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 
 	uniqueKeyColumnNames := duplicateNames(uniqueKeyColumns.Names())
 	uniqueKeyColumnAscending := make([]string, len(uniqueKeyColumnNames))
-	uniqueKeyColumnDescending := make([]string, len(uniqueKeyColumnNames))
 	for i, column := range uniqueKeyColumns.Columns() {
 		uniqueKeyColumnNames[i] = EscapeName(uniqueKeyColumnNames[i])
 		if column.Type == EnumColumnType {
 			uniqueKeyColumnAscending[i] = fmt.Sprintf("concat(%s) asc", uniqueKeyColumnNames[i])
-			uniqueKeyColumnDescending[i] = fmt.Sprintf("concat(%s) desc", uniqueKeyColumnNames[i])
 		} else {
 			uniqueKeyColumnAscending[i] = fmt.Sprintf("%s asc", uniqueKeyColumnNames[i])
-			uniqueKeyColumnDescending[i] = fmt.Sprintf("%s desc", uniqueKeyColumnNames[i])
 		}
 	}
 	result = fmt.Sprintf(`
@@ -353,7 +350,8 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 				%s and %s
 			order by
 				%s
-			limit %d) select_osc_chunk
+			limit %d
+		) select_osc_chunk
 		order by
 			%s
 		limit 1`,

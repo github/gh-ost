@@ -44,27 +44,27 @@ Those are relatively self explanatory. Mostly they indicate that all goes well.
 You will be mostly interested in following up on the migration and understanding whether it goes well. Once migration actually begins, you will see output as follows:
 
 ```
-Copy: 0/752865 0.0%; Applied: 0; Backlog: 0/100; Time: 29s(total), 0s(copy); streamer: mysql-bin.007068:846528615; ETA: N/A
-Copy: 0/752865 0.0%; Applied: 0; Backlog: 0/100; Time: 30s(total), 1s(copy); streamer: mysql-bin.007068:846875570; ETA: N/A
-Copy: 7300/752865 1.0%; Applied: 0; Backlog: 0/100; Time: 31s(total), 2s(copy); streamer: mysql-bin.007068:855439063; ETA: N/A
-Copy: 14100/752865 1.9%; Applied: 0; Backlog: 0/100; Time: 32s(total), 3s(copy); streamer: mysql-bin.007068:864722759; ETA: 2m37s
-Copy: 20100/752865 2.7%; Applied: 0; Backlog: 0/100; Time: 33s(total), 4s(copy); streamer: mysql-bin.007068:874346340; ETA: 2m26s
-Copy: 27000/752865 3.6%; Applied: 0; Backlog: 0/100; Time: 34s(total), 5s(copy); streamer: mysql-bin.007068:886997306; ETA: 2m14s
+Copy: 0/752865 0.0%; Applied: 0; Backlog: 0/100; Time: 29s(total), 0s(copy); streamer: mysql-bin.007068:846528615; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: N/A
+Copy: 0/752865 0.0%; Applied: 0; Backlog: 0/100; Time: 30s(total), 1s(copy); streamer: mysql-bin.007068:846875570; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: N/A
+Copy: 7300/752865 1.0%; Applied: 0; Backlog: 0/100; Time: 31s(total), 2s(copy); streamer: mysql-bin.007068:855439063; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: N/A
+Copy: 14100/752865 1.9%; Applied: 0; Backlog: 0/100; Time: 32s(total), 3s(copy); streamer: mysql-bin.007068:864722759; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 2m37s
+Copy: 20100/752865 2.7%; Applied: 0; Backlog: 0/100; Time: 33s(total), 4s(copy); streamer: mysql-bin.007068:874346340; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 2m26s
+Copy: 27000/752865 3.6%; Applied: 0; Backlog: 0/100; Time: 34s(total), 5s(copy); streamer: mysql-bin.007068:886997306; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 2m14s
 ...
 ```
 In the above some time was spent on counting table rows. `29s` have elapsed before actual rowcopy began. `gh-ost` will not deliver ETA before `1%` of the copy is complete.
 
 ```
-Copy: 460900/752865 61.2%; Applied: 0; Backlog: 0/100; Time: 2m35s(total), 2m6s(copy); streamer: mysql-bin.007069:596112173; ETA: 1m19s
-Copy: 466600/752865 62.0%; Applied: 0; Backlog: 0/100; Time: 2m40s(total), 2m11s(copy); streamer: mysql-bin.007069:622646704; ETA: throttled, my.replica-01.com:3306 replica-lag=3.000000s
-Copy: 478500/752865 63.6%; Applied: 0; Backlog: 0/100; Time: 2m45s(total), 2m16s(copy); streamer: mysql-bin.007069:641258880; ETA: 1m17s
-Copy: 496900/752865 66.0%; Applied: 0; Backlog: 0/100; Time: 2m50s(total), 2m21s(copy); streamer: mysql-bin.007069:678956577; ETA: throttled, my.replica-01.com:3306 replica-lag=2.000000s
-Copy: 496900/752865 66.0%; Applied: 0; Backlog: 0/100; Time: 2m55s(total), 2m26s(copy); streamer: mysql-bin.007069:681610879; ETA: throttled, max-load Threads_running=26 >= 25
-Copy: 528000/752865 70.1%; Applied: 0; Backlog: 0/100; Time: 3m0s(total), 2m31s(copy); streamer: mysql-bin.007069:711177703; ETA: throttled, lag=2.483039s
-Copy: 564900/752865 75.0%; Applied: 0; Backlog: 0/100; Time: 3m30s(total), 3m1s(copy); streamer: mysql-bin.007069:795150744; ETA: throttled, lag=3.482914s
-Copy: 577200/752865 76.7%; Applied: 0; Backlog: 0/100; Time: 3m39s(total), 3m10s(copy); streamer: mysql-bin.007069:819956052; ETA: 57s
-Copy: 589300/752865 78.3%; Applied: 0; Backlog: 0/100; Time: 3m56s(total), 3m27s(copy); streamer: mysql-bin.007069:858738375; ETA: 57s
-Copy: 595700/752865 79.1%; Applied: 0; Backlog: 0/100; Time: 3m57s(total), 3m28s(copy); streamer: mysql-bin.007069:860745762; ETA: 54s
+Copy: 460900/752865 61.2%; Applied: 0; Backlog: 0/100; Time: 2m35s(total), 2m6s(copy); streamer: mysql-bin.007069:596112173; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 1m19s
+Copy: 466600/752865 62.0%; Applied: 0; Backlog: 0/100; Time: 2m40s(total), 2m11s(copy); streamer: mysql-bin.007069:622646704; Lag: 0.01s, HeartbeatLag: 0.01s, State: throttled, my.replica-01.com:3306 replica-lag=3.000000s; ETA: 1m19s
+Copy: 478500/752865 63.6%; Applied: 0; Backlog: 0/100; Time: 2m45s(total), 2m16s(copy); streamer: mysql-bin.007069:641258880; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 1m17s
+Copy: 496900/752865 66.0%; Applied: 0; Backlog: 0/100; Time: 2m50s(total), 2m21s(copy); streamer: mysql-bin.007069:678956577; Lag: 0.01s, HeartbeatLag: 0.01s, State: throttled, my.replica-01.com:3306 replica-lag=2.000000s; ETA: 1m17s
+Copy: 496900/752865 66.0%; Applied: 0; Backlog: 0/100; Time: 2m55s(total), 2m26s(copy); streamer: mysql-bin.007069:681610879; Lag: 0.01s, HeartbeatLag: 0.01s, State: throttled, max-load Threads_running=26 >= 25; ETA: 1m17s
+Copy: 528000/752865 70.1%; Applied: 0; Backlog: 0/100; Time: 3m0s(total), 2m31s(copy); streamer: mysql-bin.007069:711177703; Lag: 2.483039s, HeartbeatLag: 0.01s, State: throttled, lag=2.483039s; ETA: 1m17s
+Copy: 564900/752865 75.0%; Applied: 0; Backlog: 0/100; Time: 3m30s(total), 3m1s(copy); streamer: mysql-bin.007069:795150744; Lag: 3.482914s, HeartbeatLag: 0.01s, State: throttled, lag=3.482914s; ETA: 1m17s
+Copy: 577200/752865 76.7%; Applied: 0; Backlog: 0/100; Time: 3m39s(total), 3m10s(copy); streamer: mysql-bin.007069:819956052; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 57s
+Copy: 589300/752865 78.3%; Applied: 0; Backlog: 0/100; Time: 3m56s(total), 3m27s(copy); streamer: mysql-bin.007069:858738375; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 57s
+Copy: 595700/752865 79.1%; Applied: 0; Backlog: 0/100; Time: 3m57s(total), 3m28s(copy); streamer: mysql-bin.007069:860745762; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 54s
 ```
 
 In the above migration is throttled on occasion.
@@ -83,15 +83,15 @@ In the above migration is throttled on occasion.
 A migration on a more intensively used table may look like this:
 
 ```
-Copy: 30713100/43138319 71.2%; Applied: 381910; Backlog: 0/100; Time: 2h6m30s(total), 2h3m20s(copy); streamer: mysql-bin.006792:1001340307; ETA: 49m53s
-Copy: 30852500/43138338 71.5%; Applied: 383365; Backlog: 0/100; Time: 2h7m0s(total), 2h3m50s(copy); streamer: mysql-bin.006792:1050191186; ETA: 49m18s
+Copy: 30713100/43138319 71.2%; Applied: 381910; Backlog: 0/100; Time: 2h6m30s(total), 2h3m20s(copy); streamer: mysql-bin.006792:1001340307; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 49m53s
+Copy: 30852500/43138338 71.5%; Applied: 383365; Backlog: 0/100; Time: 2h7m0s(total), 2h3m50s(copy); streamer: mysql-bin.006792:1050191186; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 49m18s
 2016-07-25 03:20:41 INFO rotate to next log name: mysql-bin.006793
 2016-07-25 03:20:41 INFO rotate to next log name: mysql-bin.006793
-Copy: 30925700/43138360 71.7%; Applied: 384873; Backlog: 0/100; Time: 2h7m30s(total), 2h4m20s(copy); streamer: mysql-bin.006793:9144080; ETA: 49m5s
-Copy: 31028800/43138380 71.9%; Applied: 386325; Backlog: 0/100; Time: 2h8m0s(total), 2h4m50s(copy); streamer: mysql-bin.006793:47984430; ETA: 48m43s
-Copy: 31165600/43138397 72.2%; Applied: 387787; Backlog: 0/100; Time: 2h8m30s(total), 2h5m20s(copy); streamer: mysql-bin.006793:96139474; ETA: 48m8s
-Copy: 31291200/43138418 72.5%; Applied: 389257; Backlog: 7/100; Time: 2h9m0s(total), 2h5m50s(copy); streamer: mysql-bin.006793:141094700; ETA: 47m38s
-Copy: 31389700/43138432 72.8%; Applied: 390629; Backlog: 100/100; Time: 2h9m30s(total), 2h6m20s(copy); streamer: mysql-bin.006793:179473435; ETA: throttled, lag=1.548707s
+Copy: 30925700/43138360 71.7%; Applied: 384873; Backlog: 0/100; Time: 2h7m30s(total), 2h4m20s(copy); streamer: mysql-bin.006793:9144080; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 49m5s
+Copy: 31028800/43138380 71.9%; Applied: 386325; Backlog: 0/100; Time: 2h8m0s(total), 2h4m50s(copy); streamer: mysql-bin.006793:47984430; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 48m43s
+Copy: 31165600/43138397 72.2%; Applied: 387787; Backlog: 0/100; Time: 2h8m30s(total), 2h5m20s(copy); streamer: mysql-bin.006793:96139474; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 48m8s
+Copy: 31291200/43138418 72.5%; Applied: 389257; Backlog: 7/100; Time: 2h9m0s(total), 2h5m50s(copy); streamer: mysql-bin.006793:141094700; Lag: 0.01s, HeartbeatLag: 0.01s, State: migrating; ETA: 47m38s
+Copy: 31389700/43138432 72.8%; Applied: 390629; Backlog: 100/100; Time: 2h9m30s(total), 2h6m20s(copy); streamer: mysql-bin.006793:179473435; Lag: 1.548707s, HeartbeatLag: 0.01s, State: throttled, lag=1.548707s; ETA: 47m38s
 ```
 
 Notes:

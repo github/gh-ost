@@ -40,3 +40,28 @@ func TestGetColumn(t *testing.T) {
 		require.Nil(t, column)
 	}
 }
+
+func TestBinaryToString(t *testing.T) {
+	id := []uint8{0x1b, 0x99}
+	col := make([]interface{}, 1)
+	col[0] = id
+	cv := ToColumnValues(col)
+
+	require.Equal(t, "1b99", cv.StringColumn(0))
+}
+
+func TestConvertArgCharsetDecoding(t *testing.T) {
+	latin1Bytes := []uint8{0x47, 0x61, 0x72, 0xe7, 0x6f, 0x6e, 0x20, 0x21}
+
+	col := Column{
+		Charset: "latin1",
+		charsetConversion: &CharacterSetConversion{
+			FromCharset: "latin1",
+			ToCharset:   "utf8mb4",
+		},
+	}
+
+	// Should decode []uint8
+	str := col.convertArg(latin1Bytes, false)
+	require.Equal(t, "Garçon !", str)
+}

@@ -55,14 +55,22 @@ type Column struct {
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
+	var arg2Bytes []byte
 	if s, ok := arg.(string); ok {
-		arg2Bytes := []byte(s)
-		// convert to bytes if character string without charsetConversion.
+		arg2Bytes = []byte(s)
+	} else if b, ok := arg.([]uint8); ok {
+		arg2Bytes = b
+	} else {
+		arg2Bytes = nil
+	}
+
+	if arg2Bytes != nil {
 		if this.Charset != "" && this.charsetConversion == nil {
 			arg = arg2Bytes
 		} else {
 			if encoding, ok := charsetEncodingMap[this.Charset]; ok {
-				arg, _ = encoding.NewDecoder().String(s)
+				decodedBytes, _ := encoding.NewDecoder().Bytes(arg2Bytes)
+				arg = string(decodedBytes)
 			}
 		}
 
@@ -275,10 +283,11 @@ func (this *ColumnList) SetCharsetConversion(columnName string, fromCharset stri
 
 // UniqueKey is the combination of a key's name and columns
 type UniqueKey struct {
-	Name            string
-	Columns         ColumnList
-	HasNullable     bool
-	IsAutoIncrement bool
+	Name             string
+	NameInGhostTable string // Name of the corresponding key in the Ghost table in case it is being renamed
+	Columns          ColumnList
+	HasNullable      bool
+	IsAutoIncrement  bool
 }
 
 // IsPrimary checks if this unique key is primary
@@ -334,7 +343,7 @@ func (this *ColumnValues) AbstractValues() []interface{} {
 func (this *ColumnValues) StringColumn(index int) string {
 	val := this.AbstractValues()[index]
 	if ints, ok := val.([]uint8); ok {
-		return string(ints)
+		return fmt.Sprintf("%x", ints)
 	}
 	return fmt.Sprintf("%+v", val)
 }

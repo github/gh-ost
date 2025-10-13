@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2021 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -7,6 +7,7 @@ package base
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +56,68 @@ func TestGetTableNames(t *testing.T) {
 		require.Equal(t, "_tmp_del", context.GetOldTableName())
 		require.Equal(t, "_tmp_gho", context.GetGhostTableName())
 		require.Equal(t, "_tmp_ghc", context.GetChangelogTableName())
+	}
+}
+
+func TestGetTriggerNames(t *testing.T) {
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_gho"
+		require.Equal(t, "my_trigger"+context.TriggerSuffix, context.GetGhostTriggerName("my_trigger"))
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_gho"
+		context.RemoveTriggerSuffix = true
+		require.Equal(t, "my_trigger"+context.TriggerSuffix, context.GetGhostTriggerName("my_trigger"))
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_gho"
+		context.RemoveTriggerSuffix = true
+		require.Equal(t, "my_trigger", context.GetGhostTriggerName("my_trigger_gho"))
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_gho"
+		context.RemoveTriggerSuffix = false
+		require.Equal(t, "my_trigger_gho_gho", context.GetGhostTriggerName("my_trigger_gho"))
+	}
+}
+
+func TestValidateGhostTriggerLengthBelowMaxLength(t *testing.T) {
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_gho"
+		require.True(t, context.ValidateGhostTriggerLengthBelowMaxLength("my_trigger"))
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		require.False(t, context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4))) // 64 characters + "_ghost"
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		require.True(t, context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 3))) // 48 characters + "_ghost"
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		context.RemoveTriggerSuffix = true
+		require.True(t, context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4))) // 64 characters + "_ghost" removed
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		context.RemoveTriggerSuffix = true
+		require.False(t, context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4)+"X")) // 65 characters + "_ghost" not removed
+	}
+	{
+		context := NewMigrationContext()
+		context.TriggerSuffix = "_ghost"
+		context.RemoveTriggerSuffix = true
+		require.True(t, context.ValidateGhostTriggerLengthBelowMaxLength(strings.Repeat("my_trigger_ghost", 4)+"_ghost")) // 70 characters + last "_ghost"  removed
 	}
 }
 
