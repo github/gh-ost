@@ -151,7 +151,7 @@ sysbench_prepare() {
         --mysql-password=opensesame \
         --mysql-db=test \
         --tables=1 \
-        --table-size=10000 \
+        --table-size=20000 \
         prepare
 }
 
@@ -169,7 +169,7 @@ sysbench_run_cmd() {
     --threads=2 \
     --time=30 \
     --report-interval=10 \
-    --rate=500 \
+    --rate=200 \
     run"
     echo $cmd
 }
@@ -299,6 +299,7 @@ test_single() {
     --verbose \
     --debug \
     --stack \
+    --checkpoint \
     --execute ${extra_args[@]}"
     echo_dot
     echo $cmd >$exec_command_file

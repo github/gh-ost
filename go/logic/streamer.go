@@ -24,7 +24,7 @@ type BinlogEventListener struct {
 	async        bool
 	databaseName string
 	tableName    string
-	onDmlEvent   func(event *binlog.BinlogDMLEvent) error
+	onDmlEvent   func(event *binlog.BinlogEntry) error
 }
 
 const (
@@ -60,7 +60,7 @@ func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer 
 
 // AddListener registers a new listener for binlog events, on a per-table basis
 func (this *EventsStreamer) AddListener(
-	async bool, databaseName string, tableName string, onDmlEvent func(event *binlog.BinlogDMLEvent) error) (err error) {
+	async bool, databaseName string, tableName string, onDmlEvent func(event *binlog.BinlogEntry) error) (err error) {
 	this.listenersMutex.Lock()
 	defer this.listenersMutex.Unlock()
 
@@ -82,24 +82,24 @@ func (this *EventsStreamer) AddListener(
 
 // notifyListeners will notify relevant listeners with given DML event. Only
 // listeners registered for changes on the table on which the DML operates are notified.
-func (this *EventsStreamer) notifyListeners(binlogEvent *binlog.BinlogDMLEvent) {
+func (this *EventsStreamer) notifyListeners(binlogEntry *binlog.BinlogEntry) {
 	this.listenersMutex.Lock()
 	defer this.listenersMutex.Unlock()
 
 	for _, listener := range this.listeners {
 		listener := listener
-		if !strings.EqualFold(listener.databaseName, binlogEvent.DatabaseName) {
+		if !strings.EqualFold(listener.databaseName, binlogEntry.DmlEvent.DatabaseName) {
 			continue
 		}
-		if !strings.EqualFold(listener.tableName, binlogEvent.TableName) {
+		if !strings.EqualFold(listener.tableName, binlogEntry.DmlEvent.TableName) {
 			continue
 		}
 		if listener.async {
 			go func() {
-				listener.onDmlEvent(binlogEvent)
+				listener.onDmlEvent(binlogEntry)
 			}()
 		} else {
-			listener.onDmlEvent(binlogEvent)
+			listener.onDmlEvent(binlogEntry)
 		}
 	}
 }
@@ -176,7 +176,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	go func() {
 		for binlogEntry := range this.eventsChannel {
 			if binlogEntry.DmlEvent != nil {
-				this.notifyListeners(binlogEntry.DmlEvent)
+				this.notifyListeners(binlogEntry)
 			}
 		}
 	}()

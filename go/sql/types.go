@@ -350,3 +350,9 @@ func (this *ColumnValues) String() string {
 	}
 	return strings.Join(stringValues, ",")
 }
+
+func (this *ColumnValues) Clone() *ColumnValues {
+	cv := NewColumnValues(len(this.abstractValues))
+	copy(cv.abstractValues, this.abstractValues)
+	return cv
+}

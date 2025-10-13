@@ -26,6 +26,8 @@ var (
 	ErrMigratorUnsupportedRenameAlter = errors.New("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
 	ErrMigrationNotAllowedOnMaster    = errors.New("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (this reduces load from the master). To proceed please provide --allow-on-master.")
 	RetrySleepFn                      = time.Sleep
+	checkpointInterval                = 10 * time.Second // 5 * time.Minute
+	checkpointTimeout                 = 2 * time.Second
 )
 
 type ChangelogState string
@@ -46,6 +48,7 @@ type tableWriteFunc func() error
 type applyEventStruct struct {
 	writeFunc *tableWriteFunc
 	dmlEvent  *binlog.BinlogDMLEvent
+	coords    mysql.BinlogCoordinates
 }
 
 func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
@@ -53,8 +56,8 @@ func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
 	return result
 }
 
-func newApplyEventStructByDML(dmlEvent *binlog.BinlogDMLEvent) *applyEventStruct {
-	result := &applyEventStruct{dmlEvent: dmlEvent}
+func newApplyEventStructByDML(dmlEntry *binlog.BinlogEntry) *applyEventStruct {
+	result := &applyEventStruct{dmlEvent: dmlEntry.DmlEvent, coords: dmlEntry.Coordinates}
 	return result
 }
 
@@ -431,6 +434,9 @@ func (this *Migrator) Migrate() (err error) {
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
 	go this.initiateStatus()
+	if this.migrationContext.Checkpoint {
+		go this.checkpointLoop()
+	}
 
 	this.migrationContext.Log.Debugf("Operating until row copy is complete")
 	this.consumeRowCopyComplete()
@@ -1086,7 +1092,7 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
-		currentBinlogCoordinates,
+		currentBinlogCoordinates.DisplayString(),
 		this.migrationContext.GetCurrentLagDuration().Seconds(),
 		this.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds(),
 		state,
@@ -1123,8 +1129,8 @@ func (this *Migrator) initiateStreaming() error {
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.GetChangelogTableName(),
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			return this.onChangelogEvent(dmlEvent)
+		func(dmlEntry *binlog.BinlogEntry) error {
+			return this.onChangelogEvent(dmlEntry.DmlEvent)
 		},
 	)
 
@@ -1157,8 +1163,8 @@ func (this *Migrator) addDMLEventsListener() error {
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			this.applyEventsQueue <- newApplyEventStructByDML(dmlEvent)
+		func(dmlEntry *binlog.BinlogEntry) error {
+			this.applyEventsQueue <- newApplyEventStructByDML(dmlEntry)
 			return nil
 		},
 	)
@@ -1342,6 +1348,11 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		if err := this.retryOperation(applyEventFunc); err != nil {
 			return this.migrationContext.Log.Errore(err)
 		}
+		// update applier coordinates
+		this.applier.CurrentCoordinatesMutex.Lock()
+		this.applier.CurrentCoordinates = eventStruct.coords
+		this.applier.CurrentCoordinatesMutex.Unlock()
+
 		if nonDmlStructToApply != nil {
 			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
 			// We need to handle it!
@@ -1351,6 +1362,65 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		}
 	}
 	return nil
+}
+
+func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
+	coords := this.eventsStreamer.GetCurrentBinlogCoordinates()
+	this.applier.LastIterationRangeMutex.Lock()
+	if this.applier.LastIterationRangeMaxValues == nil || this.applier.LastIterationRangeMinValues == nil {
+		this.applier.LastIterationRangeMutex.Unlock()
+		return nil, errors.New("iteration range is empty, not checkpointing...")
+	}
+	chk := &Checkpoint{
+		IterationRangeMin: this.applier.LastIterationRangeMinValues.Clone(),
+		IterationRangeMax: this.applier.LastIterationRangeMaxValues.Clone(),
+		LastTrxCoords:     coords,
+	}
+	this.applier.LastIterationRangeMutex.Unlock()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			this.applier.CurrentCoordinatesMutex.Lock()
+			if coords.SmallerThanOrEquals(this.applier.CurrentCoordinates) {
+				id, err := this.applier.WriteCheckpoint(chk)
+				chk.Id = id
+				this.applier.CurrentCoordinatesMutex.Unlock()
+				return chk, err
+			}
+			this.applier.CurrentCoordinatesMutex.Unlock()
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+}
+
+func (this *Migrator) checkpointLoop() {
+	if this.migrationContext.Noop {
+		this.migrationContext.Log.Debugf("Noop operation; not really checkpointing")
+		return
+	}
+	ticker := time.NewTicker(checkpointInterval)
+	for t := range ticker.C {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return
+		}
+		this.migrationContext.Log.Infof("starting checkpoint at %+v", t)
+		ctx, cancel := context.WithTimeout(context.Background(), checkpointTimeout)
+		chk, err := this.Checkpoint(ctx)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				this.migrationContext.Log.Errorf("checkpoint attempt timed out after %+v", checkpointTimeout)
+			} else {
+				this.migrationContext.Log.Errorf("error attempting checkpoint: %+v", err)
+			}
+		} else {
+			this.migrationContext.Log.Infof("checkpoint success at coords=%+v range_min=%+v range_max=%+v",
+				chk.LastTrxCoords.DisplayString(), chk.IterationRangeMin.String(), chk.IterationRangeMax.String())
+		}
+		cancel()
+	}
 }
 
 // executeWriteFuncs writes data via applier: both the rowcopy and the events backlog.

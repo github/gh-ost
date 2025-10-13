@@ -689,7 +689,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().NoError(err)
 
 	// checkpoint table is empty
-	gotChk := &Checkpoint{IterationRangeMin: sql.NewColumnValues(2)}
+	gotChk := &Checkpoint{IterationRangeMin: sql.NewColumnValues(2), IterationRangeMax: sql.NewColumnValues(2)}
 	err = applier.ReadLastCheckpoint(gotChk)
 	suite.Require().ErrorIs(err, NoCheckpointFoundError)
 
@@ -699,7 +699,8 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 
 	chk := &Checkpoint{
 		LastTrxCoords:     coords,
-		IterationRangeMin: applier.migrationContext.MigrationRangeMaxValues,
+		IterationRangeMin: applier.migrationContext.MigrationRangeMinValues,
+		IterationRangeMax: applier.migrationContext.MigrationRangeMaxValues,
 		Iteration:         2,
 	}
 	id, err := applier.WriteCheckpoint(chk)
@@ -712,6 +713,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().Equal(chk.Iteration, gotChk.Iteration)
 	suite.Require().Equal(chk.LastTrxCoords.String(), gotChk.LastTrxCoords.String())
 	suite.Require().Equal(chk.IterationRangeMin.String(), gotChk.IterationRangeMin.String())
+	suite.Require().Equal(chk.IterationRangeMax.String(), gotChk.IterationRangeMax.String())
 }
 
 func TestApplier(t *testing.T) {

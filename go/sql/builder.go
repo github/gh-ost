@@ -112,16 +112,24 @@ func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns 
 		return nil, fmt.Errorf("Got 0 columns in BuildSetCheckpointInsertQuery")
 	}
 	values := buildColumnsPreparedValues(uniqueKeyColumns)
+	minUniqueColNames := []string{}
+	maxUniqueColNames := []string{}
+	for _, name := range uniqueKeyColumns.Names() {
+		minUniqueColNames = append(minUniqueColNames, name+"_min")
+		maxUniqueColNames = append(maxUniqueColNames, name+"_max")
+	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 	stmt := fmt.Sprintf(`
 		insert /* gh-ost */
 		into %s.%s
-			(gh_ost_chk_coords, gh_ost_chk_iteration, %s)
+			(gh_ost_chk_coords, gh_ost_chk_iteration, %s, %s)
 		values
-			(?, ?, %s)`,
+			(?, ?, %s, %s)`,
 		databaseName, tableName,
-		strings.Join(uniqueKeyColumns.Names(), ", "),
+		strings.Join(minUniqueColNames, ", "),
+		strings.Join(maxUniqueColNames, ", "),
+		strings.Join(values, ", "),
 		strings.Join(values, ", "),
 	)
 
@@ -134,10 +142,10 @@ func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns 
 
 // BuildQuery builds the insert query.
 func (b *CheckpointInsertQueryBuilder) BuildQuery(uniqueKeyArgs []interface{}) (string, []interface{}, error) {
-	if len(uniqueKeyArgs) != b.uniqueKeyColumns.Len() {
-		return "", nil, fmt.Errorf("args count differs from unique key column count")
+	if len(uniqueKeyArgs) != 2*b.uniqueKeyColumns.Len() {
+		return "", nil, fmt.Errorf("args count differs from 2 x unique key column count")
 	}
-	convertedArgs := make([]interface{}, 0, b.uniqueKeyColumns.Len()+1)
+	convertedArgs := make([]interface{}, 0, 2*b.uniqueKeyColumns.Len())
 	for _, column := range b.uniqueKeyColumns.Columns() {
 		arg := column.convertArg(column, true)
 		convertedArgs = append(convertedArgs, arg)

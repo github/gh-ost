@@ -195,7 +195,6 @@ type MigrationContext struct {
 	pointOfInterestTimeMutex               *sync.Mutex
 	lastHeartbeatOnChangelogTime           time.Time
 	lastHeartbeatOnChangelogMutex          *sync.Mutex
-	LastLockProcessedCoords                mysql.BinlogCoordinates
 	CurrentLag                             int64
 	currentProgress                        uint64
 	etaNanoseonds                          int64

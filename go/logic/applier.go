@@ -25,6 +25,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/sqlutils"
+	"sync"
 )
 
 const (
@@ -69,6 +70,13 @@ type Applier struct {
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
 	name              string
+
+	CurrentCoordinatesMutex sync.Mutex
+	CurrentCoordinates      mysql.BinlogCoordinates
+
+	LastIterationRangeMutex     sync.Mutex
+	LastIterationRangeMinValues *sql.ColumnValues
+	LastIterationRangeMaxValues *sql.ColumnValues
 
 	dmlDeleteQueryBuilder        *sql.DMLDeleteQueryBuilder
 	dmlInsertQueryBuilder        *sql.DMLInsertQueryBuilder
@@ -415,6 +423,8 @@ func (this *Applier) CreateChangelogTable() error {
 }
 
 // Create the checkpoint table to store the chunk copy and applier state.
+// There are two sets of columns with the same types as the shared unique key,
+// one for IterationMinValues and one for IterationMaxValues.
 func (this *Applier) CreateCheckpointTable() error {
 	if err := this.DropCheckpointTable(); err != nil {
 		return err
@@ -428,12 +438,21 @@ func (this *Applier) CreateCheckpointTable() error {
 		if col.MySQLType == "" {
 			return fmt.Errorf("CreateCheckpoinTable: column %s has no type information. applyColumnTypes must be called", sql.EscapeName(col.Name))
 		}
-		colDef := fmt.Sprintf("%s %s", sql.EscapeName(col.Name), col.MySQLType)
+		colDef := fmt.Sprintf("%s %s", sql.EscapeName(col.Name+"_min"), col.MySQLType)
 		if !col.Nullable {
 			colDef += " NOT NULL"
 		}
 		colDefs = append(colDefs, colDef)
 	}
+
+	for _, col := range this.migrationContext.UniqueKey.Columns.Columns() {
+		colDef := fmt.Sprintf("%s %s", sql.EscapeName(col.Name+"_max"), col.MySQLType)
+		if !col.Nullable {
+			colDef += " NOT NULL"
+		}
+		colDefs = append(colDefs, colDef)
+	}
+
 	query := fmt.Sprintf("create /* gh-ost */ table %s.%s (\n %s\n)",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetCheckpointTableName()),
@@ -597,6 +616,7 @@ func (this *Applier) WriteChangelogState(value string) (string, error) {
 func (this *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 	var insertId int64
 	uniqueKeyArgs := sqlutils.Args(chk.IterationRangeMin.AbstractValues()...)
+	uniqueKeyArgs = append(uniqueKeyArgs, chk.IterationRangeMax.AbstractValues()...)
 	query, uniqueKeyArgs, err := this.checkpointInsertQueryBuilder.BuildQuery(uniqueKeyArgs)
 	if err != nil {
 		return insertId, err
@@ -611,11 +631,12 @@ func (this *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 }
 
 func (this *Applier) ReadLastCheckpoint(chk *Checkpoint) error {
-	row := this.db.QueryRow(fmt.Sprintf(`select /* gh-ost */ * from %s.%s order by id desc limit 1`, this.migrationContext.DatabaseName, this.migrationContext.GetCheckpointTableName()))
+	row := this.db.QueryRow(fmt.Sprintf(`select /* gh-ost */ * from %s.%s order by gh_ost_chk_id desc limit 1`, this.migrationContext.DatabaseName, this.migrationContext.GetCheckpointTableName()))
 
 	var coordStr string
 	ptrs := []interface{}{&chk.Id, &coordStr, &chk.Iteration}
 	ptrs = append(ptrs, chk.IterationRangeMin.ValuesPointers...)
+	ptrs = append(ptrs, chk.IterationRangeMax.ValuesPointers...)
 	err := row.Scan(ptrs...)
 	if err != nil {
 		if errors.Is(err, gosql.ErrNoRows) {
@@ -777,6 +798,13 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and thus done with copying row chunks)
 func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
+	this.LastIterationRangeMutex.Lock()
+	if this.migrationContext.MigrationIterationRangeMinValues != nil && this.migrationContext.MigrationIterationRangeMaxValues != nil {
+		this.LastIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMinValues.Clone()
+		this.LastIterationRangeMaxValues = this.migrationContext.MigrationIterationRangeMaxValues.Clone()
+	}
+	this.LastIterationRangeMutex.Unlock()
+
 	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
 	if this.migrationContext.MigrationIterationRangeMinValues == nil {
 		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
