@@ -151,7 +151,7 @@ sysbench_prepare() {
         --mysql-password=opensesame \
         --mysql-db=test \
         --tables=1 \
-        --table-size=100000 \
+        --table-size=20000 \
         prepare
 }
 

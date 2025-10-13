@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2025 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 

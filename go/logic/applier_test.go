@@ -1,7 +1,6 @@
 /*
-   Copyright 2022 GitHub Inc.
-         See https://github.com/git
-hub/gh-ost/blob/master/LICENSE
+   Copyright 2025 GitHub Inc.
+         See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
 package logic

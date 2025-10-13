@@ -1,5 +1,5 @@
 /*
-   Copyright 2021 GitHub Inc.
+   Copyright 2025 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -22,10 +22,11 @@ import (
 	"database/sql/driver"
 
 	"errors"
+	"sync"
+
 	"github.com/github/gh-ost/go/mysql"
 	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/sqlutils"
-	"sync"
 )
 
 const (
@@ -33,8 +34,8 @@ const (
 	atomicCutOverMagicHint     = "ghost-cut-over-sentry"
 )
 
-// NoCheckpointFoundError is returned when an empty checkpoint table is queried.
-var NoCheckpointFoundError = errors.New("no checkpoint found in _ghk table")
+// ErrNoCheckpointFound is returned when an empty checkpoint table is queried.
+var ErrNoCheckpointFound = errors.New("no checkpoint found in _ghk table")
 
 type dmlBuildResult struct {
 	query     string
@@ -239,7 +240,7 @@ func (this *Applier) tableExists(tableName string) (tableFound bool) {
 // ValidateOrDropExistingTables verifies ghost and changelog tables do not exist,
 // or attempts to drop them if instructed to.
 func (this *Applier) ValidateOrDropExistingTables() error {
-	if this.migrationContext.InitiallyDropGhostTable && !this.migrationContext.Resume {
+	if this.migrationContext.InitiallyDropGhostTable {
 		if err := this.DropGhostTable(); err != nil {
 			return err
 		}
@@ -646,7 +647,7 @@ func (this *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 	err := row.Scan(ptrs...)
 	if err != nil {
 		if errors.Is(err, gosql.ErrNoRows) {
-			return nil, NoCheckpointFoundError
+			return nil, ErrNoCheckpointFound
 		}
 		return nil, err
 	}

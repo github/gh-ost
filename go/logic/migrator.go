@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2025 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -416,7 +416,6 @@ func (this *Migrator) Migrate() (err error) {
 		if err := this.applier.CreateCheckpointTable(); err != nil {
 			this.migrationContext.Log.Errorf("Unable to create checkpoint table, see further error details.")
 		}
-
 	}
 
 	if this.migrationContext.Resume {
@@ -1396,8 +1395,10 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 	return nil
 }
 
+// Checkpoint attempts to write a checkpoint of the Migrator's current state.
+// It gets the binlog coordinates of the last received trx and waits until the
+// applier reaches that trx. At that point it's safe to resume from these
 func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
-	// TODO: doesn't work if no DML events come in
 	coords := this.eventsStreamer.GetCurrentBinlogCoordinates()
 	this.applier.LastIterationRangeMutex.Lock()
 	if this.applier.LastIterationRangeMaxValues == nil || this.applier.LastIterationRangeMinValues == nil {
