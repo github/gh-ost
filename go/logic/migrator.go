@@ -1394,6 +1394,7 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 }
 
 func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
+	// TODO: doesn't work if no DML events come in
 	coords := this.eventsStreamer.GetCurrentBinlogCoordinates()
 	this.applier.LastIterationRangeMutex.Lock()
 	if this.applier.LastIterationRangeMaxValues == nil || this.applier.LastIterationRangeMinValues == nil {
