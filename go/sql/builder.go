@@ -146,11 +146,15 @@ func (b *CheckpointInsertQueryBuilder) BuildQuery(uniqueKeyArgs []interface{}) (
 		return "", nil, fmt.Errorf("args count differs from 2 x unique key column count")
 	}
 	convertedArgs := make([]interface{}, 0, 2*b.uniqueKeyColumns.Len())
-	for _, column := range b.uniqueKeyColumns.Columns() {
-		arg := column.convertArg(column, true)
-		convertedArgs = append(convertedArgs, arg)
+	for i, column := range b.uniqueKeyColumns.Columns() {
+		minArg := column.convertArg(uniqueKeyArgs[i], true)
+		convertedArgs = append(convertedArgs, minArg)
 	}
-	return b.preparedStatement, uniqueKeyArgs, nil
+	for i, column := range b.uniqueKeyColumns.Columns() {
+		minArg := column.convertArg(uniqueKeyArgs[i+b.uniqueKeyColumns.Len()], true)
+		convertedArgs = append(convertedArgs, minArg)
+	}
+	return b.preparedStatement, convertedArgs, nil
 }
 
 func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
