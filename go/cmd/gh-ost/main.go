@@ -146,6 +146,7 @@ func main() {
 	flag.BoolVar(&migrationContext.RemoveTriggerSuffix, "remove-trigger-suffix-if-exists", false, "Remove given suffix from name of trigger. Requires '--include-triggers' and '--trigger-suffix'")
 	flag.BoolVar(&migrationContext.SkipPortValidation, "skip-port-validation", false, "Skip port validation for MySQL connections")
 	flag.BoolVar(&migrationContext.Checkpoint, "checkpoint", false, "Use migration checkpoints")
+	flag.BoolVar(&migrationContext.Resume, "resume", false, "Attempt to resume migration from checkpoint")
 
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")

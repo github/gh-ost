@@ -49,12 +49,13 @@ type EventsStreamer struct {
 
 func NewEventsStreamer(migrationContext *base.MigrationContext) *EventsStreamer {
 	return &EventsStreamer{
-		connectionConfig: migrationContext.InspectorConnectionConfig,
-		migrationContext: migrationContext,
-		listeners:        [](*BinlogEventListener){},
-		listenersMutex:   &sync.Mutex{},
-		eventsChannel:    make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
-		name:             "streamer",
+		connectionConfig:         migrationContext.InspectorConnectionConfig,
+		migrationContext:         migrationContext,
+		listeners:                [](*BinlogEventListener){},
+		listenersMutex:           &sync.Mutex{},
+		eventsChannel:            make(chan *binlog.BinlogEntry, EventsChannelBufferSize),
+		name:                     "streamer",
+		initialBinlogCoordinates: migrationContext.InitialStreamerCoords,
 	}
 }
 
@@ -114,8 +115,10 @@ func (this *EventsStreamer) InitDBConnections() (err error) {
 		return err
 	}
 	this.dbVersion = version
-	if err := this.readCurrentBinlogCoordinates(); err != nil {
-		return err
+	if this.initialBinlogCoordinates == nil || this.initialBinlogCoordinates.IsEmpty() {
+		if err := this.readCurrentBinlogCoordinates(); err != nil {
+			return err
+		}
 	}
 	if err := this.initBinlogReader(this.initialBinlogCoordinates); err != nil {
 		return err

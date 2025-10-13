@@ -1,6 +1,7 @@
 /*
    Copyright 2022 GitHub Inc.
-         See https://github.com/github/gh-ost/blob/master/LICENSE
+         See https://github.com/git
+hub/gh-ost/blob/master/LICENSE
 */
 
 package logic
@@ -689,13 +690,11 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().NoError(err)
 
 	// checkpoint table is empty
-	gotChk := &Checkpoint{IterationRangeMin: sql.NewColumnValues(2), IterationRangeMax: sql.NewColumnValues(2)}
-	err = applier.ReadLastCheckpoint(gotChk)
+	_, err = applier.ReadLastCheckpoint()
 	suite.Require().ErrorIs(err, NoCheckpointFoundError)
 
 	// write a checkpoint and read it back
-	coords, err := mysql.NewGTIDBinlogCoordinates(`08dc06d7-c27c-11ea-b204-e4434b77a5ce:1-1497873603,0b4ff540-a712-11ea-9857-e4434b2a1c98:1-4315312982,19636248-246d-11e9-ab0d-0263df733a8e:1`)
-	suite.Require().NoError(err)
+	coords := mysql.NewFileBinlogCoordinates("mysql-bin.000003", int64(219202907))
 
 	chk := &Checkpoint{
 		LastTrxCoords:     coords,
@@ -707,7 +706,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(1), id)
 
-	err = applier.ReadLastCheckpoint(gotChk)
+	gotChk, err := applier.ReadLastCheckpoint()
 	suite.Require().NoError(err)
 
 	suite.Require().Equal(chk.Iteration, gotChk.Iteration)

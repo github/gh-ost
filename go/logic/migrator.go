@@ -352,8 +352,14 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
-	if err := this.initiateStreaming(); err != nil {
-		return err
+	// If we are resuming, we will initiateStreaming later when we know
+	// the coordinates to resume streaming.
+	// If not resuming, the streamer must be initiated before the applier,
+	// so that the "GhostTableMigrated" event gets processed.
+	if !this.migrationContext.Resume {
+		if err := this.initiateStreaming(); err != nil {
+			return err
+		}
 	}
 	if err := this.initiateApplier(); err != nil {
 		return err
@@ -384,9 +390,11 @@ func (this *Migrator) Migrate() (err error) {
 	}
 
 	initialLag, _ := this.inspector.getReplicationLag()
-	this.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
-	<-this.ghostTableMigrated
-	this.migrationContext.Log.Debugf("ghost table migrated")
+	if !this.migrationContext.Resume {
+		this.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
+		<-this.ghostTableMigrated
+		this.migrationContext.Log.Debugf("ghost table migrated")
+	}
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
 	// When running on replica, this means the replica has those tables. When running
 	// on master this is always true, of course, and yet it also implies this knowledge
@@ -395,14 +403,33 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
-	if this.migrationContext.Checkpoint {
-		if err := this.applier.CreateCheckpointTable(); err != nil {
-			this.migrationContext.Log.Errorf("Unable to create checkpoint table, see further error deatils.")
-		}
-	}
 	// We can prepare some of the queries on the applier
 	if err := this.applier.prepareQueries(); err != nil {
 		return err
+	}
+
+	// inspectOriginalAndGhostTables must be called before creating checkpoint table.
+	if this.migrationContext.Checkpoint && !this.migrationContext.Resume {
+		if err := this.applier.CreateCheckpointTable(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to create checkpoint table, see further error deatils.")
+		}
+
+	}
+
+	if this.migrationContext.Resume {
+		lastCheckpoint, err := this.applier.ReadLastCheckpoint()
+		if err != nil {
+			return this.migrationContext.Log.Errorf("No checkpoint found, unable to resume: %+v", err)
+		}
+		this.migrationContext.Log.Infof("Resuming from checkpoint coords=%+v range_min=%+v range_max=%+v",
+			lastCheckpoint.LastTrxCoords, lastCheckpoint.IterationRangeMin.String(), lastCheckpoint.IterationRangeMax.String())
+
+		this.migrationContext.MigrationIterationRangeMinValues = lastCheckpoint.IterationRangeMin
+		this.migrationContext.MigrationIterationRangeMaxValues = lastCheckpoint.IterationRangeMax
+		this.migrationContext.InitialStreamerCoords = lastCheckpoint.LastTrxCoords
+		if err := this.initiateStreaming(); err != nil {
+			return err
+		}
 	}
 
 	// Validation complete! We're good to execute this migration
@@ -1189,31 +1216,33 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}
-	if err := this.applier.ValidateOrDropExistingTables(); err != nil {
-		return err
-	}
-	if err := this.applier.CreateChangelogTable(); err != nil {
-		this.migrationContext.Log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
-		return err
-	}
-	if err := this.applier.CreateGhostTable(); err != nil {
-		this.migrationContext.Log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
-		return err
-	}
-	if err := this.applier.AlterGhost(); err != nil {
-		this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
-		return err
-	}
-
-	if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
-		// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
-		// so we should copy AUTO_INCREMENT value onto our ghost table.
-		if err := this.applier.AlterGhostAutoIncrement(); err != nil {
-			this.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+	if !this.migrationContext.Resume {
+		if err := this.applier.ValidateOrDropExistingTables(); err != nil {
 			return err
 		}
+		if err := this.applier.CreateChangelogTable(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			return err
+		}
+		if err := this.applier.CreateGhostTable(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+			return err
+		}
+		if err := this.applier.AlterGhost(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
+			return err
+		}
+
+		if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
+			// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
+			// so we should copy AUTO_INCREMENT value onto our ghost table.
+			if err := this.applier.AlterGhostAutoIncrement(); err != nil {
+				this.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+				return err
+			}
+		}
+		this.applier.WriteChangelogState(string(GhostTableMigrated))
 	}
-	this.applier.WriteChangelogState(string(GhostTableMigrated))
 	if err := this.applier.StateMetadataLockInstrument(); err != nil {
 		this.migrationContext.Log.Errorf("Unable to enable metadata lock instrument, see further error details. Bailing out")
 		return err

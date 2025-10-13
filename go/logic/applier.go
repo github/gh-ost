@@ -239,7 +239,7 @@ func (this *Applier) tableExists(tableName string) (tableFound bool) {
 // ValidateOrDropExistingTables verifies ghost and changelog tables do not exist,
 // or attempts to drop them if instructed to.
 func (this *Applier) ValidateOrDropExistingTables() error {
-	if this.migrationContext.InitiallyDropGhostTable {
+	if this.migrationContext.InitiallyDropGhostTable && !this.migrationContext.Resume {
 		if err := this.DropGhostTable(); err != nil {
 			return err
 		}
@@ -431,6 +431,7 @@ func (this *Applier) CreateCheckpointTable() error {
 	}
 	colDefs := []string{
 		"`gh_ost_chk_id` bigint auto_increment primary key",
+		"`gh_ost_chk_timestamp` bigint",
 		"`gh_ost_chk_coords` varchar(4096)",
 		"`gh_ost_chk_iteration` bigint",
 	}
@@ -630,26 +631,40 @@ func (this *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 	return res.LastInsertId()
 }
 
-func (this *Applier) ReadLastCheckpoint(chk *Checkpoint) error {
+func (this *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 	row := this.db.QueryRow(fmt.Sprintf(`select /* gh-ost */ * from %s.%s order by gh_ost_chk_id desc limit 1`, this.migrationContext.DatabaseName, this.migrationContext.GetCheckpointTableName()))
+	chk := &Checkpoint{
+		IterationRangeMin: sql.NewColumnValues(this.migrationContext.UniqueKey.Columns.Len()),
+		IterationRangeMax: sql.NewColumnValues(this.migrationContext.UniqueKey.Columns.Len()),
+	}
 
 	var coordStr string
-	ptrs := []interface{}{&chk.Id, &coordStr, &chk.Iteration}
+	var timestamp int64
+	ptrs := []interface{}{&chk.Id, &timestamp, &coordStr, &chk.Iteration}
 	ptrs = append(ptrs, chk.IterationRangeMin.ValuesPointers...)
 	ptrs = append(ptrs, chk.IterationRangeMax.ValuesPointers...)
 	err := row.Scan(ptrs...)
 	if err != nil {
 		if errors.Is(err, gosql.ErrNoRows) {
-			return NoCheckpointFoundError
+			return nil, NoCheckpointFoundError
 		}
-		return err
+		return nil, err
 	}
-	gtidCoords, err := mysql.NewGTIDBinlogCoordinates(coordStr)
-	if err != nil {
-		return err
+	chk.Timestamp = time.Unix(timestamp, 0)
+	if this.migrationContext.UseGTIDs {
+		gtidCoords, err := mysql.NewGTIDBinlogCoordinates(coordStr)
+		if err != nil {
+			return nil, err
+		}
+		chk.LastTrxCoords = gtidCoords
+	} else {
+		fileCoords, err := mysql.ParseFileBinlogCoordinates(coordStr)
+		if err != nil {
+			return nil, err
+		}
+		chk.LastTrxCoords = fileCoords
 	}
-	chk.LastTrxCoords = gtidCoords
-	return nil
+	return chk, nil
 }
 
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.

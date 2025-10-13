@@ -123,9 +123,9 @@ func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns 
 	stmt := fmt.Sprintf(`
 		insert /* gh-ost */
 		into %s.%s
-			(gh_ost_chk_coords, gh_ost_chk_iteration, %s, %s)
+			(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration, %s, %s)
 		values
-			(?, ?, %s, %s)`,
+			(unix_timestamp(now()), ?, ?, %s, %s)`,
 		databaseName, tableName,
 		strings.Join(minUniqueColNames, ", "),
 		strings.Join(maxUniqueColNames, ", "),

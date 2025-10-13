@@ -103,6 +103,7 @@ type MigrationContext struct {
 	GoogleCloudPlatform      bool
 	AzureMySQL               bool
 	AttemptInstantDDL        bool
+	Resume                   bool
 
 	// SkipPortValidation allows skipping the port validation in `ValidateConnection`
 	// This is useful when connecting to a MySQL instance where the external port
@@ -240,6 +241,7 @@ type MigrationContext struct {
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
+	InitialStreamerCoords            mysql.BinlogCoordinates
 	ForceTmpTableName                string
 
 	IncludeTriggers     bool
