@@ -435,6 +435,8 @@ func (this *Applier) CreateCheckpointTable() error {
 		"`gh_ost_chk_timestamp` bigint",
 		"`gh_ost_chk_coords` varchar(4096)",
 		"`gh_ost_chk_iteration` bigint",
+		"`gh_ost_rows_copied` bigint",
+		"`gh_ost_dml_applied` bigint",
 	}
 	for _, col := range this.migrationContext.UniqueKey.Columns.Columns() {
 		if col.MySQLType == "" {
@@ -623,7 +625,7 @@ func (this *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 	if err != nil {
 		return insertId, err
 	}
-	args := sqlutils.Args(chk.LastTrxCoords.String(), chk.Iteration)
+	args := sqlutils.Args(chk.LastTrxCoords.String(), chk.Iteration, chk.RowsCopied, chk.DMLApplied)
 	args = append(args, uniqueKeyArgs...)
 	res, err := this.db.Exec(query, args...)
 	if err != nil {
@@ -641,7 +643,7 @@ func (this *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 
 	var coordStr string
 	var timestamp int64
-	ptrs := []interface{}{&chk.Id, &timestamp, &coordStr, &chk.Iteration}
+	ptrs := []interface{}{&chk.Id, &timestamp, &coordStr, &chk.Iteration, &chk.RowsCopied, &chk.DMLApplied}
 	ptrs = append(ptrs, chk.IterationRangeMin.ValuesPointers...)
 	ptrs = append(ptrs, chk.IterationRangeMax.ValuesPointers...)
 	err := row.Scan(ptrs...)

@@ -428,6 +428,8 @@ func (this *Migrator) Migrate() (err error) {
 		this.migrationContext.MigrationIterationRangeMinValues = lastCheckpoint.IterationRangeMin
 		this.migrationContext.MigrationIterationRangeMaxValues = lastCheckpoint.IterationRangeMax
 		this.migrationContext.Iteration = lastCheckpoint.Iteration
+		this.migrationContext.TotalRowsCopied = lastCheckpoint.RowsCopied
+		this.migrationContext.TotalDMLEventsApplied = lastCheckpoint.DMLApplied
 		this.migrationContext.InitialStreamerCoords = lastCheckpoint.LastTrxCoords
 		if err := this.initiateStreaming(); err != nil {
 			return err
@@ -1397,7 +1399,7 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 
 // Checkpoint attempts to write a checkpoint of the Migrator's current state.
 // It gets the binlog coordinates of the last received trx and waits until the
-// applier reaches that trx. At that point it's safe to resume from these
+// applier reaches that trx. At that point it's safe to resume from these coordinates.
 func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 	coords := this.eventsStreamer.GetCurrentBinlogCoordinates()
 	this.applier.LastIterationRangeMutex.Lock()
@@ -1410,6 +1412,8 @@ func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 		IterationRangeMin: this.applier.LastIterationRangeMinValues.Clone(),
 		IterationRangeMax: this.applier.LastIterationRangeMaxValues.Clone(),
 		LastTrxCoords:     coords,
+		RowsCopied:        atomic.LoadInt64(&this.migrationContext.TotalRowsCopied),
+		DMLApplied:        atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 	}
 	this.applier.LastIterationRangeMutex.Unlock()
 

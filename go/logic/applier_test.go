@@ -700,6 +700,8 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 		IterationRangeMin: applier.migrationContext.MigrationRangeMinValues,
 		IterationRangeMax: applier.migrationContext.MigrationRangeMaxValues,
 		Iteration:         2,
+		RowsCopied:        100000,
+		DMLApplied:        200000,
 	}
 	id, err := applier.WriteCheckpoint(chk)
 	suite.Require().NoError(err)
@@ -712,6 +714,8 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().Equal(chk.LastTrxCoords.String(), gotChk.LastTrxCoords.String())
 	suite.Require().Equal(chk.IterationRangeMin.String(), gotChk.IterationRangeMin.String())
 	suite.Require().Equal(chk.IterationRangeMax.String(), gotChk.IterationRangeMax.String())
+	suite.Require().Equal(chk.RowsCopied, gotChk.RowsCopied)
+	suite.Require().Equal(chk.DMLApplied, gotChk.DMLApplied)
 }
 
 func TestApplier(t *testing.T) {

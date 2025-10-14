@@ -26,4 +26,6 @@ type Checkpoint struct {
 	// for the chunk copier range.
 	IterationRangeMax *sql.ColumnValues
 	Iteration         int64
+	RowsCopied        int64
+	DMLApplied        int64
 }
