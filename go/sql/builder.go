@@ -20,6 +20,7 @@ const (
 	GreaterThanOrEqualsComparisonSign ValueComparisonSign = ">="
 	GreaterThanComparisonSign         ValueComparisonSign = ">"
 	NotEqualsComparisonSign           ValueComparisonSign = "!="
+	MaxColumnNameLength                                   = 64
 )
 
 // EscapeName will escape a db/table/column/... name by wrapping with backticks.
@@ -30,6 +31,21 @@ func EscapeName(name string) string {
 		name = unquoted
 	}
 	return fmt.Sprintf("`%s`", name)
+}
+
+// TruncateColumnName truncates a name so it can be used as a MySQL
+// column name, taking into account UTF-8 characters.
+func TruncateColumnName(name string, limit int) string {
+	truncatedName := name
+	chars := 0
+	for byteIdx := range name {
+		if chars >= limit {
+			truncatedName = name[:byteIdx]
+			break
+		}
+		chars++
+	}
+	return truncatedName
 }
 
 func buildColumnsPreparedValues(columns *ColumnList) []string {
@@ -115,8 +131,10 @@ func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns 
 	minUniqueColNames := []string{}
 	maxUniqueColNames := []string{}
 	for _, name := range uniqueKeyColumns.Names() {
-		minUniqueColNames = append(minUniqueColNames, name+"_min")
-		maxUniqueColNames = append(maxUniqueColNames, name+"_max")
+		minColName := TruncateColumnName(name, MaxColumnNameLength-4) + "_min"
+		maxColName := TruncateColumnName(name, MaxColumnNameLength-4) + "_max"
+		minUniqueColNames = append(minUniqueColNames, minColName)
+		maxUniqueColNames = append(maxUniqueColNames, maxColName)
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)

@@ -442,7 +442,8 @@ func (this *Applier) CreateCheckpointTable() error {
 		if col.MySQLType == "" {
 			return fmt.Errorf("CreateCheckpoinTable: column %s has no type information. applyColumnTypes must be called", sql.EscapeName(col.Name))
 		}
-		colDef := fmt.Sprintf("%s %s", sql.EscapeName(col.Name+"_min"), col.MySQLType)
+		minColName := sql.TruncateColumnName(col.Name, sql.MaxColumnNameLength-4) + "_min"
+		colDef := fmt.Sprintf("%s %s", sql.EscapeName(minColName), col.MySQLType)
 		if !col.Nullable {
 			colDef += " NOT NULL"
 		}
@@ -450,7 +451,8 @@ func (this *Applier) CreateCheckpointTable() error {
 	}
 
 	for _, col := range this.migrationContext.UniqueKey.Columns.Columns() {
-		colDef := fmt.Sprintf("%s %s", sql.EscapeName(col.Name+"_max"), col.MySQLType)
+		maxColName := sql.TruncateColumnName(col.Name, sql.MaxColumnNameLength-4) + "_max"
+		colDef := fmt.Sprintf("%s %s", sql.EscapeName(maxColName), col.MySQLType)
 		if !col.Nullable {
 			colDef += " NOT NULL"
 		}
