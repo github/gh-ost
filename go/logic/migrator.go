@@ -1406,6 +1406,7 @@ func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 		return nil, errors.New("iteration range is empty, not checkpointing...")
 	}
 	chk := &Checkpoint{
+		Iteration:         this.migrationContext.GetIteration(),
 		IterationRangeMin: this.applier.LastIterationRangeMinValues.Clone(),
 		IterationRangeMax: this.applier.LastIterationRangeMaxValues.Clone(),
 		LastTrxCoords:     coords,
