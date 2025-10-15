@@ -64,6 +64,15 @@ It is not reliable to parse the `ALTER` statement to determine if it is instant 
 ### binlogsyncer-max-reconnect-attempts
 `--binlogsyncer-max-reconnect-attempts=0`, the maximum number of attempts to re-establish a broken inspector connection for sync binlog. `0` or `negative number` means infinite retry, default `0`
 
+### checkpoint
+
+`--checkpoint` enables periodic checkpoints of the gh-ost's state so that gh-ost can resume a migration from the checkpoint with `--resume`. Checkpoints are written to a separate table named `_${original_table_name}_ghk`. It is recommended to use with `--gtid` for checkpoints.
+See also: [`resuming-migrations`](resume.md)
+
+### checkpoint-seconds
+
+`--checkpoint-seconds` specifies the seconds between checkpoints. Default is 300.
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
@@ -225,6 +234,11 @@ Optionally involve the process ID, for example: `--replica-server-id=$((10000000
 
 It's on you to choose a number that does not collide with another `gh-ost` or another running replica.
 See also: [`concurrent-migrations`](cheatsheet.md#concurrent-migrations) on the cheatsheet.
+
+### resume
+
+`--resume` attempts to resume a migration that was previously interrupted from the last checkpoint. The first `gh-ost` invocation must run with `--checkpoint` and have successfully written a checkpoint in order for `--resume` to work.
+See also: [`resuming-migrations`](resume.md)
 
 ### serve-socket-file
 
