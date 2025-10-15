@@ -104,7 +104,7 @@ Optional. Default is `safe`. See more discussion in [`cut-over`](cut-over.md)
 
 ### cut-over-lock-timeout-seconds
 
-Default `3`.  Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout).
+Default `3`.  Max number of seconds to hold locks on tables while attempting to issue the atomic rename during cut-over (retry attempted when lock exceeds timeout). The theoretical max lock time is `2x` this timeout, as gh-ost sets the timeout to acquire the initial table locks to twice this value. Therefore, the true maximum time a table may be blocked by default is `6` seconds.
 
 ### discard-foreign-keys
 
