@@ -1541,6 +1541,9 @@ func (this *Migrator) finalCleanup() error {
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
 		return err
 	}
+	if err := this.retryOperation(this.applier.DropCheckpointTable); err != nil {
+		return err
+	}
 	if this.migrationContext.OkToDropTable && !this.migrationContext.TestOnReplica {
 		if err := this.retryOperation(this.applier.DropOldTable); err != nil {
 			return err
