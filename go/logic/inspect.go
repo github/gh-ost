@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2025 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -711,11 +711,16 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 		columnName := m.GetString("COLUMN_NAME")
 		columnType := m.GetString("COLUMN_TYPE")
 		columnOctetLength := m.GetUint("CHARACTER_OCTET_LENGTH")
+		isNullable := m.GetString("IS_NULLABLE")
 		extra := m.GetString("EXTRA")
 		for _, columnsList := range columnsLists {
 			column := columnsList.GetColumn(columnName)
 			if column == nil {
 				continue
+			}
+			column.MySQLType = columnType
+			if isNullable == "YES" {
+				column.Nullable = true
 			}
 
 			if strings.Contains(columnType, "unsigned") {

@@ -790,3 +790,28 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 		require.Equal(t, []interface{}{uint8(253)}, uniqueKeyArgs)
 	}
 }
+
+func TestCheckpointQueryBuilder(t *testing.T) {
+	databaseName := "mydb"
+	tableName := "_tbl_ghk"
+	valueArgs := []interface{}{"mona", "mascot", int8(-17), "anothername", "anotherposition", int8(-2)}
+	uniqueKeyColumns := NewColumnList([]string{"name", "position", "my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长很长很长"})
+	builder, err := NewCheckpointQueryBuilder(databaseName, tableName, uniqueKeyColumns)
+	require.NoError(t, err)
+	query, uniqueKeyArgs, err := builder.BuildQuery(valueArgs)
+	require.NoError(t, err)
+	expected := `
+		insert /* gh-ost */ into mydb._tbl_ghk
+		(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
+		 gh_ost_rows_copied, gh_ost_dml_applied,
+		 name_min, position_min, my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长_min,
+		 name_max, position_max, my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长_max)
+		values
+		(unix_timestamp(now()), ?, ?,
+			 ?, ?,
+			 ?, ?, ?,
+			 ?, ?, ?)
+    `
+	require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+	require.Equal(t, []interface{}{"mona", "mascot", int8(-17), "anothername", "anotherposition", int8(-2)}, uniqueKeyArgs)
+}

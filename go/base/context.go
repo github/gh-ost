@@ -103,6 +103,7 @@ type MigrationContext struct {
 	GoogleCloudPlatform      bool
 	AzureMySQL               bool
 	AttemptInstantDDL        bool
+	Resume                   bool
 
 	// SkipPortValidation allows skipping the port validation in `ValidateConnection`
 	// This is useful when connecting to a MySQL instance where the external port
@@ -153,6 +154,8 @@ type MigrationContext struct {
 	HooksHintToken                      string
 	HooksStatusIntervalSec              int64
 	PanicOnWarnings                     bool
+	Checkpoint                          bool
+	CheckpointIntervalSeconds           int64
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -239,6 +242,7 @@ type MigrationContext struct {
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
+	InitialStreamerCoords            mysql.BinlogCoordinates
 	ForceTmpTableName                string
 
 	IncludeTriggers     bool
@@ -377,6 +381,15 @@ func (this *MigrationContext) GetChangelogTableName() string {
 		return getSafeTableName(this.ForceTmpTableName, "ghc")
 	} else {
 		return getSafeTableName(this.OriginalTableName, "ghc")
+	}
+}
+
+// GetCheckpointTableName generates the name of checkpoint table.
+func (this *MigrationContext) GetCheckpointTableName() string {
+	if this.ForceTmpTableName != "" {
+		return getSafeTableName(this.ForceTmpTableName, "ghk")
+	} else {
+		return getSafeTableName(this.OriginalTableName, "ghk")
 	}
 }
 

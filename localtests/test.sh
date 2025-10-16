@@ -151,7 +151,7 @@ sysbench_prepare() {
         --mysql-password=opensesame \
         --mysql-db=test \
         --tables=1 \
-        --table-size=10000 \
+        --table-size=20000 \
         prepare
 }
 
@@ -169,7 +169,7 @@ sysbench_run_cmd() {
     --threads=2 \
     --time=30 \
     --report-interval=10 \
-    --rate=500 \
+    --rate=200 \
     run"
     echo $cmd
 }
@@ -254,7 +254,6 @@ test_single() {
 
     table_name="gh_ost_test"
     ghost_table_name="_gh_ost_test_gho"
-    trap cleanup EXIT INT TERM
     # test with sysbench oltp write load
     if [[ "$test_name" == "sysbench" ]]; then
         if ! command -v sysbench &>/dev/null; then
@@ -273,6 +272,7 @@ test_single() {
         echo -n "Started sysbench (PID $sysbench_pid):  "
         echo $load_cmd
     fi
+    trap cleanup SIGINT
 
     #
     cmd="GOTRACEBACK=crash $ghost_binary \
@@ -299,6 +299,7 @@ test_single() {
     --verbose \
     --debug \
     --stack \
+    --checkpoint \
     --execute ${extra_args[@]}"
     echo_dot
     echo $cmd >$exec_command_file
