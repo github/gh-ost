@@ -4,19 +4,23 @@
 
 Arbitrary-precision fixed-point decimal numbers in go.
 
-NOTE: can "only" represent numbers with a maximum of 2^31 digits after the decimal point.
+_Note:_ Decimal library can "only" represent numbers with a maximum of 2^31 digits after the decimal point.
 
 ## Features
 
- * the zero-value is 0, and is safe to use without initialization
- * addition, subtraction, multiplication with no loss of precision
- * division with specified precision
- * database/sql serialization/deserialization
- * json and xml serialization/deserialization
+ * The zero-value is 0, and is safe to use without initialization
+ * Addition, subtraction, multiplication with no loss of precision
+ * Division with specified precision
+ * Database/sql serialization/deserialization
+ * JSON and XML serialization/deserialization
 
 ## Install
 
 Run `go get github.com/shopspring/decimal`
+
+## Requirements 
+
+Decimal library requires Go version `>=1.7`
 
 ## Usage
 
@@ -34,7 +38,7 @@ func main() {
 		panic(err)
 	}
 
-	quantity := decimal.NewFromFloat(3)
+	quantity := decimal.NewFromInt(3)
 
 	fee, _ := decimal.NewFromString(".035")
 	taxRate, _ := decimal.NewFromString(".08875")
@@ -66,8 +70,8 @@ http://godoc.org/github.com/shopspring/decimal
 
 #### Why don't you just use float64?
 
-Because float64s (or any binary floating point type, actually) can't represent
-numbers such as 0.1 exactly.
+Because float64 (or any binary floating point type, actually) can't represent
+numbers such as `0.1` exactly.
 
 Consider this code: http://play.golang.org/p/TQBd4yJe6B You might expect that
 it prints out `10`, but it actually prints `9.999999999999831`. Over time,

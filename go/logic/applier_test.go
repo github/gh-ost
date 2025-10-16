@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2025 GitHub Inc.
          See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -15,11 +15,15 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
+	testmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
+
+	"fmt"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func TestApplierGenerateSqlModeQuery(t *testing.T) {
@@ -59,8 +63,8 @@ func TestApplierGenerateSqlModeQuery(t *testing.T) {
 }
 
 func TestApplierUpdateModifiesUniqueKeyColumns(t *testing.T) {
-	columns := sql.NewColumnList([]string{"id", "item_id"})
-	columnValues := sql.ToColumnValues([]interface{}{123456, 42})
+	columns := sql.NewColumnList([]string{"id", "item_id", "item_text"})
+	columnValues := sql.ToColumnValues([]interface{}{123456, 42, []uint8{116, 101, 115, 116}})
 
 	migrationContext := base.NewMigrationContext()
 	migrationContext.OriginalTableColumns = columns
@@ -204,22 +208,18 @@ type ApplierTestSuite struct {
 
 func (suite *ApplierTestSuite) SetupSuite() {
 	ctx := context.Background()
-	req := testcontainers.ContainerRequest{
-		Image:        "mysql:8.0.40",
-		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root-password"},
-		ExposedPorts: []string{"3306/tcp"},
-		WaitingFor:   wait.ForListeningPort("3306/tcp"),
-	}
-
-	mysqlContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
+	mysqlContainer, err := testmysql.Run(ctx,
+		testMysqlContainerImage,
+		testmysql.WithDatabase(testMysqlDatabase),
+		testmysql.WithUsername(testMysqlUser),
+		testmysql.WithPassword(testMysqlPass),
+		testcontainers.WithWaitStrategy(wait.ForExposedPort()),
+	)
 	suite.Require().NoError(err)
 
 	suite.mysqlContainer = mysqlContainer
 
-	dsn, err := GetDSN(ctx, mysqlContainer)
+	dsn, err := mysqlContainer.ConnectionString(ctx)
 	suite.Require().NoError(err)
 
 	db, err := gosql.Open("mysql", dsn)
@@ -229,23 +229,22 @@ func (suite *ApplierTestSuite) SetupSuite() {
 }
 
 func (suite *ApplierTestSuite) TeardownSuite() {
-	ctx := context.Background()
-
 	suite.Assert().NoError(suite.db.Close())
-	suite.Assert().NoError(suite.mysqlContainer.Terminate(ctx))
+	suite.Assert().NoError(testcontainers.TerminateContainer(suite.mysqlContainer))
 }
 
 func (suite *ApplierTestSuite) SetupTest() {
 	ctx := context.Background()
-
-	_, err := suite.db.ExecContext(ctx, "CREATE DATABASE test")
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", testMysqlDatabase))
 	suite.Require().NoError(err)
 }
 
 func (suite *ApplierTestSuite) TearDownTest() {
 	ctx := context.Background()
 
-	_, err := suite.db.ExecContext(ctx, "DROP DATABASE test")
+	_, err := suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestTableName())
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestGhostTableName())
 	suite.Require().NoError(err)
 }
 
@@ -254,17 +253,14 @@ func (suite *ApplierTestSuite) TestInitDBConnections() {
 
 	var err error
 
-	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
 	suite.Require().NoError(err)
 
-	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
-	migrationContext := base.NewMigrationContext()
+	migrationContext := newTestMigrationContext()
 	migrationContext.ApplierConnectionConfig = connectionConfig
-	migrationContext.DatabaseName = "test"
-	migrationContext.SkipPortValidation = true
-	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
 
 	applier := NewApplier(migrationContext)
@@ -273,7 +269,8 @@ func (suite *ApplierTestSuite) TestInitDBConnections() {
 	err = applier.InitDBConnections()
 	suite.Require().NoError(err)
 
-	suite.Require().Equal("8.0.40", migrationContext.ApplierMySQLVersion)
+	mysqlVersion, _ := strings.CutPrefix(testMysqlContainerImage, "mysql:")
+	suite.Require().Equal(mysqlVersion, migrationContext.ApplierMySQLVersion)
 	suite.Require().Equal(int64(28800), migrationContext.ApplierWaitTimeout)
 	suite.Require().Equal("SYSTEM", migrationContext.ApplierTimeZone)
 
@@ -285,20 +282,17 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 
 	var err error
 
-	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
 	suite.Require().NoError(err)
 
-	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test._testing_gho (id INT, item_id INT);")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestGhostTableName()))
 	suite.Require().NoError(err)
 
-	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
-	migrationContext := base.NewMigrationContext()
+	migrationContext := newTestMigrationContext()
 	migrationContext.ApplierConnectionConfig = connectionConfig
-	migrationContext.DatabaseName = "test"
-	migrationContext.SkipPortValidation = true
-	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
 
 	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
@@ -318,8 +312,8 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 
 	dmlEvents := []*binlog.BinlogDMLEvent{
 		{
-			DatabaseName:    "test",
-			TableName:       "testing",
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
 			DML:             binlog.InsertDML,
 			NewColumnValues: sql.ToColumnValues([]interface{}{123456, 42}),
 		},
@@ -328,7 +322,7 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	suite.Require().NoError(err)
 
 	// Check that the row was inserted
-	rows, err := suite.db.Query("SELECT * FROM test._testing_gho")
+	rows, err := suite.db.Query("SELECT * FROM " + getTestGhostTableName())
 	suite.Require().NoError(err)
 	defer rows.Close()
 
@@ -353,17 +347,14 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
 
 	var err error
 
-	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
 	suite.Require().NoError(err)
 
-	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
-	migrationContext := base.NewMigrationContext()
+	migrationContext := newTestMigrationContext()
 	migrationContext.ApplierConnectionConfig = connectionConfig
-	migrationContext.DatabaseName = "test"
-	migrationContext.SkipPortValidation = true
-	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
 
 	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
@@ -385,20 +376,17 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExi
 
 	var err error
 
-	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
 	suite.Require().NoError(err)
 
-	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test._testing_gho (id INT, item_id INT);")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestGhostTableName()))
 	suite.Require().NoError(err)
 
-	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
-	migrationContext := base.NewMigrationContext()
+	migrationContext := newTestMigrationContext()
 	migrationContext.ApplierConnectionConfig = connectionConfig
-	migrationContext.DatabaseName = "test"
-	migrationContext.SkipPortValidation = true
-	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
 
 	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
@@ -421,20 +409,17 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExi
 
 	var err error
 
-	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
 	suite.Require().NoError(err)
 
-	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test._testing_gho (id INT, item_id INT);")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestGhostTableName()))
 	suite.Require().NoError(err)
 
-	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
-	migrationContext := base.NewMigrationContext()
+	migrationContext := newTestMigrationContext()
 	migrationContext.ApplierConnectionConfig = connectionConfig
-	migrationContext.DatabaseName = "test"
-	migrationContext.SkipPortValidation = true
-	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
 
 	migrationContext.InitiallyDropGhostTable = true
@@ -451,7 +436,7 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExi
 	// Check that the ghost table was dropped
 	var tableName string
 	//nolint:execinquery
-	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_gho'").Scan(&tableName)
+	err = suite.db.QueryRow(fmt.Sprintf("SHOW TABLES IN test LIKE '_%s_gho'", testMysqlTableName)).Scan(&tableName)
 	suite.Require().Error(err)
 	suite.Require().Equal(gosql.ErrNoRows, err)
 }
@@ -461,17 +446,14 @@ func (suite *ApplierTestSuite) TestCreateGhostTable() {
 
 	var err error
 
-	_, err = suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
 	suite.Require().NoError(err)
 
-	connectionConfig, err := GetConnectionConfig(ctx, suite.mysqlContainer)
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
-	migrationContext := base.NewMigrationContext()
+	migrationContext := newTestMigrationContext()
 	migrationContext.ApplierConnectionConfig = connectionConfig
-	migrationContext.DatabaseName = "test"
-	migrationContext.SkipPortValidation = true
-	migrationContext.OriginalTableName = "testing"
 	migrationContext.SetConnectionConfig("innodb")
 
 	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
@@ -499,9 +481,241 @@ func (suite *ApplierTestSuite) TestCreateGhostTable() {
 	// Check that the ghost table has the same columns as the original table
 	var createDDL string
 	//nolint:execinquery
-	err = suite.db.QueryRow("SHOW CREATE TABLE test._testing_gho").Scan(&tableName, &createDDL)
+	err = suite.db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", getTestGhostTableName())).Scan(&tableName, &createDDL)
 	suite.Require().NoError(err)
 	suite.Require().Equal("CREATE TABLE `_testing_gho` (\n  `id` int DEFAULT NULL,\n  `item_id` int DEFAULT NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createDDL)
+}
+
+func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySucceedsWithUniqueKeyWarningInsertedByDMLEvent() {
+	ctx := context.Background()
+
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT, UNIQUE KEY (item_id));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT, UNIQUE KEY (item_id));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "item_id",
+		NameInGhostTable: "item_id",
+		Columns:          *sql.NewColumnList([]string{"item_id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, item_id) VALUES (123456, 42);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{123456, 42}),
+		},
+	}
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().NoError(err)
+
+	err = applier.CreateChangelogTable()
+	suite.Require().NoError(err)
+	err = applier.ReadMigrationRangeValues()
+	suite.Require().NoError(err)
+
+	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+	suite.Require().NoError(err)
+	suite.Require().True(hasFurtherRange)
+
+	_, rowsAffected, _, err := applier.ApplyIterationInsertQuery()
+	suite.Require().NoError(err)
+	suite.Require().Equal(int64(0), rowsAffected)
+
+	// Ensure Duplicate entry '42' for key '_testing_gho.item_id' is ignored correctly
+	suite.Require().Empty(applier.migrationContext.MigrationLastInsertSQLWarnings)
+
+	// Check that the row was inserted
+	rows, err := suite.db.Query("SELECT * FROM " + getTestGhostTableName())
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var count, id, item_id int
+	for rows.Next() {
+		err = rows.Scan(&id, &item_id)
+		suite.Require().NoError(err)
+		count += 1
+	}
+	suite.Require().NoError(rows.Err())
+
+	suite.Require().Equal(1, count)
+	suite.Require().Equal(123456, id)
+	suite.Require().Equal(42, item_id)
+
+	suite.Require().
+		Equal(int64(1), migrationContext.TotalDMLEventsApplied)
+	suite.Require().
+		Equal(int64(0), migrationContext.RowsDeltaEstimate)
+}
+
+func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQueryFailsWithTruncationWarning() {
+	ctx := context.Background()
+
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id int not null, name varchar(20), primary key(id))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, name varchar(20), primary key(id));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, name) VALUES (1, 'this string is long')", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.AlterStatementOptions = "modify column name varchar(10)"
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "name"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "name"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "name"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+	applier := NewApplier(migrationContext)
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	err = applier.CreateChangelogTable()
+	suite.Require().NoError(err)
+
+	err = applier.ReadMigrationRangeValues()
+	suite.Require().NoError(err)
+
+	err = applier.AlterGhost()
+	suite.Require().NoError(err)
+
+	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+	suite.Require().NoError(err)
+	suite.Require().True(hasFurtherRange)
+
+	_, rowsAffected, _, err := applier.ApplyIterationInsertQuery()
+	suite.Equal(int64(1), rowsAffected)
+	suite.Require().NoError(err)
+
+	// Verify the warning was recorded and will cause the migrator to panic
+	suite.Require().NotEmpty(applier.migrationContext.MigrationLastInsertSQLWarnings)
+	suite.Require().Contains(applier.migrationContext.MigrationLastInsertSQLWarnings[0], "Warning: Data truncated for column 'name' at row 1")
+}
+
+func (suite *ApplierTestSuite) TestWriteCheckpoint() {
+	ctx := context.Background()
+
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id int not null, id2 char(4) CHARACTER SET utf8mb4, primary key(id, id2))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, id2 char(4) CHARACTER SET utf8mb4, name varchar(20), primary key(id, id2));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, id2) VALUES (?,?), (?,?), (?,?)", getTestTableName()), 411, "君子懷德", 411, "小人懷土", 212, "君子不器")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.AlterStatementOptions = "add column name varchar(20)"
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "id2"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "id2"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "id2"})
+	migrationContext.Checkpoint = true
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id", "id2"}),
+	}
+
+	inspector := NewInspector(migrationContext)
+	suite.Require().NoError(inspector.InitDBConnections())
+
+	err = inspector.applyColumnTypes(testMysqlDatabase, testMysqlTableName, &migrationContext.UniqueKey.Columns)
+	suite.Require().NoError(err)
+
+	applier := NewApplier(migrationContext)
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	err = applier.CreateChangelogTable()
+	suite.Require().NoError(err)
+
+	err = applier.CreateCheckpointTable()
+	suite.Require().NoError(err)
+
+	err = applier.prepareQueries()
+	suite.Require().NoError(err)
+
+	err = applier.ReadMigrationRangeValues()
+	suite.Require().NoError(err)
+
+	// checkpoint table is empty
+	_, err = applier.ReadLastCheckpoint()
+	suite.Require().ErrorIs(err, ErrNoCheckpointFound)
+
+	// write a checkpoint and read it back
+	coords := mysql.NewFileBinlogCoordinates("mysql-bin.000003", int64(219202907))
+
+	chk := &Checkpoint{
+		LastTrxCoords:     coords,
+		IterationRangeMin: applier.migrationContext.MigrationRangeMinValues,
+		IterationRangeMax: applier.migrationContext.MigrationRangeMaxValues,
+		Iteration:         2,
+		RowsCopied:        100000,
+		DMLApplied:        200000,
+	}
+	id, err := applier.WriteCheckpoint(chk)
+	suite.Require().NoError(err)
+	suite.Require().Equal(int64(1), id)
+
+	gotChk, err := applier.ReadLastCheckpoint()
+	suite.Require().NoError(err)
+
+	suite.Require().Equal(chk.Iteration, gotChk.Iteration)
+	suite.Require().Equal(chk.LastTrxCoords.String(), gotChk.LastTrxCoords.String())
+	suite.Require().Equal(chk.IterationRangeMin.String(), gotChk.IterationRangeMin.String())
+	suite.Require().Equal(chk.IterationRangeMax.String(), gotChk.IterationRangeMax.String())
+	suite.Require().Equal(chk.RowsCopied, gotChk.RowsCopied)
+	suite.Require().Equal(chk.DMLApplied, gotChk.DMLApplied)
 }
 
 func TestApplier(t *testing.T) {

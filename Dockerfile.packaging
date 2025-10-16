@@ -1,4 +1,4 @@
-FROM golang:1.22-bullseye
+FROM golang:1.23-bullseye
 
 RUN apt-get update
 RUN apt-get install -y ruby ruby-dev rubygems build-essential

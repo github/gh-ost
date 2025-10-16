@@ -106,7 +106,7 @@ func ExtractRegistry(image string, fallback string) string {
 	return fallback
 }
 
-// IsURL checks if the string is an URL.
+// IsURL checks if the string is a URL.
 // Extracted from https://github.com/asaskevich/govalidator/blob/f21760c49a8d/validator.go#L104
 func IsURL(str string) bool {
 	if str == "" || utf8.RuneCountInString(str) >= maxURLRuneCount || len(str) <= minURLRuneCount || strings.HasPrefix(str, ".") {

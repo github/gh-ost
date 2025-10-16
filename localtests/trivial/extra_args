@@ -1,1 +1,1 @@
---throttle-query='select false' \
+--throttle-query='select false'

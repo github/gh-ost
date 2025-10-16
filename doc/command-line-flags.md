@@ -64,6 +64,15 @@ It is not reliable to parse the `ALTER` statement to determine if it is instant 
 ### binlogsyncer-max-reconnect-attempts
 `--binlogsyncer-max-reconnect-attempts=0`, the maximum number of attempts to re-establish a broken inspector connection for sync binlog. `0` or `negative number` means infinite retry, default `0`
 
+### checkpoint
+
+`--checkpoint` enables periodic checkpoints of the gh-ost's state so that gh-ost can resume a migration from the checkpoint with `--resume`. Checkpoints are written to a separate table named `_${original_table_name}_ghk`. It is recommended to use with `--gtid` for checkpoints.
+See also: [`resuming-migrations`](resume.md)
+
+### checkpoint-seconds
+
+`--checkpoint-seconds` specifies the seconds between checkpoints. Default is 300.
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
@@ -119,7 +128,7 @@ See also: [`skip-foreign-key-checks`](#skip-foreign-key-checks)
 
 `gh-ost` reads event from the binary log and applies them onto the _ghost_ table. It does so in batched writes: grouping multiple events to apply in a single transaction. This gives better write throughput as we don't need to sync the transaction log to disk for each event.
 
-The `--dml-batch-size` flag controls the size of the batched write. Allowed values are `1 - 100`, where `1` means no batching (every event from the binary log is applied onto the _ghost_ table on its own transaction). Default value is `10`.
+The `--dml-batch-size` flag controls the size of the batched write. Allowed values are `1 - 1000`, where `1` means no batching (every event from the binary log is applied onto the _ghost_ table on its own transaction). Default value is `10`.
 
 Why is this behavior configurable? Different workloads have different characteristics. Some workloads have very large writes, such that aggregating even `50` writes into a transaction makes for a significant transaction size. On other workloads write rate is high such that one just can't allow for a hundred more syncs to disk per second. The default value of `10` is a modest compromise that should probably work very well for most workloads. Your mileage may vary.
 
@@ -159,6 +168,10 @@ Table name prefix to be used on the temporary tables.
 ### gcp
 
 Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
+
+### gtid
+
+Add this flag to enable support for [MySQL replication GTIDs](https://dev.mysql.com/doc/refman/5.7/en/replication-gtids-concepts.html) for replication positioning. This requires `gtid_mode` and `enforce_gtid_consistency` to be set to `ON`.
 
 ### heartbeat-interval-millis
 
@@ -202,6 +215,12 @@ List of metrics and threshold values; topping the threshold of any will cause th
 
 Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but otherwise will make no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
 
+### panic-on-warnings
+
+When this flag is set, `gh-ost` will panic when SQL warnings indicating data loss are encountered when copying data. This flag helps prevent data loss scenarios with migrations touching unique keys, column collation and types, as well as `NOT NULL` constraints, where `MySQL` will silently drop inserted rows that no longer satisfy the updated constraint (also dependent on the configured `sql_mode`).
+
+While `panic-on-warnings` is currently disabled by defaults, it will default to `true` in a future version of `gh-ost`.
+
 ### postpone-cut-over-flag-file
 
 Indicate a file name, such that the final [cut-over](cut-over.md) step does not take place as long as the file exists.
@@ -215,6 +234,11 @@ Optionally involve the process ID, for example: `--replica-server-id=$((10000000
 
 It's on you to choose a number that does not collide with another `gh-ost` or another running replica.
 See also: [`concurrent-migrations`](cheatsheet.md#concurrent-migrations) on the cheatsheet.
+
+### resume
+
+`--resume` attempts to resume a migration that was previously interrupted from the last checkpoint. The first `gh-ost` invocation must run with `--checkpoint` and have successfully written a checkpoint in order for `--resume` to work.
+See also: [`resuming-migrations`](resume.md)
 
 ### serve-socket-file
 

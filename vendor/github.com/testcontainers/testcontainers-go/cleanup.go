@@ -8,20 +8,65 @@ import (
 	"time"
 )
 
-// terminateOptions is a type that holds the options for terminating a container.
-type terminateOptions struct {
-	ctx     context.Context
-	timeout *time.Duration
-	volumes []string
+// TerminateOptions is a type that holds the options for terminating a container.
+type TerminateOptions struct {
+	ctx         context.Context
+	stopTimeout *time.Duration
+	volumes     []string
 }
 
 // TerminateOption is a type that represents an option for terminating a container.
-type TerminateOption func(*terminateOptions)
+type TerminateOption func(*TerminateOptions)
+
+// NewTerminateOptions returns a fully initialised TerminateOptions.
+// Defaults: StopTimeout: 10 seconds.
+func NewTerminateOptions(ctx context.Context, opts ...TerminateOption) *TerminateOptions {
+	timeout := time.Second * 10
+	options := &TerminateOptions{
+		stopTimeout: &timeout,
+		ctx:         ctx,
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+	return options
+}
+
+// Context returns the context to use during a Terminate.
+func (o *TerminateOptions) Context() context.Context {
+	return o.ctx
+}
+
+// StopTimeout returns the stop timeout to use during a Terminate.
+func (o *TerminateOptions) StopTimeout() *time.Duration {
+	return o.stopTimeout
+}
+
+// Cleanup performs any clean up needed
+func (o *TerminateOptions) Cleanup() error {
+	// TODO: simplify this when when perform the client refactor.
+	if len(o.volumes) == 0 {
+		return nil
+	}
+	client, err := NewDockerClientWithOpts(o.ctx)
+	if err != nil {
+		return fmt.Errorf("docker client: %w", err)
+	}
+	defer client.Close()
+	// Best effort to remove all volumes.
+	var errs []error
+	for _, volume := range o.volumes {
+		if errRemove := client.VolumeRemove(o.ctx, volume, true); errRemove != nil {
+			errs = append(errs, fmt.Errorf("volume remove %q: %w", volume, errRemove))
+		}
+	}
+	return errors.Join(errs...)
+}
 
 // StopContext returns a TerminateOption that sets the context.
 // Default: context.Background().
 func StopContext(ctx context.Context) TerminateOption {
-	return func(c *terminateOptions) {
+	return func(c *TerminateOptions) {
 		c.ctx = ctx
 	}
 }
@@ -29,8 +74,8 @@ func StopContext(ctx context.Context) TerminateOption {
 // StopTimeout returns a TerminateOption that sets the timeout.
 // Default: See [Container.Stop].
 func StopTimeout(timeout time.Duration) TerminateOption {
-	return func(c *terminateOptions) {
-		c.timeout = &timeout
+	return func(c *TerminateOptions) {
+		c.stopTimeout = &timeout
 	}
 }
 
@@ -39,7 +84,7 @@ func StopTimeout(timeout time.Duration) TerminateOption {
 // which are not removed by default.
 // Default: nil.
 func RemoveVolumes(volumes ...string) TerminateOption {
-	return func(c *terminateOptions) {
+	return func(c *TerminateOptions) {
 		c.volumes = volumes
 	}
 }
@@ -54,44 +99,15 @@ func TerminateContainer(container Container, options ...TerminateOption) error {
 		return nil
 	}
 
-	c := &terminateOptions{
-		ctx: context.Background(),
-	}
-
-	for _, opt := range options {
-		opt(c)
-	}
-
-	// TODO: Add a timeout when terminate supports it.
-	err := container.Terminate(c.ctx)
+	err := container.Terminate(context.Background(), options...)
 	if !isCleanupSafe(err) {
 		return fmt.Errorf("terminate: %w", err)
 	}
 
-	// Remove additional volumes if any.
-	if len(c.volumes) == 0 {
-		return nil
-	}
-
-	client, err := NewDockerClientWithOpts(c.ctx)
-	if err != nil {
-		return fmt.Errorf("docker client: %w", err)
-	}
-
-	defer client.Close()
-
-	// Best effort to remove all volumes.
-	var errs []error
-	for _, volume := range c.volumes {
-		if errRemove := client.VolumeRemove(c.ctx, volume, true); errRemove != nil {
-			errs = append(errs, fmt.Errorf("volume remove %q: %w", volume, errRemove))
-		}
-	}
-
-	return errors.Join(errs...)
+	return nil
 }
 
-// isNil returns true if val is nil or an nil instance false otherwise.
+// isNil returns true if val is nil or a nil instance false otherwise.
 func isNil(val any) bool {
 	if val == nil {
 		return true

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	uuid "github.com/google/uuid"
 
@@ -102,11 +103,13 @@ type MigrationContext struct {
 	GoogleCloudPlatform      bool
 	AzureMySQL               bool
 	AttemptInstantDDL        bool
+	Resume                   bool
 
 	// SkipPortValidation allows skipping the port validation in `ValidateConnection`
 	// This is useful when connecting to a MySQL instance where the external port
 	// may not match the internal port.
 	SkipPortValidation bool
+	UseGTIDs           bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
@@ -150,6 +153,9 @@ type MigrationContext struct {
 	HooksHintOwner                      string
 	HooksHintToken                      string
 	HooksStatusIntervalSec              int64
+	PanicOnWarnings                     bool
+	Checkpoint                          bool
+	CheckpointIntervalSeconds           int64
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -230,16 +236,25 @@ type MigrationContext struct {
 	ColumnRenameMap                  map[string]string
 	DroppedColumnsMap                map[string]bool
 	MappedSharedColumns              *sql.ColumnList
+	MigrationLastInsertSQLWarnings   []string
 	MigrationRangeMinValues          *sql.ColumnValues
 	MigrationRangeMaxValues          *sql.ColumnValues
 	Iteration                        int64
 	MigrationIterationRangeMinValues *sql.ColumnValues
 	MigrationIterationRangeMaxValues *sql.ColumnValues
+	InitialStreamerCoords            mysql.BinlogCoordinates
 	ForceTmpTableName                string
+
+	IncludeTriggers     bool
+	RemoveTriggerSuffix bool
+	TriggerSuffix       string
+	Triggers            []mysql.Trigger
 
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
-	BinlogSyncerMaxReconnectAttempts int
+	BinlogSyncerMaxReconnectAttempts  int
+	AllowSetupMetadataLockInstruments bool
+	IsOpenMetadataLockInstruments     bool
 
 	Log Logger
 }
@@ -366,6 +381,15 @@ func (this *MigrationContext) GetChangelogTableName() string {
 		return getSafeTableName(this.ForceTmpTableName, "ghc")
 	} else {
 		return getSafeTableName(this.OriginalTableName, "ghc")
+	}
+}
+
+// GetCheckpointTableName generates the name of checkpoint table.
+func (this *MigrationContext) GetCheckpointTableName() string {
+	if this.ForceTmpTableName != "" {
+		return getSafeTableName(this.ForceTmpTableName, "ghk")
+	} else {
+		return getSafeTableName(this.OriginalTableName, "ghk")
 	}
 }
 
@@ -923,4 +947,21 @@ func (this *MigrationContext) ReadConfigFile() error {
 	}
 
 	return nil
+}
+
+// getGhostTriggerName generates the name of a ghost trigger, based on original trigger name
+// or a given trigger name
+func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
+	if this.RemoveTriggerSuffix && strings.HasSuffix(triggerName, this.TriggerSuffix) {
+		return strings.TrimSuffix(triggerName, this.TriggerSuffix)
+	}
+	// else
+	return triggerName + this.TriggerSuffix
+}
+
+// validateGhostTriggerLength check if the ghost trigger name length is not more than 64 characters
+func (this *MigrationContext) ValidateGhostTriggerLengthBelowMaxLength(triggerName string) bool {
+	ghostTriggerName := this.GetGhostTriggerName(triggerName)
+
+	return utf8.RuneCountInString(ghostTriggerName) <= mysql.MaxTableNameLength
 }

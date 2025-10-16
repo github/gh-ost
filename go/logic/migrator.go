@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2025 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -24,6 +24,9 @@ import (
 
 var (
 	ErrMigratorUnsupportedRenameAlter = errors.New("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
+	ErrMigrationNotAllowedOnMaster    = errors.New("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (this reduces load from the master). To proceed please provide --allow-on-master.")
+	RetrySleepFn                      = time.Sleep
+	checkpointTimeout                 = 2 * time.Second
 )
 
 type ChangelogState string
@@ -44,6 +47,7 @@ type tableWriteFunc func() error
 type applyEventStruct struct {
 	writeFunc *tableWriteFunc
 	dmlEvent  *binlog.BinlogDMLEvent
+	coords    mysql.BinlogCoordinates
 }
 
 func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
@@ -51,8 +55,8 @@ func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
 	return result
 }
 
-func newApplyEventStructByDML(dmlEvent *binlog.BinlogDMLEvent) *applyEventStruct {
-	result := &applyEventStruct{dmlEvent: dmlEvent}
+func newApplyEventStructByDML(dmlEntry *binlog.BinlogEntry) *applyEventStruct {
+	result := &applyEventStruct{dmlEvent: dmlEntry.DmlEvent, coords: dmlEntry.Coordinates}
 	return result
 }
 
@@ -89,8 +93,6 @@ type Migrator struct {
 	copyRowsQueue    chan tableWriteFunc
 	applyEventsQueue chan *applyEventStruct
 
-	handledChangelogStates map[string]bool
-
 	finishedMigrating int64
 }
 
@@ -105,10 +107,9 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		rowCopyComplete:            make(chan error),
 		allEventsUpToLockProcessed: make(chan string),
 
-		copyRowsQueue:          make(chan tableWriteFunc),
-		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
-		handledChangelogStates: make(map[string]bool),
-		finishedMigrating:      0,
+		copyRowsQueue:     make(chan tableWriteFunc),
+		applyEventsQueue:  make(chan *applyEventStruct, base.MaxEventsBatchSize),
+		finishedMigrating: 0,
 	}
 	return migrator
 }
@@ -135,7 +136,7 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
 			// sleep after previous iteration
-			time.Sleep(1 * time.Second)
+			RetrySleepFn(1 * time.Second)
 		}
 		err = operation()
 		if err == nil {
@@ -155,16 +156,16 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 // attempts are reached. Wait intervals between attempts obey a maximum of
 // `ExponentialBackoffMaxInterval`.
 func (this *Migrator) retryOperationWithExponentialBackoff(operation func() error, notFatalHint ...bool) (err error) {
-	var interval int64
 	maxRetries := int(this.migrationContext.MaxRetries())
 	maxInterval := this.migrationContext.ExponentialBackoffMaxInterval
 	for i := 0; i < maxRetries; i++ {
-		newInterval := int64(math.Exp2(float64(i - 1)))
-		if newInterval <= maxInterval {
-			interval = newInterval
-		}
+		interval := math.Min(
+			float64(maxInterval),
+			math.Max(1, math.Exp2(float64(i-1))),
+		)
+
 		if i != 0 {
-			time.Sleep(time.Duration(interval) * time.Second)
+			RetrySleepFn(time.Duration(interval) * time.Second)
 		}
 		err = operation()
 		if err == nil {
@@ -199,20 +200,20 @@ func (this *Migrator) canStopStreaming() bool {
 }
 
 // onChangelogEvent is called when a binlog event operation on the changelog table is intercepted.
-func (this *Migrator) onChangelogEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+func (this *Migrator) onChangelogEvent(dmlEntry *binlog.BinlogEntry) (err error) {
 	// Hey, I created the changelog table, I know the type of columns it has!
-	switch hint := dmlEvent.NewColumnValues.StringColumn(2); hint {
+	switch hint := dmlEntry.DmlEvent.NewColumnValues.StringColumn(2); hint {
 	case "state":
-		return this.onChangelogStateEvent(dmlEvent)
+		return this.onChangelogStateEvent(dmlEntry)
 	case "heartbeat":
-		return this.onChangelogHeartbeatEvent(dmlEvent)
+		return this.onChangelogHeartbeatEvent(dmlEntry)
 	default:
 		return nil
 	}
 }
 
-func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
-	changelogStateString := dmlEvent.NewColumnValues.StringColumn(3)
+func (this *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err error) {
+	changelogStateString := dmlEntry.DmlEvent.NewColumnValues.StringColumn(3)
 	changelogState := ReadChangelogState(changelogStateString)
 	this.migrationContext.Log.Infof("Intercepted changelog state %s", changelogState)
 	switch changelogState {
@@ -240,14 +241,17 @@ func (this *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (er
 	return nil
 }
 
-func (this *Migrator) onChangelogHeartbeatEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
-	changelogHeartbeatString := dmlEvent.NewColumnValues.StringColumn(3)
+func (this *Migrator) onChangelogHeartbeatEvent(dmlEntry *binlog.BinlogEntry) (err error) {
+	changelogHeartbeatString := dmlEntry.DmlEvent.NewColumnValues.StringColumn(3)
 
 	heartbeatTime, err := time.Parse(time.RFC3339Nano, changelogHeartbeatString)
 	if err != nil {
 		return this.migrationContext.Log.Errore(err)
 	} else {
 		this.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
+		this.applier.CurrentCoordinatesMutex.Lock()
+		this.applier.CurrentCoordinates = dmlEntry.Coordinates
+		this.applier.CurrentCoordinatesMutex.Unlock()
 		return nil
 	}
 }
@@ -350,8 +354,14 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
-	if err := this.initiateStreaming(); err != nil {
-		return err
+	// If we are resuming, we will initiateStreaming later when we know
+	// the coordinates to resume streaming.
+	// If not resuming, the streamer must be initiated before the applier,
+	// so that the "GhostTableMigrated" event gets processed.
+	if !this.migrationContext.Resume {
+		if err := this.initiateStreaming(); err != nil {
+			return err
+		}
 	}
 	if err := this.initiateApplier(); err != nil {
 		return err
@@ -367,6 +377,9 @@ func (this *Migrator) Migrate() (err error) {
 		} else {
 			this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := this.applier.AttemptInstantDDL(); err == nil {
+				if err := this.finalCleanup(); err != nil {
+					return nil
+				}
 				if err := this.hooksExecutor.onSuccess(); err != nil {
 					return err
 				}
@@ -379,9 +392,11 @@ func (this *Migrator) Migrate() (err error) {
 	}
 
 	initialLag, _ := this.inspector.getReplicationLag()
-	this.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
-	<-this.ghostTableMigrated
-	this.migrationContext.Log.Debugf("ghost table migrated")
+	if !this.migrationContext.Resume {
+		this.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
+		<-this.ghostTableMigrated
+		this.migrationContext.Log.Debugf("ghost table migrated")
+	}
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
 	// When running on replica, this means the replica has those tables. When running
 	// on master this is always true, of course, and yet it also implies this knowledge
@@ -389,10 +404,38 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
 		return err
 	}
+
 	// We can prepare some of the queries on the applier
 	if err := this.applier.prepareQueries(); err != nil {
 		return err
 	}
+
+	// inspectOriginalAndGhostTables must be called before creating checkpoint table.
+	if this.migrationContext.Checkpoint && !this.migrationContext.Resume {
+		if err := this.applier.CreateCheckpointTable(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to create checkpoint table, see further error details.")
+		}
+	}
+
+	if this.migrationContext.Resume {
+		lastCheckpoint, err := this.applier.ReadLastCheckpoint()
+		if err != nil {
+			return this.migrationContext.Log.Errorf("No checkpoint found, unable to resume: %+v", err)
+		}
+		this.migrationContext.Log.Infof("Resuming from checkpoint coords=%+v range_min=%+v range_max=%+v iteration=%d",
+			lastCheckpoint.LastTrxCoords, lastCheckpoint.IterationRangeMin.String(), lastCheckpoint.IterationRangeMax.String(), lastCheckpoint.Iteration)
+
+		this.migrationContext.MigrationIterationRangeMinValues = lastCheckpoint.IterationRangeMin
+		this.migrationContext.MigrationIterationRangeMaxValues = lastCheckpoint.IterationRangeMax
+		this.migrationContext.Iteration = lastCheckpoint.Iteration
+		this.migrationContext.TotalRowsCopied = lastCheckpoint.RowsCopied
+		this.migrationContext.TotalDMLEventsApplied = lastCheckpoint.DMLApplied
+		this.migrationContext.InitialStreamerCoords = lastCheckpoint.LastTrxCoords
+		if err := this.initiateStreaming(); err != nil {
+			return err
+		}
+	}
+
 	// Validation complete! We're good to execute this migration
 	if err := this.hooksExecutor.onValidated(); err != nil {
 		return err
@@ -422,6 +465,9 @@ func (this *Migrator) Migrate() (err error) {
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
 	go this.initiateStatus()
+	if this.migrationContext.Checkpoint {
+		go this.checkpointLoop()
+	}
 
 	this.migrationContext.Log.Debugf("Operating until row copy is complete")
 	this.consumeRowCopyComplete()
@@ -630,6 +676,12 @@ func (this *Migrator) cutOverTwoStep() (err error) {
 	if err := this.retryOperation(this.waitForEventsUpToLock); err != nil {
 		return err
 	}
+	// If we need to create triggers we need to do it here (only create part)
+	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
+		if err := this.retryOperation(this.applier.CreateTriggersOnGhost); err != nil {
+			return err
+		}
+	}
 	if err := this.retryOperation(this.applier.SwapTablesQuickAndBumpy); err != nil {
 		return err
 	}
@@ -658,8 +710,9 @@ func (this *Migrator) atomicCutOver() (err error) {
 	lockOriginalSessionIdChan := make(chan int64, 2)
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
+	var renameLockSessionId int64
 	go func() {
-		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked); err != nil {
+		if err := this.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, &renameLockSessionId); err != nil {
 			this.migrationContext.Log.Errore(err)
 		}
 	}()
@@ -672,6 +725,13 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// We know any newly incoming DML on original table is blocked.
 	if err := this.waitForEventsUpToLock(); err != nil {
 		return this.migrationContext.Log.Errore(err)
+	}
+
+	// If we need to create triggers we need to do it here (only create part)
+	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
+		if err := this.applier.CreateTriggersOnGhost(); err != nil {
+			this.migrationContext.Log.Errore(err)
+		}
 	}
 
 	// Step 2
@@ -717,6 +777,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// Now that we've found the RENAME blocking, AND the locking connection still alive,
 	// we know it is safe to proceed to release the lock
 
+	renameLockSessionId = renameSessionId
 	okToUnlockTable <- true
 	// BAM! magic table dropped, original table lock is released
 	// -> RENAME released -> queries on original are unblocked.
@@ -790,6 +851,9 @@ func (this *Migrator) initiateInspector() (err error) {
 		if this.migrationContext.CliMasterPassword != "" {
 			this.migrationContext.ApplierConnectionConfig.Password = this.migrationContext.CliMasterPassword
 		}
+		if err := this.migrationContext.ApplierConnectionConfig.RegisterTLSConfig(); err != nil {
+			return err
+		}
 		this.migrationContext.Log.Infof("Master forced to be %+v", *this.migrationContext.ApplierConnectionConfig.ImpliedKey)
 	}
 	// validate configs
@@ -805,7 +869,7 @@ func (this *Migrator) initiateInspector() (err error) {
 			this.migrationContext.AddThrottleControlReplicaKey(this.migrationContext.InspectorConnectionConfig.Key)
 		}
 	} else if this.migrationContext.InspectorIsAlsoApplier() && !this.migrationContext.AllowedRunningOnMaster {
-		return fmt.Errorf("It seems like this migration attempt to run directly on master. Preferably it would be executed on a replica (and this reduces load from the master). To proceed please provide --allow-on-master. Inspector config=%+v, applier config=%+v", this.migrationContext.InspectorConnectionConfig, this.migrationContext.ApplierConnectionConfig)
+		return ErrMigrationNotAllowedOnMaster
 	}
 	if err := this.inspector.validateLogSlaveUpdates(); err != nil {
 		return err
@@ -1052,14 +1116,14 @@ func (this *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		return
 	}
 
-	currentBinlogCoordinates := *this.eventsStreamer.GetCurrentBinlogCoordinates()
+	currentBinlogCoordinates := this.eventsStreamer.GetCurrentBinlogCoordinates()
 
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 		len(this.applyEventsQueue), cap(this.applyEventsQueue),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(this.migrationContext.ElapsedRowCopyTime()),
-		currentBinlogCoordinates,
+		currentBinlogCoordinates.DisplayString(),
 		this.migrationContext.GetCurrentLagDuration().Seconds(),
 		this.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds(),
 		state,
@@ -1096,8 +1160,8 @@ func (this *Migrator) initiateStreaming() error {
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.GetChangelogTableName(),
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			return this.onChangelogEvent(dmlEvent)
+		func(dmlEntry *binlog.BinlogEntry) error {
+			return this.onChangelogEvent(dmlEntry)
 		},
 	)
 
@@ -1117,7 +1181,7 @@ func (this *Migrator) initiateStreaming() error {
 			if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 				return
 			}
-			this.migrationContext.SetRecentBinlogCoordinates(*this.eventsStreamer.GetCurrentBinlogCoordinates())
+			this.migrationContext.SetRecentBinlogCoordinates(this.eventsStreamer.GetCurrentBinlogCoordinates())
 		}
 	}()
 	return nil
@@ -1130,8 +1194,8 @@ func (this *Migrator) addDMLEventsListener() error {
 		false,
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
-		func(dmlEvent *binlog.BinlogDMLEvent) error {
-			this.applyEventsQueue <- newApplyEventStructByDML(dmlEvent)
+		func(dmlEntry *binlog.BinlogEntry) error {
+			this.applyEventsQueue <- newApplyEventStructByDML(dmlEntry)
 			return nil
 		},
 	)
@@ -1156,32 +1220,37 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}
-	if err := this.applier.ValidateOrDropExistingTables(); err != nil {
-		return err
-	}
-	if err := this.applier.CreateChangelogTable(); err != nil {
-		this.migrationContext.Log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
-		return err
-	}
-	if err := this.applier.CreateGhostTable(); err != nil {
-		this.migrationContext.Log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
-		return err
-	}
-
-	if err := this.applier.AlterGhost(); err != nil {
-		this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
-		return err
-	}
-
-	if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
-		// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
-		// so we should copy AUTO_INCREMENT value onto our ghost table.
-		if err := this.applier.AlterGhostAutoIncrement(); err != nil {
-			this.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+	if !this.migrationContext.Resume {
+		if err := this.applier.ValidateOrDropExistingTables(); err != nil {
 			return err
 		}
+		if err := this.applier.CreateChangelogTable(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			return err
+		}
+		if err := this.applier.CreateGhostTable(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+			return err
+		}
+		if err := this.applier.AlterGhost(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
+			return err
+		}
+
+		if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
+			// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
+			// so we should copy AUTO_INCREMENT value onto our ghost table.
+			if err := this.applier.AlterGhostAutoIncrement(); err != nil {
+				this.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+				return err
+			}
+		}
+		this.applier.WriteChangelogState(string(GhostTableMigrated))
 	}
-	this.applier.WriteChangelogState(string(GhostTableMigrated))
+	if err := this.applier.StateMetadataLockInstrument(); err != nil {
+		this.migrationContext.Log.Errorf("Unable to enable metadata lock instrument, see further error details. Bailing out")
+		return err
+	}
 	go this.applier.InitiateHeartbeat()
 	return nil
 }
@@ -1247,6 +1316,17 @@ func (this *Migrator) iterateChunks() error {
 				if err != nil {
 					return err // wrapping call will retry
 				}
+
+				if this.migrationContext.PanicOnWarnings {
+					if len(this.migrationContext.MigrationLastInsertSQLWarnings) > 0 {
+						for _, warning := range this.migrationContext.MigrationLastInsertSQLWarnings {
+							this.migrationContext.Log.Infof("ApplyIterationInsertQuery has SQL warnings! %s", warning)
+						}
+						joinedWarnings := strings.Join(this.migrationContext.MigrationLastInsertSQLWarnings, "; ")
+						terminateRowIteration(fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings))
+					}
+				}
+
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
 				return nil
@@ -1301,6 +1381,11 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		if err := this.retryOperation(applyEventFunc); err != nil {
 			return this.migrationContext.Log.Errore(err)
 		}
+		// update applier coordinates
+		this.applier.CurrentCoordinatesMutex.Lock()
+		this.applier.CurrentCoordinates = eventStruct.coords
+		this.applier.CurrentCoordinatesMutex.Unlock()
+
 		if nonDmlStructToApply != nil {
 			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
 			// We need to handle it!
@@ -1310,6 +1395,72 @@ func (this *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		}
 	}
 	return nil
+}
+
+// Checkpoint attempts to write a checkpoint of the Migrator's current state.
+// It gets the binlog coordinates of the last received trx and waits until the
+// applier reaches that trx. At that point it's safe to resume from these coordinates.
+func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
+	coords := this.eventsStreamer.GetCurrentBinlogCoordinates()
+	this.applier.LastIterationRangeMutex.Lock()
+	if this.applier.LastIterationRangeMaxValues == nil || this.applier.LastIterationRangeMinValues == nil {
+		this.applier.LastIterationRangeMutex.Unlock()
+		return nil, errors.New("iteration range is empty, not checkpointing...")
+	}
+	chk := &Checkpoint{
+		Iteration:         this.migrationContext.GetIteration(),
+		IterationRangeMin: this.applier.LastIterationRangeMinValues.Clone(),
+		IterationRangeMax: this.applier.LastIterationRangeMaxValues.Clone(),
+		LastTrxCoords:     coords,
+		RowsCopied:        atomic.LoadInt64(&this.migrationContext.TotalRowsCopied),
+		DMLApplied:        atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
+	}
+	this.applier.LastIterationRangeMutex.Unlock()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			this.applier.CurrentCoordinatesMutex.Lock()
+			if coords.SmallerThanOrEquals(this.applier.CurrentCoordinates) {
+				id, err := this.applier.WriteCheckpoint(chk)
+				chk.Id = id
+				this.applier.CurrentCoordinatesMutex.Unlock()
+				return chk, err
+			}
+			this.applier.CurrentCoordinatesMutex.Unlock()
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+}
+
+func (this *Migrator) checkpointLoop() {
+	if this.migrationContext.Noop {
+		this.migrationContext.Log.Debugf("Noop operation; not really checkpointing")
+		return
+	}
+	checkpointInterval := time.Duration(this.migrationContext.CheckpointIntervalSeconds) * time.Second
+	ticker := time.NewTicker(checkpointInterval)
+	for t := range ticker.C {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return
+		}
+		this.migrationContext.Log.Infof("starting checkpoint at %+v", t)
+		ctx, cancel := context.WithTimeout(context.Background(), checkpointTimeout)
+		chk, err := this.Checkpoint(ctx)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				this.migrationContext.Log.Errorf("checkpoint attempt timed out after %+v", checkpointTimeout)
+			} else {
+				this.migrationContext.Log.Errorf("error attempting checkpoint: %+v", err)
+			}
+		} else {
+			this.migrationContext.Log.Infof("checkpoint success at coords=%+v range_min=%+v range_max=%+v iteration=%d",
+				chk.LastTrxCoords.DisplayString(), chk.IterationRangeMin.String(), chk.IterationRangeMax.String(), chk.Iteration)
+		}
+		cancel()
+	}
 }
 
 // executeWriteFuncs writes data via applier: both the rowcopy and the events backlog.
@@ -1388,6 +1539,9 @@ func (this *Migrator) finalCleanup() error {
 	}
 
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
+		return err
+	}
+	if err := this.retryOperation(this.applier.DropCheckpointTable); err != nil {
 		return err
 	}
 	if this.migrationContext.OkToDropTable && !this.migrationContext.TestOnReplica {

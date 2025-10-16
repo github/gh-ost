@@ -325,7 +325,34 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 	}
 }
 
-func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
+func TestBuildUniqueKeyRangeEndPreparedQueryViaOffset(t *testing.T) {
+	databaseName := "mydb"
+	originalTableName := "tbl"
+	var chunkSize int64 = 500
+	{
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+		rangeStartArgs := []interface{}{3, 17}
+		rangeEndArgs := []interface{}{103, 117}
+
+		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		require.NoError(t, err)
+		expected := `
+			select /* gh-ost mydb.tbl test */
+				name, position
+			from
+				mydb.tbl
+			where
+				((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
+			order by
+				name asc, position asc
+			limit 1
+			offset 499`
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
+	}
+}
+
+func TestBuildUniqueKeyRangeEndPreparedQueryViaTemptable(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"
 	var chunkSize int64 = 500
@@ -337,7 +364,8 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		require.NoError(t, err)
 		expected := `
-			select /* gh-ost mydb.tbl test */ name, position
+			select /* gh-ost mydb.tbl test */
+				name, position
 			from (
 				select
 					name, position
@@ -346,7 +374,8 @@ func TestBuildUniqueKeyRangeEndPreparedQuery(t *testing.T) {
 				where ((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
 				order by
 					name asc, position asc
-				limit 500) select_osc_chunk
+				limit 500
+			) select_osc_chunk
 			order by
 				name desc, position desc
 			limit 1`
@@ -760,4 +789,29 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 		require.Equal(t, []interface{}{3, "testname", int8(-17), uint8(254)}, sharedArgs)
 		require.Equal(t, []interface{}{uint8(253)}, uniqueKeyArgs)
 	}
+}
+
+func TestCheckpointQueryBuilder(t *testing.T) {
+	databaseName := "mydb"
+	tableName := "_tbl_ghk"
+	valueArgs := []interface{}{"mona", "mascot", int8(-17), "anothername", "anotherposition", int8(-2)}
+	uniqueKeyColumns := NewColumnList([]string{"name", "position", "my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长很长很长"})
+	builder, err := NewCheckpointQueryBuilder(databaseName, tableName, uniqueKeyColumns)
+	require.NoError(t, err)
+	query, uniqueKeyArgs, err := builder.BuildQuery(valueArgs)
+	require.NoError(t, err)
+	expected := `
+		insert /* gh-ost */ into mydb._tbl_ghk
+		(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
+		 gh_ost_rows_copied, gh_ost_dml_applied,
+		 name_min, position_min, my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长_min,
+		 name_max, position_max, my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长_max)
+		values
+		(unix_timestamp(now()), ?, ?,
+			 ?, ?,
+			 ?, ?, ?,
+			 ?, ?, ?)
+    `
+	require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+	require.Equal(t, []interface{}{"mona", "mascot", int8(-17), "anothername", "anotherposition", int8(-2)}, uniqueKeyArgs)
 }

@@ -76,9 +76,8 @@ func (ws *ExitStrategy) WaitUntilReady(ctx context.Context, target StrategyTarge
 			if err != nil {
 				if !strings.Contains(err.Error(), "No such container") {
 					return err
-				} else {
-					return nil
 				}
+				return nil
 			}
 			if state.Running {
 				time.Sleep(ws.PollInterval)
