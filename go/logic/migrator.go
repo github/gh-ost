@@ -73,7 +73,6 @@ const (
 // Migrator is the main schema migration flow manager.
 type Migrator struct {
 	appVersion       string
-	parser           *sql.AlterTableParser
 	inspector        *Inspector
 	applier          *Applier
 	eventsStreamer   *EventsStreamer
@@ -101,7 +100,6 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		appVersion:                 appVersion,
 		hooksExecutor:              NewHooksExecutor(context),
 		migrationContext:           context,
-		parser:                     sql.NewAlterTableParser(),
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
@@ -262,24 +260,24 @@ func (this *Migrator) listenOnPanicAbort() {
 	this.migrationContext.Log.Fatale(err)
 }
 
-// validateAlterStatement validates the `alter` statement meets criteria.
-// At this time this means:
-// - column renames are approved
-// - no table rename allowed
-func (this *Migrator) validateAlterStatement() (err error) {
-	if this.parser.IsRenameTable() {
-		return ErrMigratorUnsupportedRenameAlter
-	}
-	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
-		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
-		if !this.migrationContext.ApproveRenamedColumns {
-			return fmt.Errorf("gh-ost believes the ALTER statement renames columns, as follows: %v; as precaution, you are asked to confirm gh-ost is correct, and provide with `--approve-renamed-columns`, and we're all happy. Or you can skip renamed columns via `--skip-renamed-columns`, in which case column data may be lost", this.parser.GetNonTrivialRenames())
-		}
-		this.migrationContext.Log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", this.parser.GetNonTrivialRenames())
-	}
-	this.migrationContext.DroppedColumnsMap = this.parser.DroppedColumnsMap()
-	return nil
-}
+// // validateAlterStatement validates the `alter` statement meets criteria.
+// // At this time this means:
+// // - column renames are approved
+// // - no table rename allowed
+// func (this *Migrator) validateAlterStatement() (err error) {
+// 	if this.parser.IsRenameTable() {
+// 		return ErrMigratorUnsupportedRenameAlter
+// 	}
+// 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
+// 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
+// 		if !this.migrationContext.ApproveRenamedColumns {
+// 			return fmt.Errorf("gh-ost believes the ALTER statement renames columns, as follows: %v; as precaution, you are asked to confirm gh-ost is correct, and provide with `--approve-renamed-columns`, and we're all happy. Or you can skip renamed columns via `--skip-renamed-columns`, in which case column data may be lost", this.parser.GetNonTrivialRenames())
+// 		}
+// 		this.migrationContext.Log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", this.parser.GetNonTrivialRenames())
+// 	}
+// 	this.migrationContext.DroppedColumnsMap = this.parser.DroppedColumnsMap()
+// 	return nil
+// }
 
 func (this *Migrator) countTableRows() (err error) {
 	if !this.migrationContext.CountTableRows {
@@ -340,12 +338,12 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onStartup(); err != nil {
 		return err
 	}
-	if err := this.parser.ParseAlterStatement(this.migrationContext.AlterStatement); err != nil {
-		return err
-	}
-	if err := this.validateAlterStatement(); err != nil {
-		return err
-	}
+	// if err := this.parser.ParseAlterStatement(this.migrationContext.AlterStatement); err != nil {
+	// 	return err
+	// }
+	// if err := this.validateAlterStatement(); err != nil {
+	// 	return err
+	// }
 
 	// After this point, we'll need to teardown anything that's been started
 	//   so we don't leave things hanging around
@@ -1232,19 +1230,19 @@ func (this *Migrator) initiateApplier() error {
 			this.migrationContext.Log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
 			return err
 		}
-		if err := this.applier.AlterGhost(); err != nil {
-			this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
-			return err
-		}
+		// if err := this.applier.AlterGhost(); err != nil {
+		// 	this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
+		// 	return err
+		// }
 
-		if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
-			// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
-			// so we should copy AUTO_INCREMENT value onto our ghost table.
-			if err := this.applier.AlterGhostAutoIncrement(); err != nil {
-				this.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
-				return err
-			}
-		}
+		// if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
+		// 	// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
+		// 	// so we should copy AUTO_INCREMENT value onto our ghost table.
+		// 	if err := this.applier.AlterGhostAutoIncrement(); err != nil {
+		// 		this.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+		// 		return err
+		// 	}
+		// }
 		this.applier.WriteChangelogState(string(GhostTableMigrated))
 	}
 	if err := this.applier.StateMetadataLockInstrument(); err != nil {

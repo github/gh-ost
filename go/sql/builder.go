@@ -56,6 +56,8 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 			token = fmt.Sprintf("convert_tz(?, '%s', '%s')", column.timezoneConversion.ToTimezone, "+00:00")
 		} else if column.enumToTextConversion {
 			token = fmt.Sprintf("ELT(?, %s)", column.EnumValues)
+		} else if column.unhexConversion {
+			token = "unhex(?)"
 		} else if column.Type == JSONColumnType {
 			token = "convert(? using utf8mb4)"
 		} else {
@@ -64,6 +66,30 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 		values[i] = token
 	}
 	return values
+}
+
+// used at NewDMLUpdateQueryBuilder
+func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
+	if columns.Len() == 0 {
+		return "", fmt.Errorf("Got 0 columns in BuildSetPreparedClause")
+	}
+	setTokens := []string{}
+	for _, column := range columns.Columns() {
+		var setToken string
+		if column.timezoneConversion != nil {
+			setToken = fmt.Sprintf("%s=convert_tz(?, '%s', '%s')", EscapeName(column.Name), column.timezoneConversion.ToTimezone, "+00:00")
+		} else if column.enumToTextConversion {
+			setToken = fmt.Sprintf("%s=ELT(?, %s)", EscapeName(column.Name), column.EnumValues)
+		} else if column.unhexConversion {
+			setToken = fmt.Sprintf("%s=UNHEX(?)", EscapeName(column.Name))
+		} else if column.Type == JSONColumnType {
+			setToken = fmt.Sprintf("%s=convert(? using utf8mb4)", EscapeName(column.Name))
+		} else {
+			setToken = fmt.Sprintf("%s=?", EscapeName(column.Name))
+		}
+		setTokens = append(setTokens, setToken)
+	}
+	return strings.Join(setTokens, ", "), nil
 }
 
 func buildPreparedValues(length int) []string {
@@ -179,27 +205,6 @@ func (b *CheckpointInsertQueryBuilder) BuildQuery(uniqueKeyArgs []interface{}) (
 	return b.preparedStatement, convertedArgs, nil
 }
 
-func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
-	if columns.Len() == 0 {
-		return "", fmt.Errorf("Got 0 columns in BuildSetPreparedClause")
-	}
-	setTokens := []string{}
-	for _, column := range columns.Columns() {
-		var setToken string
-		if column.timezoneConversion != nil {
-			setToken = fmt.Sprintf("%s=convert_tz(?, '%s', '%s')", EscapeName(column.Name), column.timezoneConversion.ToTimezone, "+00:00")
-		} else if column.enumToTextConversion {
-			setToken = fmt.Sprintf("%s=ELT(?, %s)", EscapeName(column.Name), column.EnumValues)
-		} else if column.Type == JSONColumnType {
-			setToken = fmt.Sprintf("%s=convert(? using utf8mb4)", EscapeName(column.Name))
-		} else {
-			setToken = fmt.Sprintf("%s=?", EscapeName(column.Name))
-		}
-		setTokens = append(setTokens, setToken)
-	}
-	return strings.Join(setTokens, ", "), nil
-}
-
 func BuildRangeComparison(columns []string, values []string, args []interface{}, comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
 	if len(columns) == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 columns in GetRangeComparison")
@@ -260,25 +265,30 @@ func BuildRangePreparedComparison(columns *ColumnList, args []interface{}, compa
 	return BuildRangeComparison(columns.Names(), values, args, comparisonSign)
 }
 
-func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, noWait bool) (result string, explodedArgs []interface{}, err error) {
-	if len(sharedColumns) == 0 {
+func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns *ColumnList, mappedSharedColumns *ColumnList, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, noWait bool) (result string, explodedArgs []interface{}, err error) {
+	mappedSharedColumnNames := mappedSharedColumns.Names()
+
+	if sharedColumns.Len() == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
 	databaseName = EscapeName(databaseName)
 	originalTableName = EscapeName(originalTableName)
 	ghostTableName = EscapeName(ghostTableName)
 
-	mappedSharedColumns = duplicateNames(mappedSharedColumns)
-	for i := range mappedSharedColumns {
-		mappedSharedColumns[i] = EscapeName(mappedSharedColumns[i])
-	}
-	mappedSharedColumnsListing := strings.Join(mappedSharedColumns, ", ")
+	mappedSharedColumnNames = duplicateNames(mappedSharedColumnNames)
 
-	sharedColumns = duplicateNames(sharedColumns)
-	for i := range sharedColumns {
-		sharedColumns[i] = EscapeName(sharedColumns[i])
+	for i, c := range mappedSharedColumns.columns {
+		mappedSharedColumnNames[i] = EscapeName(c.Name)
 	}
-	sharedColumnsListing := strings.Join(sharedColumns, ", ")
+	mappedSharedColumnsListing := strings.Join(mappedSharedColumnNames, ", ")
+
+	sharedColumnNames := sharedColumns.Names()
+
+	sharedColumnNames = duplicateNames(sharedColumnNames)
+	for i, c := range sharedColumns.columns {
+		sharedColumnNames[i] = EscapeName(c.WrapInMapExpression(c.Name))
+	}
+	sharedColumnsListing := strings.Join(sharedColumnNames, ", ")
 
 	uniqueKey = EscapeName(uniqueKey)
 	var minRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
@@ -323,7 +333,7 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	return result, explodedArgs, nil
 }
 
-func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, noWait bool) (result string, explodedArgs []interface{}, err error) {
+func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns *ColumnList, mappedSharedColumns *ColumnList, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, noWait bool) (result string, explodedArgs []interface{}, err error) {
 	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
 	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, noWait)

@@ -16,7 +16,6 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
-	"github.com/github/gh-ost/go/sql"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/log"
 
@@ -68,7 +67,6 @@ func main() {
 
 	flag.StringVar(&migrationContext.DatabaseName, "database", "", "database name (mandatory)")
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
-	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
 	flag.BoolVar(&migrationContext.AttemptInstantDDL, "attempt-instant-ddl", false, "Attempt to use instant DDL for this migration first")
 	storageEngine := flag.String("storage-engine", "innodb", "Specify table storage engine (default: 'innodb'). When 'rocksdb': the session transaction isolation level is changed from REPEATABLE_READ to READ_COMMITTED.")
 
@@ -206,31 +204,10 @@ func main() {
 
 	migrationContext.SetConnectionCharset(*charset)
 
-	if migrationContext.AlterStatement == "" {
-		log.Fatal("--alter must be provided and statement must not be empty")
-	}
-	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
-	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
-
-	if migrationContext.DatabaseName == "" {
-		if parser.HasExplicitSchema() {
-			migrationContext.DatabaseName = parser.GetExplicitSchema()
-		} else {
-			log.Fatal("--database must be provided and database name must not be empty, or --alter must specify database name")
-		}
-	}
-
 	if err := flag.Set("database", url.QueryEscape(migrationContext.DatabaseName)); err != nil {
 		migrationContext.Log.Fatale(err)
 	}
 
-	if migrationContext.OriginalTableName == "" {
-		if parser.HasExplicitTable() {
-			migrationContext.OriginalTableName = parser.GetExplicitTable()
-		} else {
-			log.Fatal("--table must be provided and table name must not be empty, or --alter must specify table name")
-		}
-	}
 	migrationContext.Noop = !(*executeFlag)
 	if migrationContext.AllowedRunningOnMaster && migrationContext.TestOnReplica {
 		migrationContext.Log.Fatal("--allow-on-master and --test-on-replica are mutually exclusive")

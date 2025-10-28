@@ -199,6 +199,10 @@ func (this *Inspector) inspectOriginalAndGhostTables() (err error) {
 			this.migrationContext.MappedSharedColumns.SetEnumToTextConversion(column.Name)
 			this.migrationContext.MappedSharedColumns.SetEnumValues(column.Name, column.EnumValues)
 		}
+		if column.Name == mappedColumn.Name && column.Type == sql.UnknownColumnType && mappedColumn.Type == sql.BinaryColumnType {
+			this.migrationContext.MappedSharedColumns.SetUnHexConversion(column.Name)
+			this.migrationContext.SharedColumns.SetUnHexConversion(column.Name)
+		}
 		if column.Name == mappedColumn.Name && column.Charset != mappedColumn.Charset {
 			this.migrationContext.SharedColumns.SetCharsetConversion(column.Name, column.Charset, mappedColumn.Charset)
 		}

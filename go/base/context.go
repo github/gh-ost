@@ -78,10 +78,8 @@ func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleRea
 type MigrationContext struct {
 	Uuid string
 
-	DatabaseName          string
-	OriginalTableName     string
-	AlterStatement        string
-	AlterStatementOptions string // anything following the 'ALTER TABLE [schema.]table' from AlterStatement
+	DatabaseName      string
+	OriginalTableName string
 
 	countMutex               sync.Mutex
 	countTableRowsCancelFunc func()

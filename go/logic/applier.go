@@ -204,11 +204,14 @@ func (this *Applier) generateSqlModeQuery() string {
 // generateInstantDDLQuery returns the SQL for this ALTER operation
 // with an INSTANT assertion (requires MySQL 8.0+)
 func (this *Applier) generateInstantDDLQuery() string {
-	return fmt.Sprintf(`ALTER /* gh-ost */ TABLE %s.%s %s, ALGORITHM=INSTANT`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
-		this.migrationContext.AlterStatementOptions,
-	)
+	// raise not implmented
+	panic("not implemented")
+
+	// return fmt.Sprintf(`ALTER /* gh-ost */ TABLE %s.%s %s, ALGORITHM=INSTANT`,
+	// 	sql.EscapeName(this.migrationContext.DatabaseName),
+	// 	sql.EscapeName(this.migrationContext.OriginalTableName),
+	// 	this.migrationContext.AlterStatementOptions,
+	// )
 }
 
 // readTableColumns reads table columns on applier
@@ -296,12 +299,37 @@ func (this *Applier) AttemptInstantDDL() error {
 
 // CreateGhostTable creates the ghost table on the applier host
 func (this *Applier) CreateGhostTable() error {
-	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s like %s.%s`,
+	lines := []string{
+		"`id` char(24) NOT NULL,",
+		"`v` binary(12) NOT NULL,",
+		"`partnerID` binary(12) NOT NULL,",
+		"`creator` binary(12) NOT NULL,",
+		"`credit` bigint NOT NULL,",
+		"`deleted` tinyint NOT NULL,",
+		"`type` varchar(255) NOT NULL,",
+		"`createdAt` datetime NOT NULL,",
+		"`updatedAt` datetime NOT NULL,",
+		"`describe` varchar(255) DEFAULT NULL,",
+		"`photo` varchar(255) DEFAULT NULL,",
+		"`connectingId` varchar(255) DEFAULT NULL,",
+		"`number` varchar(255) DEFAULT NULL,",
+		"`partnerDeleted` tinyint NOT NULL DEFAULT '0',",
+		"`bookDeleted` tinyint NOT NULL DEFAULT '0',",
+		"`hasHistory` tinyint NOT NULL DEFAULT '0',",
+		"`date` datetime DEFAULT NULL,",
+		"PRIMARY KEY (`id`),",
+		"KEY `IDX_944228763edcf3d5ae021a2d4f` (`partnerID`),",
+		"KEY `i_bill_creator_v` (`creator`,`v`(6))",
+	}
+
+	ddl := strings.Join(lines, "\n")
+
+	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s (%s)`,
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.OriginalTableName),
+		ddl,
 	)
+
 	this.migrationContext.Log.Infof("Creating ghost table %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName),
 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
@@ -336,45 +364,45 @@ func (this *Applier) CreateGhostTable() error {
 }
 
 // AlterGhost applies `alter` statement on ghost table
-func (this *Applier) AlterGhost() error {
-	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s %s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-		this.migrationContext.AlterStatementOptions,
-	)
-	this.migrationContext.Log.Infof("Altering ghost table %s.%s",
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
-	)
-	this.migrationContext.Log.Debugf("ALTER statement: %s", query)
+// func (this *Applier) AlterGhost() error {
+// 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s %s`,
+// 		sql.EscapeName(this.migrationContext.DatabaseName),
+// 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+// 		this.migrationContext.AlterStatementOptions,
+// 	)
+// 	this.migrationContext.Log.Infof("Altering ghost table %s.%s",
+// 		sql.EscapeName(this.migrationContext.DatabaseName),
+// 		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+// 	)
+// 	this.migrationContext.Log.Debugf("ALTER statement: %s", query)
 
-	err := func() error {
-		tx, err := this.db.Begin()
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
+// 	err := func() error {
+// 		tx, err := this.db.Begin()
+// 		if err != nil {
+// 			return err
+// 		}
+// 		defer tx.Rollback()
 
-		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
-		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
+// 		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, this.migrationContext.ApplierTimeZone)
+// 		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, this.generateSqlModeQuery())
 
-		if _, err := tx.Exec(sessionQuery); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(query); err != nil {
-			return err
-		}
-		this.migrationContext.Log.Infof("Ghost table altered")
-		if err := tx.Commit(); err != nil {
-			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
-			// there's no need to commit; but let's do this the legit way anyway.
-			return err
-		}
-		return nil
-	}()
+// 		if _, err := tx.Exec(sessionQuery); err != nil {
+// 			return err
+// 		}
+// 		if _, err := tx.Exec(query); err != nil {
+// 			return err
+// 		}
+// 		this.migrationContext.Log.Infof("Ghost table altered")
+// 		if err := tx.Commit(); err != nil {
+// 			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
+// 			// there's no need to commit; but let's do this the legit way anyway.
+// 			return err
+// 		}
+// 		return nil
+// 	}()
 
-	return err
-}
+// 	return err
+// }
 
 // AlterGhost applies `alter` statement on ghost table
 func (this *Applier) AlterGhostAutoIncrement() error {
@@ -883,8 +911,8 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.GetGhostTableName(),
-		this.migrationContext.SharedColumns.Names(),
-		this.migrationContext.MappedSharedColumns.Names(),
+		this.migrationContext.SharedColumns,
+		this.migrationContext.MappedSharedColumns,
 		this.migrationContext.UniqueKey.Name,
 		&this.migrationContext.UniqueKey.Columns,
 		this.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),

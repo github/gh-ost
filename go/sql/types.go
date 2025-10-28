@@ -55,6 +55,21 @@ type Column struct {
 	CharacterSetName  string
 	Nullable          bool
 	MySQLType         string
+	unhexConversion   bool
+}
+
+func (this *Column) WrapInMapExpression(inputName string) string {
+	if this.timezoneConversion != nil {
+		return fmt.Sprintf("convert_tz(%s, '%s', '%s')", inputName, this.timezoneConversion.ToTimezone, "+00:00")
+	} else if this.enumToTextConversion {
+		return fmt.Sprintf("ELT(%s, %s)", inputName, this.EnumValues)
+	} else if this.unhexConversion {
+		return fmt.Sprintf("UNHEX(%s)", inputName)
+	} else if this.Type == JSONColumnType {
+		return fmt.Sprintf("convert(%s using utf8mb4)", inputName)
+	}
+
+	return inputName
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
@@ -225,6 +240,10 @@ func (this *ColumnList) HasTimezoneConversion(columnName string) bool {
 
 func (this *ColumnList) SetEnumToTextConversion(columnName string) {
 	this.GetColumn(columnName).enumToTextConversion = true
+}
+
+func (this *ColumnList) SetUnHexConversion(columnName string) {
+	this.GetColumn(columnName).unhexConversion = true
 }
 
 func (this *ColumnList) IsEnumToTextConversion(columnName string) bool {
