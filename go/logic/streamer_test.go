@@ -90,8 +90,8 @@ func (suite *EventsStreamerTestSuite) TestStreamEvents() {
 	streamCtx, cancel := context.WithCancel(context.Background())
 
 	dmlEvents := make([]*binlog.BinlogDMLEvent, 0)
-	err = streamer.AddListener(false, testMysqlDatabase, testMysqlTableName, func(event *binlog.BinlogDMLEvent) error {
-		dmlEvents = append(dmlEvents, event)
+	err = streamer.AddListener(false, testMysqlDatabase, testMysqlTableName, func(event *binlog.BinlogEntry) error {
+		dmlEvents = append(dmlEvents, event.DmlEvent)
 
 		// Stop once we've collected three events
 		if len(dmlEvents) == 3 {
@@ -165,8 +165,8 @@ func (suite *EventsStreamerTestSuite) TestStreamEventsAutomaticallyReconnects() 
 	streamCtx, cancel := context.WithCancel(context.Background())
 
 	dmlEvents := make([]*binlog.BinlogDMLEvent, 0)
-	err = streamer.AddListener(false, testMysqlDatabase, testMysqlTableName, func(event *binlog.BinlogDMLEvent) error {
-		dmlEvents = append(dmlEvents, event)
+	err = streamer.AddListener(false, testMysqlDatabase, testMysqlTableName, func(event *binlog.BinlogEntry) error {
+		dmlEvents = append(dmlEvents, event.DmlEvent)
 
 		// Stop once we've collected three events
 		if len(dmlEvents) == 3 {

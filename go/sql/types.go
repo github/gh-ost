@@ -38,10 +38,12 @@ type CharacterSetConversion struct {
 }
 
 type Column struct {
-	Name                 string
-	IsUnsigned           bool
-	IsVirtual            bool
-	Charset              string
+	Name       string
+	IsUnsigned bool
+	IsVirtual  bool
+	Charset    string
+	// Type represents a subset of MySQL types
+	// used for mapping columns to golang values.
 	Type                 ColumnType
 	EnumValues           string
 	timezoneConversion   *TimezoneConversion
@@ -50,6 +52,9 @@ type Column struct {
 	// https://github.com/github/gh-ost/issues/909
 	BinaryOctetLength uint
 	charsetConversion *CharacterSetConversion
+	CharacterSetName  string
+	Nullable          bool
+	MySQLType         string
 }
 
 func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
@@ -344,4 +349,10 @@ func (this *ColumnValues) String() string {
 		stringValues = append(stringValues, this.StringColumn(i))
 	}
 	return strings.Join(stringValues, ",")
+}
+
+func (this *ColumnValues) Clone() *ColumnValues {
+	cv := NewColumnValues(len(this.abstractValues))
+	copy(cv.abstractValues, this.abstractValues)
+	return cv
 }

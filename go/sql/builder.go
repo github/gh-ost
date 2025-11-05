@@ -20,6 +20,7 @@ const (
 	GreaterThanOrEqualsComparisonSign ValueComparisonSign = ">="
 	GreaterThanComparisonSign         ValueComparisonSign = ">"
 	NotEqualsComparisonSign           ValueComparisonSign = "!="
+	MaxColumnNameLength                                   = 64
 )
 
 // EscapeName will escape a db/table/column/... name by wrapping with backticks.
@@ -30,6 +31,21 @@ func EscapeName(name string) string {
 		name = unquoted
 	}
 	return fmt.Sprintf("`%s`", name)
+}
+
+// TruncateColumnName truncates a name so it can be used as a MySQL
+// column name, taking into account UTF-8 characters.
+func TruncateColumnName(name string, limit int) string {
+	truncatedName := name
+	chars := 0
+	for byteIdx := range name {
+		if chars >= limit {
+			truncatedName = name[:byteIdx]
+			break
+		}
+		chars++
+	}
+	return truncatedName
 }
 
 func buildColumnsPreparedValues(columns *ColumnList) []string {
@@ -99,6 +115,68 @@ func BuildEqualsComparison(columns []string, values []string) (result string, er
 func BuildEqualsPreparedComparison(columns []string) (result string, err error) {
 	values := buildPreparedValues(len(columns))
 	return BuildEqualsComparison(columns, values)
+}
+
+// It holds the prepared query statement so it doesn't need to be recreated every time.
+type CheckpointInsertQueryBuilder struct {
+	uniqueKeyColumns  *ColumnList
+	preparedStatement string
+}
+
+func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns *ColumnList) (*CheckpointInsertQueryBuilder, error) {
+	if uniqueKeyColumns.Len() == 0 {
+		return nil, fmt.Errorf("Got 0 columns in BuildSetCheckpointInsertQuery")
+	}
+	values := buildColumnsPreparedValues(uniqueKeyColumns)
+	minUniqueColNames := []string{}
+	maxUniqueColNames := []string{}
+	for _, name := range uniqueKeyColumns.Names() {
+		minColName := TruncateColumnName(name, MaxColumnNameLength-4) + "_min"
+		maxColName := TruncateColumnName(name, MaxColumnNameLength-4) + "_max"
+		minUniqueColNames = append(minUniqueColNames, minColName)
+		maxUniqueColNames = append(maxUniqueColNames, maxColName)
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+	stmt := fmt.Sprintf(`
+		insert /* gh-ost */
+		into %s.%s
+			(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
+			 gh_ost_rows_copied, gh_ost_dml_applied,
+  			 %s, %s)
+		values
+			(unix_timestamp(now()), ?, ?,
+			 ?, ?,
+			 %s, %s)`,
+		databaseName, tableName,
+		strings.Join(minUniqueColNames, ", "),
+		strings.Join(maxUniqueColNames, ", "),
+		strings.Join(values, ", "),
+		strings.Join(values, ", "),
+	)
+
+	b := &CheckpointInsertQueryBuilder{
+		uniqueKeyColumns:  uniqueKeyColumns,
+		preparedStatement: stmt,
+	}
+	return b, nil
+}
+
+// BuildQuery builds the insert query.
+func (b *CheckpointInsertQueryBuilder) BuildQuery(uniqueKeyArgs []interface{}) (string, []interface{}, error) {
+	if len(uniqueKeyArgs) != 2*b.uniqueKeyColumns.Len() {
+		return "", nil, fmt.Errorf("args count differs from 2 x unique key column count")
+	}
+	convertedArgs := make([]interface{}, 0, 2*b.uniqueKeyColumns.Len())
+	for i, column := range b.uniqueKeyColumns.Columns() {
+		minArg := column.convertArg(uniqueKeyArgs[i], true)
+		convertedArgs = append(convertedArgs, minArg)
+	}
+	for i, column := range b.uniqueKeyColumns.Columns() {
+		minArg := column.convertArg(uniqueKeyArgs[i+b.uniqueKeyColumns.Len()], true)
+		convertedArgs = append(convertedArgs, minArg)
+	}
+	return b.preparedStatement, convertedArgs, nil
 }
 
 func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {

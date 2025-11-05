@@ -23,12 +23,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/testcontainers/testcontainers-go/modules/mysql"
+	testmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 
 	"runtime"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -37,6 +38,7 @@ import (
 func TestMigratorOnChangelogEvent(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
 	migrator := NewMigrator(migrationContext, "1.2.3")
+	migrator.applier = NewApplier(migrationContext)
 
 	t.Run("heartbeat", func(t *testing.T) {
 		columnValues := sql.ToColumnValues([]interface{}{
@@ -45,10 +47,12 @@ func TestMigratorOnChangelogEvent(t *testing.T) {
 			"heartbeat",
 			"2022-08-16T00:45:10.52Z",
 		})
-		require.Nil(t, migrator.onChangelogEvent(&binlog.BinlogDMLEvent{
-			DatabaseName:    "test",
-			DML:             binlog.InsertDML,
-			NewColumnValues: columnValues,
+		require.Nil(t, migrator.onChangelogEvent(&binlog.BinlogEntry{
+			DmlEvent: &binlog.BinlogDMLEvent{
+				DatabaseName:    "test",
+				DML:             binlog.InsertDML,
+				NewColumnValues: columnValues},
+			Coordinates: mysql.NewFileBinlogCoordinates("mysql-bin.000004", int64(4)),
 		}))
 	})
 
@@ -68,10 +72,12 @@ func TestMigratorOnChangelogEvent(t *testing.T) {
 			"state",
 			AllEventsUpToLockProcessed,
 		})
-		require.Nil(t, migrator.onChangelogEvent(&binlog.BinlogDMLEvent{
-			DatabaseName:    "test",
-			DML:             binlog.InsertDML,
-			NewColumnValues: columnValues,
+		require.Nil(t, migrator.onChangelogEvent(&binlog.BinlogEntry{
+			DmlEvent: &binlog.BinlogDMLEvent{
+				DatabaseName:    "test",
+				DML:             binlog.InsertDML,
+				NewColumnValues: columnValues},
+			Coordinates: mysql.NewFileBinlogCoordinates("mysql-bin.000004", int64(4)),
 		}))
 		wg.Wait()
 	})
@@ -87,10 +93,12 @@ func TestMigratorOnChangelogEvent(t *testing.T) {
 			"state",
 			GhostTableMigrated,
 		})
-		require.Nil(t, migrator.onChangelogEvent(&binlog.BinlogDMLEvent{
-			DatabaseName:    "test",
-			DML:             binlog.InsertDML,
-			NewColumnValues: columnValues,
+		require.Nil(t, migrator.onChangelogEvent(&binlog.BinlogEntry{
+			DmlEvent: &binlog.BinlogDMLEvent{
+				DatabaseName:    "test",
+				DML:             binlog.InsertDML,
+				NewColumnValues: columnValues},
+			Coordinates: mysql.NewFileBinlogCoordinates("mysql-bin.000004", int64(4)),
 		}))
 	})
 
@@ -101,10 +109,12 @@ func TestMigratorOnChangelogEvent(t *testing.T) {
 			"state",
 			Migrated,
 		})
-		require.Nil(t, migrator.onChangelogEvent(&binlog.BinlogDMLEvent{
-			DatabaseName:    "test",
-			DML:             binlog.InsertDML,
-			NewColumnValues: columnValues,
+		require.Nil(t, migrator.onChangelogEvent(&binlog.BinlogEntry{
+			DmlEvent: &binlog.BinlogDMLEvent{
+				DatabaseName:    "test",
+				DML:             binlog.InsertDML,
+				NewColumnValues: columnValues},
+			Coordinates: mysql.NewFileBinlogCoordinates("mysql-bin.000004", int64(4)),
 		}))
 	})
 
@@ -115,10 +125,12 @@ func TestMigratorOnChangelogEvent(t *testing.T) {
 			"state",
 			ReadMigrationRangeValues,
 		})
-		require.Nil(t, migrator.onChangelogEvent(&binlog.BinlogDMLEvent{
-			DatabaseName:    "test",
-			DML:             binlog.InsertDML,
-			NewColumnValues: columnValues,
+		require.Nil(t, migrator.onChangelogEvent(&binlog.BinlogEntry{
+			DmlEvent: &binlog.BinlogDMLEvent{
+				DatabaseName:    "test",
+				DML:             binlog.InsertDML,
+				NewColumnValues: columnValues},
+			Coordinates: mysql.NewFileBinlogCoordinates("mysql-bin.000004", int64(4)),
 		}))
 	})
 }
@@ -285,11 +297,11 @@ type MigratorTestSuite struct {
 
 func (suite *MigratorTestSuite) SetupSuite() {
 	ctx := context.Background()
-	mysqlContainer, err := mysql.Run(ctx,
+	mysqlContainer, err := testmysql.Run(ctx,
 		testMysqlContainerImage,
-		mysql.WithDatabase(testMysqlDatabase),
-		mysql.WithUsername(testMysqlUser),
-		mysql.WithPassword(testMysqlPass),
+		testmysql.WithDatabase(testMysqlDatabase),
+		testmysql.WithUsername(testMysqlUser),
+		testmysql.WithPassword(testMysqlPass),
 		testcontainers.WithWaitStrategy(wait.ForExposedPort()),
 	)
 	suite.Require().NoError(err)
