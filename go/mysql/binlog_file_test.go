@@ -134,3 +134,19 @@ func TestIsLogPosOverflowBeyond4Bytes(t *testing.T) {
 		require.True(t, curCoordinates.IsLogPosOverflowBeyond4Bytes(preCoordinates))
 	}
 }
+
+func TestBinlogCoordinates_LogFileZeroPaddedTransition(t *testing.T) {
+	c1 := FileBinlogCoordinates{LogFile: "mysql-bin.999999", LogPos: 100}
+	c2 := FileBinlogCoordinates{LogFile: "mysql-bin.1000000", LogPos: 100}
+
+	require.True(t, c1.SmallerThan(&c2))
+}
+
+func TestBinlogCoordinates_SameLogFileDifferentPosition(t *testing.T) {
+	c1 := FileBinlogCoordinates{LogFile: "binlog.000001", LogPos: 100}
+	c2 := FileBinlogCoordinates{LogFile: "binlog.000001", LogPos: 200}
+
+	require.True(t, c1.SmallerThan(&c2))
+	require.False(t, c2.SmallerThan(&c1))
+	require.False(t, c1.SmallerThan(&c1))
+}
