@@ -99,15 +99,6 @@ func (this *FileBinlogCoordinates) SmallerThanOrEquals(other BinlogCoordinates) 
 	return this.LogFile == coord.LogFile && this.LogPos == coord.LogPos // No Type comparison
 }
 
-// FileSmallerThan returns true if this coordinate's file is strictly smaller than the other's.
-func (this *FileBinlogCoordinates) FileSmallerThan(other BinlogCoordinates) bool {
-	coord, ok := other.(*FileBinlogCoordinates)
-	if !ok || other == nil {
-		return false
-	}
-	return this.LogFile < coord.LogFile
-}
-
 // FileNumberDistance returns the numeric distance between this coordinate's file number and the other's.
 // Effectively it means "how many rotates/FLUSHes would make these coordinates's file reach the other's"
 func (this *FileBinlogCoordinates) FileNumberDistance(other *FileBinlogCoordinates) int {
