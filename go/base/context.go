@@ -104,6 +104,8 @@ type MigrationContext struct {
 	AzureMySQL               bool
 	AttemptInstantDDL        bool
 	Resume                   bool
+	Revert                   bool
+	OldTableName             string
 
 	// SkipPortValidation allows skipping the port validation in `ValidateConnection`
 	// This is useful when connecting to a MySQL instance where the external port
@@ -348,6 +350,9 @@ func getSafeTableName(baseName string, suffix string) string {
 // GetGhostTableName generates the name of ghost table, based on original table name
 // or a given table name
 func (this *MigrationContext) GetGhostTableName() string {
+	if this.Revert {
+		return this.OldTableName
+	}
 	if this.ForceTmpTableName != "" {
 		return getSafeTableName(this.ForceTmpTableName, "gho")
 	} else {

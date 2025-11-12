@@ -148,6 +148,8 @@ func main() {
 	flag.BoolVar(&migrationContext.Checkpoint, "checkpoint", false, "Enable migration checkpoints")
 	flag.Int64Var(&migrationContext.CheckpointIntervalSeconds, "checkpoint-seconds", 300, "The number of seconds between checkpoints")
 	flag.BoolVar(&migrationContext.Resume, "resume", false, "Attempt to resume migration from checkpoint")
+	flag.BoolVar(&migrationContext.Revert, "revert", false, "Attempt to revert completed migration")
+	flag.StringVar(&migrationContext.OldTableName, "old-table", "", "The name of the old table when using --revert, e.g. '_mytable_del'")
 
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")
@@ -291,6 +293,10 @@ func main() {
 		migrationContext.Log.Fatalf("--checkpoint-seconds should be >=10")
 	}
 
+	if migrationContext.Revert && migrationContext.OldTableName == "" {
+		migrationContext.Log.Fatalf("--revert must be called with --old-table")
+	}
+
 	switch *cutOver {
 	case "atomic", "default", "":
 		migrationContext.CutOverType = base.CutOverAtomic
@@ -347,9 +353,15 @@ func main() {
 	acceptSignals(migrationContext)
 
 	migrator := logic.NewMigrator(migrationContext, AppVersion)
-	if err := migrator.Migrate(); err != nil {
-		migrator.ExecOnFailureHook()
-		migrationContext.Log.Fatale(err)
+	if migrationContext.Revert {
+		if err := migrator.Revert(); err != nil {
+			migrationContext.Log.Fatale(err)
+		}
+	} else {
+		if err := migrator.Migrate(); err != nil {
+			migrator.ExecOnFailureHook()
+			migrationContext.Log.Fatale(err)
+		}
 	}
 	fmt.Fprintln(os.Stdout, "# Done")
 }
