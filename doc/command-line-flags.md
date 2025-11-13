@@ -318,6 +318,12 @@ Defaults to 1000 (1 second). Configures the HTTP throttler check timeout in mill
 
 Makes the _old_ table include a timestamp value. The _old_ table is what the original table is renamed to at the end of a successful migration. For example, if the table is `gh_ost_test`, then the _old_ table would normally be `_gh_ost_test_del`. With `--timestamp-old-table` it would be, for example, `_gh_ost_test_20170221103147_del`.
 
+### optimizer-switch
+
+Default is "prefer_ordering_index=on", this allow to override a `SET GLOBAL optimizer_switch=key=value` by one set on the session with `SET SESSION optimizer_switch=key=value`.
+You can find values on https://dev.mysql.com/doc/refman/8.0/en/switchable-optimizations.html.
+Example: `--optimizer-switch="prefer_ordering_index=off"`.
+
 ### tungsten
 
 See [`tungsten`](cheatsheet.md#tungsten) on the cheatsheet.
