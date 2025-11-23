@@ -351,6 +351,7 @@ func getSafeTableName(baseName string, suffix string) string {
 // or a given table name
 func (this *MigrationContext) GetGhostTableName() string {
 	if this.Revert {
+		// When reverting the "ghost" table is the _del table from the original migration.
 		return this.OldTableName
 	}
 	if this.ForceTmpTableName != "" {
@@ -371,7 +372,6 @@ func (this *MigrationContext) GetOldTableName() string {
 
 	suffix := "del"
 	if this.Revert {
-		// When reverting the "ghost" table is the _del table
 		suffix = "rev_del"
 	}
 	if this.TimestampOldTable {

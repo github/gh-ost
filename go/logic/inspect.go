@@ -102,7 +102,6 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 }
 
 func (this *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (columns *sql.ColumnList, virtualColumns *sql.ColumnList, uniqueKeys [](*sql.UniqueKey), err error) {
-	this.migrationContext.Log.Debugf("InspectTableColumnsAndUniqueKeys: %s", tableName)
 	uniqueKeys, err = this.getCandidateUniqueKeys(tableName)
 	if err != nil {
 		return columns, virtualColumns, uniqueKeys, err

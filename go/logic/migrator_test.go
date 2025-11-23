@@ -742,6 +742,7 @@ func (suite *MigratorTestSuite) TestRevert() {
 	var _tableName, checksum1, checksum2 string
 	rows, err := suite.db.Query(fmt.Sprintf("CHECKSUM TABLE %s, %s", testMysqlTableName, oldTableName))
 	suite.Require().NoError(err)
+	defer rows.Close()
 	suite.Require().True(rows.Next())
 	suite.Require().NoError(rows.Scan(&_tableName, &checksum1))
 	suite.Require().True(rows.Next())

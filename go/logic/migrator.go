@@ -364,7 +364,7 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	// If we are resuming, we will initiateStreaming later when we know
-	// the coordinates to resume streaming.
+	// the binlog coordinates to resume streaming from.
 	// If not resuming, the streamer must be initiated before the applier,
 	// so that the "GhostTableMigrated" event gets processed.
 	if !this.migrationContext.Resume {
@@ -504,7 +504,7 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 
-	if this.migrationContext.Checkpoint {
+	if this.migrationContext.Checkpoint && !this.migrationContext.Noop {
 		cutoverChk, err := this.CheckpointAfterCutOver()
 		if err != nil {
 			this.migrationContext.Log.Warningf("failed to checkpoint after cutover: %+v", err)
@@ -527,7 +527,6 @@ func (this *Migrator) Migrate() (err error) {
 // after the original cutover, then doing another cutover to swap the tables back.
 // The steps are similar to Migrate(), but without row copying.
 func (this *Migrator) Revert() error {
-	//TODO: add hooks
 	this.migrationContext.Log.Infof("Reverting %s.%s from %s.%s",
 		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName),
 		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OldTableName))
@@ -599,11 +598,17 @@ func (this *Migrator) Revert() error {
 	} else {
 		retrier = this.retryOperation
 	}
+	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
+		return err
+	}
 	if err := retrier(this.cutOver); err != nil {
 		return err
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
-	this.migrationContext.Log.Infof("Reverted %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	if err := this.hooksExecutor.onSuccess(); err != nil {
+		return err
+	}
+	this.migrationContext.Log.Infof("Done reverting %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
@@ -749,6 +754,7 @@ func (this *Migrator) waitForEventsUpToLock() error {
 				if lockProcessed.state == allEventsUpToLockProcessedChallenge {
 					this.migrationContext.Log.Infof("Waiting for events up to lock: got %s", lockProcessed.state)
 					found = true
+					this.lastLockProcessed = lockProcessed
 				} else {
 					this.migrationContext.Log.Infof("Waiting for events up to lock: skipping %s", lockProcessed.state)
 				}
@@ -757,7 +763,6 @@ func (this *Migrator) waitForEventsUpToLock() error {
 	}
 	waitForEventsUpToLockDuration := time.Since(waitForEventsUpToLockStartTime)
 
-	this.lastLockProcessed = lockProcessed
 	this.migrationContext.Log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
 	this.printStatus(ForcePrintStatusAndHintRule)
 
