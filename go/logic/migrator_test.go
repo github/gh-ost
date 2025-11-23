@@ -713,9 +713,9 @@ func (suite *MigratorTestSuite) TestRevert() {
 		suite.Require().NoError(err)
 		numRows += 1
 	}
-	for i := 0; i < numRows; i += 5 {
+	for i := 0; i < numRows; i += 7 {
 		_, err = suite.db.ExecContext(ctx,
-			fmt.Sprintf("UPDATE %s SET s=MD5('%d') where id=%d", getTestTableName(), i, 2*i))
+			fmt.Sprintf("UPDATE %s SET s=MD5('%d') where id=%d", getTestTableName(), 2*i, i))
 		suite.Require().NoError(err)
 	}
 
@@ -725,7 +725,7 @@ func (suite *MigratorTestSuite) TestRevert() {
 		migrationContext.ApplierConnectionConfig = connectionConfig
 		migrationContext.InspectorConnectionConfig = connectionConfig
 		migrationContext.SetConnectionConfig("innodb")
-		migrationContext.AlterStatement = "DROP INDEX idx1 (name)"
+		migrationContext.AlterStatement = "DROP INDEX idx1"
 		migrationContext.DropServeSocket = true
 		migrationContext.UseGTIDs = true
 		migrationContext.Revert = true
@@ -742,10 +742,12 @@ func (suite *MigratorTestSuite) TestRevert() {
 	var _tableName, checksum1, checksum2 string
 	rows, err := suite.db.Query(fmt.Sprintf("CHECKSUM TABLE %s, %s", testMysqlTableName, oldTableName))
 	suite.Require().NoError(err)
-	rows.Next()
-	rows.Scan(&_tableName, &checksum1)
-	rows.Next()
-	rows.Scan(&_tableName, &checksum2)
+	suite.Require().True(rows.Next())
+	suite.Require().NoError(rows.Scan(&_tableName, &checksum1))
+	suite.Require().True(rows.Next())
+	suite.Require().NoError(rows.Scan(&_tableName, &checksum2))
+	suite.Require().NoError(rows.Err())
+
 	suite.Require().Equal(checksum1, checksum2)
 }
 

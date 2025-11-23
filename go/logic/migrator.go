@@ -1544,10 +1544,10 @@ func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 	}
 }
 
-// CheckpointCutOver writes a final checkpoint after the cutover completes successfully.
+// CheckpointAfterCutOver writes a final checkpoint after the cutover completes successfully.
 func (this *Migrator) CheckpointAfterCutOver() (*Checkpoint, error) {
 	if this.lastLockProcessed == nil || this.lastLockProcessed.coords.IsEmpty() {
-		return nil, this.migrationContext.Log.Errorf("lastLockProcessed coords are empty: %+v")
+		return nil, this.migrationContext.Log.Errorf("lastLockProcessed coords are empty")
 	}
 
 	chk := &Checkpoint{
@@ -1564,7 +1564,7 @@ func (this *Migrator) CheckpointAfterCutOver() (*Checkpoint, error) {
 		chk.IterationRangeMin = this.applier.LastIterationRangeMinValues.Clone()
 	}
 	if this.applier.LastIterationRangeMaxValues != nil {
-		chk.IterationRangeMin = this.applier.LastIterationRangeMaxValues.Clone()
+		chk.IterationRangeMax = this.applier.LastIterationRangeMaxValues.Clone()
 	}
 	this.applier.LastIterationRangeMutex.Unlock()
 
