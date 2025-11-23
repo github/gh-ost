@@ -208,11 +208,34 @@ func main() {
 
 	migrationContext.SetConnectionCharset(*charset)
 
-	if migrationContext.AlterStatement == "" {
+	if migrationContext.AlterStatement == "" && !migrationContext.Revert {
 		log.Fatal("--alter must be provided and statement must not be empty")
 	}
 	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
 	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
+
+	if migrationContext.Revert {
+		if migrationContext.Resume {
+			log.Fatal("--revert cannot be used with --resume")
+		}
+		if migrationContext.OldTableName == "" {
+			migrationContext.Log.Fatalf("--revert must be called with --old-table")
+		}
+
+		// options irrelevant to revert mode
+		if migrationContext.AlterStatement != "" {
+			log.Warning("--alter was provided with --revert, it will be ignored")
+		}
+		if migrationContext.AttemptInstantDDL {
+			log.Warning("--attempt-instant-ddl was provided with --revert, it will be ignored")
+		}
+		if migrationContext.IncludeTriggers {
+			log.Warning("--include-triggers was provided with --revert, it will be ignored")
+		}
+		if migrationContext.DiscardForeignKeys {
+			log.Warning("--discard-foreign-keys was provided with --revert, it will be ignored")
+		}
+	}
 
 	if migrationContext.DatabaseName == "" {
 		if parser.HasExplicitSchema() {
@@ -293,10 +316,6 @@ func main() {
 		migrationContext.Log.Fatalf("--checkpoint-seconds should be >=10")
 	}
 
-	if migrationContext.Revert && migrationContext.OldTableName == "" {
-		migrationContext.Log.Fatalf("--revert must be called with --old-table")
-	}
-
 	switch *cutOver {
 	case "atomic", "default", "":
 		migrationContext.CutOverType = base.CutOverAtomic
@@ -353,15 +372,16 @@ func main() {
 	acceptSignals(migrationContext)
 
 	migrator := logic.NewMigrator(migrationContext, AppVersion)
+	var err error
 	if migrationContext.Revert {
-		if err := migrator.Revert(); err != nil {
-			migrationContext.Log.Fatale(err)
-		}
+		err = migrator.Revert()
 	} else {
-		if err := migrator.Migrate(); err != nil {
-			migrator.ExecOnFailureHook()
-			migrationContext.Log.Fatale(err)
-		}
+		err = migrator.Migrate()
+	}
+
+	if err != nil {
+		migrator.ExecOnFailureHook()
+		migrationContext.Log.Fatale(err)
 	}
 	fmt.Fprintln(os.Stdout, "# Done")
 }

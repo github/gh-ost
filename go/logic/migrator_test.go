@@ -725,7 +725,6 @@ func (suite *MigratorTestSuite) TestRevert() {
 		migrationContext.ApplierConnectionConfig = connectionConfig
 		migrationContext.InspectorConnectionConfig = connectionConfig
 		migrationContext.SetConnectionConfig("innodb")
-		migrationContext.AlterStatement = "DROP INDEX idx1"
 		migrationContext.DropServeSocket = true
 		migrationContext.UseGTIDs = true
 		migrationContext.Revert = true

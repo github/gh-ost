@@ -541,9 +541,6 @@ func (this *Migrator) Revert() error {
 	if err := this.hooksExecutor.onStartup(); err != nil {
 		return err
 	}
-	if err := this.parser.ParseAlterStatement(this.migrationContext.AlterStatement); err != nil {
-		return err
-	}
 	if err := this.validateAlterStatement(); err != nil {
 		return err
 	}
@@ -591,7 +588,10 @@ func (this *Migrator) Revert() error {
 	}
 
 	this.initiateThrottler()
+	go this.initiateStatus()
 	go this.executeDMLWriteFuncs()
+
+	this.printStatus(ForcePrintStatusRule)
 	var retrier func(func() error, ...bool) error
 	if this.migrationContext.CutOverExponentialBackoff {
 		retrier = this.retryOperationWithExponentialBackoff
@@ -605,6 +605,9 @@ func (this *Migrator) Revert() error {
 		return err
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
+	if err := this.finalCleanup(); err != nil {
+		return nil
+	}
 	if err := this.hooksExecutor.onSuccess(); err != nil {
 		return err
 	}
