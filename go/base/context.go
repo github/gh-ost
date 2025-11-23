@@ -369,14 +369,19 @@ func (this *MigrationContext) GetOldTableName() string {
 		tableName = this.OriginalTableName
 	}
 
+	suffix := "del"
+	if this.Revert {
+		// When reverting the "ghost" table is the _del table
+		suffix = "rev_del"
+	}
 	if this.TimestampOldTable {
 		t := this.StartTime
 		timestamp := fmt.Sprintf("%d%02d%02d%02d%02d%02d",
 			t.Year(), t.Month(), t.Day(),
 			t.Hour(), t.Minute(), t.Second())
-		return getSafeTableName(tableName, fmt.Sprintf("%s_del", timestamp))
+		return getSafeTableName(tableName, fmt.Sprintf("%s_%s", timestamp, suffix))
 	}
-	return getSafeTableName(tableName, "del")
+	return getSafeTableName(tableName, suffix)
 }
 
 // GetChangelogTableName generates the name of changelog table, based on original table name

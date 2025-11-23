@@ -528,6 +528,9 @@ func (this *Migrator) Migrate() (err error) {
 // The steps are similar to Migrate(), but without row copying.
 func (this *Migrator) Revert() error {
 	//TODO: add hooks
+	this.migrationContext.Log.Infof("Reverting %s.%s from %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OldTableName))
 	this.migrationContext.StartTime = time.Now()
 	var err error
 	if this.migrationContext.Hostname, err = os.Hostname(); err != nil {
@@ -1321,7 +1324,12 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}
-	if !this.migrationContext.Resume {
+	if this.migrationContext.Revert {
+		if err := this.applier.CreateChangelogTable(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			return err
+		}
+	} else if !this.migrationContext.Resume {
 		if err := this.applier.ValidateOrDropExistingTables(); err != nil {
 			return err
 		}
@@ -1541,16 +1549,25 @@ func (this *Migrator) CheckpointAfterCutOver() (*Checkpoint, error) {
 	if this.lastLockProcessed == nil || this.lastLockProcessed.coords.IsEmpty() {
 		return nil, this.migrationContext.Log.Errorf("lastLockProcessed coords are empty: %+v")
 	}
-	//TODO: iteration range could be nil
+
 	chk := &Checkpoint{
 		IsCutover:         true,
 		LastTrxCoords:     this.lastLockProcessed.coords,
+		IterationRangeMin: sql.NewColumnValues(this.migrationContext.UniqueKey.Len()),
+		IterationRangeMax: sql.NewColumnValues(this.migrationContext.UniqueKey.Len()),
 		Iteration:         this.migrationContext.GetIteration(),
-		IterationRangeMin: this.applier.LastIterationRangeMinValues.Clone(),
-		IterationRangeMax: this.applier.LastIterationRangeMaxValues.Clone(),
 		RowsCopied:        atomic.LoadInt64(&this.migrationContext.TotalRowsCopied),
 		DMLApplied:        atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
 	}
+	this.applier.LastIterationRangeMutex.Lock()
+	if this.applier.LastIterationRangeMinValues != nil {
+		chk.IterationRangeMin = this.applier.LastIterationRangeMinValues.Clone()
+	}
+	if this.applier.LastIterationRangeMaxValues != nil {
+		chk.IterationRangeMin = this.applier.LastIterationRangeMaxValues.Clone()
+	}
+	this.applier.LastIterationRangeMutex.Unlock()
+
 	id, err := this.applier.WriteCheckpoint(chk)
 	chk.Id = id
 	return chk, err
@@ -1688,9 +1705,6 @@ func (this *Migrator) finalCleanup() error {
 	}
 
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
-		return err
-	}
-	if err := this.retryOperation(this.applier.DropCheckpointTable); err != nil {
 		return err
 	}
 	if this.migrationContext.OkToDropTable && !this.migrationContext.TestOnReplica {
