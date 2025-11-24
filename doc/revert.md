@@ -7,6 +7,7 @@
 
 To revert, find the name of the "old" table from the original migration e.g. `_mytable_del`. Then invoke `gh-ost` with the same arguments and the flags `--revert` and `--old-table="_mytable_del"`.
 gh-ost will read the binlog coordinates of the original cut-over from the checkpoint table and bring the old table up to date. Then it performs another cut-over to complete the reversion.
+Note that the checkpoint table (name ends with _ghk) will not be automatically dropped unless `--ok-to-drop-table` is provided.
 
 > [!WARNING]
 > It is recommended use `--checkpoint` with `--gtid` enabled so that checkpoint binlog coordinates store GTID sets rather than file positions. In that case, `gh-ost` can revert using a different replica than it originally attached to.
@@ -47,7 +48,7 @@ gh-ost \
 --gtid \
 --checkpoint \
 --checkpoint-seconds=60 \
---revert
+--revert \
 --execute
 ```
 
