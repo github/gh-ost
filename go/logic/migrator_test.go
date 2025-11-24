@@ -334,6 +334,9 @@ func (suite *MigratorTestSuite) TearDownTest() {
 	suite.Require().NoError(err)
 	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestGhostTableName())
 	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestRevertedTableName())
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestOldTableName())
 }
 
 func (suite *MigratorTestSuite) TestMigrateEmpty() {
@@ -666,6 +669,57 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 
 	suite.Require().Equal(testMysqlTableName, tableName)
 	suite.Require().Equal("CREATE TABLE `testing` (\n  `id` int NOT NULL,\n  `name` varchar(64) DEFAULT NULL,\n  `foobar` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createTableSQL)
+}
+
+func (suite *MigratorTestSuite) TestRevertEmpty() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, s CHAR(32))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	var oldTableName string
+
+	// perform original migration
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	{
+		migrationContext := newTestMigrationContext()
+		migrationContext.ApplierConnectionConfig = connectionConfig
+		migrationContext.InspectorConnectionConfig = connectionConfig
+		migrationContext.SetConnectionConfig("innodb")
+		migrationContext.AlterStatement = "ADD COLUMN newcol CHAR(32)"
+		migrationContext.Checkpoint = true
+		migrationContext.CheckpointIntervalSeconds = 10
+		migrationContext.DropServeSocket = true
+		migrationContext.InitiallyDropOldTable = true
+		migrationContext.UseGTIDs = true
+
+		migrator := NewMigrator(migrationContext, "0.0.0")
+
+		err = migrator.Migrate()
+		oldTableName = migrationContext.GetOldTableName()
+		suite.Require().NoError(err)
+	}
+
+	// revert the original migration
+	{
+		migrationContext := newTestMigrationContext()
+		migrationContext.ApplierConnectionConfig = connectionConfig
+		migrationContext.InspectorConnectionConfig = connectionConfig
+		migrationContext.SetConnectionConfig("innodb")
+		migrationContext.DropServeSocket = true
+		migrationContext.UseGTIDs = true
+		migrationContext.Revert = true
+		migrationContext.OkToDropTable = true
+		migrationContext.OldTableName = oldTableName
+
+		migrator := NewMigrator(migrationContext, "0.0.0")
+
+		err = migrator.Revert()
+		oldTableName = migrationContext.GetOldTableName()
+		suite.Require().NoError(err)
+	}
+
 }
 
 func (suite *MigratorTestSuite) TestRevert() {
