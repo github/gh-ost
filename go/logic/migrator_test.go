@@ -337,6 +337,7 @@ func (suite *MigratorTestSuite) TearDownTest() {
 	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestRevertedTableName())
 	suite.Require().NoError(err)
 	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestOldTableName())
+	suite.Require().NoError(err)
 }
 
 func (suite *MigratorTestSuite) TestMigrateEmpty() {
@@ -716,10 +717,8 @@ func (suite *MigratorTestSuite) TestRevertEmpty() {
 		migrator := NewMigrator(migrationContext, "0.0.0")
 
 		err = migrator.Revert()
-		oldTableName = migrationContext.GetOldTableName()
 		suite.Require().NoError(err)
 	}
-
 }
 
 func (suite *MigratorTestSuite) TestRevert() {
@@ -738,9 +737,9 @@ func (suite *MigratorTestSuite) TestRevert() {
 
 	var oldTableName string
 
-	// perform original migration
 	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
+	// perform original migration
 	{
 		migrationContext := newTestMigrationContext()
 		migrationContext.ApplierConnectionConfig = connectionConfig
