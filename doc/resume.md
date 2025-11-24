@@ -4,6 +4,7 @@
 - The first `gh-ost` process was invoked with `--checkpoint`
 - The first `gh-ost` process had at least one successful checkpoint
 - The binlogs from the last checkpoint's binlog coordinates still exist on the replica gh-ost is inspecting (specified by `--host`)
+- The checkpoint table (name ends with `_ghk`) still exists
 
 To resume, invoke `gh-ost` again with the same arguments with the `--resume` flag.
 
