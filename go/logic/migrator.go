@@ -44,6 +44,11 @@ func ReadChangelogState(s string) ChangelogState {
 
 type tableWriteFunc func() error
 
+type lockProcessedStruct struct {
+	state  string
+	coords mysql.BinlogCoordinates
+}
+
 type applyEventStruct struct {
 	writeFunc *tableWriteFunc
 	dmlEvent  *binlog.BinlogDMLEvent
@@ -85,7 +90,8 @@ type Migrator struct {
 	firstThrottlingCollected   chan bool
 	ghostTableMigrated         chan bool
 	rowCopyComplete            chan error
-	allEventsUpToLockProcessed chan string
+	allEventsUpToLockProcessed chan *lockProcessedStruct
+	lastLockProcessed          *lockProcessedStruct
 
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
@@ -105,7 +111,7 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
-		allEventsUpToLockProcessed: make(chan string),
+		allEventsUpToLockProcessed: make(chan *lockProcessedStruct),
 
 		copyRowsQueue:     make(chan tableWriteFunc),
 		applyEventsQueue:  make(chan *applyEventStruct, base.MaxEventsBatchSize),
@@ -223,7 +229,10 @@ func (this *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 		this.ghostTableMigrated <- true
 	case AllEventsUpToLockProcessed:
 		var applyEventFunc tableWriteFunc = func() error {
-			this.allEventsUpToLockProcessed <- changelogStateString
+			this.allEventsUpToLockProcessed <- &lockProcessedStruct{
+				state:  changelogStateString,
+				coords: dmlEntry.Coordinates.Clone(),
+			}
 			return nil
 		}
 		// at this point we know all events up to lock have been read from the streamer,
@@ -355,7 +364,7 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	// If we are resuming, we will initiateStreaming later when we know
-	// the coordinates to resume streaming.
+	// the binlog coordinates to resume streaming from.
 	// If not resuming, the streamer must be initiated before the applier,
 	// so that the "GhostTableMigrated" event gets processed.
 	if !this.migrationContext.Resume {
@@ -495,6 +504,15 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 
+	if this.migrationContext.Checkpoint && !this.migrationContext.Noop {
+		cutoverChk, err := this.CheckpointAfterCutOver()
+		if err != nil {
+			this.migrationContext.Log.Warningf("failed to checkpoint after cutover: %+v", err)
+		} else {
+			this.migrationContext.Log.Infof("checkpoint success after cutover at coords=%+v", cutoverChk.LastTrxCoords.DisplayString())
+		}
+	}
+
 	if err := this.finalCleanup(); err != nil {
 		return nil
 	}
@@ -502,6 +520,98 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 	this.migrationContext.Log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	return nil
+}
+
+// Revert reverts a migration that previously completed by applying all DML events that happened
+// after the original cutover, then doing another cutover to swap the tables back.
+// The steps are similar to Migrate(), but without row copying.
+func (this *Migrator) Revert() error {
+	this.migrationContext.Log.Infof("Reverting %s.%s from %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OldTableName))
+	this.migrationContext.StartTime = time.Now()
+	var err error
+	if this.migrationContext.Hostname, err = os.Hostname(); err != nil {
+		return err
+	}
+
+	go this.listenOnPanicAbort()
+
+	if err := this.hooksExecutor.onStartup(); err != nil {
+		return err
+	}
+	if err := this.validateAlterStatement(); err != nil {
+		return err
+	}
+	defer this.teardown()
+
+	if err := this.initiateInspector(); err != nil {
+		return err
+	}
+	if err := this.initiateApplier(); err != nil {
+		return err
+	}
+	if err := this.createFlagFiles(); err != nil {
+		return err
+	}
+	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
+		return err
+	}
+	if err := this.applier.prepareQueries(); err != nil {
+		return err
+	}
+
+	lastCheckpoint, err := this.applier.ReadLastCheckpoint()
+	if err != nil {
+		return this.migrationContext.Log.Errorf("No checkpoint found, unable to revert: %+v", err)
+	}
+	if !lastCheckpoint.IsCutover {
+		return this.migrationContext.Log.Errorf("Last checkpoint is not after cutover, unable to revert: coords=%+v time=%+v", lastCheckpoint.LastTrxCoords, lastCheckpoint.Timestamp)
+	}
+	this.migrationContext.InitialStreamerCoords = lastCheckpoint.LastTrxCoords
+	this.migrationContext.TotalRowsCopied = lastCheckpoint.RowsCopied
+	this.migrationContext.MigrationIterationRangeMinValues = lastCheckpoint.IterationRangeMin
+	this.migrationContext.MigrationIterationRangeMaxValues = lastCheckpoint.IterationRangeMax
+	if err := this.initiateStreaming(); err != nil {
+		return err
+	}
+	if err := this.hooksExecutor.onValidated(); err != nil {
+		return err
+	}
+	if err := this.initiateServer(); err != nil {
+		return err
+	}
+	defer this.server.RemoveSocketFile()
+	if err := this.addDMLEventsListener(); err != nil {
+		return err
+	}
+
+	this.initiateThrottler()
+	go this.initiateStatus()
+	go this.executeDMLWriteFuncs()
+
+	this.printStatus(ForcePrintStatusRule)
+	var retrier func(func() error, ...bool) error
+	if this.migrationContext.CutOverExponentialBackoff {
+		retrier = this.retryOperationWithExponentialBackoff
+	} else {
+		retrier = this.retryOperation
+	}
+	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
+		return err
+	}
+	if err := retrier(this.cutOver); err != nil {
+		return err
+	}
+	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
+	if err := this.finalCleanup(); err != nil {
+		return nil
+	}
+	if err := this.hooksExecutor.onSuccess(); err != nil {
+		return err
+	}
+	this.migrationContext.Log.Infof("Done reverting %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
@@ -622,7 +732,7 @@ func (this *Migrator) cutOver() (err error) {
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
-func (this *Migrator) waitForEventsUpToLock() (err error) {
+func (this *Migrator) waitForEventsUpToLock() error {
 	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
 
 	this.migrationContext.MarkPointOfInterest()
@@ -635,19 +745,21 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	}
 	this.migrationContext.Log.Infof("Waiting for events up to lock")
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 1)
+	var lockProcessed *lockProcessedStruct
 	for found := false; !found; {
 		select {
 		case <-timeout.C:
 			{
 				return this.migrationContext.Log.Errorf("Timeout while waiting for events up to lock")
 			}
-		case state := <-this.allEventsUpToLockProcessed:
+		case lockProcessed = <-this.allEventsUpToLockProcessed:
 			{
-				if state == allEventsUpToLockProcessedChallenge {
-					this.migrationContext.Log.Infof("Waiting for events up to lock: got %s", state)
+				if lockProcessed.state == allEventsUpToLockProcessedChallenge {
+					this.migrationContext.Log.Infof("Waiting for events up to lock: got %s", lockProcessed.state)
 					found = true
+					this.lastLockProcessed = lockProcessed
 				} else {
-					this.migrationContext.Log.Infof("Waiting for events up to lock: skipping %s", state)
+					this.migrationContext.Log.Infof("Waiting for events up to lock: skipping %s", lockProcessed.state)
 				}
 			}
 		}
@@ -1220,7 +1332,12 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}
-	if !this.migrationContext.Resume {
+	if this.migrationContext.Revert {
+		if err := this.applier.CreateChangelogTable(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			return err
+		}
+	} else if !this.migrationContext.Resume {
 		if err := this.applier.ValidateOrDropExistingTables(); err != nil {
 			return err
 		}
@@ -1435,6 +1552,35 @@ func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 	}
 }
 
+// CheckpointAfterCutOver writes a final checkpoint after the cutover completes successfully.
+func (this *Migrator) CheckpointAfterCutOver() (*Checkpoint, error) {
+	if this.lastLockProcessed == nil || this.lastLockProcessed.coords.IsEmpty() {
+		return nil, this.migrationContext.Log.Errorf("lastLockProcessed coords are empty")
+	}
+
+	chk := &Checkpoint{
+		IsCutover:         true,
+		LastTrxCoords:     this.lastLockProcessed.coords,
+		IterationRangeMin: sql.NewColumnValues(this.migrationContext.UniqueKey.Len()),
+		IterationRangeMax: sql.NewColumnValues(this.migrationContext.UniqueKey.Len()),
+		Iteration:         this.migrationContext.GetIteration(),
+		RowsCopied:        atomic.LoadInt64(&this.migrationContext.TotalRowsCopied),
+		DMLApplied:        atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
+	}
+	this.applier.LastIterationRangeMutex.Lock()
+	if this.applier.LastIterationRangeMinValues != nil {
+		chk.IterationRangeMin = this.applier.LastIterationRangeMinValues.Clone()
+	}
+	if this.applier.LastIterationRangeMaxValues != nil {
+		chk.IterationRangeMax = this.applier.LastIterationRangeMaxValues.Clone()
+	}
+	this.applier.LastIterationRangeMutex.Unlock()
+
+	id, err := this.applier.WriteCheckpoint(chk)
+	chk.Id = id
+	return chk, err
+}
+
 func (this *Migrator) checkpointLoop() {
 	if this.migrationContext.Noop {
 		this.migrationContext.Log.Debugf("Noop operation; not really checkpointing")
@@ -1443,8 +1589,11 @@ func (this *Migrator) checkpointLoop() {
 	checkpointInterval := time.Duration(this.migrationContext.CheckpointIntervalSeconds) * time.Second
 	ticker := time.NewTicker(checkpointInterval)
 	for t := range ticker.C {
-		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 || atomic.LoadInt64(&this.migrationContext.CutOverCompleteFlag) > 0 {
 			return
+		}
+		if atomic.LoadInt64(&this.migrationContext.InCutOverCriticalSectionFlag) > 0 {
+			continue
 		}
 		this.migrationContext.Log.Infof("starting checkpoint at %+v", t)
 		ctx, cancel := context.WithTimeout(context.Background(), checkpointTimeout)
@@ -1517,6 +1666,31 @@ func (this *Migrator) executeWriteFuncs() error {
 	}
 }
 
+func (this *Migrator) executeDMLWriteFuncs() error {
+	if this.migrationContext.Noop {
+		this.migrationContext.Log.Debugf("Noop operation; not really executing DML write funcs")
+		return nil
+	}
+	for {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return nil
+		}
+
+		this.throttler.throttle(nil)
+
+		select {
+		case eventStruct := <-this.applyEventsQueue:
+			{
+				if err := this.onApplyEventStruct(eventStruct); err != nil {
+					return err
+				}
+			}
+		case <-time.After(time.Second):
+			continue
+		}
+	}
+}
+
 // finalCleanup takes actions at very end of migration, dropping tables etc.
 func (this *Migrator) finalCleanup() error {
 	atomic.StoreInt64(&this.migrationContext.CleanupImminentFlag, 1)
@@ -1541,17 +1715,19 @@ func (this *Migrator) finalCleanup() error {
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
 		return err
 	}
-	if err := this.retryOperation(this.applier.DropCheckpointTable); err != nil {
-		return err
-	}
 	if this.migrationContext.OkToDropTable && !this.migrationContext.TestOnReplica {
 		if err := this.retryOperation(this.applier.DropOldTable); err != nil {
 			return err
 		}
-	} else {
-		if !this.migrationContext.Noop {
-			this.migrationContext.Log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add `--ok-to-drop-table` next time. But I prefer you do not. To drop the old table, issue:")
-			this.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
+		if err := this.retryOperation(this.applier.DropCheckpointTable); err != nil {
+			return err
+		}
+	} else if !this.migrationContext.Noop {
+		this.migrationContext.Log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add `--ok-to-drop-table` next time. But I prefer you do not. To drop the old table, issue:")
+		this.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
+		if this.migrationContext.Checkpoint {
+			this.migrationContext.Log.Infof("Am not dropping checkpoint table without `--ok-to-drop-table`. To drop the checkpoint table, issue:")
+			this.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetCheckpointTableName()))
 		}
 	}
 	if this.migrationContext.Noop {

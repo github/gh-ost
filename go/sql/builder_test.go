@@ -803,12 +803,12 @@ func TestCheckpointQueryBuilder(t *testing.T) {
 	expected := `
 		insert /* gh-ost */ into mydb._tbl_ghk
 		(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
-		 gh_ost_rows_copied, gh_ost_dml_applied,
+		 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
 		 name_min, position_min, my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长_min,
 		 name_max, position_max, my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长_max)
 		values
 		(unix_timestamp(now()), ?, ?,
-			 ?, ?,
+			 ?, ?, ?,
 			 ?, ?, ?,
 			 ?, ?, ?)
     `
