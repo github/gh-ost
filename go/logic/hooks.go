@@ -69,6 +69,7 @@ func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) [
 	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT_OWNER=%s", this.migrationContext.HooksHintOwner))
 	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT_TOKEN=%s", this.migrationContext.HooksHintToken))
 	env = append(env, fmt.Sprintf("GH_OST_DRY_RUN=%t", this.migrationContext.Noop))
+	env = append(env, fmt.Sprintf("GH_OST_REVERT=%t", this.migrationContext.Revert))
 
 	env = append(env, extraVariables...)
 	return env
