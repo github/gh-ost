@@ -437,6 +437,7 @@ func (this *Applier) CreateCheckpointTable() error {
 		"`gh_ost_chk_iteration` bigint",
 		"`gh_ost_rows_copied` bigint",
 		"`gh_ost_dml_applied` bigint",
+		"`gh_ost_is_cutover` tinyint(1) DEFAULT '0'",
 	}
 	for _, col := range this.migrationContext.UniqueKey.Columns.Columns() {
 		if col.MySQLType == "" {
@@ -444,18 +445,12 @@ func (this *Applier) CreateCheckpointTable() error {
 		}
 		minColName := sql.TruncateColumnName(col.Name, sql.MaxColumnNameLength-4) + "_min"
 		colDef := fmt.Sprintf("%s %s", sql.EscapeName(minColName), col.MySQLType)
-		if !col.Nullable {
-			colDef += " NOT NULL"
-		}
 		colDefs = append(colDefs, colDef)
 	}
 
 	for _, col := range this.migrationContext.UniqueKey.Columns.Columns() {
 		maxColName := sql.TruncateColumnName(col.Name, sql.MaxColumnNameLength-4) + "_max"
 		colDef := fmt.Sprintf("%s %s", sql.EscapeName(maxColName), col.MySQLType)
-		if !col.Nullable {
-			colDef += " NOT NULL"
-		}
 		colDefs = append(colDefs, colDef)
 	}
 
@@ -627,7 +622,7 @@ func (this *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 	if err != nil {
 		return insertId, err
 	}
-	args := sqlutils.Args(chk.LastTrxCoords.String(), chk.Iteration, chk.RowsCopied, chk.DMLApplied)
+	args := sqlutils.Args(chk.LastTrxCoords.String(), chk.Iteration, chk.RowsCopied, chk.DMLApplied, chk.IsCutover)
 	args = append(args, uniqueKeyArgs...)
 	res, err := this.db.Exec(query, args...)
 	if err != nil {
@@ -637,7 +632,7 @@ func (this *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 }
 
 func (this *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
-	row := this.db.QueryRow(fmt.Sprintf(`select /* gh-ost */ * from %s.%s order by gh_ost_chk_id desc limit 1`, this.migrationContext.DatabaseName, this.migrationContext.GetCheckpointTableName()))
+	row := this.db.QueryRow(fmt.Sprintf(`select /* gh-ost */ * from %s.%s order by gh_ost_chk_id desc limit 1`, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetCheckpointTableName())))
 	chk := &Checkpoint{
 		IterationRangeMin: sql.NewColumnValues(this.migrationContext.UniqueKey.Columns.Len()),
 		IterationRangeMax: sql.NewColumnValues(this.migrationContext.UniqueKey.Columns.Len()),
@@ -645,7 +640,7 @@ func (this *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 
 	var coordStr string
 	var timestamp int64
-	ptrs := []interface{}{&chk.Id, &timestamp, &coordStr, &chk.Iteration, &chk.RowsCopied, &chk.DMLApplied}
+	ptrs := []interface{}{&chk.Id, &timestamp, &coordStr, &chk.Iteration, &chk.RowsCopied, &chk.DMLApplied, &chk.IsCutover}
 	ptrs = append(ptrs, chk.IterationRangeMin.ValuesPointers...)
 	ptrs = append(ptrs, chk.IterationRangeMax.ValuesPointers...)
 	err := row.Scan(ptrs...)
