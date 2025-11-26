@@ -959,7 +959,7 @@ func (this *MigrationContext) ReadConfigFile() error {
 	return nil
 }
 
-// getGhostTriggerName generates the name of a ghost trigger, based on original trigger name
+// GetGhostTriggerName generates the name of a ghost trigger, based on original trigger name
 // or a given trigger name
 func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
 	if this.RemoveTriggerSuffix && strings.HasSuffix(triggerName, this.TriggerSuffix) {
@@ -969,7 +969,7 @@ func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
 	return triggerName + this.TriggerSuffix
 }
 
-// validateGhostTriggerLength check if the ghost trigger name length is not more than 64 characters
+// ValidateGhostTriggerLengthBelowMaxLength check if the ghost trigger name length is not more than 64 characters
 func (this *MigrationContext) ValidateGhostTriggerLengthBelowMaxLength(triggerName string) bool {
 	ghostTriggerName := this.GetGhostTriggerName(triggerName)
 
