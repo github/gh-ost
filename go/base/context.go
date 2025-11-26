@@ -610,6 +610,13 @@ func (this *MigrationContext) GetIteration() int64 {
 	return atomic.LoadInt64(&this.Iteration)
 }
 
+func (this *MigrationContext) SetNextIterationRangeMinValues() {
+	this.MigrationIterationRangeMinValues = this.MigrationIterationRangeMaxValues
+	if this.MigrationIterationRangeMinValues == nil {
+		this.MigrationIterationRangeMinValues = this.MigrationRangeMinValues
+	}
+}
+
 func (this *MigrationContext) MarkPointOfInterest() int64 {
 	this.pointOfInterestTimeMutex.Lock()
 	defer this.pointOfInterestTimeMutex.Unlock()

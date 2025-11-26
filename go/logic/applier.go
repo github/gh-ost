@@ -820,10 +820,6 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 	}
 	this.LastIterationRangeMutex.Unlock()
 
-	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
-	if this.migrationContext.MigrationIterationRangeMinValues == nil {
-		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
-	}
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
