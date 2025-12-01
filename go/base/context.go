@@ -130,6 +130,7 @@ type MigrationContext struct {
 	defaultNumRetries                   int64
 	ChunkSize                           int64
 	niceRatio                           float64
+	copyWhereClause                     string
 	MaxLagMillisecondsThrottleThreshold int64
 	throttleControlReplicaKeys          *mysql.InstanceKeyMap
 	ThrottleFlagFile                    string
@@ -763,6 +764,19 @@ func (this *MigrationContext) GetCriticalLoad() LoadMap {
 	defer this.throttleMutex.Unlock()
 
 	return this.criticalLoad.Duplicate()
+}
+
+func (this *MigrationContext) GetWhereClause() string {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+
+	return this.copyWhereClause
+}
+
+func (this *MigrationContext) SetWhereClause(WhereClause string) {
+	this.throttleMutex.Lock()
+	defer this.throttleMutex.Unlock()
+	this.copyWhereClause = WhereClause
 }
 
 func (this *MigrationContext) GetNiceRatio() float64 {
