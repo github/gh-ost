@@ -1570,6 +1570,23 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 	return nil
 }
 
+// AnalyzeTable actively analyze table to ensure that the ghost table's statistics are timely updated
+func (this *Applier) AnalyzeTable() {
+	query := fmt.Sprintf(`analyze table /* gh-ost */ %s.%s`,
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	)
+
+	this.migrationContext.Log.Infof("Analyzing ghost table %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName),
+		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	)
+	if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+		this.migrationContext.Log.Warningf("Ghost table analyzes failed")
+	}
+	this.migrationContext.Log.Infof("Ghost table analyzed")
+}
+
 func (this *Applier) Teardown() {
 	this.migrationContext.Log.Debugf("Tearing down...")
 	this.db.Close()

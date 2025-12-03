@@ -486,6 +486,9 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	this.printStatus(ForcePrintStatusRule)
 
+	// analyze table before cutover
+	this.applier.AnalyzeTable()
+
 	if this.migrationContext.IsCountingTableRows() {
 		this.migrationContext.Log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
 		this.migrationContext.CancelTableRowsCount()
