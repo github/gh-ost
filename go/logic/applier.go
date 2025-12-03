@@ -433,7 +433,7 @@ func (this *Applier) CreateCheckpointTable() error {
 	colDefs := []string{
 		"`gh_ost_chk_id` bigint auto_increment primary key",
 		"`gh_ost_chk_timestamp` bigint",
-		"`gh_ost_chk_coords` varchar(4096)",
+		"`gh_ost_chk_coords` text charset ascii",
 		"`gh_ost_chk_iteration` bigint",
 		"`gh_ost_rows_copied` bigint",
 		"`gh_ost_dml_applied` bigint",
