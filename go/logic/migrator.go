@@ -1364,10 +1364,19 @@ func (this *Migrator) initiateApplier() error {
 		}
 		this.applier.WriteChangelogState(string(GhostTableMigrated))
 	}
+
+	// ensure performance_schema.metadata_locks is available.
 	if err := this.applier.StateMetadataLockInstrument(); err != nil {
 		this.migrationContext.Log.Errorf("Unable to enable metadata lock instrument, see further error details. Bailing out")
 		return err
 	}
+	if !this.migrationContext.IsOpenMetadataLockInstruments {
+		if !this.migrationContext.SkipMetadataLockChecks {
+			return this.migrationContext.Log.Errorf("Bailing out because metadata lock instrument not enabled. Use --skip-metadata-lock-check if you wish to proceed without. See https://github.com/github/gh-ost/pull/1536 for details.")
+		}
+		this.migrationContext.Log.Warning("Proceeding without metadata lock check. There is a small chance of data loss if another session accesses the ghost table during cut-over. See https://github.com/github/gh-ost/pull/1536 for details.")
+	}
+
 	go this.applier.InitiateHeartbeat()
 	return nil
 }

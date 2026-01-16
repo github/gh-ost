@@ -256,6 +256,7 @@ type MigrationContext struct {
 
 	BinlogSyncerMaxReconnectAttempts  int
 	AllowSetupMetadataLockInstruments bool
+	SkipMetadataLockChecks            bool
 	IsOpenMetadataLockInstruments     bool
 
 	Log Logger

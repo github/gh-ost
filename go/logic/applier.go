@@ -483,10 +483,16 @@ func (this *Applier) dropTable(tableName string) error {
 	return nil
 }
 
+// StateMetadataLockInstrument checks if metadata_locks is enabled in performance_schema.
+// If not it attempts to enable metadata_locks if this is allowed.
 func (this *Applier) StateMetadataLockInstrument() error {
 	query := `select /*+ MAX_EXECUTION_TIME(300) */ ENABLED, TIMED from performance_schema.setup_instruments WHERE NAME = 'wait/lock/metadata/sql/mdl'`
 	var enabled, timed string
 	if err := this.db.QueryRow(query).Scan(&enabled, &timed); err != nil {
+		if errors.Is(err, gosql.ErrNoRows) {
+			// performance_schema may be disabled.
+			return nil
+		}
 		return this.migrationContext.Log.Errorf("query performance_schema.setup_instruments with name wait/lock/metadata/sql/mdl error: %s", err)
 	}
 	if strings.EqualFold(enabled, "YES") && strings.EqualFold(timed, "YES") {
