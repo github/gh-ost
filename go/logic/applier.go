@@ -1350,7 +1350,7 @@ func (this *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocke
 
 	this.migrationContext.Log.Infof("Session renameLockSessionId is %+v", *renameLockSessionId)
 	// Checking the lock is held by rename session
-	if *renameLockSessionId > 0 && this.migrationContext.IsOpenMetadataLockInstruments {
+	if *renameLockSessionId > 0 && this.migrationContext.IsOpenMetadataLockInstruments && !this.migrationContext.SkipMetadataLockCheck {
 		sleepDuration := time.Duration(10*this.migrationContext.CutOverLockTimeoutSeconds) * time.Millisecond
 		for i := 1; i <= 100; i++ {
 			err := this.ExpectMetadataLock(*renameLockSessionId)

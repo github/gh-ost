@@ -287,6 +287,7 @@ test_single() {
     --alter='engine=${storage_engine}' \
     --exact-rowcount \
     --assume-rbr \
+    --skip-metadata-lock-check \
     --initially-drop-old-table \
     --initially-drop-ghost-table \
     --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _${table_name}_ghc' \
