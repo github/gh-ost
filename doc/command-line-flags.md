@@ -24,6 +24,11 @@ By default, `gh-ost` would like you to connect to a replica, from where it figur
 
 If, for some reason, you do not wish `gh-ost` to connect to a replica, you may connect it directly to the master and approve this via `--allow-on-master`.
 
+### allow-setup-metadata-lock-instruments
+
+`--allow-setup-metadata-lock-instruments` allows gh-ost to enable the [`metadata_locks`](https://dev.mysql.com/doc/refman/8.0/en/performance-schema-metadata-locks-table.html) table in `performance_schema`, if it is not already enabled. This is used for a safety check before cut-over.
+See also: [`skip-metadata-lock-check`](#skip-metadata-lock-check)
+
 ### approve-renamed-columns
 
 When your migration issues a column rename (`change column old_name new_name ...`) `gh-ost` analyzes the statement to try and associate the old column name with new column name. Otherwise, the new structure may also look like some column was dropped and another was added.
@@ -246,6 +251,13 @@ Defaults to an auto-determined and advertised upon startup file. Defines Unix so
 ### skip-foreign-key-checks
 
 By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not reference other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
+
+### skip-metadata-lock-check
+
+By default `gh-ost` performs a check before the cut-over to ensure the rename session holds the exclusive metadata lock on the table. In case `performance_schema.metadata_locks` cannot be enabled on your setup, this check can be skipped with `--skip-metadata-lock-check`. 
+:warning: Disabling this check involves the small chance of data loss in case a session accesses the ghost table during cut-over. See https://github.com/github/gh-ost/pull/1536 for details.
+
+See also: [`allow-setup-metadata-lock-instruments`](#allow-setup-metadata-lock-instruments)
 
 ### skip-strict-mode
 

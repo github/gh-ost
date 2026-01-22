@@ -214,6 +214,7 @@ func (suite *ApplierTestSuite) SetupSuite() {
 		testmysql.WithUsername(testMysqlUser),
 		testmysql.WithPassword(testMysqlPass),
 		testcontainers.WithWaitStrategy(wait.ForExposedPort()),
+		testmysql.WithConfigFile("my.cnf.test"),
 	)
 	suite.Require().NoError(err)
 
@@ -272,7 +273,7 @@ func (suite *ApplierTestSuite) TestInitDBConnections() {
 	mysqlVersion, _ := strings.CutPrefix(testMysqlContainerImage, "mysql:")
 	suite.Require().Equal(mysqlVersion, migrationContext.ApplierMySQLVersion)
 	suite.Require().Equal(int64(28800), migrationContext.ApplierWaitTimeout)
-	suite.Require().Equal("SYSTEM", migrationContext.ApplierTimeZone)
+	suite.Require().Equal("+00:00", migrationContext.ApplierTimeZone)
 
 	suite.Require().Equal(sql.NewColumnList([]string{"id", "item_id"}), migrationContext.OriginalTableColumnsOnApplier)
 }
@@ -702,6 +703,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 		Iteration:         2,
 		RowsCopied:        100000,
 		DMLApplied:        200000,
+		IsCutover:         true,
 	}
 	id, err := applier.WriteCheckpoint(chk)
 	suite.Require().NoError(err)
@@ -716,6 +718,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().Equal(chk.IterationRangeMax.String(), gotChk.IterationRangeMax.String())
 	suite.Require().Equal(chk.RowsCopied, gotChk.RowsCopied)
 	suite.Require().Equal(chk.DMLApplied, gotChk.DMLApplied)
+	suite.Require().Equal(chk.IsCutover, gotChk.IsCutover)
 }
 
 func TestApplier(t *testing.T) {

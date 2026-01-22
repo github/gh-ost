@@ -301,6 +301,7 @@ func (suite *MigratorTestSuite) SetupSuite() {
 		testmysql.WithUsername(testMysqlUser),
 		testmysql.WithPassword(testMysqlPass),
 		testcontainers.WithWaitStrategy(wait.ForExposedPort()),
+		testmysql.WithConfigFile("my.cnf.test"),
 	)
 	suite.Require().NoError(err)
 
@@ -332,6 +333,10 @@ func (suite *MigratorTestSuite) TearDownTest() {
 	_, err := suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestTableName())
 	suite.Require().NoError(err)
 	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestGhostTableName())
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestRevertedTableName())
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestOldTableName())
 	suite.Require().NoError(err)
 }
 
@@ -665,6 +670,138 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 
 	suite.Require().Equal(testMysqlTableName, tableName)
 	suite.Require().Equal("CREATE TABLE `testing` (\n  `id` int NOT NULL,\n  `name` varchar(64) DEFAULT NULL,\n  `foobar` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createTableSQL)
+}
+
+func (suite *MigratorTestSuite) TestRevertEmpty() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, s CHAR(32))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	var oldTableName string
+
+	// perform original migration
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	{
+		migrationContext := newTestMigrationContext()
+		migrationContext.ApplierConnectionConfig = connectionConfig
+		migrationContext.InspectorConnectionConfig = connectionConfig
+		migrationContext.SetConnectionConfig("innodb")
+		migrationContext.AlterStatement = "ADD COLUMN newcol CHAR(32)"
+		migrationContext.Checkpoint = true
+		migrationContext.CheckpointIntervalSeconds = 10
+		migrationContext.DropServeSocket = true
+		migrationContext.InitiallyDropOldTable = true
+		migrationContext.UseGTIDs = true
+
+		migrator := NewMigrator(migrationContext, "0.0.0")
+
+		err = migrator.Migrate()
+		oldTableName = migrationContext.GetOldTableName()
+		suite.Require().NoError(err)
+	}
+
+	// revert the original migration
+	{
+		migrationContext := newTestMigrationContext()
+		migrationContext.ApplierConnectionConfig = connectionConfig
+		migrationContext.InspectorConnectionConfig = connectionConfig
+		migrationContext.SetConnectionConfig("innodb")
+		migrationContext.DropServeSocket = true
+		migrationContext.UseGTIDs = true
+		migrationContext.Revert = true
+		migrationContext.OkToDropTable = true
+		migrationContext.OldTableName = oldTableName
+
+		migrator := NewMigrator(migrationContext, "0.0.0")
+
+		err = migrator.Revert()
+		suite.Require().NoError(err)
+	}
+}
+
+func (suite *MigratorTestSuite) TestRevert() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, s CHAR(32))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	numRows := 0
+	for range 100 {
+		_, err = suite.db.ExecContext(ctx,
+			fmt.Sprintf("INSERT INTO %s (id, s) VALUES (%d, MD5('%d'))", getTestTableName(), numRows, numRows))
+		suite.Require().NoError(err)
+		numRows += 1
+	}
+
+	var oldTableName string
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	// perform original migration
+	{
+		migrationContext := newTestMigrationContext()
+		migrationContext.ApplierConnectionConfig = connectionConfig
+		migrationContext.InspectorConnectionConfig = connectionConfig
+		migrationContext.SetConnectionConfig("innodb")
+		migrationContext.AlterStatement = "ADD INDEX idx1 (s)"
+		migrationContext.Checkpoint = true
+		migrationContext.CheckpointIntervalSeconds = 10
+		migrationContext.DropServeSocket = true
+		migrationContext.InitiallyDropOldTable = true
+		migrationContext.UseGTIDs = true
+
+		migrator := NewMigrator(migrationContext, "0.0.0")
+
+		err = migrator.Migrate()
+		oldTableName = migrationContext.GetOldTableName()
+		suite.Require().NoError(err)
+	}
+
+	// do some writes
+	for range 100 {
+		_, err = suite.db.ExecContext(ctx,
+			fmt.Sprintf("INSERT INTO %s (id, s) VALUES (%d, MD5('%d'))", getTestTableName(), numRows, numRows))
+		suite.Require().NoError(err)
+		numRows += 1
+	}
+	for i := 0; i < numRows; i += 7 {
+		_, err = suite.db.ExecContext(ctx,
+			fmt.Sprintf("UPDATE %s SET s=MD5('%d') where id=%d", getTestTableName(), 2*i, i))
+		suite.Require().NoError(err)
+	}
+
+	// revert the original migration
+	{
+		migrationContext := newTestMigrationContext()
+		migrationContext.ApplierConnectionConfig = connectionConfig
+		migrationContext.InspectorConnectionConfig = connectionConfig
+		migrationContext.SetConnectionConfig("innodb")
+		migrationContext.DropServeSocket = true
+		migrationContext.UseGTIDs = true
+		migrationContext.Revert = true
+		migrationContext.OldTableName = oldTableName
+
+		migrator := NewMigrator(migrationContext, "0.0.0")
+
+		err = migrator.Revert()
+		oldTableName = migrationContext.GetOldTableName()
+		suite.Require().NoError(err)
+	}
+
+	// checksum original and reverted table
+	var _tableName, checksum1, checksum2 string
+	rows, err := suite.db.Query(fmt.Sprintf("CHECKSUM TABLE %s, %s", testMysqlTableName, oldTableName))
+	suite.Require().NoError(err)
+	defer rows.Close()
+	suite.Require().True(rows.Next())
+	suite.Require().NoError(rows.Scan(&_tableName, &checksum1))
+	suite.Require().True(rows.Next())
+	suite.Require().NoError(rows.Scan(&_tableName, &checksum2))
+	suite.Require().NoError(rows.Err())
+
+	suite.Require().Equal(checksum1, checksum2)
 }
 
 func TestMigrator(t *testing.T) {

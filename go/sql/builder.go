@@ -142,11 +142,11 @@ func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns 
 		insert /* gh-ost */
 		into %s.%s
 			(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
-			 gh_ost_rows_copied, gh_ost_dml_applied,
+			 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
   			 %s, %s)
 		values
 			(unix_timestamp(now()), ?, ?,
-			 ?, ?,
+			 ?, ?, ?,
 			 %s, %s)`,
 		databaseName, tableName,
 		strings.Join(minUniqueColNames, ", "),

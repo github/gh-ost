@@ -28,4 +28,5 @@ type Checkpoint struct {
 	Iteration         int64
 	RowsCopied        int64
 	DMLApplied        int64
+	IsCutover         bool
 }

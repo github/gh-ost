@@ -138,7 +138,8 @@ func main() {
 	flag.Int64Var(&migrationContext.HooksStatusIntervalSec, "hooks-status-interval", 60, "how many seconds to wait between calling onStatus hook")
 
 	flag.UintVar(&migrationContext.ReplicaServerId, "replica-server-id", 99999, "server id used by gh-ost process. Default: 99999")
-	flag.BoolVar(&migrationContext.AllowSetupMetadataLockInstruments, "allow-setup-metadata-lock-instruments", false, "validate rename session hold the MDL of original table before unlock tables in cut-over phase")
+	flag.BoolVar(&migrationContext.AllowSetupMetadataLockInstruments, "allow-setup-metadata-lock-instruments", false, "Validate rename session hold the MDL of original table before unlock tables in cut-over phase")
+	flag.BoolVar(&migrationContext.SkipMetadataLockCheck, "skip-metadata-lock-check", false, "Skip metadata lock check at cut-over time. The checks require performance_schema.metadata_lock to be enabled")
 	flag.IntVar(&migrationContext.BinlogSyncerMaxReconnectAttempts, "binlogsyncer-max-reconnect-attempts", 0, "when master node fails, the maximum number of binlog synchronization attempts to reconnect. 0 is unlimited")
 
 	flag.BoolVar(&migrationContext.IncludeTriggers, "include-triggers", false, "When true, the triggers (if exist) will be created on the new table")
@@ -148,6 +149,8 @@ func main() {
 	flag.BoolVar(&migrationContext.Checkpoint, "checkpoint", false, "Enable migration checkpoints")
 	flag.Int64Var(&migrationContext.CheckpointIntervalSeconds, "checkpoint-seconds", 300, "The number of seconds between checkpoints")
 	flag.BoolVar(&migrationContext.Resume, "resume", false, "Attempt to resume migration from checkpoint")
+	flag.BoolVar(&migrationContext.Revert, "revert", false, "Attempt to revert completed migration")
+	flag.StringVar(&migrationContext.OldTableName, "old-table", "", "The name of the old table when using --revert, e.g. '_mytable_del'")
 
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")
@@ -206,11 +209,34 @@ func main() {
 
 	migrationContext.SetConnectionCharset(*charset)
 
-	if migrationContext.AlterStatement == "" {
+	if migrationContext.AlterStatement == "" && !migrationContext.Revert {
 		log.Fatal("--alter must be provided and statement must not be empty")
 	}
 	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
 	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
+
+	if migrationContext.Revert {
+		if migrationContext.Resume {
+			log.Fatal("--revert cannot be used with --resume")
+		}
+		if migrationContext.OldTableName == "" {
+			migrationContext.Log.Fatalf("--revert must be called with --old-table")
+		}
+
+		// options irrelevant to revert mode
+		if migrationContext.AlterStatement != "" {
+			log.Warning("--alter was provided with --revert, it will be ignored")
+		}
+		if migrationContext.AttemptInstantDDL {
+			log.Warning("--attempt-instant-ddl was provided with --revert, it will be ignored")
+		}
+		if migrationContext.IncludeTriggers {
+			log.Warning("--include-triggers was provided with --revert, it will be ignored")
+		}
+		if migrationContext.DiscardForeignKeys {
+			log.Warning("--discard-foreign-keys was provided with --revert, it will be ignored")
+		}
+	}
 
 	if migrationContext.DatabaseName == "" {
 		if parser.HasExplicitSchema() {
@@ -347,7 +373,14 @@ func main() {
 	acceptSignals(migrationContext)
 
 	migrator := logic.NewMigrator(migrationContext, AppVersion)
-	if err := migrator.Migrate(); err != nil {
+	var err error
+	if migrationContext.Revert {
+		err = migrator.Revert()
+	} else {
+		err = migrator.Migrate()
+	}
+
+	if err != nil {
 		migrator.ExecOnFailureHook()
 		migrationContext.Log.Fatale(err)
 	}
