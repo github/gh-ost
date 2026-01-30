@@ -1362,7 +1362,9 @@ func (this *Migrator) initiateApplier() error {
 				return err
 			}
 		}
-		this.applier.WriteChangelogState(string(GhostTableMigrated))
+		if _, err := this.applier.WriteChangelogState(string(GhostTableMigrated)); err != nil {
+			return err
+		}
 	}
 
 	// ensure performance_schema.metadata_locks is available.
