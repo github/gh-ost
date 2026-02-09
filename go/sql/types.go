@@ -77,7 +77,7 @@ func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interfac
 			}
 		}
 
-		if this.Type == BinaryColumnType && isUniqueKeyColumn {
+		if this.Type == BinaryColumnType {
 			size := len(arg2Bytes)
 			if uint(size) < this.BinaryOctetLength {
 				buf := bytes.NewBuffer(arg2Bytes)
