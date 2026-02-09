@@ -596,7 +596,7 @@ func (this *Inspector) validateGhostTriggersDontExist() error {
 		var foundTriggers []string
 		for _, trigger := range this.migrationContext.Triggers {
 			triggerName := this.migrationContext.GetGhostTriggerName(trigger.Name)
-			query := "select 1 from information_schema.triggers where trigger_name = ? and trigger_schema = ? and event_object_table = ?"
+			query := "select 1 from information_schema.triggers where trigger_name = ? and trigger_schema = ?"
 			err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
 				triggerExists := rowMap.GetInt("1")
 				if triggerExists == 1 {
@@ -606,7 +606,6 @@ func (this *Inspector) validateGhostTriggersDontExist() error {
 			},
 				triggerName,
 				this.migrationContext.DatabaseName,
-				this.migrationContext.OriginalTableName,
 			)
 			if err != nil {
 				return err
