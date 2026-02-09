@@ -842,7 +842,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// If we need to create triggers we need to do it here (only create part)
 	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
 		if err := this.applier.CreateTriggersOnGhost(); err != nil {
-			this.migrationContext.Log.Errore(err)
+			return this.migrationContext.Log.Errore(err)
 		}
 	}
 
