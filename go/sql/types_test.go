@@ -113,5 +113,5 @@ func TestConvertArgBinaryColumnNoPaddingWhenFull(t *testing.T) {
 	resultBytes := result.([]byte)
 
 	require.Equal(t, 20, len(resultBytes))
-	require.Equal(t, []byte(fullValue), resultBytes)
+	require.Equal(t, fullValue, resultBytes)
 }
