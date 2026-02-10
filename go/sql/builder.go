@@ -169,11 +169,11 @@ func (b *CheckpointInsertQueryBuilder) BuildQuery(uniqueKeyArgs []interface{}) (
 	}
 	convertedArgs := make([]interface{}, 0, 2*b.uniqueKeyColumns.Len())
 	for i, column := range b.uniqueKeyColumns.Columns() {
-		minArg := column.convertArg(uniqueKeyArgs[i], true)
+		minArg := column.convertArg(uniqueKeyArgs[i])
 		convertedArgs = append(convertedArgs, minArg)
 	}
 	for i, column := range b.uniqueKeyColumns.Columns() {
-		minArg := column.convertArg(uniqueKeyArgs[i+b.uniqueKeyColumns.Len()], true)
+		minArg := column.convertArg(uniqueKeyArgs[i+b.uniqueKeyColumns.Len()])
 		convertedArgs = append(convertedArgs, minArg)
 	}
 	return b.preparedStatement, convertedArgs, nil
@@ -533,7 +533,7 @@ func (b *DMLDeleteQueryBuilder) BuildQuery(args []interface{}) (string, []interf
 	uniqueKeyArgs := make([]interface{}, 0, b.uniqueKeyColumns.Len())
 	for _, column := range b.uniqueKeyColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal], true)
+		arg := column.convertArg(args[tableOrdinal])
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 	return b.preparedStatement, uniqueKeyArgs, nil
@@ -595,7 +595,7 @@ func (b *DMLInsertQueryBuilder) BuildQuery(args []interface{}) (string, []interf
 	sharedArgs := make([]interface{}, 0, b.sharedColumns.Len())
 	for _, column := range b.sharedColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal], false)
+		arg := column.convertArg(args[tableOrdinal])
 		sharedArgs = append(sharedArgs, arg)
 	}
 	return b.preparedStatement, sharedArgs, nil
@@ -661,20 +661,18 @@ func NewDMLUpdateQueryBuilder(databaseName, tableName string, tableColumns, shar
 
 // BuildQuery builds the arguments array for a DML event UPDATE query.
 // It returns the query string, the shared arguments array, and the unique key arguments array.
-func (b *DMLUpdateQueryBuilder) BuildQuery(valueArgs, whereArgs []interface{}) (string, []interface{}, []interface{}, error) {
-	sharedArgs := make([]interface{}, 0, b.sharedColumns.Len())
+func (b *DMLUpdateQueryBuilder) BuildQuery(valueArgs, whereArgs []interface{}) (string, []interface{}, error) {
+	args := make([]interface{}, 0, b.sharedColumns.Len()+b.uniqueKeyColumns.Len())
 	for _, column := range b.sharedColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(valueArgs[tableOrdinal], false)
-		sharedArgs = append(sharedArgs, arg)
+		arg := column.convertArg(valueArgs[tableOrdinal])
+		args = append(args, arg)
 	}
-
-	uniqueKeyArgs := make([]interface{}, 0, b.uniqueKeyColumns.Len())
 	for _, column := range b.uniqueKeyColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(whereArgs[tableOrdinal], true)
-		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+		arg := column.convertArg(whereArgs[tableOrdinal])
+		args = append(args, arg)
 	}
 
-	return b.preparedStatement, sharedArgs, uniqueKeyArgs, nil
+	return b.preparedStatement, args, nil
 }
