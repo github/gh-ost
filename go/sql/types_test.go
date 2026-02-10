@@ -86,7 +86,7 @@ func TestConvertArgBinaryColumnPadding(t *testing.T) {
 	}
 
 	result := col.convertArg(truncatedValue)
-	resultBytes := []byte(result.(string))
+	resultBytes := result.([]byte)
 
 	require.Equal(t, 20, len(resultBytes), "binary column should be padded to declared length")
 	// First 18 bytes should be unchanged
@@ -110,16 +110,7 @@ func TestConvertArgBinaryColumnNoPaddingWhenFull(t *testing.T) {
 	}
 
 	result := col.convertArg(fullValue)
-	// When no padding needed, result may be []uint8 or string depending on code path
-	var resultBytes []byte
-	switch v := result.(type) {
-	case string:
-		resultBytes = []byte(v)
-	case []uint8:
-		resultBytes = v
-	default:
-		t.Fatalf("unexpected type %T", result)
-	}
+	resultBytes := result.([]byte)
 
 	require.Equal(t, 20, len(resultBytes))
 	require.Equal(t, []byte(fullValue), resultBytes)

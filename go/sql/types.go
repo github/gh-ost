@@ -84,7 +84,7 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 				for i := uint(0); i < (this.BinaryOctetLength - uint(size)); i++ {
 					buf.Write([]byte{0})
 				}
-				arg = buf.String()
+				arg = buf.Bytes()
 			}
 		}
 
