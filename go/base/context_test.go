@@ -136,7 +136,7 @@ func TestValidateGhostTriggerLengthBelowMaxLength(t *testing.T) {
 		// Edge case: exactly 64 chars after transformation → valid (boundary test)
 		context := NewMigrationContext()
 		context.TriggerSuffix = "_ght"
-		originalName := strings.Repeat("x", 60) // 60 chars
+		originalName := strings.Repeat("x", 60)                // 60 chars
 		ghostName := context.GetGhostTriggerName(originalName) // 60 + 4 = 64
 		require.Equal(t, 64, len(ghostName))
 		require.True(t, context.ValidateGhostTriggerLengthBelowMaxLength(ghostName))
@@ -145,7 +145,7 @@ func TestValidateGhostTriggerLengthBelowMaxLength(t *testing.T) {
 		// Edge case: 65 chars after transformation → exceeds (boundary test)
 		context := NewMigrationContext()
 		context.TriggerSuffix = "_ght"
-		originalName := strings.Repeat("x", 61) // 61 chars
+		originalName := strings.Repeat("x", 61)                // 61 chars
 		ghostName := context.GetGhostTriggerName(originalName) // 61 + 4 = 65
 		require.Equal(t, 65, len(ghostName))
 		require.False(t, context.ValidateGhostTriggerLengthBelowMaxLength(ghostName))
