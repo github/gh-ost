@@ -62,7 +62,7 @@ func TestConvertArgCharsetDecoding(t *testing.T) {
 	}
 
 	// Should decode []uint8
-	str := col.convertArg(latin1Bytes, false)
+	str := col.convertArg(latin1Bytes)
 	require.Equal(t, "Garçon !", str)
 }
 
@@ -85,8 +85,7 @@ func TestConvertArgBinaryColumnPadding(t *testing.T) {
 		BinaryOctetLength: 20,
 	}
 
-	// Test with isUniqueKeyColumn=false (the bug was that non-key columns weren't padded)
-	result := col.convertArg(truncatedValue, false)
+	result := col.convertArg(truncatedValue)
 	resultBytes := []byte(result.(string))
 
 	require.Equal(t, 20, len(resultBytes), "binary column should be padded to declared length")
@@ -94,11 +93,6 @@ func TestConvertArgBinaryColumnPadding(t *testing.T) {
 	require.Equal(t, truncatedValue, resultBytes[:18])
 	// Last 2 bytes should be zeros
 	require.Equal(t, []byte{0x00, 0x00}, resultBytes[18:])
-
-	// Test with isUniqueKeyColumn=true (this already worked before the fix)
-	resultKey := col.convertArg(truncatedValue, true)
-	resultKeyBytes := []byte(resultKey.(string))
-	require.Equal(t, 20, len(resultKeyBytes), "binary key column should be padded to declared length")
 }
 
 func TestConvertArgBinaryColumnNoPaddingWhenFull(t *testing.T) {
@@ -115,7 +109,7 @@ func TestConvertArgBinaryColumnNoPaddingWhenFull(t *testing.T) {
 		BinaryOctetLength: 20,
 	}
 
-	result := col.convertArg(fullValue, false)
+	result := col.convertArg(fullValue)
 	// When no padding needed, result may be []uint8 or string depending on code path
 	var resultBytes []byte
 	switch v := result.(type) {

@@ -57,7 +57,7 @@ type Column struct {
 	MySQLType         string
 }
 
-func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
+func (this *Column) convertArg(arg interface{}) interface{} {
 	var arg2Bytes []byte
 	if s, ok := arg.(string); ok {
 		arg2Bytes = []byte(s)
