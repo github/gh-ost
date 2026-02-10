@@ -57,7 +57,7 @@ type Column struct {
 	MySQLType         string
 }
 
-func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
+func (this *Column) convertArg(arg interface{}) interface{} {
 	var arg2Bytes []byte
 	if s, ok := arg.(string); ok {
 		arg2Bytes = []byte(s)
@@ -77,14 +77,14 @@ func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interfac
 			}
 		}
 
-		if this.Type == BinaryColumnType && isUniqueKeyColumn {
+		if this.Type == BinaryColumnType {
 			size := len(arg2Bytes)
 			if uint(size) < this.BinaryOctetLength {
 				buf := bytes.NewBuffer(arg2Bytes)
 				for i := uint(0); i < (this.BinaryOctetLength - uint(size)); i++ {
 					buf.Write([]byte{0})
 				}
-				arg = buf.String()
+				arg = buf.Bytes()
 			}
 		}
 
