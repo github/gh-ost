@@ -28,6 +28,7 @@ const (
 	onInteractiveCommand = "gh-ost-on-interactive-command"
 	onSuccess            = "gh-ost-on-success"
 	onFailure            = "gh-ost-on-failure"
+	onBatchCopyRetry     = "gh-ost-on-batch-copy-retry"
 	onStatus             = "gh-ost-on-status"
 	onStopReplication    = "gh-ost-on-stop-replication"
 	onStartReplication   = "gh-ost-on-start-replication"
@@ -78,6 +79,7 @@ func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) [
 // executeHook executes a command, and sets relevant environment variables
 // combined output & error are printed to the configured writer.
 func (this *HooksExecutor) executeHook(hook string, extraVariables ...string) error {
+	this.migrationContext.Log.Infof("executing hook: %+v", hook)
 	cmd := exec.Command(hook)
 	cmd.Env = this.applyEnvironmentVariables(extraVariables...)
 
@@ -122,6 +124,11 @@ func (this *HooksExecutor) onRowCountComplete() error {
 }
 func (this *HooksExecutor) onBeforeRowCopy() error {
 	return this.executeHooks(onBeforeRowCopy)
+}
+
+func (this *HooksExecutor) onBatchCopyRetry(errorMessage string) error {
+	v := fmt.Sprintf("GH_OST_LAST_BATCH_COPY_ERROR=%s", errorMessage)
+	return this.executeHooks(onBatchCopyRetry, v)
 }
 
 func (this *HooksExecutor) onRowCopyComplete() error {
