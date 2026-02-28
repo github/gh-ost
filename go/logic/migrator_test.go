@@ -931,3 +931,284 @@ func (suite *MigratorTestSuite) TestRevert() {
 func TestMigrator(t *testing.T) {
 	suite.Run(t, new(MigratorTestSuite))
 }
+
+func TestPanicAbort_PropagatesError(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Send an error to PanicAbort
+	testErr := errors.New("test abort error")
+	go func() {
+		migrationContext.PanicAbort <- testErr
+	}()
+
+	// Wait a bit for error to be processed
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify error was stored
+	got := migrationContext.GetAbortError()
+	if got != testErr { //nolint:errorlint // Testing pointer equality for sentinel error
+		t.Errorf("Expected error %v, got %v", testErr, got)
+	}
+
+	// Verify context was cancelled
+	ctx := migrationContext.GetContext()
+	select {
+	case <-ctx.Done():
+		// Success - context was cancelled
+	default:
+		t.Error("Expected context to be cancelled")
+	}
+}
+
+func TestPanicAbort_FirstErrorWins(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Send first error
+	err1 := errors.New("first error")
+	go func() {
+		migrationContext.PanicAbort <- err1
+	}()
+
+	// Wait for first error to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Try to send second error (should be ignored)
+	err2 := errors.New("second error")
+	migrationContext.SetAbortError(err2)
+
+	// Verify only first error is stored
+	got := migrationContext.GetAbortError()
+	if got != err1 { //nolint:errorlint // Testing pointer equality for sentinel error
+		t.Errorf("Expected first error %v, got %v", err1, got)
+	}
+}
+
+func TestAbort_AfterRowCopy(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Give listenOnPanicAbort time to start
+	time.Sleep(20 * time.Millisecond)
+
+	// Simulate row copy error by sending to rowCopyComplete in a goroutine
+	// (unbuffered channel, so send must be async)
+	testErr := errors.New("row copy failed")
+	go func() {
+		migrator.rowCopyComplete <- testErr
+	}()
+
+	// Consume the error (simulating what Migrate() does)
+	// This is a blocking call that waits for the error
+	migrator.consumeRowCopyComplete()
+
+	// Wait for the error to be processed by listenOnPanicAbort
+	time.Sleep(50 * time.Millisecond)
+
+	// Check that error was stored
+	if got := migrationContext.GetAbortError(); got == nil {
+		t.Fatal("Expected abort error to be stored after row copy error")
+	} else if got.Error() != "row copy failed" {
+		t.Errorf("Expected 'row copy failed', got %v", got)
+	}
+
+	// Verify context was cancelled
+	ctx := migrationContext.GetContext()
+	select {
+	case <-ctx.Done():
+		// Success
+	case <-time.After(1 * time.Second):
+		t.Error("Expected context to be cancelled after row copy error")
+	}
+}
+
+func TestAbort_DuringInspection(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Simulate error during inspection phase
+	testErr := errors.New("inspection failed")
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		select {
+		case migrationContext.PanicAbort <- testErr:
+		case <-migrationContext.GetContext().Done():
+		}
+	}()
+
+	// Wait for abort to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Call checkAbort (simulating what Migrate() does after initiateInspector)
+	err := migrator.checkAbort()
+	if err == nil {
+		t.Fatal("Expected checkAbort to return error after abort during inspection")
+	}
+
+	if err.Error() != "inspection failed" {
+		t.Errorf("Expected 'inspection failed', got %v", err)
+	}
+}
+
+func TestAbort_DuringStreaming(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Simulate error from streaming goroutine
+	testErr := errors.New("streaming error")
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		// Use select pattern like actual code does
+		select {
+		case migrationContext.PanicAbort <- testErr:
+		case <-migrationContext.GetContext().Done():
+		}
+	}()
+
+	// Wait for abort to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify error stored and context cancelled
+	if got := migrationContext.GetAbortError(); got == nil {
+		t.Fatal("Expected abort error to be stored")
+	} else if got.Error() != "streaming error" {
+		t.Errorf("Expected 'streaming error', got %v", got)
+	}
+
+	// Verify checkAbort catches it
+	err := migrator.checkAbort()
+	if err == nil {
+		t.Fatal("Expected checkAbort to return error after streaming abort")
+	}
+}
+
+func TestRetryExhaustion_TriggersAbort(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(2) // Only 2 retries
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Operation that always fails
+	callCount := 0
+	operation := func() error {
+		callCount++
+		return errors.New("persistent failure")
+	}
+
+	// Call retryOperation (with notFatalHint=false so it sends to PanicAbort)
+	err := migrator.retryOperation(operation)
+
+	// Should have called operation MaxRetries times
+	if callCount != 2 {
+		t.Errorf("Expected 2 retry attempts, got %d", callCount)
+	}
+
+	// Should return the error
+	if err == nil {
+		t.Fatal("Expected retryOperation to return error")
+	}
+
+	// Wait for abort to be processed
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify error was sent to PanicAbort and stored
+	if got := migrationContext.GetAbortError(); got == nil {
+		t.Error("Expected abort error to be stored after retry exhaustion")
+	}
+
+	// Verify context was cancelled
+	ctx := migrationContext.GetContext()
+	select {
+	case <-ctx.Done():
+		// Success
+	default:
+		t.Error("Expected context to be cancelled after retry exhaustion")
+	}
+}
+
+func TestRevert_AbortsOnError(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrationContext.Revert = true
+	migrationContext.OldTableName = "_test_del"
+	migrationContext.OriginalTableName = "test"
+	migrationContext.DatabaseName = "testdb"
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Simulate error during revert
+	testErr := errors.New("revert failed")
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		select {
+		case migrationContext.PanicAbort <- testErr:
+		case <-migrationContext.GetContext().Done():
+		}
+	}()
+
+	// Wait for abort to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify checkAbort catches it
+	err := migrator.checkAbort()
+	if err == nil {
+		t.Fatal("Expected checkAbort to return error during revert")
+	}
+
+	if err.Error() != "revert failed" {
+		t.Errorf("Expected 'revert failed', got %v", err)
+	}
+
+	// Verify context was cancelled
+	ctx := migrationContext.GetContext()
+	select {
+	case <-ctx.Done():
+		// Success
+	default:
+		t.Error("Expected context to be cancelled during revert abort")
+	}
+}
+
+func TestCheckAbort_ReturnsNilWhenNoError(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// No error has occurred
+	err := migrator.checkAbort()
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+}
+
+func TestCheckAbort_DetectsContextCancellation(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Cancel context directly (without going through PanicAbort)
+	migrationContext.CancelContext()
+
+	// checkAbort should detect the cancellation
+	err := migrator.checkAbort()
+	if err == nil {
+		t.Fatal("Expected checkAbort to return error when context is cancelled")
+	}
+}

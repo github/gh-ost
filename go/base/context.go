@@ -6,6 +6,7 @@
 package base
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -225,6 +226,16 @@ type MigrationContext struct {
 	InCutOverCriticalSectionFlag           int64
 	PanicAbort                             chan error
 
+	// Context for cancellation signaling across all goroutines
+	// Stored in struct as it spans the entire migration lifecycle, not per-function.
+	// context.Context is safe for concurrent use by multiple goroutines.
+	ctx        context.Context //nolint:containedctx
+	cancelFunc context.CancelFunc
+
+	// Stores the fatal error that triggered abort
+	AbortError error
+	abortMutex *sync.Mutex
+
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableVirtualColumns      *sql.ColumnList
@@ -293,6 +304,7 @@ type ContextConfig struct {
 }
 
 func NewMigrationContext() *MigrationContext {
+	ctx, cancelFunc := context.WithCancel(context.Background())
 	return &MigrationContext{
 		Uuid:                                uuid.NewString(),
 		defaultNumRetries:                   60,
@@ -313,6 +325,9 @@ func NewMigrationContext() *MigrationContext {
 		lastHeartbeatOnChangelogMutex:       &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
+		ctx:                                 ctx,
+		cancelFunc:                          cancelFunc,
+		abortMutex:                          &sync.Mutex{},
 		Log:                                 NewDefaultLogger(),
 	}
 }
@@ -981,4 +996,34 @@ func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
 // by GetGhostTriggerName) does not exceed the maximum allowed length.
 func (this *MigrationContext) ValidateGhostTriggerLengthBelowMaxLength(triggerName string) bool {
 	return utf8.RuneCountInString(triggerName) <= mysql.MaxTableNameLength
+}
+
+// GetContext returns the migration context for cancellation checking
+func (this *MigrationContext) GetContext() context.Context {
+	return this.ctx
+}
+
+// SetAbortError stores the fatal error that triggered abort
+// Only the first error is stored (subsequent errors are ignored)
+func (this *MigrationContext) SetAbortError(err error) {
+	this.abortMutex.Lock()
+	defer this.abortMutex.Unlock()
+	if this.AbortError == nil {
+		this.AbortError = err
+	}
+}
+
+// GetAbortError retrieves the stored abort error
+func (this *MigrationContext) GetAbortError() error {
+	this.abortMutex.Lock()
+	defer this.abortMutex.Unlock()
+	return this.AbortError
+}
+
+// CancelContext cancels the migration context to signal all goroutines to stop
+// The cancel function is safe to call multiple times and from multiple goroutines.
+func (this *MigrationContext) CancelContext() {
+	if this.cancelFunc != nil {
+		this.cancelFunc()
+	}
 }
