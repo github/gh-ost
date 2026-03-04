@@ -1560,6 +1560,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 
 		// Check for warnings when PanicOnWarnings is enabled
 		if this.migrationContext.PanicOnWarnings {
+			//nolint:execinquery
 			rows, err := tx.Query("SHOW WARNINGS")
 			if err != nil {
 				return rollback(err)
