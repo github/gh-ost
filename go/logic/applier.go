@@ -1589,7 +1589,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 			}
 			if len(sqlWarnings) > 0 {
 				warningMsg := fmt.Sprintf("Warnings detected during DML event application: %v", sqlWarnings)
-				return rollback(fmt.Errorf(warningMsg))
+				return rollback(errors.New(warningMsg))
 			}
 		}
 
