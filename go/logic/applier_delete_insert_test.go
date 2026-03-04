@@ -22,7 +22,9 @@ type DeleteInsertTestSuite struct {
 // TestUpdateModifyingUniqueKeyWithDuplicateOnOtherIndex tests the scenario where:
 // 1. An UPDATE modifies the unique key (converted to DELETE+INSERT)
 // 2. The INSERT would create a duplicate on a NON-migration unique index
-// 3. With INSERT IGNORE, the DELETE succeeds but INSERT skips = DATA LOSS
+// 3. Without warning detection: DELETE succeeds, INSERT IGNORE skips = DATA LOSS
+// 4. With PanicOnWarnings: Warning detected, transaction rolled back, no data loss
+// This test verifies that PanicOnWarnings correctly prevents the data loss scenario.
 func (suite *DeleteInsertTestSuite) TestUpdateModifyingUniqueKeyWithDuplicateOnOtherIndex() {
 	ctx := context.Background()
 
