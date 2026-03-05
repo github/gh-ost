@@ -819,17 +819,6 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and thus done with copying row chunks)
 func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
-	this.LastIterationRangeMutex.Lock()
-	if this.migrationContext.MigrationIterationRangeMinValues != nil && this.migrationContext.MigrationIterationRangeMaxValues != nil {
-		this.LastIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMinValues.Clone()
-		this.LastIterationRangeMaxValues = this.migrationContext.MigrationIterationRangeMaxValues.Clone()
-	}
-	this.LastIterationRangeMutex.Unlock()
-
-	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
-	if this.migrationContext.MigrationIterationRangeMinValues == nil {
-		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
-	}
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
