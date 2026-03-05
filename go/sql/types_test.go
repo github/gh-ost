@@ -62,6 +62,56 @@ func TestConvertArgCharsetDecoding(t *testing.T) {
 	}
 
 	// Should decode []uint8
-	str := col.convertArg(latin1Bytes, false)
+	str := col.convertArg(latin1Bytes)
 	require.Equal(t, "Garçon !", str)
+}
+
+func TestConvertArgBinaryColumnPadding(t *testing.T) {
+	// Test that binary columns are padded with trailing zeros to their declared length.
+	// This is needed because MySQL's binlog strips trailing 0x00 bytes from binary values.
+	// See https://github.com/github/gh-ost/issues/909
+
+	// Simulates a binary(20) column where binlog delivered only 18 bytes
+	// (trailing zeros were stripped)
+	truncatedValue := []uint8{
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+		0x11, 0x12, // 18 bytes, missing 2 trailing zeros
+	}
+
+	col := Column{
+		Name:              "bin_col",
+		Type:              BinaryColumnType,
+		BinaryOctetLength: 20,
+	}
+
+	result := col.convertArg(truncatedValue)
+	resultBytes := result.([]byte)
+
+	require.Equal(t, 20, len(resultBytes), "binary column should be padded to declared length")
+	// First 18 bytes should be unchanged
+	require.Equal(t, truncatedValue, resultBytes[:18])
+	// Last 2 bytes should be zeros
+	require.Equal(t, []byte{0x00, 0x00}, resultBytes[18:])
+}
+
+func TestConvertArgBinaryColumnNoPaddingWhenFull(t *testing.T) {
+	// When binary value is already at full length, no padding should occur
+	fullValue := []uint8{
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+		0x11, 0x12, 0x13, 0x14, // 20 bytes
+	}
+
+	col := Column{
+		Name:              "bin_col",
+		Type:              BinaryColumnType,
+		BinaryOctetLength: 20,
+	}
+
+	result := col.convertArg(fullValue)
+	resultBytes := result.([]byte)
+
+	require.Equal(t, 20, len(resultBytes))
+	require.Equal(t, fullValue, resultBytes)
 }

@@ -248,9 +248,9 @@ func Kill(db *gosql.DB, connectionID string) error {
 
 // GetTriggers reads trigger list from given table
 func GetTriggers(db *gosql.DB, databaseName, tableName string) (triggers []Trigger, err error) {
-	query := fmt.Sprintf(`select trigger_name as name, event_manipulation as event, action_statement as statement, action_timing as timing
-	from information_schema.triggers 
-	where trigger_schema = '%s' and event_object_table = '%s'`, databaseName, tableName)
+	query := `select trigger_name as name, event_manipulation as event, action_statement as statement, action_timing as timing
+	from information_schema.triggers
+	where trigger_schema = ? and event_object_table = ?`
 
 	err = sqlutils.QueryRowsMap(db, query, func(rowMap sqlutils.RowMap) error {
 		triggers = append(triggers, Trigger{
@@ -260,7 +260,7 @@ func GetTriggers(db *gosql.DB, databaseName, tableName string) (triggers []Trigg
 			Timing:    rowMap.GetString("timing"),
 		})
 		return nil
-	})
+	}, databaseName, tableName)
 	if err != nil {
 		return nil, err
 	}

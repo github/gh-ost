@@ -647,7 +647,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 		uniqueKeyColumns := NewColumnList([]string{"position"})
 		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
 		require.NoError(t, err)
-		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
+		query, updateArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -657,15 +657,14 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 					((position = ?))
 		`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
-		require.Equal(t, []interface{}{17}, uniqueKeyArgs)
+		require.Equal(t, []interface{}{3, "testname", 17, 23, 17}, updateArgs)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"position", "name"})
 		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
 		require.NoError(t, err)
-		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
+		query, updateArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -675,15 +674,14 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 					((position = ?) and (name = ?))
 		`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
-		require.Equal(t, []interface{}{17, "testname"}, uniqueKeyArgs)
+		require.Equal(t, []interface{}{3, "testname", 17, 23, 17, "testname"}, updateArgs)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age"})
 		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
 		require.NoError(t, err)
-		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
+		query, updateArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -693,15 +691,14 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 					((age = ?))
 		`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
-		require.Equal(t, []interface{}{56}, uniqueKeyArgs)
+		require.Equal(t, []interface{}{3, "testname", 17, 23, 56}, updateArgs)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
 		uniqueKeyColumns := NewColumnList([]string{"age", "position", "id", "name"})
 		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, sharedColumns, uniqueKeyColumns)
 		require.NoError(t, err)
-		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
+		query, updateArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -711,8 +708,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 					((age = ?) and (position = ?) and (id = ?) and (name = ?))
 		`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
-		require.Equal(t, []interface{}{56, 17, 3, "testname"}, uniqueKeyArgs)
+		require.Equal(t, []interface{}{3, "testname", 17, 23, 56, 17, 3, "testname"}, updateArgs)
 	}
 	{
 		sharedColumns := NewColumnList([]string{"id", "name", "position", "age"})
@@ -732,7 +728,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 		uniqueKeyColumns := NewColumnList([]string{"id"})
 		builder, err := NewDMLUpdateQueryBuilder(databaseName, tableName, tableColumns, sharedColumns, mappedColumns, uniqueKeyColumns)
 		require.NoError(t, err)
-		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
+		query, updateArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -742,8 +738,7 @@ func TestBuildDMLUpdateQuery(t *testing.T) {
 					((id = ?))
 		`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, "testname", 17, 23}, sharedArgs)
-		require.Equal(t, []interface{}{3}, uniqueKeyArgs)
+		require.Equal(t, []interface{}{3, "testname", 17, 23, 3}, updateArgs)
 	}
 }
 
@@ -759,7 +754,7 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 	require.NoError(t, err)
 	{
 		// test signed
-		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
+		query, updateArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -769,14 +764,13 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 					((position = ?))
 		`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, "testname", int8(-17), int8(-2)}, sharedArgs)
-		require.Equal(t, []interface{}{int8(-3)}, uniqueKeyArgs)
+		require.Equal(t, []interface{}{3, "testname", int8(-17), int8(-2), int8(-3)}, updateArgs)
 	}
 	{
 		// test unsigned
 		sharedColumns.SetUnsigned("age")
 		uniqueKeyColumns.SetUnsigned("position")
-		query, sharedArgs, uniqueKeyArgs, err := builder.BuildQuery(valueArgs, whereArgs)
+		query, updateArgs, err := builder.BuildQuery(valueArgs, whereArgs)
 		require.NoError(t, err)
 		expected := `
 			update /* gh-ost mydb.tbl */
@@ -786,8 +780,7 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 					((position = ?))
 		`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, "testname", int8(-17), uint8(254)}, sharedArgs)
-		require.Equal(t, []interface{}{uint8(253)}, uniqueKeyArgs)
+		require.Equal(t, []interface{}{3, "testname", int8(-17), uint8(254), uint8(253)}, updateArgs)
 	}
 }
 
