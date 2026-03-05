@@ -542,7 +542,9 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySuc
 	err = applier.ReadMigrationRangeValues()
 	suite.Require().NoError(err)
 
+	migrationContext.SetNextIterationRangeMinValues()
 	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
 
@@ -620,6 +622,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQueryFai
 	err = applier.AlterGhost()
 	suite.Require().NoError(err)
 
+	migrationContext.SetNextIterationRangeMinValues()
 	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
