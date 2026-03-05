@@ -1470,6 +1470,15 @@ func (this *Migrator) iterateChunks() error {
 			if err := this.retryBatchCopyWithHooks(applyCopyRowsFunc); err != nil {
 				return terminateRowIteration(err)
 			}
+
+			// record last successfully copied range
+			this.applier.LastIterationRangeMutex.Lock()
+			if this.migrationContext.MigrationIterationRangeMinValues != nil && this.migrationContext.MigrationIterationRangeMaxValues != nil {
+				this.applier.LastIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMinValues.Clone()
+				this.applier.LastIterationRangeMaxValues = this.migrationContext.MigrationIterationRangeMaxValues.Clone()
+			}
+			this.applier.LastIterationRangeMutex.Unlock()
+
 			return nil
 		}
 		// Enqueue copy operation; to be executed by executeWriteFuncs()
