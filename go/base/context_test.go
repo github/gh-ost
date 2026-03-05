@@ -235,14 +235,14 @@ func TestSetAbortError_ThreadSafe(t *testing.T) {
 	ctx := NewMigrationContext()
 
 	var wg sync.WaitGroup
-	errors := []error{
+	errs := []error{
 		errors.New("error 1"),
 		errors.New("error 2"),
 		errors.New("error 3"),
 	}
 
 	// Launch 3 goroutines trying to set error concurrently
-	for _, err := range errors {
+	for _, err := range errs {
 		wg.Add(1)
 		go func(e error) {
 			defer wg.Done()
@@ -260,7 +260,7 @@ func TestSetAbortError_ThreadSafe(t *testing.T) {
 
 	// Verify it's one of the errors we sent
 	found := false
-	for _, err := range errors {
+	for _, err := range errs {
 		if got == err { //nolint:errorlint // Testing pointer equality for sentinel error
 			found = true
 			break
