@@ -1655,20 +1655,18 @@ func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 	this.applier.LastIterationRangeMutex.Unlock()
 
 	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-			this.applier.CurrentCoordinatesMutex.Lock()
-			if coords.SmallerThanOrEquals(this.applier.CurrentCoordinates) {
-				id, err := this.applier.WriteCheckpoint(chk)
-				chk.Id = id
-				this.applier.CurrentCoordinatesMutex.Unlock()
-				return chk, err
-			}
-			this.applier.CurrentCoordinatesMutex.Unlock()
-			time.Sleep(500 * time.Millisecond)
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		this.applier.CurrentCoordinatesMutex.Lock()
+		if coords.SmallerThanOrEquals(this.applier.CurrentCoordinates) {
+			id, err := this.applier.WriteCheckpoint(chk)
+			chk.Id = id
+			this.applier.CurrentCoordinatesMutex.Unlock()
+			return chk, err
+		}
+		this.applier.CurrentCoordinatesMutex.Unlock()
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
