@@ -190,7 +190,7 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	for {
 		// Check for context cancellation each iteration
 		if err := ctx.Err(); err != nil {
-			return nil
+			return err
 		}
 		if canStopStreaming() {
 			return nil
