@@ -819,17 +819,6 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and thus done with copying row chunks)
 func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
-	this.LastIterationRangeMutex.Lock()
-	if this.migrationContext.MigrationIterationRangeMinValues != nil && this.migrationContext.MigrationIterationRangeMaxValues != nil {
-		this.LastIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMinValues.Clone()
-		this.LastIterationRangeMaxValues = this.migrationContext.MigrationIterationRangeMaxValues.Clone()
-	}
-	this.LastIterationRangeMutex.Unlock()
-
-	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
-	if this.migrationContext.MigrationIterationRangeMinValues == nil {
-		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
-	}
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
@@ -1557,6 +1546,43 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		if execErr != nil {
 			return rollback(execErr)
 		}
+
+		// Check for warnings when PanicOnWarnings is enabled
+		if this.migrationContext.PanicOnWarnings {
+			//nolint:execinquery
+			rows, err := tx.Query("SHOW WARNINGS")
+			if err != nil {
+				return rollback(err)
+			}
+			defer rows.Close()
+			if err = rows.Err(); err != nil {
+				return rollback(err)
+			}
+
+			var sqlWarnings []string
+			for rows.Next() {
+				var level, message string
+				var code int
+				if err := rows.Scan(&level, &code, &message); err != nil {
+					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+					continue
+				}
+				// Duplicate warnings are formatted differently across mysql versions, hence the optional table name prefix
+				migrationUniqueKeyExpression := fmt.Sprintf("for key '(%s\\.)?%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
+				matched, _ := regexp.MatchString(migrationUniqueKeyExpression, message)
+				if strings.Contains(message, "Duplicate entry") && matched {
+					// Duplicate entry on migration unique key is expected during binlog replay
+					// (row was already copied during bulk copy phase)
+					continue
+				}
+				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+			}
+			if len(sqlWarnings) > 0 {
+				warningMsg := fmt.Sprintf("Warnings detected during DML event application: %v", sqlWarnings)
+				return rollback(errors.New(warningMsg))
+			}
+		}
+
 		if err := tx.Commit(); err != nil {
 			return err
 		}
