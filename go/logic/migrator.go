@@ -1574,7 +1574,16 @@ func (this *Migrator) iterateChunks() error {
 			return nil
 		}
 		// Enqueue copy operation; to be executed by executeWriteFuncs()
-		this.copyRowsQueue <- copyRowsFunc
+		select {
+		case this.copyRowsQueue <- copyRowsFunc:
+			// Successfully enqueued
+		case <-this.migrationContext.GetContext().Done():
+			// Context cancelled, check for abort and exit
+			if err := this.checkAbort(); err != nil {
+				return terminateRowIteration(err)
+			}
+			return terminateRowIteration(this.migrationContext.GetContext().Err())
+		}
 	}
 }
 
