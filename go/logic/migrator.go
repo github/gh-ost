@@ -258,7 +258,12 @@ func (this *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 	case Migrated, ReadMigrationRangeValues:
 		// no-op event
 	case GhostTableMigrated:
-		this.ghostTableMigrated <- true
+		select {
+		case this.ghostTableMigrated <- true:
+			// Successfully sent
+		case <-this.migrationContext.GetContext().Done():
+			// Context cancelled, migration is aborting
+		}
 	case AllEventsUpToLockProcessed:
 		var applyEventFunc tableWriteFunc = func() error {
 			this.allEventsUpToLockProcessed <- &lockProcessedStruct{
@@ -273,7 +278,12 @@ func (this *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 		// So as not to create a potential deadlock, we write this func to applyEventsQueue
 		// asynchronously, understanding it doesn't really matter.
 		go func() {
-			this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
+			select {
+			case this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc):
+				// Successfully enqueued
+			case <-this.migrationContext.GetContext().Done():
+				// Context cancelled, migration is aborting
+			}
 		}()
 	default:
 		return fmt.Errorf("Unknown changelog state: %+v", changelogState)
@@ -1408,8 +1418,14 @@ func (this *Migrator) addDMLEventsListener() error {
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		func(dmlEntry *binlog.BinlogEntry) error {
-			this.applyEventsQueue <- newApplyEventStructByDML(dmlEntry)
-			return nil
+			select {
+			case this.applyEventsQueue <- newApplyEventStructByDML(dmlEntry):
+				// Successfully enqueued
+				return nil
+			case <-this.migrationContext.GetContext().Done():
+				// Context cancelled, stop processing events
+				return this.migrationContext.GetContext().Err()
+			}
 		},
 	)
 	return err
