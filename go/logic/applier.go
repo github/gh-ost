@@ -716,12 +716,8 @@ func (this *Applier) InitiateHeartbeat() {
 			continue
 		}
 		if err := injectHeartbeat(); err != nil {
-			select {
-			case this.migrationContext.PanicAbort <- fmt.Errorf("injectHeartbeat writing failed %d times, last error: %w", numSuccessiveFailures, err):
-				// Error sent successfully
-			case <-this.migrationContext.GetContext().Done():
-				// Context cancelled, someone else already reported an error
-			}
+			// Use helper to prevent deadlock if listenOnPanicAbort already exited
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, fmt.Errorf("injectHeartbeat writing failed %d times, last error: %w", numSuccessiveFailures, err))
 			return
 		}
 	}

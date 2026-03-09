@@ -1027,3 +1027,24 @@ func (this *MigrationContext) CancelContext() {
 		this.cancelFunc()
 	}
 }
+
+// SendWithContext attempts to send a value to a channel, but returns early
+// if the context is cancelled. This prevents goroutine deadlocks when the
+// channel receiver has exited due to an error.
+//
+// Use this instead of bare channel sends (ch <- val) in goroutines to ensure
+// proper cleanup when the migration is aborted.
+//
+// Example:
+//
+//	if err := base.SendWithContext(ctx, ch, value); err != nil {
+//	    return err  // context was cancelled
+//	}
+func SendWithContext[T any](ctx context.Context, ch chan<- T, val T) error {
+	select {
+	case ch <- val:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

@@ -163,12 +163,8 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		// there's an error. Let's try again.
 	}
 	if len(notFatalHint) == 0 {
-		select {
-		case this.migrationContext.PanicAbort <- err:
-			// Error sent successfully
-		case <-this.migrationContext.GetContext().Done():
-			// Context cancelled, someone else already reported an error
-		}
+		// Use helper to prevent deadlock if listenOnPanicAbort already exited
+		_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
 	}
 	return err
 }
@@ -196,12 +192,8 @@ func (this *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 		}
 	}
 	if len(notFatalHint) == 0 {
-		select {
-		case this.migrationContext.PanicAbort <- err:
-			// Error sent successfully
-		case <-this.migrationContext.GetContext().Done():
-			// Context cancelled, someone else already reported an error
-		}
+		// Use helper to prevent deadlock if listenOnPanicAbort already exited
+		_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
 	}
 	return err
 }
@@ -210,24 +202,16 @@ func (this *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 // consumes and drops any further incoming events that may be left hanging.
 func (this *Migrator) consumeRowCopyComplete() {
 	if err := <-this.rowCopyComplete; err != nil {
-		select {
-		case this.migrationContext.PanicAbort <- err:
-			// Error sent successfully
-		case <-this.migrationContext.GetContext().Done():
-			// Context cancelled, someone else already reported an error
-		}
+		// Use helper to prevent deadlock if listenOnPanicAbort already exited
+		_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
 	}
 	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
 	this.migrationContext.MarkRowCopyEndTime()
 	go func() {
 		for err := range this.rowCopyComplete {
 			if err != nil {
-				select {
-				case this.migrationContext.PanicAbort <- err:
-					// Error sent successfully
-				case <-this.migrationContext.GetContext().Done():
-					// Context cancelled, someone else already reported an error
-				}
+				// Use helper to prevent deadlock if listenOnPanicAbort already exited
+				_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
 			}
 		}
 	}()
@@ -258,19 +242,14 @@ func (this *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 	case Migrated, ReadMigrationRangeValues:
 		// no-op event
 	case GhostTableMigrated:
-		select {
-		case this.ghostTableMigrated <- true:
-			// Successfully sent
-		case <-this.migrationContext.GetContext().Done():
-			// Context cancelled, migration is aborting
-		}
+		// Use helper to prevent deadlock if migration aborts before receiver is ready
+		_ = base.SendWithContext(this.migrationContext.GetContext(), this.ghostTableMigrated, true)
 	case AllEventsUpToLockProcessed:
 		var applyEventFunc tableWriteFunc = func() error {
-			this.allEventsUpToLockProcessed <- &lockProcessedStruct{
+			return base.SendWithContext(this.migrationContext.GetContext(), this.allEventsUpToLockProcessed, &lockProcessedStruct{
 				state:  changelogStateString,
 				coords: dmlEntry.Coordinates.Clone(),
-			}
-			return nil
+			})
 		}
 		// at this point we know all events up to lock have been read from the streamer,
 		// because the streamer works sequentially. So those events are either already handled,
@@ -278,12 +257,8 @@ func (this *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 		// So as not to create a potential deadlock, we write this func to applyEventsQueue
 		// asynchronously, understanding it doesn't really matter.
 		go func() {
-			select {
-			case this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc):
-				// Successfully enqueued
-			case <-this.migrationContext.GetContext().Done():
-				// Context cancelled, migration is aborting
-			}
+			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.applyEventsQueue, newApplyEventStructByFunc(&applyEventFunc))
 		}()
 	default:
 		return fmt.Errorf("Unknown changelog state: %+v", changelogState)
@@ -1387,12 +1362,8 @@ func (this *Migrator) initiateStreaming() error {
 		this.migrationContext.Log.Debugf("Beginning streaming")
 		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
 		if err != nil {
-			select {
-			case this.migrationContext.PanicAbort <- err:
-				// Error sent successfully
-			case <-this.migrationContext.GetContext().Done():
-				// Context cancelled, someone else already reported an error
-			}
+			// Use helper to prevent deadlock if listenOnPanicAbort already exited
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
 		}
 		this.migrationContext.Log.Debugf("Done streaming")
 	}()
@@ -1418,14 +1389,9 @@ func (this *Migrator) addDMLEventsListener() error {
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		func(dmlEntry *binlog.BinlogEntry) error {
-			select {
-			case this.applyEventsQueue <- newApplyEventStructByDML(dmlEntry):
-				// Successfully enqueued
-				return nil
-			case <-this.migrationContext.GetContext().Done():
-				// Context cancelled, stop processing events
-				return this.migrationContext.GetContext().Err()
-			}
+			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
+			// This is critical because this callback blocks the event streamer
+			return base.SendWithContext(this.migrationContext.GetContext(), this.applyEventsQueue, newApplyEventStructByDML(dmlEntry))
 		},
 	)
 	return err
@@ -1503,7 +1469,7 @@ func (this *Migrator) initiateApplier() error {
 // a chunk of rows onto the ghost table.
 func (this *Migrator) iterateChunks() error {
 	terminateRowIteration := func(err error) error {
-		this.rowCopyComplete <- err
+		_ = base.SendWithContext(this.migrationContext.GetContext(), this.rowCopyComplete, err)
 		return this.migrationContext.Log.Errore(err)
 	}
 	if this.migrationContext.Noop {
@@ -1590,15 +1556,13 @@ func (this *Migrator) iterateChunks() error {
 			return nil
 		}
 		// Enqueue copy operation; to be executed by executeWriteFuncs()
-		select {
-		case this.copyRowsQueue <- copyRowsFunc:
-			// Successfully enqueued
-		case <-this.migrationContext.GetContext().Done():
+		// Use helper to prevent deadlock if executeWriteFuncs exits
+		if err := base.SendWithContext(this.migrationContext.GetContext(), this.copyRowsQueue, copyRowsFunc); err != nil {
 			// Context cancelled, check for abort and exit
-			if err := this.checkAbort(); err != nil {
-				return terminateRowIteration(err)
+			if abortErr := this.checkAbort(); abortErr != nil {
+				return terminateRowIteration(abortErr)
 			}
-			return terminateRowIteration(this.migrationContext.GetContext().Err())
+			return terminateRowIteration(err)
 		}
 	}
 }
