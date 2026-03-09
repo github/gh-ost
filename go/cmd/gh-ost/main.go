@@ -316,6 +316,9 @@ func main() {
 	if migrationContext.CheckpointIntervalSeconds < 10 {
 		migrationContext.Log.Fatalf("--checkpoint-seconds should be >=10")
 	}
+	if migrationContext.CountTableRows && migrationContext.PanicOnWarnings {
+		migrationContext.Log.Warning("--exact-rowcount with --panic-on-warnings: row counts cannot be exact due to warning detection")
+	}
 
 	switch *cutOver {
 	case "atomic", "default", "":
