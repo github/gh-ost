@@ -1546,6 +1546,43 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 		if execErr != nil {
 			return rollback(execErr)
 		}
+
+		// Check for warnings when PanicOnWarnings is enabled
+		if this.migrationContext.PanicOnWarnings {
+			//nolint:execinquery
+			rows, err := tx.Query("SHOW WARNINGS")
+			if err != nil {
+				return rollback(err)
+			}
+			defer rows.Close()
+			if err = rows.Err(); err != nil {
+				return rollback(err)
+			}
+
+			var sqlWarnings []string
+			for rows.Next() {
+				var level, message string
+				var code int
+				if err := rows.Scan(&level, &code, &message); err != nil {
+					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+					continue
+				}
+				// Duplicate warnings are formatted differently across mysql versions, hence the optional table name prefix
+				migrationUniqueKeyExpression := fmt.Sprintf("for key '(%s\\.)?%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
+				matched, _ := regexp.MatchString(migrationUniqueKeyExpression, message)
+				if strings.Contains(message, "Duplicate entry") && matched {
+					// Duplicate entry on migration unique key is expected during binlog replay
+					// (row was already copied during bulk copy phase)
+					continue
+				}
+				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+			}
+			if len(sqlWarnings) > 0 {
+				warningMsg := fmt.Sprintf("Warnings detected during DML event application: %v", sqlWarnings)
+				return rollback(errors.New(warningMsg))
+			}
+		}
+
 		if err := tx.Commit(); err != nil {
 			return err
 		}

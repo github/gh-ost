@@ -538,7 +538,7 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 		query, sharedArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
-			replace /* gh-ost mydb.tbl */
+			insert /* gh-ost mydb.tbl */ ignore
 				into mydb.tbl
 					(id, name, position, age)
 				values
@@ -554,7 +554,7 @@ func TestBuildDMLInsertQuery(t *testing.T) {
 		query, sharedArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
-			replace /* gh-ost mydb.tbl */
+			insert /* gh-ost mydb.tbl */ ignore
 				into mydb.tbl
 					(position, name, age, id)
 				values
@@ -589,7 +589,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		query, sharedArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
-			replace /* gh-ost mydb.tbl */
+			insert /* gh-ost mydb.tbl */ ignore
 				into mydb.tbl
 					(id, name, position, age)
 				values
@@ -607,7 +607,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		query, sharedArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
-			replace /* gh-ost mydb.tbl */
+			insert /* gh-ost mydb.tbl */ ignore
 				into mydb.tbl
 					(id, name, position, age)
 				values
@@ -625,7 +625,7 @@ func TestBuildDMLInsertQuerySignedUnsigned(t *testing.T) {
 		query, sharedArgs, err := builder.BuildQuery(args)
 		require.NoError(t, err)
 		expected := `
-			replace /* gh-ost mydb.tbl */
+			insert /* gh-ost mydb.tbl */ ignore
 				into mydb.tbl
 					(id, name, position, age)
 				values

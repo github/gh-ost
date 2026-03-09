@@ -566,7 +566,7 @@ func NewDMLInsertQueryBuilder(databaseName, tableName string, tableColumns, shar
 	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
 
 	stmt := fmt.Sprintf(`
-		replace /* gh-ost %s.%s */
+		insert /* gh-ost %s.%s */ ignore
 		into
 			%s.%s
 			(%s)
