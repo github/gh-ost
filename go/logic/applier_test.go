@@ -1082,7 +1082,7 @@ func (suite *ApplierTestSuite) TestDuplicateOnMigrationKeyAllowedInBinlogReplay(
 
 // TestRegexMetacharactersInIndexName tests that index names with regex metacharacters
 // are properly escaped. We test with a plus sign in the index name, which without
-// QuoteMeta would be treated as a regex quantifier (one or more of preceding character).
+// QuoteMeta would be treated as a regex quantifier (one or more of 'x' in this case).
 // This test verifies the pattern matches ONLY the exact index name, not a regex pattern.
 func (suite *ApplierTestSuite) TestRegexMetacharactersInIndexName() {
 	ctx := context.Background()
@@ -1090,8 +1090,8 @@ func (suite *ApplierTestSuite) TestRegexMetacharactersInIndexName() {
 	var err error
 
 	// Create tables with an index name containing a plus sign
-	// Without QuoteMeta, "idx+" would mean "one or more 'd'" in regex
-	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100));", getTestTableName()))
+	// Without QuoteMeta, "idx+email" would be treated as a regex pattern where + is a quantifier
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), UNIQUE KEY `idx+email` (email));", getTestTableName()))
 	suite.Require().NoError(err)
 
 	// MySQL allows + in index names when quoted
@@ -1111,9 +1111,9 @@ func (suite *ApplierTestSuite) TestRegexMetacharactersInIndexName() {
 	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email"})
 	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email"})
 	migrationContext.UniqueKey = &sql.UniqueKey{
-		Name:             "PRIMARY",
-		NameInGhostTable: "PRIMARY",
-		Columns:          *sql.NewColumnList([]string{"id"}),
+		Name:             "idx+email",
+		NameInGhostTable: "idx+email",
+		Columns:          *sql.NewColumnList([]string{"email"}),
 	}
 
 	applier := NewApplier(migrationContext)
@@ -1127,22 +1127,10 @@ func (suite *ApplierTestSuite) TestRegexMetacharactersInIndexName() {
 	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email) VALUES (1, 'alice@example.com'), (2, 'bob@example.com');", getTestGhostTableName()))
 	suite.Require().NoError(err)
 
-	// Test: duplicate on PRIMARY KEY (migration key) should be allowed
+	// Test: duplicate on idx+email (the migration key) should be allowed
+	// This verifies our regex correctly identifies "idx+email" as the migration key
+	// Without regexp.QuoteMeta, the + would be treated as a regex quantifier and might not match correctly
 	dmlEvents := []*binlog.BinlogDMLEvent{
-		{
-			DatabaseName:    testMysqlDatabase,
-			TableName:       testMysqlTableName,
-			DML:             binlog.InsertDML,
-			NewColumnValues: sql.ToColumnValues([]interface{}{1, "alice@example.com"}),
-		},
-	}
-
-	err = applier.ApplyDMLEventQueries(dmlEvents)
-	suite.Require().NoError(err, "Duplicate on PRIMARY should be allowed even with + in index name")
-
-	// Test: duplicate on idx+email should fail
-	// This verifies our regex correctly identifies "idx+email" (not as a regex pattern)
-	dmlEvents = []*binlog.BinlogDMLEvent{
 		{
 			DatabaseName:    testMysqlDatabase,
 			TableName:       testMysqlTableName,
@@ -1152,7 +1140,20 @@ func (suite *ApplierTestSuite) TestRegexMetacharactersInIndexName() {
 	}
 
 	err = applier.ApplyDMLEventQueries(dmlEvents)
-	suite.Require().Error(err, "Duplicate on idx+email should fail")
+	suite.Require().NoError(err, "Duplicate on idx+email (migration key) should be allowed with PanicOnWarnings enabled")
+
+	// Test: duplicate on PRIMARY (not the migration key) should fail
+	dmlEvents = []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{1, "charlie@example.com"}),
+		},
+	}
+
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().Error(err, "Duplicate on PRIMARY (not migration key) should fail with PanicOnWarnings enabled")
 	suite.Require().Contains(err.Error(), "Duplicate entry")
 
 	// Verify final state - should still have only the original 2 rows
