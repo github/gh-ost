@@ -545,7 +545,7 @@ func (this *Migrator) Migrate() (err error) {
 	this.consumeRowCopyComplete()
 	this.migrationContext.Log.Infof("Row copy complete")
 	// Check if row copy was aborted due to error
-	if err := this.migrationContext.GetAbortError(); err != nil {
+	if err := this.checkAbort(); err != nil {
 		return err
 	}
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
