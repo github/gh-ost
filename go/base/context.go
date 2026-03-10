@@ -324,7 +324,7 @@ func NewMigrationContext() *MigrationContext {
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		lastHeartbeatOnChangelogMutex:       &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
-		PanicAbort:                          make(chan error, 1),
+		PanicAbort:                          make(chan error),
 		ctx:                                 ctx,
 		cancelFunc:                          cancelFunc,
 		abortMutex:                          &sync.Mutex{},
