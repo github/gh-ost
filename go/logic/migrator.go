@@ -202,8 +202,8 @@ func (this *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 // consumes and drops any further incoming events that may be left hanging.
 func (this *Migrator) consumeRowCopyComplete() {
 	if err := <-this.rowCopyComplete; err != nil {
-		// Use helper to prevent deadlock if listenOnPanicAbort already exited
-		_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+		// Abort synchronously to ensure checkAbort() sees the error immediately
+		this.abort(err)
 		// Don't mark row copy as complete if there was an error
 		return
 	}
@@ -212,8 +212,8 @@ func (this *Migrator) consumeRowCopyComplete() {
 	go func() {
 		for err := range this.rowCopyComplete {
 			if err != nil {
-				// Use helper to prevent deadlock if listenOnPanicAbort already exited
-				_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+				// Abort synchronously to ensure the error is stored immediately
+				this.abort(err)
 				return
 			}
 		}
@@ -285,10 +285,10 @@ func (this *Migrator) onChangelogHeartbeatEvent(dmlEntry *binlog.BinlogEntry) (e
 	}
 }
 
-// listenOnPanicAbort listens for fatal errors and initiates graceful shutdown
-func (this *Migrator) listenOnPanicAbort() {
-	err := <-this.migrationContext.PanicAbort
-
+// abort stores the error, cancels the context, and logs the abort.
+// This is the common abort logic used by both listenOnPanicAbort and
+// consumeRowCopyComplete to ensure consistent error handling.
+func (this *Migrator) abort(err error) {
 	// Store the error for Migrate() to return
 	this.migrationContext.SetAbortError(err)
 
@@ -297,6 +297,12 @@ func (this *Migrator) listenOnPanicAbort() {
 
 	// Log the error (but don't panic or exit)
 	this.migrationContext.Log.Errorf("Migration aborted: %v", err)
+}
+
+// listenOnPanicAbort listens for fatal errors and initiates graceful shutdown
+func (this *Migrator) listenOnPanicAbort() {
+	err := <-this.migrationContext.PanicAbort
+	this.abort(err)
 }
 
 // validateAlterStatement validates the `alter` statement meets criteria.
