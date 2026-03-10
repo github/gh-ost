@@ -204,6 +204,8 @@ func (this *Migrator) consumeRowCopyComplete() {
 	if err := <-this.rowCopyComplete; err != nil {
 		// Use helper to prevent deadlock if listenOnPanicAbort already exited
 		_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+		// Don't mark row copy as complete if there was an error
+		return
 	}
 	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
 	this.migrationContext.MarkRowCopyEndTime()
@@ -212,6 +214,7 @@ func (this *Migrator) consumeRowCopyComplete() {
 			if err != nil {
 				// Use helper to prevent deadlock if listenOnPanicAbort already exited
 				_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+				return
 			}
 		}
 	}()
