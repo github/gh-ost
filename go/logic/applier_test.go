@@ -813,6 +813,102 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateKeyOnNonMigration
 	suite.Require().Equal("user3@example.com", results[2].email)
 }
 
+func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateCompositeUniqueKey() {
+	ctx := context.Background()
+
+	var err error
+
+	// Create table with id, email, and username columns
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), username VARCHAR(100));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Create ghost table with same schema plus a composite unique index on (email, username)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), username VARCHAR(100), UNIQUE KEY email_username_unique (email, username));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "email", "username"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email", "username"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email", "username"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Insert initial rows into ghost table (simulating bulk copy phase)
+	// alice@example.com + bob is ok due to composite unique index
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email, username) VALUES (1, 'alice@example.com', 'alice'), (2, 'alice@example.com', 'bob'), (3, 'charlie@example.com', 'charlie');", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	// Simulate binlog event: try to insert a row with duplicate composite key (email + username)
+	// This should fail with a warning because the ghost table has a composite unique index
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{4, "alice@example.com", "alice"}), // duplicate (email, username)
+		},
+	}
+
+	// This should return an error when PanicOnWarnings is enabled
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().Error(err)
+	suite.Require().Contains(err.Error(), "Duplicate entry")
+
+	// Verify that the ghost table still has only the original 3 rows with correct data (no data loss)
+	rows, err := suite.db.Query("SELECT id, email, username FROM " + getTestGhostTableName() + " ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var results []struct {
+		id       int
+		email    string
+		username string
+	}
+	for rows.Next() {
+		var id int
+		var email string
+		var username string
+		err = rows.Scan(&id, &email, &username)
+		suite.Require().NoError(err)
+		results = append(results, struct {
+			id       int
+			email    string
+			username string
+		}{id, email, username})
+	}
+	suite.Require().NoError(rows.Err())
+
+	// All 3 original rows should still be present with correct data
+	suite.Require().Len(results, 3)
+	suite.Require().Equal(1, results[0].id)
+	suite.Require().Equal("alice@example.com", results[0].email)
+	suite.Require().Equal("alice", results[0].username)
+	suite.Require().Equal(2, results[1].id)
+	suite.Require().Equal("alice@example.com", results[1].email)
+	suite.Require().Equal("bob", results[1].username)
+	suite.Require().Equal(3, results[2].id)
+	suite.Require().Equal("charlie@example.com", results[2].email)
+	suite.Require().Equal("charlie", results[2].username)
+}
+
 // TestUpdateModifyingUniqueKeyWithDuplicateOnOtherIndex tests the scenario where:
 // 1. An UPDATE modifies the unique key (converted to DELETE+INSERT)
 // 2. The INSERT would create a duplicate on a NON-migration unique index
