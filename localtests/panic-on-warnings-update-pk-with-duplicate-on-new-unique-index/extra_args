@@ -1,1 +1,1 @@
---panic-on-warnings --alter "ADD UNIQUE KEY email_unique (email)"
+--panic-on-warnings --alter "ADD UNIQUE KEY email_unique (email)" --postpone-cut-over-flag-file=/tmp/gh-ost-test.postpone-cutover

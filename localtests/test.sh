@@ -135,6 +135,77 @@ start_replication() {
     done
 }
 
+build_ghost_command() {
+    # Build gh-ost command with all standard options
+    # Expects: ghost_binary, replica_host, replica_port, master_host, master_port,
+    #          table_name, storage_engine, throttle_flag_file, extra_args
+    cmd="GOTRACEBACK=crash $ghost_binary \
+    --user=gh-ost \
+    --password=gh-ost \
+    --host=$replica_host \
+    --port=$replica_port \
+    --assume-master-host=${master_host}:${master_port} \
+    --database=test \
+    --table=${table_name} \
+    --storage-engine=${storage_engine} \
+    --alter='engine=${storage_engine}' \
+    --exact-rowcount \
+    --assume-rbr \
+    --skip-metadata-lock-check \
+    --initially-drop-old-table \
+    --initially-drop-ghost-table \
+    --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _${table_name}_ghc' \
+    --throttle-flag-file=$throttle_flag_file \
+    --serve-socket-file=/tmp/gh-ost.test.sock \
+    --initially-drop-socket-file \
+    --test-on-replica \
+    --default-retries=3 \
+    --chunk-size=10 \
+    --verbose \
+    --debug \
+    --stack \
+    --checkpoint \
+    --execute ${extra_args[@]}"
+}
+
+validate_expected_failure() {
+    # Check if test expected to fail and validate error message
+    # Expects: tests_path, test_name, execution_result, test_logfile
+    if [ -f $tests_path/$test_name/expect_failure ]; then
+        if [ $execution_result -eq 0 ]; then
+            echo
+            echo "ERROR $test_name execution was expected to exit on error but did not."
+            echo "=== Last 50 lines of $test_logfile ==="
+            tail -n 50 $test_logfile
+            echo "=== End log excerpt ==="
+            return 1
+        fi
+        if [ -s $tests_path/$test_name/expect_failure ]; then
+            # 'expect_failure' file has content. We expect to find this content in the log.
+            expected_error_message="$(cat $tests_path/$test_name/expect_failure)"
+            if grep -q "$expected_error_message" $test_logfile; then
+                return 0
+            fi
+            echo
+            echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not."
+            echo "=== Last 50 lines of $test_logfile ==="
+            tail -n 50 $test_logfile
+            echo "=== End log excerpt ==="
+            return 1
+        fi
+        # 'expect_failure' file has no content. We generally agree that the failure is correct
+        return 0
+    fi
+
+    if [ $execution_result -ne 0 ]; then
+        echo
+        echo "ERROR $test_name execution failure. cat $test_logfile:"
+        cat $test_logfile
+        return 1
+    fi
+    return 0
+}
+
 sysbench_prepare() {
     local mysql_host="$1"
     local mysql_port="$2"
@@ -253,6 +324,15 @@ test_single() {
 
     table_name="gh_ost_test"
     ghost_table_name="_gh_ost_test_gho"
+
+    # Check for custom test script
+    if [ -f $tests_path/$test_name/test.sh ]; then
+        # Source the custom test script which can override default behavior
+        # It has access to all variables and functions from this script
+        source $tests_path/$test_name/test.sh
+        return $?
+    fi
+
     # test with sysbench oltp write load
     if [[ "$test_name" == "sysbench" ]]; then
         if ! command -v sysbench &>/dev/null; then
@@ -273,34 +353,8 @@ test_single() {
     fi
     trap cleanup SIGINT
 
-    #
-    cmd="GOTRACEBACK=crash $ghost_binary \
-    --user=gh-ost \
-    --password=gh-ost \
-    --host=$replica_host \
-    --port=$replica_port \
-    --assume-master-host=${master_host}:${master_port}
-    --database=test \
-    --table=${table_name} \
-    --storage-engine=${storage_engine} \
-    --alter='engine=${storage_engine}' \
-    --exact-rowcount \
-    --assume-rbr \
-    --skip-metadata-lock-check \
-    --initially-drop-old-table \
-    --initially-drop-ghost-table \
-    --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _${table_name}_ghc' \
-    --throttle-flag-file=$throttle_flag_file \
-    --serve-socket-file=/tmp/gh-ost.test.sock \
-    --initially-drop-socket-file \
-    --test-on-replica \
-    --default-retries=3 \
-    --chunk-size=10 \
-    --verbose \
-    --debug \
-    --stack \
-    --checkpoint \
-    --execute ${extra_args[@]}"
+    # Build and execute gh-ost command
+    build_ghost_command
     echo_dot
     echo $cmd >$exec_command_file
     echo_dot
@@ -323,38 +377,9 @@ test_single() {
         gh-ost-test-mysql-master --default-character-set=utf8mb4 test <$tests_path/$test_name/destroy.sql
     fi
 
-    if [ -f $tests_path/$test_name/expect_failure ]; then
-        if [ $execution_result -eq 0 ]; then
-            echo
-            echo "ERROR $test_name execution was expected to exit on error but did not."
-            echo "=== Last 50 lines of $test_logfile ==="
-            tail -n 50 $test_logfile
-            echo "=== End log excerpt ==="
-            return 1
-        fi
-        if [ -s $tests_path/$test_name/expect_failure ]; then
-            # 'expect_failure' file has content. We expect to find this content in the log.
-            expected_error_message="$(cat $tests_path/$test_name/expect_failure)"
-            if grep -q "$expected_error_message" $test_logfile; then
-                return 0
-            fi
-            echo
-            echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not."
-            echo "=== Last 50 lines of $test_logfile ==="
-            tail -n 50 $test_logfile
-            echo "=== End log excerpt ==="
-            return 1
-        fi
-        # 'expect_failure' file has no content. We generally agree that the failure is correct
-        return 0
-    fi
-
-    if [ $execution_result -ne 0 ]; then
-        echo
-        echo "ERROR $test_name execution failure. cat $test_logfile:"
-        cat $test_logfile
-        return 1
-    fi
+    # Validate expected failure or success
+    validate_expected_failure
+    return $?
 
     gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "show create table ${ghost_table_name}\G" -ss >$ghost_structure_output_file
 
