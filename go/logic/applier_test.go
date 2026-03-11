@@ -23,7 +23,6 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func TestApplierGenerateSqlModeQuery(t *testing.T) {
@@ -213,7 +212,6 @@ func (suite *ApplierTestSuite) SetupSuite() {
 		testmysql.WithDatabase(testMysqlDatabase),
 		testmysql.WithUsername(testMysqlUser),
 		testmysql.WithPassword(testMysqlPass),
-		testcontainers.WithWaitStrategy(wait.ForExposedPort()),
 		testmysql.WithConfigFile("my.cnf.test"),
 	)
 	suite.Require().NoError(err)
