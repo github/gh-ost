@@ -107,12 +107,6 @@ verify_master_and_replica() {
     fi
 }
 
-exec_cmd() {
-    echo "$@"
-    command "$@" 1>$test_logfile 2>&1
-    return $?
-}
-
 echo_dot() {
     echo -n "."
 }
@@ -225,7 +219,7 @@ test_single() {
         cat $tests_path/$test_name/create.sql
         return 1
     fi
-    
+
     if [ -f $tests_path/$test_name/before.sql ]; then
         gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/before.sql
         gh-ost-test-mysql-replica --default-character-set=utf8mb4 test < $tests_path/$test_name/before.sql
@@ -310,7 +304,7 @@ test_single() {
     echo_dot
     echo $cmd >$exec_command_file
     echo_dot
-    bash $exec_command_file 1>$test_logfile 2>&1
+    bash $exec_command_file >$test_logfile 2>&1
 
     execution_result=$?
     cleanup
@@ -332,7 +326,10 @@ test_single() {
     if [ -f $tests_path/$test_name/expect_failure ]; then
         if [ $execution_result -eq 0 ]; then
             echo
-            echo "ERROR $test_name execution was expected to exit on error but did not. cat $test_logfile"
+            echo "ERROR $test_name execution was expected to exit on error but did not."
+            echo "=== Last 50 lines of $test_logfile ==="
+            tail -n 50 $test_logfile
+            echo "=== End log excerpt ==="
             return 1
         fi
         if [ -s $tests_path/$test_name/expect_failure ]; then
@@ -342,7 +339,10 @@ test_single() {
                 return 0
             fi
             echo
-            echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not. cat $test_logfile"
+            echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not."
+            echo "=== Last 50 lines of $test_logfile ==="
+            tail -n 50 $test_logfile
+            echo "=== End log excerpt ==="
             return 1
         fi
         # 'expect_failure' file has no content. We generally agree that the failure is correct
