@@ -710,7 +710,17 @@ func (this *Applier) InitiateHeartbeat() {
 
 	ticker := time.NewTicker(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		// Check for context cancellation each iteration
+		ctx := this.migrationContext.GetContext()
+		select {
+		case <-ctx.Done():
+			this.migrationContext.Log.Debugf("Heartbeat injection cancelled")
+			return
+		case <-ticker.C:
+			// Process heartbeat
+		}
+
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -721,7 +731,8 @@ func (this *Applier) InitiateHeartbeat() {
 			continue
 		}
 		if err := injectHeartbeat(); err != nil {
-			this.migrationContext.PanicAbort <- fmt.Errorf("injectHeartbeat writing failed %d times, last error: %w", numSuccessiveFailures, err)
+			// Use helper to prevent deadlock if listenOnPanicAbort already exited
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, fmt.Errorf("injectHeartbeat writing failed %d times, last error: %w", numSuccessiveFailures, err))
 			return
 		}
 	}
