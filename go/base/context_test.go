@@ -6,8 +6,10 @@
 package base
 
 import (
+	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,5 +213,60 @@ func TestReadConfigFile(t *testing.T) {
 		if context.config.Osc.Max_Load != "10" {
 			t.Fatalf("Expected osc 'max_load' %q, got %q", "10", context.config.Osc.Max_Load)
 		}
+	}
+}
+
+func TestSetAbortError_StoresFirstError(t *testing.T) {
+	ctx := NewMigrationContext()
+
+	err1 := errors.New("first error")
+	err2 := errors.New("second error")
+
+	ctx.SetAbortError(err1)
+	ctx.SetAbortError(err2)
+
+	got := ctx.GetAbortError()
+	if got != err1 { //nolint:errorlint // Testing pointer equality for sentinel error
+		t.Errorf("Expected first error %v, got %v", err1, got)
+	}
+}
+
+func TestSetAbortError_ThreadSafe(t *testing.T) {
+	ctx := NewMigrationContext()
+
+	var wg sync.WaitGroup
+	errs := []error{
+		errors.New("error 1"),
+		errors.New("error 2"),
+		errors.New("error 3"),
+	}
+
+	// Launch 3 goroutines trying to set error concurrently
+	for _, err := range errs {
+		wg.Add(1)
+		go func(e error) {
+			defer wg.Done()
+			ctx.SetAbortError(e)
+		}(err)
+	}
+
+	wg.Wait()
+
+	// Should store exactly one of the errors
+	got := ctx.GetAbortError()
+	if got == nil {
+		t.Fatal("Expected error to be stored, got nil")
+	}
+
+	// Verify it's one of the errors we sent
+	found := false
+	for _, err := range errs {
+		if got == err { //nolint:errorlint // Testing pointer equality for sentinel error
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Stored error %v not in list of sent errors", got)
 	}
 }
