@@ -335,6 +335,67 @@ func (this *Applier) CreateGhostTable() error {
 	return err
 }
 
+func (this *Applier) getTableForeignKeyDefinitions(tableName string) (fkNames []string, fkBodies []string, err error) {
+	query := fmt.Sprintf("show create table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(tableName))
+	var dummy string
+	var createStatement string
+	if err := this.db.QueryRow(query).Scan(&dummy, &createStatement); err != nil {
+		return nil, nil, err
+	}
+
+	lines := strings.Split(createStatement, "\n")
+	re := regexp.MustCompile("CONSTRAINT\\s+['\"`]?([^'\"`]+)['\"`]?\\s+FOREIGN\\s+KEY\\s+(.*)")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		line = strings.TrimRight(line, ",")
+		if matches := re.FindStringSubmatch(line); len(matches) == 3 {
+			fkNames = append(fkNames, matches[1])
+			fkBodies = append(fkBodies, "FOREIGN KEY "+matches[2])
+		}
+	}
+	return fkNames, fkBodies, nil
+}
+
+func (this *Applier) ApplyForeignKeys() error {
+	this.migrationContext.Log.Infof("Applying foreign keys with prefix '%s'", this.migrationContext.ForeignKeyRenamePrefix)
+
+	ghostFKNames, _, err := this.getTableForeignKeyDefinitions(this.migrationContext.GetGhostTableName())
+	if err != nil {
+		return err
+	}
+	for _, name := range ghostFKNames {
+		query := fmt.Sprintf("alter /* gh-ost */ table %s.%s drop foreign key %s",
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+			sql.EscapeName(name))
+		this.migrationContext.Log.Infof("Dropping foreign key %s from ghost table", name)
+		if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+			return err
+		}
+	}
+
+	origFKNames, origFKBodies, err := this.getTableForeignKeyDefinitions(this.migrationContext.OriginalTableName)
+	if err != nil {
+		return err
+	}
+	for i, name := range origFKNames {
+		newName := fmt.Sprintf("%s%s", this.migrationContext.ForeignKeyRenamePrefix, name)
+		if len(newName) > 64 {
+			return fmt.Errorf("Generate foreign key name '%s' exceeds 64 characters", newName)
+		}
+		query := fmt.Sprintf("alter /* gh-ost */ table %s.%s add constraint %s %s",
+			sql.EscapeName(this.migrationContext.DatabaseName),
+			sql.EscapeName(this.migrationContext.GetGhostTableName()),
+			sql.EscapeName(newName),
+			origFKBodies[i])
+		this.migrationContext.Log.Infof("Adding foreign key %s to ghost table", newName)
+		if _, err := sqlutils.ExecNoPrepare(this.db, query); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // AlterGhost applies `alter` statement on ghost table
 func (this *Applier) AlterGhost() error {
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s %s`,
