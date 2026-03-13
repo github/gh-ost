@@ -59,6 +59,15 @@ func newDmlBuildResultError(err error) *dmlBuildResult {
 	}
 }
 
+func (this *Applier) setOptimizerSwitch() error {
+	if this.migrationContext.OptimizerSwitch == "" {
+		return nil
+	}
+	optimizerString := fmt.Sprintf("SET SESSION optimizer_switch=%q", this.migrationContext.OptimizerSwitch)
+	_, err := this.db.Exec(optimizerString)
+	return err
+}
+
 // Applier connects and writes the applier-server, which is the server where migration
 // happens. This is typically the master, but could be a replica when `--test-on-replica` or
 // `--execute-on-replica` are given.
@@ -122,6 +131,10 @@ func (this *Applier) InitDBConnections() (err error) {
 		} else {
 			this.connectionConfig.ImpliedKey = impliedKey
 		}
+	}
+	err = this.setOptimizerSwitch()
+	if err != nil {
+		return err
 	}
 	if err := this.readTableColumns(); err != nil {
 		return err
