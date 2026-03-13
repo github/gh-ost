@@ -483,6 +483,16 @@ func (this *Migrator) Migrate() (err error) {
 		return err
 	}
 
+	// Initialize row filter for data purging if a WHERE clause was provided
+	if this.migrationContext.RowFilterWhereClause != "" {
+		rowFilter, err := sql.NewRowFilter(this.migrationContext.RowFilterWhereClause, this.migrationContext.OriginalTableColumns)
+		if err != nil {
+			return this.migrationContext.Log.Errorf("Failed to parse --where clause: %+v", err)
+		}
+		this.migrationContext.RowFilter = rowFilter
+		this.migrationContext.Log.Infof("Row filter enabled: only rows matching '%s' will be migrated", this.migrationContext.RowFilterWhereClause)
+	}
+
 	// We can prepare some of the queries on the applier
 	if err := this.applier.prepareQueries(); err != nil {
 		return err
