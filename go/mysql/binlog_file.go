@@ -7,18 +7,10 @@
 package mysql
 
 import (
-	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 )
-
-var detachPattern *regexp.Regexp
-
-func init() {
-	detachPattern, _ = regexp.Compile(`//([^/:]+):([\d]+)`) // e.g. `//binlog.01234:567890`
-}
 
 // FileBinlogCoordinates described binary log coordinates in the form of a binlog file & log position.
 type FileBinlogCoordinates struct {
@@ -118,51 +110,6 @@ func (this *FileBinlogCoordinates) FileNumber() (int, int) {
 		return 0, 0
 	}
 	return fileNum, numLen
-}
-
-// PreviousFileCoordinatesBy guesses the filename of the previous binlog/relaylog, by given offset (number of files back)
-func (this *FileBinlogCoordinates) PreviousFileCoordinatesBy(offset int) (BinlogCoordinates, error) {
-	result := &FileBinlogCoordinates{}
-
-	fileNum, numLen := this.FileNumber()
-	if fileNum == 0 {
-		return result, errors.New("Log file number is zero, cannot detect previous file")
-	}
-	newNumStr := fmt.Sprintf("%d", (fileNum - offset))
-	newNumStr = strings.Repeat("0", numLen-len(newNumStr)) + newNumStr
-
-	tokens := strings.Split(this.LogFile, ".")
-	tokens[len(tokens)-1] = newNumStr
-	result.LogFile = strings.Join(tokens, ".")
-	return result, nil
-}
-
-// PreviousFileCoordinates guesses the filename of the previous binlog/relaylog
-func (this *FileBinlogCoordinates) PreviousFileCoordinates() (BinlogCoordinates, error) {
-	return this.PreviousFileCoordinatesBy(1)
-}
-
-// PreviousFileCoordinates guesses the filename of the previous binlog/relaylog
-func (this *FileBinlogCoordinates) NextFileCoordinates() (BinlogCoordinates, error) {
-	result := &FileBinlogCoordinates{}
-
-	fileNum, numLen := this.FileNumber()
-	newNumStr := fmt.Sprintf("%d", (fileNum + 1))
-	newNumStr = strings.Repeat("0", numLen-len(newNumStr)) + newNumStr
-
-	tokens := strings.Split(this.LogFile, ".")
-	tokens[len(tokens)-1] = newNumStr
-	result.LogFile = strings.Join(tokens, ".")
-	return result, nil
-}
-
-// FileSmallerThan returns true if this coordinate's file is strictly smaller than the other's.
-func (this *FileBinlogCoordinates) DetachedCoordinates() (isDetached bool, detachedLogFile string, detachedLogPos string) {
-	detachedCoordinatesSubmatch := detachPattern.FindStringSubmatch(this.LogFile)
-	if len(detachedCoordinatesSubmatch) == 0 {
-		return false, "", ""
-	}
-	return true, detachedCoordinatesSubmatch[1], detachedCoordinatesSubmatch[2]
 }
 
 func (this *FileBinlogCoordinates) Clone() BinlogCoordinates {
