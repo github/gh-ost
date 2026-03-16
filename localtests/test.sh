@@ -378,9 +378,16 @@ test_single() {
     fi
 
     # Validate expected failure or success
-    validate_expected_failure
-    return $?
+    if ! validate_expected_failure; then
+        return 1
+    fi
 
+    # If this was an expected failure test, we're done (no need to validate structure/checksums)
+    if [ -f $tests_path/$test_name/expect_failure ]; then
+        return 0
+    fi
+
+    # Test succeeded - now validate structure and checksums
     gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "show create table ${ghost_table_name}\G" -ss >$ghost_structure_output_file
 
     if [ -f $tests_path/$test_name/expect_table_structure ]; then
