@@ -18,11 +18,21 @@ ghost_pid=$!
 
 # Wait for row copy to complete
 echo_dot
+row_copy_complete=false
 for i in {1..30}; do
-    grep -q "Row copy complete" $test_logfile && break
+    if grep -q "Row copy complete" $test_logfile; then
+        row_copy_complete=true
+        break
+    fi
     ps -p $ghost_pid > /dev/null || { echo; echo "ERROR gh-ost exited early"; rm -f $postpone_flag_file; return 1; }
     sleep 1; echo_dot
 done
+
+if ! $row_copy_complete; then
+    echo; echo "ERROR row copy did not complete within expected time"
+    rm -f $postpone_flag_file
+    return 1
+fi
 
 # Inject conflicting SQL after row copy (UPDATE with PK change creates DELETE+INSERT in binlog)
 echo_dot

@@ -30,6 +30,8 @@ replica_port=
 original_sql_mode=
 current_gtid_mode=
 sysbench_pid=
+test_timeout=120
+test_failure_log_tail_lines=50
 
 OPTIND=1
 while getopts "b:s:dtg" OPTION; do
@@ -168,6 +170,12 @@ build_ghost_command() {
     --execute ${extra_args[@]}"
 }
 
+print_log_excerpt() {
+    echo "=== Last $test_failure_log_tail_lines lines of $test_logfile ==="
+    tail -n $test_failure_log_tail_lines $test_logfile
+    echo "=== End log excerpt ==="
+}
+
 validate_expected_failure() {
     # Check if test expected to fail and validate error message
     # Expects: tests_path, test_name, execution_result, test_logfile
@@ -175,9 +183,7 @@ validate_expected_failure() {
         if [ $execution_result -eq 0 ]; then
             echo
             echo "ERROR $test_name execution was expected to exit on error but did not."
-            echo "=== Last 50 lines of $test_logfile ==="
-            tail -n 50 $test_logfile
-            echo "=== End log excerpt ==="
+            print_log_excerpt
             return 1
         fi
         if [ -s $tests_path/$test_name/expect_failure ]; then
@@ -188,9 +194,7 @@ validate_expected_failure() {
             fi
             echo
             echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not."
-            echo "=== Last 50 lines of $test_logfile ==="
-            tail -n 50 $test_logfile
-            echo "=== End log excerpt ==="
+            print_log_excerpt
             return 1
         fi
         # 'expect_failure' file has no content. We generally agree that the failure is correct
@@ -327,10 +331,32 @@ test_single() {
 
     # Check for custom test script
     if [ -f $tests_path/$test_name/test.sh ]; then
-        # Source the custom test script which can override default behavior
-        # It has access to all variables and functions from this script
-        source $tests_path/$test_name/test.sh
-        return $?
+        # Run the custom test script in a subshell with timeout monitoring
+        # The subshell inherits all functions and variables from the current shell
+        (source $tests_path/$test_name/test.sh) &
+        test_pid=$!
+
+        # Monitor the test with timeout
+        timeout_counter=0
+        while kill -0 $test_pid 2>/dev/null; do
+            if [ $timeout_counter -ge $test_timeout ]; then
+                kill -TERM $test_pid 2>/dev/null
+                sleep 1
+                kill -KILL $test_pid 2>/dev/null
+                wait $test_pid 2>/dev/null
+                echo
+                echo "ERROR $test_name execution timed out"
+                print_log_excerpt
+                return 1
+            fi
+            sleep 1
+            ((timeout_counter++))
+        done
+
+        # Get the exit code
+        wait $test_pid 2>/dev/null
+        execution_result=$?
+        return $execution_result
     fi
 
     # test with sysbench oltp write load
@@ -358,10 +384,18 @@ test_single() {
     echo_dot
     echo $cmd >$exec_command_file
     echo_dot
-    bash $exec_command_file >$test_logfile 2>&1
+    timeout $test_timeout bash $exec_command_file >$test_logfile 2>&1
 
     execution_result=$?
     cleanup
+
+    # Check for timeout (exit code 124)
+    if [ $execution_result -eq 124 ]; then
+        echo
+        echo "ERROR $test_name execution timed out"
+        print_log_excerpt
+        return 1
+    fi
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
         gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
@@ -441,14 +475,19 @@ test_all() {
     test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | sort)
     while read -r test_dir; do
         test_name=$(basename "$test_dir")
+        local test_start_time=$(date +%s)
         if ! test_single "$test_name"; then
+            local test_end_time=$(date +%s)
+            local test_duration=$((test_end_time - test_start_time))
             create_statement=$(gh-ost-test-mysql-replica test -t -e "show create table ${ghost_table_name} \G")
             echo "$create_statement" >>$test_logfile
-            echo "+ FAIL"
+            echo "+ FAIL (${test_duration}s)"
             return 1
         else
+            local test_end_time=$(date +%s)
+            local test_duration=$((test_end_time - test_start_time))
             echo
-            echo "+ pass"
+            echo "+ pass (${test_duration}s)"
         fi
         mysql_version="$(gh-ost-test-mysql-replica -e "select @@version")"
         replica_terminology="slave"

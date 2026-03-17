@@ -124,6 +124,10 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 // (or fails with error)
 func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 	for {
+		// Check for abort before continuing
+		if err := this.checkAbort(); err != nil {
+			return err
+		}
 		shouldSleep, err := operation()
 		if err != nil {
 			return err
@@ -539,7 +543,12 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
-	go this.executeWriteFuncs()
+	go func() {
+		if err := this.executeWriteFuncs(); err != nil {
+			// Send error to PanicAbort to trigger abort
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+		}
+	}()
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
 	go this.initiateStatus()
@@ -679,7 +688,12 @@ func (this *Migrator) Revert() error {
 
 	this.initiateThrottler()
 	go this.initiateStatus()
-	go this.executeDMLWriteFuncs()
+	go func() {
+		if err := this.executeDMLWriteFuncs(); err != nil {
+			// Send error to PanicAbort to trigger abort
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+		}
+	}()
 
 	this.printStatus(ForcePrintStatusRule)
 	var retrier func(func() error, ...bool) error
@@ -755,7 +769,7 @@ func (this *Migrator) cutOver() (err error) {
 
 	this.migrationContext.MarkPointOfInterest()
 	this.migrationContext.Log.Debugf("checking for cut-over postpone")
-	this.sleepWhileTrue(
+	if err := this.sleepWhileTrue(
 		func() (bool, error) {
 			heartbeatLag := this.migrationContext.TimeSinceLastHeartbeatOnChangelog()
 			maxLagMillisecondsThrottle := time.Duration(atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)) * time.Millisecond
@@ -783,7 +797,9 @@ func (this *Migrator) cutOver() (err error) {
 			}
 			return false, nil
 		},
-	)
+	); err != nil {
+		return err
+	}
 	atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 0)
 	this.migrationContext.MarkPointOfInterest()
 	this.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
