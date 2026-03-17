@@ -104,6 +104,7 @@ type MigrationContext struct {
 	GoogleCloudPlatform      bool
 	AzureMySQL               bool
 	AttemptInstantDDL        bool
+	ForceInstantDDL          bool
 	Resume                   bool
 	Revert                   bool
 	OldTableName             string
