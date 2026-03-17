@@ -13,7 +13,6 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
 
-	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -31,7 +30,6 @@ func (suite *EventsStreamerTestSuite) SetupSuite() {
 		mysql.WithDatabase(testMysqlDatabase),
 		mysql.WithUsername(testMysqlUser),
 		mysql.WithPassword(testMysqlPass),
-		testcontainers.WithWaitStrategy(wait.ForExposedPort()),
 	)
 	suite.Require().NoError(err)
 

@@ -94,6 +94,21 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	}
 }
 
+// compileMigrationKeyWarningRegex compiles a regex pattern that matches duplicate key warnings
+// for the migration's unique key. Duplicate warnings are formatted differently across MySQL versions,
+// hence the optional table name prefix. Metacharacters in table/index names are escaped to avoid
+// regex syntax errors.
+func (this *Applier) compileMigrationKeyWarningRegex() (*regexp.Regexp, error) {
+	escapedTable := regexp.QuoteMeta(this.migrationContext.GetGhostTableName())
+	escapedKey := regexp.QuoteMeta(this.migrationContext.UniqueKey.NameInGhostTable)
+	migrationUniqueKeyPattern := fmt.Sprintf(`for key '(%s\.)?%s'`, escapedTable, escapedKey)
+	migrationKeyRegex, err := regexp.Compile(migrationUniqueKeyPattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile migration key pattern: %w", err)
+	}
+	return migrationKeyRegex, nil
+}
+
 func (this *Applier) InitDBConnections() (err error) {
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	uriWithMulti := fmt.Sprintf("%s&multiStatements=true", applierUri)
@@ -928,6 +943,12 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 				return nil, err
 			}
 
+			// Compile regex once before loop to avoid performance penalty and handle errors properly
+			migrationKeyRegex, err := this.compileMigrationKeyWarningRegex()
+			if err != nil {
+				return nil, err
+			}
+
 			var sqlWarnings []string
 			for rows.Next() {
 				var level, message string
@@ -936,10 +957,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
 					continue
 				}
-				// Duplicate warnings are formatted differently across mysql versions, hence the optional table name prefix
-				migrationUniqueKeyExpression := fmt.Sprintf("for key '(%s\\.)?%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
-				matched, _ := regexp.MatchString(migrationUniqueKeyExpression, message)
-				if strings.Contains(message, "Duplicate entry") && matched {
+				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
 					continue
 				}
 				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
@@ -1570,6 +1588,12 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 				return rollback(err)
 			}
 
+			// Compile regex once before loop to avoid performance penalty and handle errors properly
+			migrationKeyRegex, err := this.compileMigrationKeyWarningRegex()
+			if err != nil {
+				return rollback(err)
+			}
+
 			var sqlWarnings []string
 			for rows.Next() {
 				var level, message string
@@ -1578,10 +1602,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
 					continue
 				}
-				// Duplicate warnings are formatted differently across mysql versions, hence the optional table name prefix
-				migrationUniqueKeyExpression := fmt.Sprintf("for key '(%s\\.)?%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
-				matched, _ := regexp.MatchString(migrationUniqueKeyExpression, message)
-				if strings.Contains(message, "Duplicate entry") && matched {
+				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
 					// Duplicate entry on migration unique key is expected during binlog replay
 					// (row was already copied during bulk copy phase)
 					continue
