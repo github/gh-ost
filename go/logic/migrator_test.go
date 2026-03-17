@@ -386,6 +386,50 @@ func (suite *MigratorTestSuite) TestMigrateEmpty() {
 	suite.Require().Equal("_testing_del", tableName)
 }
 
+func (suite *MigratorTestSuite) TestMigrateInstantDDLEarly() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, name VARCHAR(64))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.AttemptInstantDDL = true
+
+	// Adding a column is an instant DDL operation in MySQL 8.0+
+	migrationContext.AlterStatementOptions = "ADD COLUMN instant_col VARCHAR(255)"
+
+	migrator := NewMigrator(migrationContext, "0.0.0")
+
+	err = migrator.Migrate()
+	suite.Require().NoError(err)
+
+	// Verify the new column was added via instant DDL
+	var tableName, createTableSQL string
+	//nolint:execinquery
+	err = suite.db.QueryRow("SHOW CREATE TABLE "+getTestTableName()).Scan(&tableName, &createTableSQL)
+	suite.Require().NoError(err)
+
+	suite.Require().Contains(createTableSQL, "instant_col")
+
+	// Verify that NO ghost table was created (instant DDL should skip ghost table creation)
+	//nolint:execinquery
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_gho'").Scan(&tableName)
+	suite.Require().Error(err, "ghost table should not exist after instant DDL")
+	suite.Require().Equal(gosql.ErrNoRows, err)
+
+	// Verify that NO changelog table was created
+	//nolint:execinquery
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_ghc'").Scan(&tableName)
+	suite.Require().Error(err, "changelog table should not exist after instant DDL")
+	suite.Require().Equal(gosql.ErrNoRows, err)
+}
+
 func (suite *MigratorTestSuite) TestRetryBatchCopyWithHooks() {
 	ctx := context.Background()
 
