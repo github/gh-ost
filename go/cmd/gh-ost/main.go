@@ -70,6 +70,7 @@ func main() {
 	flag.StringVar(&migrationContext.OriginalTableName, "table", "", "table name (mandatory)")
 	flag.StringVar(&migrationContext.AlterStatement, "alter", "", "alter statement (mandatory)")
 	flag.BoolVar(&migrationContext.AttemptInstantDDL, "attempt-instant-ddl", false, "Attempt to use instant DDL for this migration first")
+	flag.BoolVar(&migrationContext.ForceInstantDDL, "force-instant-ddl", false, "Require instant DDL; abort if the operation cannot be completed instantly (do not fall back to regular migration)")
 	storageEngine := flag.String("storage-engine", "innodb", "Specify table storage engine (default: 'innodb'). When 'rocksdb': the session transaction isolation level is changed from REPEATABLE_READ to READ_COMMITTED.")
 
 	flag.BoolVar(&migrationContext.CountTableRows, "exact-rowcount", false, "actually count table rows as opposed to estimate them (results in more accurate progress estimation)")
@@ -230,6 +231,9 @@ func main() {
 		if migrationContext.AttemptInstantDDL {
 			log.Warning("--attempt-instant-ddl was provided with --revert, it will be ignored")
 		}
+		if migrationContext.ForceInstantDDL {
+			log.Warning("--force-instant-ddl was provided with --revert, it will be ignored")
+		}
 		if migrationContext.IncludeTriggers {
 			log.Warning("--include-triggers was provided with --revert, it will be ignored")
 		}
@@ -269,6 +273,9 @@ func main() {
 	}
 	if migrationContext.SwitchToRowBinlogFormat && migrationContext.AssumeRBR {
 		migrationContext.Log.Fatal("--switch-to-rbr and --assume-rbr are mutually exclusive")
+	}
+	if migrationContext.ForceInstantDDL {
+		migrationContext.AttemptInstantDDL = true
 	}
 	if migrationContext.TestOnReplicaSkipReplicaStop {
 		if !migrationContext.TestOnReplica {
