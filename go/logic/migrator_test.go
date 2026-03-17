@@ -430,32 +430,6 @@ func (suite *MigratorTestSuite) TestMigrateInstantDDLEarly() {
 	suite.Require().Equal(gosql.ErrNoRows, err)
 }
 
-func (suite *MigratorTestSuite) TestForceInstantDDLFailsForNonInstantOp() {
-	ctx := context.Background()
-
-	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, name VARCHAR(64))", getTestTableName()))
-	suite.Require().NoError(err)
-
-	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
-	suite.Require().NoError(err)
-
-	migrationContext := newTestMigrationContext()
-	migrationContext.ApplierConnectionConfig = connectionConfig
-	migrationContext.InspectorConnectionConfig = connectionConfig
-	migrationContext.SetConnectionConfig("innodb")
-	migrationContext.AttemptInstantDDL = true
-	migrationContext.ForceInstantDDL = true
-
-	// Changing a column type from VARCHAR to INT is NOT an instant DDL operation
-	migrationContext.AlterStatementOptions = "MODIFY COLUMN name INT"
-
-	migrator := NewMigrator(migrationContext, "0.0.0")
-
-	err = migrator.Migrate()
-	suite.Require().Error(err)
-	suite.Require().Contains(err.Error(), "--force-instant-ddl")
-}
-
 func (suite *MigratorTestSuite) TestRetryBatchCopyWithHooks() {
 	ctx := context.Background()
 

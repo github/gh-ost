@@ -1,1 +1,0 @@
---force-instant-ddl --alter='ADD COLUMN extra_col VARCHAR(255)'

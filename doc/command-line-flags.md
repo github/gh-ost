@@ -68,12 +68,6 @@ When `--attempt-instant-ddl` is enabled, `gh-ost` will attempt `ALGORITHM=INSTAN
 
 `gh-ost` will automatically fallback to the normal DDL process if the attempt to use instant DDL is unsuccessful.
 
-### force-instant-ddl
-
-`--force-instant-ddl` requires instant DDL to succeed. If `ALGORITHM=INSTANT` is not supported for the given operation, `gh-ost` will abort the migration immediately instead of falling back to a regular row-copy migration. This is useful when you intend an instant metadata-only change and want to prevent accidental multi-hour migrations on large tables.
-
-Implies `--attempt-instant-ddl`. Ignored with `--revert`.
-
 ### binlogsyncer-max-reconnect-attempts
 `--binlogsyncer-max-reconnect-attempts=0`, the maximum number of attempts to re-establish a broken inspector connection for sync binlog. `0` or `negative number` means infinite retry, default `0`
 

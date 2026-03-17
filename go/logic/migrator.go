@@ -441,8 +441,6 @@ func (this *Migrator) Migrate() (err error) {
 		} else {
 			if err := this.attemptInstantDDLEarly(); err == nil {
 				return nil
-			} else if this.migrationContext.ForceInstantDDL {
-				return fmt.Errorf("--force-instant-ddl enabled but ALGORITHM=INSTANT is not supported for this operation: %w", err)
 			} else {
 				this.migrationContext.Log.Infof("ALGORITHM=INSTANT not supported for this operation, proceeding with original algorithm")
 			}
