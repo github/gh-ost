@@ -320,7 +320,7 @@ func retryOnLockWaitTimeout(operation func() error, logger base.Logger) error {
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
 			logger.Infof("Retrying after lock wait timeout (attempt %d/%d)", i+1, maxRetries)
-			RetrySleepFn(i * 5 * time.Second)
+			RetrySleepFn(time.Duration(i) * 5 * time.Second)
 		}
 		err = operation()
 		if err == nil {
