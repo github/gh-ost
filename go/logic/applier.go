@@ -305,7 +305,32 @@ func (this *Applier) AttemptInstantDDL() error {
 		return err
 	}
 	// We don't need a trx, because for instant DDL the SQL mode doesn't matter.
-	_, err := this.db.Exec(query)
+	return retryOnLockWaitTimeout(func() error {
+		_, err := this.db.Exec(query)
+		return err
+	}, this.migrationContext.Log)
+}
+
+// retryOnLockWaitTimeout retries the given operation on MySQL lock wait timeout
+// (errno 1205). Non-timeout errors return immediately. This is used for instant
+// DDL attempts where the operation may be blocked by a long-running transaction.
+func retryOnLockWaitTimeout(operation func() error, logger base.Logger) error {
+	const maxRetries = 5
+	var err error
+	for i := 0; i < maxRetries; i++ {
+		if i != 0 {
+			logger.Infof("Retrying after lock wait timeout (attempt %d/%d)", i+1, maxRetries)
+			RetrySleepFn(time.Duration(i) * 5 * time.Second)
+		}
+		err = operation()
+		if err == nil {
+			return nil
+		}
+		var mysqlErr *drivermysql.MySQLError
+		if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1205 {
+			return err
+		}
+	}
 	return err
 }
 
