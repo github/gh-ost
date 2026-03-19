@@ -1,0 +1,1 @@
+--default-retries=1 --panic-on-warnings --alter "add unique index email_idx(email)" --postpone-cut-over-flag-file=/tmp/gh-ost-test.postpone-cutover
