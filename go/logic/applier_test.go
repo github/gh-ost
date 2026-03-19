@@ -8,9 +8,12 @@ package logic
 import (
 	"context"
 	gosql "database/sql"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
@@ -195,6 +198,71 @@ func TestApplierInstantDDL(t *testing.T) {
 	t.Run("instantDDLstmt", func(t *testing.T) {
 		stmt := applier.generateInstantDDLQuery()
 		require.Equal(t, "ALTER /* gh-ost */ TABLE `test`.`mytable` ADD INDEX (foo), ALGORITHM=INSTANT", stmt)
+	})
+}
+
+func TestRetryOnLockWaitTimeout(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+	RetrySleepFn = func(d time.Duration) {} // no-op for tests
+
+	logger := base.NewMigrationContext().Log
+
+	lockWaitTimeoutErr := &drivermysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}
+	nonRetryableErr := &drivermysql.MySQLError{Number: 1845, Message: "ALGORITHM=INSTANT is not supported"}
+
+	t.Run("success on first attempt", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return nil
+		}, logger)
+		require.NoError(t, err)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("retry on lock wait timeout then succeed", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			if calls < 3 {
+				return lockWaitTimeoutErr
+			}
+			return nil
+		}, logger)
+		require.NoError(t, err)
+		require.Equal(t, 3, calls)
+	})
+
+	t.Run("non-retryable error returns immediately", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return nonRetryableErr
+		}, logger)
+		require.ErrorIs(t, err, nonRetryableErr)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("non-mysql error returns immediately", func(t *testing.T) {
+		calls := 0
+		genericErr := errors.New("connection refused")
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return genericErr
+		}, logger)
+		require.ErrorIs(t, err, genericErr)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("exhausts all retries", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return lockWaitTimeoutErr
+		}, logger)
+		require.ErrorIs(t, err, lockWaitTimeoutErr)
+		require.Equal(t, 5, calls)
 	})
 }
 
