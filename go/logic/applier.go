@@ -94,6 +94,21 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	}
 }
 
+// compileMigrationKeyWarningRegex compiles a regex pattern that matches duplicate key warnings
+// for the migration's unique key. Duplicate warnings are formatted differently across MySQL versions,
+// hence the optional table name prefix. Metacharacters in table/index names are escaped to avoid
+// regex syntax errors.
+func (this *Applier) compileMigrationKeyWarningRegex() (*regexp.Regexp, error) {
+	escapedTable := regexp.QuoteMeta(this.migrationContext.GetGhostTableName())
+	escapedKey := regexp.QuoteMeta(this.migrationContext.UniqueKey.NameInGhostTable)
+	migrationUniqueKeyPattern := fmt.Sprintf(`for key '(%s\.)?%s'`, escapedTable, escapedKey)
+	migrationKeyRegex, err := regexp.Compile(migrationUniqueKeyPattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile migration key pattern: %w", err)
+	}
+	return migrationKeyRegex, nil
+}
+
 func (this *Applier) InitDBConnections() (err error) {
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	uriWithMulti := fmt.Sprintf("%s&multiStatements=true", applierUri)
@@ -290,7 +305,32 @@ func (this *Applier) AttemptInstantDDL() error {
 		return err
 	}
 	// We don't need a trx, because for instant DDL the SQL mode doesn't matter.
-	_, err := this.db.Exec(query)
+	return retryOnLockWaitTimeout(func() error {
+		_, err := this.db.Exec(query)
+		return err
+	}, this.migrationContext.Log)
+}
+
+// retryOnLockWaitTimeout retries the given operation on MySQL lock wait timeout
+// (errno 1205). Non-timeout errors return immediately. This is used for instant
+// DDL attempts where the operation may be blocked by a long-running transaction.
+func retryOnLockWaitTimeout(operation func() error, logger base.Logger) error {
+	const maxRetries = 5
+	var err error
+	for i := 0; i < maxRetries; i++ {
+		if i != 0 {
+			logger.Infof("Retrying after lock wait timeout (attempt %d/%d)", i+1, maxRetries)
+			RetrySleepFn(time.Duration(i) * 5 * time.Second)
+		}
+		err = operation()
+		if err == nil {
+			return nil
+		}
+		var mysqlErr *drivermysql.MySQLError
+		if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1205 {
+			return err
+		}
+	}
 	return err
 }
 
@@ -695,7 +735,17 @@ func (this *Applier) InitiateHeartbeat() {
 
 	ticker := time.NewTicker(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		// Check for context cancellation each iteration
+		ctx := this.migrationContext.GetContext()
+		select {
+		case <-ctx.Done():
+			this.migrationContext.Log.Debugf("Heartbeat injection cancelled")
+			return
+		case <-ticker.C:
+			// Process heartbeat
+		}
+
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -706,7 +756,8 @@ func (this *Applier) InitiateHeartbeat() {
 			continue
 		}
 		if err := injectHeartbeat(); err != nil {
-			this.migrationContext.PanicAbort <- fmt.Errorf("injectHeartbeat writing failed %d times, last error: %w", numSuccessiveFailures, err)
+			// Use helper to prevent deadlock if listenOnPanicAbort already exited
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, fmt.Errorf("injectHeartbeat writing failed %d times, last error: %w", numSuccessiveFailures, err))
 			return
 		}
 	}
@@ -917,6 +968,12 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 				return nil, err
 			}
 
+			// Compile regex once before loop to avoid performance penalty and handle errors properly
+			migrationKeyRegex, err := this.compileMigrationKeyWarningRegex()
+			if err != nil {
+				return nil, err
+			}
+
 			var sqlWarnings []string
 			for rows.Next() {
 				var level, message string
@@ -925,10 +982,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
 					continue
 				}
-				// Duplicate warnings are formatted differently across mysql versions, hence the optional table name prefix
-				migrationUniqueKeyExpression := fmt.Sprintf("for key '(%s\\.)?%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
-				matched, _ := regexp.MatchString(migrationUniqueKeyExpression, message)
-				if strings.Contains(message, "Duplicate entry") && matched {
+				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
 					continue
 				}
 				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
@@ -1559,6 +1613,12 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 				return rollback(err)
 			}
 
+			// Compile regex once before loop to avoid performance penalty and handle errors properly
+			migrationKeyRegex, err := this.compileMigrationKeyWarningRegex()
+			if err != nil {
+				return rollback(err)
+			}
+
 			var sqlWarnings []string
 			for rows.Next() {
 				var level, message string
@@ -1567,10 +1627,7 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
 					continue
 				}
-				// Duplicate warnings are formatted differently across mysql versions, hence the optional table name prefix
-				migrationUniqueKeyExpression := fmt.Sprintf("for key '(%s\\.)?%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
-				matched, _ := regexp.MatchString(migrationUniqueKeyExpression, message)
-				if strings.Contains(message, "Duplicate entry") && matched {
+				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
 					// Duplicate entry on migration unique key is expected during binlog replay
 					// (row was already copied during bulk copy phase)
 					continue
