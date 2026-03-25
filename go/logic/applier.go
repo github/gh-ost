@@ -920,7 +920,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&this.migrationContext.ChunkSize)
 
-	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
+	query, explodedArgs, err := sql.BuildRangeInsertPreparedQueryWithFilter(
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		this.migrationContext.GetGhostTableName(),
@@ -934,6 +934,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 		this.migrationContext.IsTransactionalTable(),
 		// TODO: Don't hardcode this
 		strings.HasPrefix(this.migrationContext.ApplierMySQLVersion, "8."),
+		this.migrationContext.RowFilterWhereClause,
 	)
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
@@ -1492,19 +1493,64 @@ func (this *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEv
 // buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
 // event entry on the original table.
 func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBuildResult {
+	// Check if we have a row filter for data purging
+	rowFilter := this.migrationContext.RowFilter
+	hasFilter := rowFilter != nil && !rowFilter.IsEmpty()
+
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
 		{
+			// For DELETE: If we have a filter, the row either matched (and was copied) or didn't match
+			// (and wasn't copied). Either way, we issue the DELETE - it's idempotent.
+			// However, if the row doesn't match the filter, it was never in the ghost table,
+			// so we can skip the DELETE to avoid unnecessary work.
+			if hasFilter {
+				oldMatches := rowFilter.Matches(dmlEvent.WhereColumnValues.AbstractValues())
+				if !oldMatches {
+					// Row was never copied to ghost table, skip DELETE
+					return []*dmlBuildResult{}
+				}
+			}
 			query, uniqueKeyArgs, err := this.dmlDeleteQueryBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
 			return []*dmlBuildResult{newDmlBuildResult(query, uniqueKeyArgs, -1, err)}
 		}
 	case binlog.InsertDML:
 		{
+			// For INSERT: Only insert if the row matches the filter (or no filter)
+			if hasFilter {
+				newMatches := rowFilter.Matches(dmlEvent.NewColumnValues.AbstractValues())
+				if !newMatches {
+					// Row doesn't match filter - don't insert (effectively deleted)
+					return []*dmlBuildResult{}
+				}
+			}
 			query, sharedArgs, err := this.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
 			return []*dmlBuildResult{newDmlBuildResult(query, sharedArgs, 1, err)}
 		}
 	case binlog.UpdateDML:
 		{
+			// For UPDATE with filter, check if the row's filter status changed
+			if hasFilter {
+				oldMatches := rowFilter.Matches(dmlEvent.WhereColumnValues.AbstractValues())
+				newMatches := rowFilter.Matches(dmlEvent.NewColumnValues.AbstractValues())
+
+				if !oldMatches && !newMatches {
+					// Row never matched filter - no-op
+					return []*dmlBuildResult{}
+				}
+				if oldMatches && !newMatches {
+					// Row used to match but no longer does - treat as DELETE
+					query, uniqueKeyArgs, err := this.dmlDeleteQueryBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
+					return []*dmlBuildResult{newDmlBuildResult(query, uniqueKeyArgs, -1, err)}
+				}
+				if !oldMatches && newMatches {
+					// Row now matches but didn't before - treat as INSERT
+					query, sharedArgs, err := this.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
+					return []*dmlBuildResult{newDmlBuildResult(query, sharedArgs, 1, err)}
+				}
+				// Both old and new match - proceed with normal UPDATE below
+			}
+
 			if _, isModified := this.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
 				results := make([]*dmlBuildResult, 0, 2)
 				dmlEvent.DML = binlog.DeleteDML
@@ -1559,6 +1605,14 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 				nArgs += len(buildResult.args)
 				buildResults = append(buildResults, buildResult)
 			}
+		}
+
+		// If all events were filtered out (e.g., by --where filter), nothing to execute
+		if len(buildResults) == 0 {
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			return nil
 		}
 
 		// We batch together the DML queries into multi-statements to minimize network trips.

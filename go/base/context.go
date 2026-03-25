@@ -263,6 +263,14 @@ type MigrationContext struct {
 	TriggerSuffix       string
 	Triggers            []mysql.Trigger
 
+	// RowFilterWhereClause is an optional WHERE clause to filter rows during migration.
+	// Only rows matching this condition will be copied to the ghost table.
+	// This enables using gh-ost for data deletion/purging.
+	// Example: "created_at >= '2024-01-01'" keeps only rows from 2024 onwards
+	RowFilterWhereClause string
+	// RowFilter is the parsed filter for evaluating binlog events
+	RowFilter *sql.RowFilter
+
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
 	BinlogSyncerMaxReconnectAttempts  int

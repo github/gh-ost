@@ -261,6 +261,12 @@ func BuildRangePreparedComparison(columns *ColumnList, args []interface{}, compa
 }
 
 func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, noWait bool) (result string, explodedArgs []interface{}, err error) {
+	return BuildRangeInsertQueryWithFilter(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, noWait, "")
+}
+
+// BuildRangeInsertQueryWithFilter builds an INSERT...SELECT query with an optional row filter WHERE clause.
+// The rowFilterWhereClause parameter allows filtering rows during copy (for data purging).
+func BuildRangeInsertQueryWithFilter(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, noWait bool, rowFilterWhereClause string) (result string, explodedArgs []interface{}, err error) {
 	if len(sharedColumns) == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
@@ -303,6 +309,13 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 		return "", explodedArgs, err
 	}
 	explodedArgs = append(explodedArgs, rangeExplodedArgs...)
+
+	// Build optional row filter clause for data purging
+	rowFilterClause := ""
+	if rowFilterWhereClause != "" {
+		rowFilterClause = fmt.Sprintf("and (%s)", rowFilterWhereClause)
+	}
+
 	result = fmt.Sprintf(`
 		insert /* gh-ost %s.%s */ ignore
 		into
@@ -314,19 +327,24 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 				%s.%s
 			force index (%s)
 			where
-				(%s and %s)
+				(%s and %s) %s
 				%s
 		)`,
 		databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
 		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
-		rangeStartComparison, rangeEndComparison, transactionalClause)
+		rangeStartComparison, rangeEndComparison, rowFilterClause, transactionalClause)
 	return result, explodedArgs, nil
 }
 
 func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, noWait bool) (result string, explodedArgs []interface{}, err error) {
+	return BuildRangeInsertPreparedQueryWithFilter(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, noWait, "")
+}
+
+// BuildRangeInsertPreparedQueryWithFilter builds a prepared INSERT...SELECT query with an optional row filter.
+func BuildRangeInsertPreparedQueryWithFilter(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, noWait bool, rowFilterWhereClause string) (result string, explodedArgs []interface{}, err error) {
 	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
 	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
-	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, noWait)
+	return BuildRangeInsertQueryWithFilter(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, noWait, rowFilterWhereClause)
 }
 
 func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
