@@ -7,6 +7,7 @@ package logic
 
 import (
 	"context"
+	stdsql "database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -442,7 +443,7 @@ func (this *Migrator) Migrate() (err error) {
 			if err := this.attemptInstantDDLEarly(); err == nil {
 				return nil
 			} else {
-				this.migrationContext.Log.Infof("ALGORITHM=INSTANT not supported for this operation, proceeding with original algorithm")
+				this.migrationContext.Log.Infof("instant DDL attempt failed (%v); proceeding with normal migration", err)
 			}
 		}
 	}
@@ -1039,11 +1040,12 @@ func (this *Migrator) attemptInstantDDLEarly() error {
 	// This avoids initializing the full Applier (ghost table, changelog, etc.).
 	connConfig := this.migrationContext.ApplierConnectionConfig
 	uri := connConfig.GetDBUri(this.migrationContext.DatabaseName)
-	db, _, err := mysql.GetDB(this.migrationContext.Uuid, uri)
+	db, err := stdsql.Open("mysql", uri)
 	if err != nil {
 		this.migrationContext.Log.Infof("Could not open connection for instant DDL attempt: %s", err)
 		return err
 	}
+	defer db.Close()
 
 	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
 	this.migrationContext.Log.Infof("Setting LOCK timeout as %d seconds for instant DDL attempt", tableLockTimeoutSeconds)
@@ -1060,7 +1062,11 @@ func (this *Migrator) attemptInstantDDLEarly() error {
 	)
 	this.migrationContext.Log.Infof("INSTANT DDL query: %s", query)
 
-	if _, err := db.Exec(query); err != nil {
+	// We don't need a trx, because for instant DDL the SQL mode doesn't matter.
+	if err := retryOnLockWaitTimeout(func() error {
+		_, err := db.Exec(query)
+		return err
+	}, this.migrationContext.Log); err != nil {
 		this.migrationContext.Log.Infof("ALGORITHM=INSTANT is not supported for this operation, proceeding with regular algorithm: %s", err)
 		return err
 	}

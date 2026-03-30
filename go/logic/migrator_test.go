@@ -419,13 +419,13 @@ func (suite *MigratorTestSuite) TestMigrateInstantDDLEarly() {
 
 	// Verify that NO ghost table was created (instant DDL should skip ghost table creation)
 	//nolint:execinquery
-	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_gho'").Scan(&tableName)
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '\\_testing\\_gho'").Scan(&tableName)
 	suite.Require().Error(err, "ghost table should not exist after instant DDL")
 	suite.Require().Equal(gosql.ErrNoRows, err)
 
 	// Verify that NO changelog table was created
 	//nolint:execinquery
-	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_ghc'").Scan(&tableName)
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '\\_testing\\_ghc'").Scan(&tableName)
 	suite.Require().Error(err, "changelog table should not exist after instant DDL")
 	suite.Require().Equal(gosql.ErrNoRows, err)
 }

@@ -8,9 +8,12 @@ package logic
 import (
 	"context"
 	gosql "database/sql"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
@@ -195,6 +198,71 @@ func TestApplierInstantDDL(t *testing.T) {
 	t.Run("instantDDLstmt", func(t *testing.T) {
 		stmt := applier.generateInstantDDLQuery()
 		require.Equal(t, "ALTER /* gh-ost */ TABLE `test`.`mytable` ADD INDEX (foo), ALGORITHM=INSTANT", stmt)
+	})
+}
+
+func TestRetryOnLockWaitTimeout(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+	RetrySleepFn = func(d time.Duration) {} // no-op for tests
+
+	logger := base.NewMigrationContext().Log
+
+	lockWaitTimeoutErr := &drivermysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}
+	nonRetryableErr := &drivermysql.MySQLError{Number: 1845, Message: "ALGORITHM=INSTANT is not supported"}
+
+	t.Run("success on first attempt", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return nil
+		}, logger)
+		require.NoError(t, err)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("retry on lock wait timeout then succeed", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			if calls < 3 {
+				return lockWaitTimeoutErr
+			}
+			return nil
+		}, logger)
+		require.NoError(t, err)
+		require.Equal(t, 3, calls)
+	})
+
+	t.Run("non-retryable error returns immediately", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return nonRetryableErr
+		}, logger)
+		require.ErrorIs(t, err, nonRetryableErr)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("non-mysql error returns immediately", func(t *testing.T) {
+		calls := 0
+		genericErr := errors.New("connection refused")
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return genericErr
+		}, logger)
+		require.ErrorIs(t, err, genericErr)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("exhausts all retries", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return lockWaitTimeoutErr
+		}, logger)
+		require.ErrorIs(t, err, lockWaitTimeoutErr)
+		require.Equal(t, 5, calls)
 	})
 }
 
@@ -1365,6 +1433,116 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsDisabled() {
 	suite.Require().Equal("alice@example.com", results[0].email)
 	suite.Require().Equal(2, results[1].id)
 	suite.Require().Equal("bob@example.com", results[1].email)
+}
+
+// TestMultipleDMLEventsInBatch tests that multiple DML events are processed in a single transaction
+// and that if one fails due to a warning, the entire batch is rolled back - including events that
+// come AFTER the failure. This proves true transaction atomicity.
+func (suite *ApplierTestSuite) TestMultipleDMLEventsInBatch() {
+	ctx := context.Background()
+
+	var err error
+
+	// Create table with id and email columns
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Create ghost table with unique index on email
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), UNIQUE KEY email_unique (email));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Insert initial rows into ghost table
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email) VALUES (1, 'alice@example.com'), (3, 'charlie@example.com');", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	// Simulate multiple binlog events in a batch:
+	// 1. Duplicate on PRIMARY KEY (allowed - expected during binlog replay)
+	// 2. Duplicate on email index (should fail) ← FAILURE IN MIDDLE
+	// 3. Valid insert (would succeed) ← SUCCESS AFTER FAILURE
+	//
+	// The critical test: Even though event #3 would succeed on its own, it must be rolled back
+	// because event #2 failed. This proves the entire batch is truly atomic.
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{1, "alice@example.com"}), // duplicate PRIMARY (normally allowed)
+		},
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{4, "alice@example.com"}), // duplicate email (FAILS)
+		},
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{2, "bob@example.com"}), // valid insert (would succeed)
+		},
+	}
+
+	// Should fail due to the second event
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().Error(err)
+	suite.Require().Contains(err.Error(), "Duplicate entry")
+
+	// Verify that the entire batch was rolled back - still only the original 2 rows
+	// Critically: id=2 (bob@example.com) from event #3 should NOT be present
+	rows, err := suite.db.Query("SELECT id, email FROM " + getTestGhostTableName() + " ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var results []struct {
+		id    int
+		email string
+	}
+	for rows.Next() {
+		var id int
+		var email string
+		err = rows.Scan(&id, &email)
+		suite.Require().NoError(err)
+		results = append(results, struct {
+			id    int
+			email string
+		}{id, email})
+	}
+	suite.Require().NoError(rows.Err())
+
+	// Should still have exactly 2 original rows (entire batch was rolled back)
+	// This proves that even event #3 (which would have succeeded) was rolled back
+	suite.Require().Len(results, 2)
+	suite.Require().Equal(1, results[0].id)
+	suite.Require().Equal("alice@example.com", results[0].email)
+	suite.Require().Equal(3, results[1].id)
+	suite.Require().Equal("charlie@example.com", results[1].email)
+	// Critically: id=2 (bob@example.com) is NOT present, proving event #3 was rolled back
 }
 
 func TestApplier(t *testing.T) {
