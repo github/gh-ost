@@ -714,6 +714,67 @@ func TestMigratorRetryWithExponentialBackoff(t *testing.T) {
 	assert.Equal(t, tries, 100)
 }
 
+func TestMigratorRetryAbortsOnContextCancellation(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(100)
+	migrator := NewMigrator(migrationContext, "1.2.3")
+
+	RetrySleepFn = func(duration time.Duration) {
+		// No sleep needed for this test
+	}
+
+	var tries = 0
+	retryable := func() error {
+		tries++
+		if tries == 5 {
+			// Cancel context on 5th try
+			migrationContext.CancelContext()
+		}
+		return errors.New("Simulated error")
+	}
+
+	result := migrator.retryOperation(retryable, false)
+	assert.Error(t, result)
+	// Should abort after 6 tries: 5 failures + 1 checkAbort detection
+	assert.True(t, tries <= 6, "Expected tries <= 6, got %d", tries)
+	// Verify we got context cancellation error
+	assert.Contains(t, result.Error(), "context canceled")
+}
+
+func TestMigratorRetryWithExponentialBackoffAbortsOnContextCancellation(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(100)
+	migrationContext.SetExponentialBackoffMaxInterval(42)
+	migrator := NewMigrator(migrationContext, "1.2.3")
+
+	RetrySleepFn = func(duration time.Duration) {
+		// No sleep needed for this test
+	}
+
+	var tries = 0
+	retryable := func() error {
+		tries++
+		if tries == 5 {
+			// Cancel context on 5th try
+			migrationContext.CancelContext()
+		}
+		return errors.New("Simulated error")
+	}
+
+	result := migrator.retryOperationWithExponentialBackoff(retryable, false)
+	assert.Error(t, result)
+	// Should abort after 6 tries: 5 failures + 1 checkAbort detection
+	assert.True(t, tries <= 6, "Expected tries <= 6, got %d", tries)
+	// Verify we got context cancellation error
+	assert.Contains(t, result.Error(), "context canceled")
+}
+
 func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 	ctx := context.Background()
 

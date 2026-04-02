@@ -160,6 +160,10 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 			// sleep after previous iteration
 			RetrySleepFn(1 * time.Second)
 		}
+		// Check for abort/context cancellation before each retry
+		if abortErr := this.checkAbort(); abortErr != nil {
+			return abortErr
+		}
 		err = operation()
 		if err == nil {
 			return nil
@@ -189,6 +193,10 @@ func (this *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 
 		if i != 0 {
 			RetrySleepFn(time.Duration(interval) * time.Second)
+		}
+		// Check for abort/context cancellation before each retry
+		if abortErr := this.checkAbort(); abortErr != nil {
+			return abortErr
 		}
 		err = operation()
 		if err == nil {
