@@ -775,6 +775,57 @@ func TestMigratorRetryWithExponentialBackoffAbortsOnContextCancellation(t *testi
 	assert.Contains(t, result.Error(), "context canceled")
 }
 
+func TestMigratorRetrySkipsRetriesForWarnings(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(100)
+	migrator := NewMigrator(migrationContext, "1.2.3")
+
+	RetrySleepFn = func(duration time.Duration) {
+		t.Fatal("Should not sleep/retry for warning errors")
+	}
+
+	var tries = 0
+	retryable := func() error {
+		tries++
+		return errors.New("warnings detected in statement 1 of 1: [Warning: Duplicate entry 'test' for key 'idx' (1062)]")
+	}
+
+	result := migrator.retryOperation(retryable, false)
+	assert.Error(t, result)
+	// Should only try once - no retries for warnings
+	assert.Equal(t, 1, tries, "Expected exactly 1 try (no retries) for warning error")
+	assert.Contains(t, result.Error(), "warnings detected")
+}
+
+func TestMigratorRetryWithExponentialBackoffSkipsRetriesForWarnings(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(100)
+	migrationContext.SetExponentialBackoffMaxInterval(42)
+	migrator := NewMigrator(migrationContext, "1.2.3")
+
+	RetrySleepFn = func(duration time.Duration) {
+		t.Fatal("Should not sleep/retry for warning errors")
+	}
+
+	var tries = 0
+	retryable := func() error {
+		tries++
+		return errors.New("warnings detected in statement 1 of 1: [Warning: Duplicate entry 'test' for key 'idx' (1062)]")
+	}
+
+	result := migrator.retryOperationWithExponentialBackoff(retryable, false)
+	assert.Error(t, result)
+	// Should only try once - no retries for warnings
+	assert.Equal(t, 1, tries, "Expected exactly 1 try (no retries) for warning error")
+	assert.Contains(t, result.Error(), "warnings detected")
+}
+
 func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 	ctx := context.Background()
 

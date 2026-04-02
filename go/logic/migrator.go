@@ -168,6 +168,13 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		if err == nil {
 			return nil
 		}
+		// Check if this is an unrecoverable error (data consistency issues won't resolve on retry)
+		if strings.Contains(err.Error(), "warnings detected") {
+			if len(notFatalHint) == 0 {
+				_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+			}
+			return err
+		}
 		// there's an error. Let's try again.
 	}
 	if len(notFatalHint) == 0 {
@@ -201,6 +208,13 @@ func (this *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 		err = operation()
 		if err == nil {
 			return nil
+		}
+		// Check if this is an unrecoverable error (data consistency issues won't resolve on retry)
+		if strings.Contains(err.Error(), "warnings detected") {
+			if len(notFatalHint) == 0 {
+				_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+			}
+			return err
 		}
 	}
 	if len(notFatalHint) == 0 {
