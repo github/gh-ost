@@ -94,6 +94,21 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 	}
 }
 
+// compileMigrationKeyWarningRegex compiles a regex pattern that matches duplicate key warnings
+// for the migration's unique key. Duplicate warnings are formatted differently across MySQL versions,
+// hence the optional table name prefix. Metacharacters in table/index names are escaped to avoid
+// regex syntax errors.
+func (this *Applier) compileMigrationKeyWarningRegex() (*regexp.Regexp, error) {
+	escapedTable := regexp.QuoteMeta(this.migrationContext.GetGhostTableName())
+	escapedKey := regexp.QuoteMeta(this.migrationContext.UniqueKey.NameInGhostTable)
+	migrationUniqueKeyPattern := fmt.Sprintf(`for key '(%s\.)?%s'`, escapedTable, escapedKey)
+	migrationKeyRegex, err := regexp.Compile(migrationUniqueKeyPattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile migration key pattern: %w", err)
+	}
+	return migrationKeyRegex, nil
+}
+
 func (this *Applier) InitDBConnections() (err error) {
 	applierUri := this.connectionConfig.GetDBUri(this.migrationContext.DatabaseName)
 	uriWithMulti := fmt.Sprintf("%s&multiStatements=true", applierUri)
@@ -290,7 +305,32 @@ func (this *Applier) AttemptInstantDDL() error {
 		return err
 	}
 	// We don't need a trx, because for instant DDL the SQL mode doesn't matter.
-	_, err := this.db.Exec(query)
+	return retryOnLockWaitTimeout(func() error {
+		_, err := this.db.Exec(query)
+		return err
+	}, this.migrationContext.Log)
+}
+
+// retryOnLockWaitTimeout retries the given operation on MySQL lock wait timeout
+// (errno 1205). Non-timeout errors return immediately. This is used for instant
+// DDL attempts where the operation may be blocked by a long-running transaction.
+func retryOnLockWaitTimeout(operation func() error, logger base.Logger) error {
+	const maxRetries = 5
+	var err error
+	for i := 0; i < maxRetries; i++ {
+		if i != 0 {
+			logger.Infof("Retrying after lock wait timeout (attempt %d/%d)", i+1, maxRetries)
+			RetrySleepFn(time.Duration(i) * 5 * time.Second)
+		}
+		err = operation()
+		if err == nil {
+			return nil
+		}
+		var mysqlErr *drivermysql.MySQLError
+		if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1205 {
+			return err
+		}
+	}
 	return err
 }
 
@@ -695,7 +735,17 @@ func (this *Applier) InitiateHeartbeat() {
 
 	ticker := time.NewTicker(time.Duration(this.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		// Check for context cancellation each iteration
+		ctx := this.migrationContext.GetContext()
+		select {
+		case <-ctx.Done():
+			this.migrationContext.Log.Debugf("Heartbeat injection cancelled")
+			return
+		case <-ticker.C:
+			// Process heartbeat
+		}
+
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
@@ -706,7 +756,8 @@ func (this *Applier) InitiateHeartbeat() {
 			continue
 		}
 		if err := injectHeartbeat(); err != nil {
-			this.migrationContext.PanicAbort <- fmt.Errorf("injectHeartbeat writing failed %d times, last error: %w", numSuccessiveFailures, err)
+			// Use helper to prevent deadlock if listenOnPanicAbort already exited
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, fmt.Errorf("injectHeartbeat writing failed %d times, last error: %w", numSuccessiveFailures, err))
 			return
 		}
 	}
@@ -819,17 +870,6 @@ func (this *Applier) ReadMigrationRangeValues() error {
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and thus done with copying row chunks)
 func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
-	this.LastIterationRangeMutex.Lock()
-	if this.migrationContext.MigrationIterationRangeMinValues != nil && this.migrationContext.MigrationIterationRangeMaxValues != nil {
-		this.LastIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMinValues.Clone()
-		this.LastIterationRangeMaxValues = this.migrationContext.MigrationIterationRangeMaxValues.Clone()
-	}
-	this.LastIterationRangeMutex.Unlock()
-
-	this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMaxValues
-	if this.migrationContext.MigrationIterationRangeMinValues == nil {
-		this.migrationContext.MigrationIterationRangeMinValues = this.migrationContext.MigrationRangeMinValues
-	}
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
@@ -928,6 +968,12 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 				return nil, err
 			}
 
+			// Compile regex once before loop to avoid performance penalty and handle errors properly
+			migrationKeyRegex, err := this.compileMigrationKeyWarningRegex()
+			if err != nil {
+				return nil, err
+			}
+
 			var sqlWarnings []string
 			for rows.Next() {
 				var level, message string
@@ -936,10 +982,7 @@ func (this *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected 
 					this.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
 					continue
 				}
-				// Duplicate warnings are formatted differently across mysql versions, hence the optional table name prefix
-				migrationUniqueKeyExpression := fmt.Sprintf("for key '(%s\\.)?%s'", this.migrationContext.GetGhostTableName(), this.migrationContext.UniqueKey.NameInGhostTable)
-				matched, _ := regexp.MatchString(migrationUniqueKeyExpression, message)
-				if strings.Contains(message, "Duplicate entry") && matched {
+				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
 					continue
 				}
 				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
@@ -1470,14 +1513,114 @@ func (this *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlB
 				results = append(results, this.buildDMLEventQuery(dmlEvent)...)
 				return results
 			}
-			query, sharedArgs, uniqueKeyArgs, err := this.dmlUpdateQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			query, updateArgs, err := this.dmlUpdateQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args := sqlutils.Args()
-			args = append(args, sharedArgs...)
-			args = append(args, uniqueKeyArgs...)
+			args = append(args, updateArgs...)
 			return []*dmlBuildResult{newDmlBuildResult(query, args, 0, err)}
 		}
 	}
 	return []*dmlBuildResult{newDmlBuildResultError(fmt.Errorf("Unknown dml event type: %+v", dmlEvent.DML))}
+}
+
+// executeBatchWithWarningChecking executes a batch of DML statements with SHOW WARNINGS
+// interleaved after each statement to detect warnings from any statement in the batch.
+// This is used when PanicOnWarnings is enabled to ensure warnings from middle statements
+// are not lost (SHOW WARNINGS only shows warnings from the last statement in a multi-statement batch).
+func (this *Applier) executeBatchWithWarningChecking(ctx context.Context, tx *gosql.Tx, buildResults []*dmlBuildResult) (int64, error) {
+	// Build query with interleaved SHOW WARNINGS: stmt1; SHOW WARNINGS; stmt2; SHOW WARNINGS; ...
+	var queryBuilder strings.Builder
+	args := make([]interface{}, 0)
+
+	for _, buildResult := range buildResults {
+		queryBuilder.WriteString(buildResult.query)
+		queryBuilder.WriteString(";\nSHOW WARNINGS;\n")
+		args = append(args, buildResult.args...)
+	}
+
+	query := queryBuilder.String()
+
+	// Execute the multi-statement query
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("%w; query=%s; args=%+v", err, query, args)
+	}
+	defer rows.Close()
+
+	var totalDelta int64
+
+	// QueryContext with multi-statement queries returns rows positioned at the first result set
+	// that produces rows (i.e., the first SHOW WARNINGS), automatically skipping DML results.
+	// Verify we're at a SHOW WARNINGS result set (should have 3 columns: Level, Code, Message)
+	cols, err := rows.Columns()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get columns: %w", err)
+	}
+
+	// If somehow we're not at a result set with columns, try to advance
+	if len(cols) == 0 {
+		if !rows.NextResultSet() {
+			return 0, fmt.Errorf("expected SHOW WARNINGS result set after first statement")
+		}
+	}
+
+	// Compile regex once before loop to avoid performance penalty and handle errors properly
+	migrationKeyRegex, err := this.compileMigrationKeyWarningRegex()
+	if err != nil {
+		return 0, err
+	}
+
+	// Iterate through SHOW WARNINGS result sets.
+	// DML statements don't create navigable result sets, so we move directly between SHOW WARNINGS.
+	// Pattern: [at SHOW WARNINGS #1] -> read warnings -> NextResultSet() -> [at SHOW WARNINGS #2] -> ...
+	for i := 0; i < len(buildResults); i++ {
+		// We can't get exact rows affected with QueryContext (needed for reading SHOW WARNINGS).
+		// Use the theoretical delta (+1 for INSERT, -1 for DELETE, 0 for UPDATE) as an approximation.
+		// This may be inaccurate (e.g., INSERT IGNORE with duplicate affects 0 rows but we count +1).
+		totalDelta += buildResults[i].rowsDelta
+
+		// Read warnings from this statement's SHOW WARNINGS result set
+		var sqlWarnings []string
+		for rows.Next() {
+			var level, message string
+			var code int
+			if err := rows.Scan(&level, &code, &message); err != nil {
+				// Scan failure means we cannot reliably read warnings.
+				// Since PanicOnWarnings is a safety feature, we must fail hard rather than silently skip.
+				return 0, fmt.Errorf("failed to scan SHOW WARNINGS for statement %d: %w", i+1, err)
+			}
+
+			if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
+				// Duplicate entry on migration unique key is expected during binlog replay
+				// (row was already copied during bulk copy phase)
+				continue
+			}
+			sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+		}
+
+		// Check for errors that occurred while iterating through warnings
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("error reading SHOW WARNINGS result set for statement %d: %w", i+1, err)
+		}
+
+		if len(sqlWarnings) > 0 {
+			return 0, fmt.Errorf("warnings detected in statement %d of %d: %v", i+1, len(buildResults), sqlWarnings)
+		}
+
+		// Move to the next statement's SHOW WARNINGS result set
+		// For the last statement, there's no next result set
+		// DML statements don't create result sets, so we only need one NextResultSet call
+		// to move from SHOW WARNINGS #N to SHOW WARNINGS #(N+1)
+		if i < len(buildResults)-1 {
+			if !rows.NextResultSet() {
+				if err := rows.Err(); err != nil {
+					return 0, fmt.Errorf("error moving to SHOW WARNINGS for statement %d: %w", i+2, err)
+				}
+				return 0, fmt.Errorf("expected SHOW WARNINGS result set for statement %d", i+2)
+			}
+		}
+	}
+
+	return totalDelta, nil
 }
 
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
@@ -1519,45 +1662,55 @@ func (this *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) 
 			}
 		}
 
-		// We batch together the DML queries into multi-statements to minimize network trips.
-		// We have to use the raw driver connection to access the rows affected
-		// for each statement in the multi-statement.
-		execErr := conn.Raw(func(driverConn any) error {
-			ex := driverConn.(driver.ExecerContext)
-			nvc := driverConn.(driver.NamedValueChecker)
+		// When PanicOnWarnings is enabled, we need to check warnings after each statement
+		// in the batch. SHOW WARNINGS only shows warnings from the last statement in a
+		// multi-statement query, so we interleave SHOW WARNINGS after each DML statement.
+		if this.migrationContext.PanicOnWarnings {
+			totalDelta, err = this.executeBatchWithWarningChecking(ctx, tx, buildResults)
+			if err != nil {
+				return rollback(err)
+			}
+		} else {
+			// Fast path: batch together DML queries into multi-statements to minimize network trips.
+			// We use the raw driver connection to access the rows affected for each statement.
+			execErr := conn.Raw(func(driverConn any) error {
+				ex := driverConn.(driver.ExecerContext)
+				nvc := driverConn.(driver.NamedValueChecker)
 
-			multiArgs := make([]driver.NamedValue, 0, nArgs)
-			multiQueryBuilder := strings.Builder{}
-			for _, buildResult := range buildResults {
-				for _, arg := range buildResult.args {
-					nv := driver.NamedValue{Value: driver.Value(arg)}
-					nvc.CheckNamedValue(&nv)
-					multiArgs = append(multiArgs, nv)
+				multiArgs := make([]driver.NamedValue, 0, nArgs)
+				multiQueryBuilder := strings.Builder{}
+				for _, buildResult := range buildResults {
+					for _, arg := range buildResult.args {
+						nv := driver.NamedValue{Value: driver.Value(arg)}
+						nvc.CheckNamedValue(&nv)
+						multiArgs = append(multiArgs, nv)
+					}
+
+					multiQueryBuilder.WriteString(buildResult.query)
+					multiQueryBuilder.WriteString(";\n")
 				}
 
-				multiQueryBuilder.WriteString(buildResult.query)
-				multiQueryBuilder.WriteString(";\n")
+				res, err := ex.ExecContext(ctx, multiQueryBuilder.String(), multiArgs)
+				if err != nil {
+					err = fmt.Errorf("%w; query=%s; args=%+v", err, multiQueryBuilder.String(), multiArgs)
+					return err
+				}
+
+				mysqlRes := res.(drivermysql.Result)
+
+				// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
+				// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
+				for i, rowsAffected := range mysqlRes.AllRowsAffected() {
+					totalDelta += buildResults[i].rowsDelta * rowsAffected
+				}
+				return nil
+			})
+
+			if execErr != nil {
+				return rollback(execErr)
 			}
-
-			res, err := ex.ExecContext(ctx, multiQueryBuilder.String(), multiArgs)
-			if err != nil {
-				err = fmt.Errorf("%w; query=%s; args=%+v", err, multiQueryBuilder.String(), multiArgs)
-				return err
-			}
-
-			mysqlRes := res.(drivermysql.Result)
-
-			// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
-			// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
-			for i, rowsAffected := range mysqlRes.AllRowsAffected() {
-				totalDelta += buildResults[i].rowsDelta * rowsAffected
-			}
-			return nil
-		})
-
-		if execErr != nil {
-			return rollback(execErr)
 		}
+
 		if err := tx.Commit(); err != nil {
 			return err
 		}

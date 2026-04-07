@@ -49,6 +49,7 @@ The full list of supported hooks is best found in code: [hooks.go](https://githu
 - `gh-ost-on-before-cut-over`
 - `gh-ost-on-success`
 - `gh-ost-on-failure`
+- `gh-ost-on-batch-copy-retry`
 
 ### Context
 
@@ -82,6 +83,7 @@ The following variable are available on particular hooks:
 
 - `GH_OST_COMMAND` is only available in `gh-ost-on-interactive-command`
 - `GH_OST_STATUS` is only available in `gh-ost-on-status`
+- `GH_OST_LAST_BATCH_COPY_ERROR` is only available in `gh-ost-on-batch-copy-retry`
 
 ### Examples
 

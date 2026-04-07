@@ -11,7 +11,9 @@ set -e
 # up so it points back to us and go is none the wiser
 
 set -x
-rm -rf .gopath
-mkdir -p .gopath/src/github.com/github
-ln -s "$PWD" .gopath/src/github.com/github/gh-ost
+if [ ! -L .gopath/src/github.com/github/gh-ost ]; then
+    rm -rf .gopath
+    mkdir -p .gopath/src/github.com/github
+    ln -s "$PWD" .gopath/src/github.com/github/gh-ost
+fi
 export GOPATH=$PWD/.gopath:$GOPATH

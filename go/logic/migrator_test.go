@@ -6,10 +6,12 @@
 package logic
 
 import (
+	"bytes"
 	"context"
 	gosql "database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +32,6 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func TestMigratorOnChangelogEvent(t *testing.T) {
@@ -300,7 +301,6 @@ func (suite *MigratorTestSuite) SetupSuite() {
 		testmysql.WithDatabase(testMysqlDatabase),
 		testmysql.WithUsername(testMysqlUser),
 		testmysql.WithPassword(testMysqlPass),
-		testcontainers.WithWaitStrategy(wait.ForExposedPort()),
 		testmysql.WithConfigFile("my.cnf.test"),
 	)
 	suite.Require().NoError(err)
@@ -325,6 +325,8 @@ func (suite *MigratorTestSuite) SetupTest() {
 
 	_, err := suite.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabase)
 	suite.Require().NoError(err)
+
+	os.Remove("/tmp/gh-ost.sock")
 }
 
 func (suite *MigratorTestSuite) TearDownTest() {
@@ -382,6 +384,126 @@ func (suite *MigratorTestSuite) TestMigrateEmpty() {
 	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_del'").Scan(&tableName)
 	suite.Require().NoError(err)
 	suite.Require().Equal("_testing_del", tableName)
+}
+
+func (suite *MigratorTestSuite) TestRetryBatchCopyWithHooks() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, "CREATE TABLE test.test_retry_batch (id INT PRIMARY KEY AUTO_INCREMENT, name TEXT)")
+	suite.Require().NoError(err)
+
+	const initStride = 1000
+	const totalBatches = 3
+	for i := 0; i < totalBatches; i++ {
+		dataSize := 50 * i
+		for j := 0; j < initStride; j++ {
+			_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO test.test_retry_batch (name) VALUES ('%s')", strings.Repeat("a", dataSize)))
+			suite.Require().NoError(err)
+		}
+	}
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("SET GLOBAL max_binlog_cache_size = %d", 1024*8))
+	suite.Require().NoError(err)
+	defer func() {
+		_, err = suite.db.ExecContext(ctx, fmt.Sprintf("SET GLOBAL max_binlog_cache_size = %d", 1024*1024*1024))
+		suite.Require().NoError(err)
+	}()
+
+	tmpDir, err := os.MkdirTemp("", "gh-ost-hooks")
+	suite.Require().NoError(err)
+	defer os.RemoveAll(tmpDir)
+
+	hookScript := filepath.Join(tmpDir, "gh-ost-on-batch-copy-retry")
+	hookContent := `#!/bin/bash
+# Mock hook that reduces chunk size on binlog cache error
+ERROR_MSG="$GH_OST_LAST_BATCH_COPY_ERROR"
+SOCKET_PATH="/tmp/gh-ost.sock"
+
+if ! [[ "$ERROR_MSG" =~ "max_binlog_cache_size" ]]; then
+    echo "Nothing to do for error: $ERROR_MSG"
+    exit 0
+fi
+
+CHUNK_SIZE=$(echo "chunk-size=?" | nc -U $SOCKET_PATH | tr -d '\n')
+
+MIN_CHUNK_SIZE=10
+NEW_CHUNK_SIZE=$(( CHUNK_SIZE * 8 / 10 ))
+if [ $NEW_CHUNK_SIZE -lt $MIN_CHUNK_SIZE ]; then
+    NEW_CHUNK_SIZE=$MIN_CHUNK_SIZE
+fi
+
+if [ $CHUNK_SIZE -eq $NEW_CHUNK_SIZE ]; then
+    echo "Chunk size unchanged: $CHUNK_SIZE"
+    exit 0
+fi
+
+echo "[gh-ost-on-batch-copy-retry]: Changing chunk size from $CHUNK_SIZE to $NEW_CHUNK_SIZE"
+echo "chunk-size=$NEW_CHUNK_SIZE" | nc -U $SOCKET_PATH
+echo "[gh-ost-on-batch-copy-retry]: Done, exiting..."
+`
+	err = os.WriteFile(hookScript, []byte(hookContent), 0755)
+	suite.Require().NoError(err)
+
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.AllowedRunningOnMaster = true
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
+	migrationContext.OriginalTableName = "test_retry_batch"
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.AlterStatementOptions = "MODIFY name LONGTEXT, ENGINE=InnoDB"
+	migrationContext.ReplicaServerId = 99999
+	migrationContext.HeartbeatIntervalMilliseconds = 100
+	migrationContext.ThrottleHTTPIntervalMillis = 100
+	migrationContext.ThrottleHTTPTimeoutMillis = 1000
+	migrationContext.HooksPath = tmpDir
+	migrationContext.ChunkSize = 1000
+	migrationContext.SetDefaultNumRetries(10)
+	migrationContext.ServeSocketFile = "/tmp/gh-ost.sock"
+
+	migrator := NewMigrator(migrationContext, "0.0.0")
+
+	err = migrator.Migrate()
+	suite.Require().NoError(err)
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = origStdout
+	os.Stderr = origStderr
+
+	var bufOut, bufErr bytes.Buffer
+	io.Copy(&bufOut, rOut)
+	io.Copy(&bufErr, rErr)
+
+	outStr := bufOut.String()
+	errStr := bufErr.String()
+
+	suite.Assert().Contains(outStr, "chunk-size: 1000")
+	suite.Assert().Contains(errStr, "[gh-ost-on-batch-copy-retry]: Changing chunk size from 1000 to 800")
+	suite.Assert().Contains(outStr, "chunk-size: 800")
+
+	suite.Assert().Contains(errStr, "[gh-ost-on-batch-copy-retry]: Changing chunk size from 800 to 640")
+	suite.Assert().Contains(outStr, "chunk-size: 640")
+
+	suite.Assert().Contains(errStr, "[gh-ost-on-batch-copy-retry]: Changing chunk size from 640 to 512")
+	suite.Assert().Contains(outStr, "chunk-size: 512")
+
+	var count int
+	err = suite.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test.test_retry_batch").Scan(&count)
+	suite.Require().NoError(err)
+	suite.Assert().Equal(3000, count)
 }
 
 func (suite *MigratorTestSuite) TestCopierIntPK() {
@@ -590,6 +712,118 @@ func TestMigratorRetryWithExponentialBackoff(t *testing.T) {
 	assert.NoError(t, result)
 	assert.Equal(t, sleeps, 99)
 	assert.Equal(t, tries, 100)
+}
+
+func TestMigratorRetryAbortsOnContextCancellation(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(100)
+	migrator := NewMigrator(migrationContext, "1.2.3")
+
+	RetrySleepFn = func(duration time.Duration) {
+		// No sleep needed for this test
+	}
+
+	var tries = 0
+	retryable := func() error {
+		tries++
+		if tries == 5 {
+			// Cancel context on 5th try
+			migrationContext.CancelContext()
+		}
+		return errors.New("Simulated error")
+	}
+
+	result := migrator.retryOperation(retryable, false)
+	assert.Error(t, result)
+	// Should abort after 6 tries: 5 failures + 1 checkAbort detection
+	assert.True(t, tries <= 6, "Expected tries <= 6, got %d", tries)
+	// Verify we got context cancellation error
+	assert.Contains(t, result.Error(), "context canceled")
+}
+
+func TestMigratorRetryWithExponentialBackoffAbortsOnContextCancellation(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(100)
+	migrationContext.SetExponentialBackoffMaxInterval(42)
+	migrator := NewMigrator(migrationContext, "1.2.3")
+
+	RetrySleepFn = func(duration time.Duration) {
+		// No sleep needed for this test
+	}
+
+	var tries = 0
+	retryable := func() error {
+		tries++
+		if tries == 5 {
+			// Cancel context on 5th try
+			migrationContext.CancelContext()
+		}
+		return errors.New("Simulated error")
+	}
+
+	result := migrator.retryOperationWithExponentialBackoff(retryable, false)
+	assert.Error(t, result)
+	// Should abort after 6 tries: 5 failures + 1 checkAbort detection
+	assert.True(t, tries <= 6, "Expected tries <= 6, got %d", tries)
+	// Verify we got context cancellation error
+	assert.Contains(t, result.Error(), "context canceled")
+}
+
+func TestMigratorRetrySkipsRetriesForWarnings(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(100)
+	migrator := NewMigrator(migrationContext, "1.2.3")
+
+	RetrySleepFn = func(duration time.Duration) {
+		t.Fatal("Should not sleep/retry for warning errors")
+	}
+
+	var tries = 0
+	retryable := func() error {
+		tries++
+		return errors.New("warnings detected in statement 1 of 1: [Warning: Duplicate entry 'test' for key 'idx' (1062)]")
+	}
+
+	result := migrator.retryOperation(retryable, false)
+	assert.Error(t, result)
+	// Should only try once - no retries for warnings
+	assert.Equal(t, 1, tries, "Expected exactly 1 try (no retries) for warning error")
+	assert.Contains(t, result.Error(), "warnings detected")
+}
+
+func TestMigratorRetryWithExponentialBackoffSkipsRetriesForWarnings(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(100)
+	migrationContext.SetExponentialBackoffMaxInterval(42)
+	migrator := NewMigrator(migrationContext, "1.2.3")
+
+	RetrySleepFn = func(duration time.Duration) {
+		t.Fatal("Should not sleep/retry for warning errors")
+	}
+
+	var tries = 0
+	retryable := func() error {
+		tries++
+		return errors.New("warnings detected in statement 1 of 1: [Warning: Duplicate entry 'test' for key 'idx' (1062)]")
+	}
+
+	result := migrator.retryOperationWithExponentialBackoff(retryable, false)
+	assert.Error(t, result)
+	// Should only try once - no retries for warnings
+	assert.Equal(t, 1, tries, "Expected exactly 1 try (no retries) for warning error")
+	assert.Contains(t, result.Error(), "warnings detected")
 }
 
 func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
@@ -806,4 +1040,384 @@ func (suite *MigratorTestSuite) TestRevert() {
 
 func TestMigrator(t *testing.T) {
 	suite.Run(t, new(MigratorTestSuite))
+}
+
+func TestPanicAbort_PropagatesError(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Send an error to PanicAbort
+	testErr := errors.New("test abort error")
+	go func() {
+		migrationContext.PanicAbort <- testErr
+	}()
+
+	// Wait a bit for error to be processed
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify error was stored
+	got := migrationContext.GetAbortError()
+	if got != testErr { //nolint:errorlint // Testing pointer equality for sentinel error
+		t.Errorf("Expected error %v, got %v", testErr, got)
+	}
+
+	// Verify context was cancelled
+	ctx := migrationContext.GetContext()
+	select {
+	case <-ctx.Done():
+		// Success - context was cancelled
+	default:
+		t.Error("Expected context to be cancelled")
+	}
+}
+
+func TestPanicAbort_FirstErrorWins(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Send first error
+	err1 := errors.New("first error")
+	go func() {
+		migrationContext.PanicAbort <- err1
+	}()
+
+	// Wait for first error to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Try to send second error (should be ignored)
+	err2 := errors.New("second error")
+	migrationContext.SetAbortError(err2)
+
+	// Verify only first error is stored
+	got := migrationContext.GetAbortError()
+	if got != err1 { //nolint:errorlint // Testing pointer equality for sentinel error
+		t.Errorf("Expected first error %v, got %v", err1, got)
+	}
+}
+
+func TestAbort_AfterRowCopy(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Give listenOnPanicAbort time to start
+	time.Sleep(20 * time.Millisecond)
+
+	// Simulate row copy error by sending to rowCopyComplete in a goroutine
+	// (unbuffered channel, so send must be async)
+	testErr := errors.New("row copy failed")
+	go func() {
+		migrator.rowCopyComplete <- testErr
+	}()
+
+	// Consume the error (simulating what Migrate() does)
+	// This is a blocking call that waits for the error
+	migrator.consumeRowCopyComplete()
+
+	// Wait for the error to be processed by listenOnPanicAbort
+	time.Sleep(50 * time.Millisecond)
+
+	// Check that error was stored
+	if got := migrationContext.GetAbortError(); got == nil {
+		t.Fatal("Expected abort error to be stored after row copy error")
+	} else if got.Error() != "row copy failed" {
+		t.Errorf("Expected 'row copy failed', got %v", got)
+	}
+
+	// Verify context was cancelled
+	ctx := migrationContext.GetContext()
+	select {
+	case <-ctx.Done():
+		// Success
+	case <-time.After(1 * time.Second):
+		t.Error("Expected context to be cancelled after row copy error")
+	}
+}
+
+func TestAbort_DuringInspection(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Simulate error during inspection phase
+	testErr := errors.New("inspection failed")
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		select {
+		case migrationContext.PanicAbort <- testErr:
+		case <-migrationContext.GetContext().Done():
+		}
+	}()
+
+	// Wait for abort to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Call checkAbort (simulating what Migrate() does after initiateInspector)
+	err := migrator.checkAbort()
+	if err == nil {
+		t.Fatal("Expected checkAbort to return error after abort during inspection")
+	}
+
+	if err.Error() != "inspection failed" {
+		t.Errorf("Expected 'inspection failed', got %v", err)
+	}
+}
+
+func TestAbort_DuringStreaming(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Simulate error from streaming goroutine
+	testErr := errors.New("streaming error")
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		// Use select pattern like actual code does
+		select {
+		case migrationContext.PanicAbort <- testErr:
+		case <-migrationContext.GetContext().Done():
+		}
+	}()
+
+	// Wait for abort to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify error stored and context cancelled
+	if got := migrationContext.GetAbortError(); got == nil {
+		t.Fatal("Expected abort error to be stored")
+	} else if got.Error() != "streaming error" {
+		t.Errorf("Expected 'streaming error', got %v", got)
+	}
+
+	// Verify checkAbort catches it
+	err := migrator.checkAbort()
+	if err == nil {
+		t.Fatal("Expected checkAbort to return error after streaming abort")
+	}
+}
+
+func TestRetryExhaustion_TriggersAbort(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrationContext.SetDefaultNumRetries(2) // Only 2 retries
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Operation that always fails
+	callCount := 0
+	operation := func() error {
+		callCount++
+		return errors.New("persistent failure")
+	}
+
+	// Call retryOperation (with notFatalHint=false so it sends to PanicAbort)
+	err := migrator.retryOperation(operation)
+
+	// Should have called operation MaxRetries times
+	if callCount != 2 {
+		t.Errorf("Expected 2 retry attempts, got %d", callCount)
+	}
+
+	// Should return the error
+	if err == nil {
+		t.Fatal("Expected retryOperation to return error")
+	}
+
+	// Wait for abort to be processed
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify error was sent to PanicAbort and stored
+	if got := migrationContext.GetAbortError(); got == nil {
+		t.Error("Expected abort error to be stored after retry exhaustion")
+	}
+
+	// Verify context was cancelled
+	ctx := migrationContext.GetContext()
+	select {
+	case <-ctx.Done():
+		// Success
+	default:
+		t.Error("Expected context to be cancelled after retry exhaustion")
+	}
+}
+
+func TestRevert_AbortsOnError(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrationContext.Revert = true
+	migrationContext.OldTableName = "_test_del"
+	migrationContext.OriginalTableName = "test"
+	migrationContext.DatabaseName = "testdb"
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Simulate error during revert
+	testErr := errors.New("revert failed")
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		select {
+		case migrationContext.PanicAbort <- testErr:
+		case <-migrationContext.GetContext().Done():
+		}
+	}()
+
+	// Wait for abort to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify checkAbort catches it
+	err := migrator.checkAbort()
+	if err == nil {
+		t.Fatal("Expected checkAbort to return error during revert")
+	}
+
+	if err.Error() != "revert failed" {
+		t.Errorf("Expected 'revert failed', got %v", err)
+	}
+
+	// Verify context was cancelled
+	ctx := migrationContext.GetContext()
+	select {
+	case <-ctx.Done():
+		// Success
+	default:
+		t.Error("Expected context to be cancelled during revert abort")
+	}
+}
+
+func TestCheckAbort_ReturnsNilWhenNoError(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// No error has occurred
+	err := migrator.checkAbort()
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+}
+
+func TestCheckAbort_DetectsContextCancellation(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Cancel context directly (without going through PanicAbort)
+	migrationContext.CancelContext()
+
+	// checkAbort should detect the cancellation
+	err := migrator.checkAbort()
+	if err == nil {
+		t.Fatal("Expected checkAbort to return error when context is cancelled")
+	}
+}
+
+func (suite *MigratorTestSuite) TestPanicOnWarningsDuplicateDuringCutoverWithHighRetries() {
+	ctx := context.Background()
+
+	// Create table with email column (no unique constraint initially)
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY AUTO_INCREMENT, email VARCHAR(100))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Insert initial rows with unique email values - passes pre-flight validation
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (email) VALUES ('user1@example.com')", getTestTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (email) VALUES ('user2@example.com')", getTestTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (email) VALUES ('user3@example.com')", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Verify we have 3 rows
+	var count int
+	err = suite.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", getTestTableName())).Scan(&count)
+	suite.Require().NoError(err)
+	suite.Require().Equal(3, count)
+
+	// Create postpone flag file
+	tmpDir, err := os.MkdirTemp("", "gh-ost-postpone-test")
+	suite.Require().NoError(err)
+	defer os.RemoveAll(tmpDir)
+	postponeFlagFile := filepath.Join(tmpDir, "postpone.flag")
+	err = os.WriteFile(postponeFlagFile, []byte{}, 0644)
+	suite.Require().NoError(err)
+
+	// Start migration in goroutine
+	done := make(chan error, 1)
+	go func() {
+		connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+		if err != nil {
+			done <- err
+			return
+		}
+
+		migrationContext := newTestMigrationContext()
+		migrationContext.ApplierConnectionConfig = connectionConfig
+		migrationContext.InspectorConnectionConfig = connectionConfig
+		migrationContext.SetConnectionConfig("innodb")
+		migrationContext.AlterStatementOptions = "ADD UNIQUE KEY unique_email_idx (email)"
+		migrationContext.HeartbeatIntervalMilliseconds = 100
+		migrationContext.PostponeCutOverFlagFile = postponeFlagFile
+		migrationContext.PanicOnWarnings = true
+
+		// High retry count + exponential backoff means retries will take a long time and fail the test if not properly aborted
+		migrationContext.SetDefaultNumRetries(30)
+		migrationContext.CutOverExponentialBackoff = true
+		migrationContext.SetExponentialBackoffMaxInterval(128)
+
+		migrator := NewMigrator(migrationContext, "0.0.0")
+
+		//nolint:contextcheck
+		done <- migrator.Migrate()
+	}()
+
+	// Wait for migration to reach postponed state
+	// TODO replace this with an actual check for postponed state
+	time.Sleep(3 * time.Second)
+
+	// Now insert a duplicate email value while migration is postponed
+	// This simulates data arriving during migration that would violate the unique constraint
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (email) VALUES ('user1@example.com')", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Verify we now have 4 rows (including the duplicate)
+	err = suite.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", getTestTableName())).Scan(&count)
+	suite.Require().NoError(err)
+	suite.Require().Equal(4, count)
+
+	// Unpostpone the migration - gh-ost will now try to apply binlog events with the duplicate
+	err = os.Remove(postponeFlagFile)
+	suite.Require().NoError(err)
+
+	// Wait for Migrate() to return - with timeout to detect if it hangs
+	select {
+	case migrateErr := <-done:
+		// Success - Migrate() returned
+		// It should return an error due to the duplicate
+		suite.Require().Error(migrateErr, "Expected migration to fail due to duplicate key violation")
+		suite.Require().Contains(migrateErr.Error(), "Duplicate entry", "Error should mention duplicate entry")
+	case <-time.After(5 * time.Minute):
+		suite.FailNow("Migrate() hung and did not return within 5 minutes - failure to abort on warnings in retry loop")
+	}
+
+	// Verify all 4 rows are still in the original table (no silent data loss)
+	err = suite.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", getTestTableName())).Scan(&count)
+	suite.Require().NoError(err)
+	suite.Require().Equal(4, count, "Original table should still have all 4 rows")
+
+	// Verify both user1@example.com entries still exist
+	var duplicateCount int
+	err = suite.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE email = 'user1@example.com'", getTestTableName())).Scan(&duplicateCount)
+	suite.Require().NoError(err)
+	suite.Require().Equal(2, duplicateCount, "Should have 2 duplicate email entries")
 }

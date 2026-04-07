@@ -30,6 +30,8 @@ replica_port=
 original_sql_mode=
 current_gtid_mode=
 sysbench_pid=
+test_timeout=120
+test_failure_log_tail_lines=50
 
 OPTIND=1
 while getopts "b:s:dtg" OPTION; do
@@ -107,12 +109,6 @@ verify_master_and_replica() {
     fi
 }
 
-exec_cmd() {
-    echo "$@"
-    command "$@" 1>$test_logfile 2>&1
-    return $?
-}
-
 echo_dot() {
     echo -n "."
 }
@@ -139,6 +135,79 @@ start_replication() {
         echo_dot
         sleep 1
     done
+}
+
+build_ghost_command() {
+    # Build gh-ost command with all standard options
+    # Expects: ghost_binary, replica_host, replica_port, master_host, master_port,
+    #          table_name, storage_engine, throttle_flag_file, extra_args
+    cmd="GOTRACEBACK=crash $ghost_binary \
+    --user=gh-ost \
+    --password=gh-ost \
+    --host=$replica_host \
+    --port=$replica_port \
+    --assume-master-host=${master_host}:${master_port} \
+    --database=test \
+    --table=${table_name} \
+    --storage-engine=${storage_engine} \
+    --alter='engine=${storage_engine}' \
+    --exact-rowcount \
+    --assume-rbr \
+    --skip-metadata-lock-check \
+    --initially-drop-old-table \
+    --initially-drop-ghost-table \
+    --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _${table_name}_ghc' \
+    --throttle-flag-file=$throttle_flag_file \
+    --serve-socket-file=/tmp/gh-ost.test.sock \
+    --initially-drop-socket-file \
+    --test-on-replica \
+    --default-retries=3 \
+    --chunk-size=10 \
+    --verbose \
+    --debug \
+    --stack \
+    --checkpoint \
+    --execute ${extra_args[@]}"
+}
+
+print_log_excerpt() {
+    echo "=== Last $test_failure_log_tail_lines lines of $test_logfile ==="
+    tail -n $test_failure_log_tail_lines $test_logfile
+    echo "=== End log excerpt ==="
+}
+
+validate_expected_failure() {
+    # Check if test expected to fail and validate error message
+    # Expects: tests_path, test_name, execution_result, test_logfile
+    if [ -f $tests_path/$test_name/expect_failure ]; then
+        if [ $execution_result -eq 0 ]; then
+            echo
+            echo "ERROR $test_name execution was expected to exit on error but did not."
+            print_log_excerpt
+            return 1
+        fi
+        if [ -s $tests_path/$test_name/expect_failure ]; then
+            # 'expect_failure' file has content. We expect to find this content in the log.
+            expected_error_message="$(cat $tests_path/$test_name/expect_failure)"
+            if grep -q "$expected_error_message" $test_logfile; then
+                return 0
+            fi
+            echo
+            echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not."
+            print_log_excerpt
+            return 1
+        fi
+        # 'expect_failure' file has no content. We generally agree that the failure is correct
+        return 0
+    fi
+
+    if [ $execution_result -ne 0 ]; then
+        echo
+        echo "ERROR $test_name execution failure. cat $test_logfile:"
+        cat $test_logfile
+        return 1
+    fi
+    return 0
 }
 
 sysbench_prepare() {
@@ -226,6 +295,11 @@ test_single() {
         return 1
     fi
 
+    if [ -f $tests_path/$test_name/before.sql ]; then
+        gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/before.sql
+        gh-ost-test-mysql-replica --default-character-set=utf8mb4 test < $tests_path/$test_name/before.sql
+    fi
+
     extra_args=""
     if [ -f $tests_path/$test_name/extra_args ]; then
         extra_args=$(cat $tests_path/$test_name/extra_args)
@@ -254,6 +328,37 @@ test_single() {
 
     table_name="gh_ost_test"
     ghost_table_name="_gh_ost_test_gho"
+
+    # Check for custom test script
+    if [ -f $tests_path/$test_name/test.sh ]; then
+        # Run the custom test script in a subshell with timeout monitoring
+        # The subshell inherits all functions and variables from the current shell
+        (source $tests_path/$test_name/test.sh) &
+        test_pid=$!
+
+        # Monitor the test with timeout
+        timeout_counter=0
+        while kill -0 $test_pid 2>/dev/null; do
+            if [ $timeout_counter -ge $test_timeout ]; then
+                kill -TERM $test_pid 2>/dev/null
+                sleep 1
+                kill -KILL $test_pid 2>/dev/null
+                wait $test_pid 2>/dev/null
+                echo
+                echo "ERROR $test_name execution timed out"
+                print_log_excerpt
+                return 1
+            fi
+            sleep 1
+            ((timeout_counter++))
+        done
+
+        # Get the exit code
+        wait $test_pid 2>/dev/null
+        execution_result=$?
+        return $execution_result
+    fi
+
     # test with sysbench oltp write load
     if [[ "$test_name" == "sysbench" ]]; then
         if ! command -v sysbench &>/dev/null; then
@@ -274,78 +379,49 @@ test_single() {
     fi
     trap cleanup SIGINT
 
-    #
-    cmd="GOTRACEBACK=crash $ghost_binary \
-    --user=gh-ost \
-    --password=gh-ost \
-    --host=$replica_host \
-    --port=$replica_port \
-    --assume-master-host=${master_host}:${master_port}
-    --database=test \
-    --table=${table_name} \
-    --storage-engine=${storage_engine} \
-    --alter='engine=${storage_engine}' \
-    --exact-rowcount \
-    --assume-rbr \
-    --skip-metadata-lock-check \
-    --initially-drop-old-table \
-    --initially-drop-ghost-table \
-    --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _${table_name}_ghc' \
-    --throttle-flag-file=$throttle_flag_file \
-    --serve-socket-file=/tmp/gh-ost.test.sock \
-    --initially-drop-socket-file \
-    --test-on-replica \
-    --default-retries=3 \
-    --chunk-size=10 \
-    --verbose \
-    --debug \
-    --stack \
-    --checkpoint \
-    --execute ${extra_args[@]}"
+    # Build and execute gh-ost command
+    build_ghost_command
     echo_dot
     echo $cmd >$exec_command_file
     echo_dot
-    bash $exec_command_file 1>$test_logfile 2>&1
+    timeout $test_timeout bash $exec_command_file >$test_logfile 2>&1
 
     execution_result=$?
     cleanup
+
+    # Check for timeout (exit code 124)
+    if [ $execution_result -eq 124 ]; then
+        echo
+        echo "ERROR $test_name execution timed out"
+        print_log_excerpt
+        return 1
+    fi
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
         gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
         gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
     fi
 
+    if [ -f $tests_path/$test_name/after.sql ]; then
+        gh-ost-test-mysql-master --default-character-set=utf8mb4 test < $tests_path/$test_name/after.sql
+        gh-ost-test-mysql-replica --default-character-set=utf8mb4 test < $tests_path/$test_name/after.sql
+    fi
+
     if [ -f $tests_path/$test_name/destroy.sql ]; then
         gh-ost-test-mysql-master --default-character-set=utf8mb4 test <$tests_path/$test_name/destroy.sql
     fi
 
-    if [ -f $tests_path/$test_name/expect_failure ]; then
-        if [ $execution_result -eq 0 ]; then
-            echo
-            echo "ERROR $test_name execution was expected to exit on error but did not. cat $test_logfile"
-            return 1
-        fi
-        if [ -s $tests_path/$test_name/expect_failure ]; then
-            # 'expect_failure' file has content. We expect to find this content in the log.
-            expected_error_message="$(cat $tests_path/$test_name/expect_failure)"
-            if grep -q "$expected_error_message" $test_logfile; then
-                return 0
-            fi
-            echo
-            echo "ERROR $test_name execution was expected to exit with error message '${expected_error_message}' but did not. cat $test_logfile"
-            return 1
-        fi
-        # 'expect_failure' file has no content. We generally agree that the failure is correct
-        return 0
-    fi
-
-    if [ $execution_result -ne 0 ]; then
-        echo
-        echo "ERROR $test_name execution failure. cat $test_logfile:"
-        cat $test_logfile
+    # Validate expected failure or success
+    if ! validate_expected_failure; then
         return 1
     fi
 
+    # If this was an expected failure test, we're done (no need to validate structure/checksums)
+    if [ -f $tests_path/$test_name/expect_failure ]; then
+        return 0
+    fi
+
+    # Test succeeded - now validate structure and checksums
     gh-ost-test-mysql-replica --default-character-set=utf8mb4 test -e "show create table ${ghost_table_name}\G" -ss >$ghost_structure_output_file
 
     if [ -f $tests_path/$test_name/expect_table_structure ]; then
@@ -399,14 +475,19 @@ test_all() {
     test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | sort)
     while read -r test_dir; do
         test_name=$(basename "$test_dir")
+        local test_start_time=$(date +%s)
         if ! test_single "$test_name"; then
+            local test_end_time=$(date +%s)
+            local test_duration=$((test_end_time - test_start_time))
             create_statement=$(gh-ost-test-mysql-replica test -t -e "show create table ${ghost_table_name} \G")
             echo "$create_statement" >>$test_logfile
-            echo "+ FAIL"
+            echo "+ FAIL (${test_duration}s)"
             return 1
         else
+            local test_end_time=$(date +%s)
+            local test_duration=$((test_end_time - test_start_time))
             echo
-            echo "+ pass"
+            echo "+ pass (${test_duration}s)"
         fi
         mysql_version="$(gh-ost-test-mysql-replica -e "select @@version")"
         replica_terminology="slave"

@@ -8,9 +8,12 @@ package logic
 import (
 	"context"
 	gosql "database/sql"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
@@ -23,7 +26,6 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func TestApplierGenerateSqlModeQuery(t *testing.T) {
@@ -147,7 +149,7 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 		require.Len(t, res, 1)
 		require.NoError(t, res[0].err)
 		require.Equal(t,
-			`replace /* gh-ost `+"`test`.`_test_gho`"+` */
+			`insert /* gh-ost `+"`test`.`_test_gho`"+` */ ignore
 		into
 			`+"`test`.`_test_gho`"+`
 			`+"(`id`, `item_id`)"+`
@@ -199,6 +201,71 @@ func TestApplierInstantDDL(t *testing.T) {
 	})
 }
 
+func TestRetryOnLockWaitTimeout(t *testing.T) {
+	oldRetrySleepFn := RetrySleepFn
+	defer func() { RetrySleepFn = oldRetrySleepFn }()
+	RetrySleepFn = func(d time.Duration) {} // no-op for tests
+
+	logger := base.NewMigrationContext().Log
+
+	lockWaitTimeoutErr := &drivermysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}
+	nonRetryableErr := &drivermysql.MySQLError{Number: 1845, Message: "ALGORITHM=INSTANT is not supported"}
+
+	t.Run("success on first attempt", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return nil
+		}, logger)
+		require.NoError(t, err)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("retry on lock wait timeout then succeed", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			if calls < 3 {
+				return lockWaitTimeoutErr
+			}
+			return nil
+		}, logger)
+		require.NoError(t, err)
+		require.Equal(t, 3, calls)
+	})
+
+	t.Run("non-retryable error returns immediately", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return nonRetryableErr
+		}, logger)
+		require.ErrorIs(t, err, nonRetryableErr)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("non-mysql error returns immediately", func(t *testing.T) {
+		calls := 0
+		genericErr := errors.New("connection refused")
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return genericErr
+		}, logger)
+		require.ErrorIs(t, err, genericErr)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("exhausts all retries", func(t *testing.T) {
+		calls := 0
+		err := retryOnLockWaitTimeout(func() error {
+			calls++
+			return lockWaitTimeoutErr
+		}, logger)
+		require.ErrorIs(t, err, lockWaitTimeoutErr)
+		require.Equal(t, 5, calls)
+	})
+}
+
 type ApplierTestSuite struct {
 	suite.Suite
 
@@ -213,7 +280,6 @@ func (suite *ApplierTestSuite) SetupSuite() {
 		testmysql.WithDatabase(testMysqlDatabase),
 		testmysql.WithUsername(testMysqlUser),
 		testmysql.WithPassword(testMysqlPass),
-		testcontainers.WithWaitStrategy(wait.ForExposedPort()),
 		testmysql.WithConfigFile("my.cnf.test"),
 	)
 	suite.Require().NoError(err)
@@ -542,7 +608,9 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySuc
 	err = applier.ReadMigrationRangeValues()
 	suite.Require().NoError(err)
 
+	migrationContext.SetNextIterationRangeMinValues()
 	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
 
@@ -620,6 +688,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQueryFai
 	err = applier.AlterGhost()
 	suite.Require().NoError(err)
 
+	migrationContext.SetNextIterationRangeMinValues()
 	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
@@ -719,6 +788,761 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().Equal(chk.RowsCopied, gotChk.RowsCopied)
 	suite.Require().Equal(chk.DMLApplied, gotChk.DMLApplied)
 	suite.Require().Equal(chk.IsCutover, gotChk.IsCutover)
+}
+
+func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateKeyOnNonMigrationIndex() {
+	ctx := context.Background()
+
+	var err error
+
+	// Create table with id and email columns, where id is the primary key
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Create ghost table with same schema plus a new unique index on email
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), UNIQUE KEY email_unique (email));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Insert initial rows into ghost table (simulating bulk copy phase)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email) VALUES (1, 'user1@example.com'), (2, 'user2@example.com'), (3, 'user3@example.com');", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	// Simulate binlog event: try to insert a row with duplicate email
+	// This should fail with a warning because the ghost table has a unique index on email
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{4, "user2@example.com"}), // duplicate email
+		},
+	}
+
+	// This should return an error when PanicOnWarnings is enabled
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().Error(err)
+	suite.Require().Contains(err.Error(), "Duplicate entry")
+
+	// Verify that the ghost table still has only the original 3 rows with correct data (no data loss)
+	rows, err := suite.db.Query("SELECT id, email FROM " + getTestGhostTableName() + " ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var results []struct {
+		id    int
+		email string
+	}
+	for rows.Next() {
+		var id int
+		var email string
+		err = rows.Scan(&id, &email)
+		suite.Require().NoError(err)
+		results = append(results, struct {
+			id    int
+			email string
+		}{id, email})
+	}
+	suite.Require().NoError(rows.Err())
+
+	// All 3 original rows should still be present with correct data
+	suite.Require().Len(results, 3)
+	suite.Require().Equal(1, results[0].id)
+	suite.Require().Equal("user1@example.com", results[0].email)
+	suite.Require().Equal(2, results[1].id)
+	suite.Require().Equal("user2@example.com", results[1].email)
+	suite.Require().Equal(3, results[2].id)
+	suite.Require().Equal("user3@example.com", results[2].email)
+}
+
+func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateCompositeUniqueKey() {
+	ctx := context.Background()
+
+	var err error
+
+	// Create table with id, email, and username columns
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), username VARCHAR(100));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Create ghost table with same schema plus a composite unique index on (email, username)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), username VARCHAR(100), UNIQUE KEY email_username_unique (email, username));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "email", "username"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email", "username"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email", "username"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Insert initial rows into ghost table (simulating bulk copy phase)
+	// alice@example.com + bob is ok due to composite unique index
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email, username) VALUES (1, 'alice@example.com', 'alice'), (2, 'alice@example.com', 'bob'), (3, 'charlie@example.com', 'charlie');", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	// Simulate binlog event: try to insert a row with duplicate composite key (email + username)
+	// This should fail with a warning because the ghost table has a composite unique index
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{4, "alice@example.com", "alice"}), // duplicate (email, username)
+		},
+	}
+
+	// This should return an error when PanicOnWarnings is enabled
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().Error(err)
+	suite.Require().Contains(err.Error(), "Duplicate entry")
+
+	// Verify that the ghost table still has only the original 3 rows with correct data (no data loss)
+	rows, err := suite.db.Query("SELECT id, email, username FROM " + getTestGhostTableName() + " ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var results []struct {
+		id       int
+		email    string
+		username string
+	}
+	for rows.Next() {
+		var id int
+		var email string
+		var username string
+		err = rows.Scan(&id, &email, &username)
+		suite.Require().NoError(err)
+		results = append(results, struct {
+			id       int
+			email    string
+			username string
+		}{id, email, username})
+	}
+	suite.Require().NoError(rows.Err())
+
+	// All 3 original rows should still be present with correct data
+	suite.Require().Len(results, 3)
+	suite.Require().Equal(1, results[0].id)
+	suite.Require().Equal("alice@example.com", results[0].email)
+	suite.Require().Equal("alice", results[0].username)
+	suite.Require().Equal(2, results[1].id)
+	suite.Require().Equal("alice@example.com", results[1].email)
+	suite.Require().Equal("bob", results[1].username)
+	suite.Require().Equal(3, results[2].id)
+	suite.Require().Equal("charlie@example.com", results[2].email)
+	suite.Require().Equal("charlie", results[2].username)
+}
+
+// TestUpdateModifyingUniqueKeyWithDuplicateOnOtherIndex tests the scenario where:
+// 1. An UPDATE modifies the unique key (converted to DELETE+INSERT)
+// 2. The INSERT would create a duplicate on a NON-migration unique index
+// 3. Without warning detection: DELETE succeeds, INSERT IGNORE skips = DATA LOSS
+// 4. With PanicOnWarnings: Warning detected, transaction rolled back, no data loss
+// This test verifies that PanicOnWarnings correctly prevents the data loss scenario.
+func (suite *ApplierTestSuite) TestUpdateModifyingUniqueKeyWithDuplicateOnOtherIndex() {
+	ctx := context.Background()
+
+	var err error
+
+	// Create table with id (PRIMARY) and email (NO unique constraint yet)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Create ghost table with id (PRIMARY) AND email unique index (being added)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), UNIQUE KEY email_unique (email));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Setup: Insert initial rows into ghost table
+	// Row 1: id=1, email='bob@example.com'
+	// Row 2: id=2, email='charlie@example.com'
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email) VALUES (1, 'bob@example.com'), (2, 'charlie@example.com');", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	// Simulate binlog event: UPDATE that changes BOTH PRIMARY KEY and email
+	// From: id=2, email='charlie@example.com'
+	// To:   id=3, email='bob@example.com'  (duplicate email with id=1)
+	// This will be converted to DELETE (id=2) + INSERT (id=3, 'bob@example.com')
+	// With INSERT IGNORE, the INSERT will skip because email='bob@example.com' already exists in id=1
+	// Result: id=2 deleted, id=3 never inserted = DATA LOSS
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:      testMysqlDatabase,
+			TableName:         testMysqlTableName,
+			DML:               binlog.UpdateDML,
+			NewColumnValues:   sql.ToColumnValues([]interface{}{3, "bob@example.com"}),     // new: id=3, email='bob@example.com'
+			WhereColumnValues: sql.ToColumnValues([]interface{}{2, "charlie@example.com"}), // old: id=2, email='charlie@example.com'
+		},
+	}
+
+	// First verify this would be converted to DELETE+INSERT
+	buildResults := applier.buildDMLEventQuery(dmlEvents[0])
+	suite.Require().Len(buildResults, 2, "UPDATE modifying unique key should be converted to DELETE+INSERT")
+
+	// Apply the event - this should FAIL because INSERT will have duplicate email warning
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().Error(err, "Should fail when DELETE+INSERT causes duplicate on non-migration unique key")
+	suite.Require().Contains(err.Error(), "Duplicate entry", "Error should mention duplicate entry")
+
+	// Verify that BOTH rows still exist (transaction rolled back)
+	rows, err := suite.db.Query("SELECT id, email FROM " + getTestGhostTableName() + " ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var count int
+	var ids []int
+	var emails []string
+	for rows.Next() {
+		var id int
+		var email string
+		err = rows.Scan(&id, &email)
+		suite.Require().NoError(err)
+		ids = append(ids, id)
+		emails = append(emails, email)
+		count++
+	}
+	suite.Require().NoError(rows.Err())
+
+	// Transaction should have rolled back, so original 2 rows should still be there
+	suite.Require().Equal(2, count, "Should still have 2 rows after failed transaction")
+	suite.Require().Equal([]int{1, 2}, ids, "Should have original ids")
+	suite.Require().Equal([]string{"bob@example.com", "charlie@example.com"}, emails)
+}
+
+// TestNormalUpdateWithPanicOnWarnings tests that normal UPDATEs (not modifying unique key) work correctly
+func (suite *ApplierTestSuite) TestNormalUpdateWithPanicOnWarnings() {
+	ctx := context.Background()
+
+	var err error
+
+	// Create table with id (PRIMARY) and email
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Create ghost table with same schema plus unique index on email
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), UNIQUE KEY email_unique (email));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Setup: Insert initial rows into ghost table
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email) VALUES (1, 'alice@example.com'), (2, 'bob@example.com');", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	// Simulate binlog event: Normal UPDATE that only changes email (not PRIMARY KEY)
+	// This should use UPDATE query, not DELETE+INSERT
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:      testMysqlDatabase,
+			TableName:         testMysqlTableName,
+			DML:               binlog.UpdateDML,
+			NewColumnValues:   sql.ToColumnValues([]interface{}{2, "robert@example.com"}), // update email only
+			WhereColumnValues: sql.ToColumnValues([]interface{}{2, "bob@example.com"}),
+		},
+	}
+
+	// Verify this generates a single UPDATE query (not DELETE+INSERT)
+	buildResults := applier.buildDMLEventQuery(dmlEvents[0])
+	suite.Require().Len(buildResults, 1, "Normal UPDATE should generate single UPDATE query")
+
+	// Apply the event - should succeed
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().NoError(err)
+
+	// Verify the update was applied correctly
+	rows, err := suite.db.Query("SELECT id, email FROM " + getTestGhostTableName() + " WHERE id = 2")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var id int
+	var email string
+	suite.Require().True(rows.Next(), "Should find updated row")
+	err = rows.Scan(&id, &email)
+	suite.Require().NoError(err)
+	suite.Require().Equal(2, id)
+	suite.Require().Equal("robert@example.com", email)
+	suite.Require().False(rows.Next(), "Should only have one row")
+	suite.Require().NoError(rows.Err())
+}
+
+// TestDuplicateOnMigrationKeyAllowedInBinlogReplay tests the positive case where
+// a duplicate on the migration unique key during binlog replay is expected and should be allowed
+func (suite *ApplierTestSuite) TestDuplicateOnMigrationKeyAllowedInBinlogReplay() {
+	ctx := context.Background()
+
+	var err error
+
+	// Create table with id and email columns, where id is the primary key
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Create ghost table with same schema plus a new unique index on email
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), UNIQUE KEY email_unique (email));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Insert initial rows into ghost table (simulating bulk copy phase)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email) VALUES (1, 'alice@example.com'), (2, 'bob@example.com');", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	// Simulate binlog event: try to insert the same row again (duplicate on PRIMARY KEY - the migration key)
+	// This is expected during binlog replay when a row was already copied during bulk copy
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{1, "alice@example.com"}), // duplicate PRIMARY KEY
+		},
+	}
+
+	// This should succeed - duplicate on migration unique key is expected and should be filtered out
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().NoError(err)
+
+	// Verify that the ghost table still has only the original 2 rows with correct data
+	rows, err := suite.db.Query("SELECT id, email FROM " + getTestGhostTableName() + " ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var results []struct {
+		id    int
+		email string
+	}
+	for rows.Next() {
+		var id int
+		var email string
+		err = rows.Scan(&id, &email)
+		suite.Require().NoError(err)
+		results = append(results, struct {
+			id    int
+			email string
+		}{id, email})
+	}
+	suite.Require().NoError(rows.Err())
+
+	// Should still have exactly 2 rows with correct data
+	suite.Require().Len(results, 2)
+	suite.Require().Equal(1, results[0].id)
+	suite.Require().Equal("alice@example.com", results[0].email)
+	suite.Require().Equal(2, results[1].id)
+	suite.Require().Equal("bob@example.com", results[1].email)
+}
+
+// TestRegexMetacharactersInIndexName tests that index names with regex metacharacters
+// are properly escaped. We test with a plus sign in the index name, which without
+// QuoteMeta would be treated as a regex quantifier (one or more of 'x' in this case).
+// This test verifies the pattern matches ONLY the exact index name, not a regex pattern.
+func (suite *ApplierTestSuite) TestRegexMetacharactersInIndexName() {
+	ctx := context.Background()
+
+	var err error
+
+	// Create tables with an index name containing a plus sign
+	// Without QuoteMeta, "idx+email" would be treated as a regex pattern where + is a quantifier
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), UNIQUE KEY `idx+email` (email));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// MySQL allows + in index names when quoted
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), UNIQUE KEY `idx+email` (email));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "idx+email",
+		NameInGhostTable: "idx+email",
+		Columns:          *sql.NewColumnList([]string{"email"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Insert initial rows
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email) VALUES (1, 'alice@example.com'), (2, 'bob@example.com');", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	// Test: duplicate on idx+email (the migration key) should be allowed
+	// This verifies our regex correctly identifies "idx+email" as the migration key
+	// Without regexp.QuoteMeta, the + would be treated as a regex quantifier and might not match correctly
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{3, "alice@example.com"}),
+		},
+	}
+
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().NoError(err, "Duplicate on idx+email (migration key) should be allowed with PanicOnWarnings enabled")
+
+	// Test: duplicate on PRIMARY (not the migration key) should fail
+	dmlEvents = []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{1, "charlie@example.com"}),
+		},
+	}
+
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().Error(err, "Duplicate on PRIMARY (not migration key) should fail with PanicOnWarnings enabled")
+	suite.Require().Contains(err.Error(), "Duplicate entry")
+
+	// Verify final state - should still have only the original 2 rows
+	rows, err := suite.db.Query("SELECT id, email FROM " + getTestGhostTableName() + " ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var results []struct {
+		id    int
+		email string
+	}
+	for rows.Next() {
+		var id int
+		var email string
+		err = rows.Scan(&id, &email)
+		suite.Require().NoError(err)
+		results = append(results, struct {
+			id    int
+			email string
+		}{id, email})
+	}
+	suite.Require().NoError(rows.Err())
+
+	suite.Require().Len(results, 2)
+	suite.Require().Equal(1, results[0].id)
+	suite.Require().Equal("alice@example.com", results[0].email)
+	suite.Require().Equal(2, results[1].id)
+	suite.Require().Equal("bob@example.com", results[1].email)
+}
+
+// TestPanicOnWarningsDisabled tests that when PanicOnWarnings is false,
+// warnings are not checked and duplicates are silently ignored
+func (suite *ApplierTestSuite) TestPanicOnWarningsDisabled() {
+	ctx := context.Background()
+
+	var err error
+
+	// Create table with id and email columns
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Create ghost table with unique index on email
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), UNIQUE KEY email_unique (email));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	// PanicOnWarnings is false (default)
+	migrationContext.PanicOnWarnings = false
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Insert initial rows into ghost table
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email) VALUES (1, 'alice@example.com'), (2, 'bob@example.com');", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	// Simulate binlog event: insert duplicate email on non-migration index
+	// With PanicOnWarnings disabled, this should succeed (INSERT IGNORE skips it)
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{3, "alice@example.com"}), // duplicate email
+		},
+	}
+
+	// Should succeed because PanicOnWarnings is disabled
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().NoError(err)
+
+	// Verify that only 2 original rows exist with correct data (the duplicate was silently ignored)
+	rows, err := suite.db.Query("SELECT id, email FROM " + getTestGhostTableName() + " ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var results []struct {
+		id    int
+		email string
+	}
+	for rows.Next() {
+		var id int
+		var email string
+		err = rows.Scan(&id, &email)
+		suite.Require().NoError(err)
+		results = append(results, struct {
+			id    int
+			email string
+		}{id, email})
+	}
+	suite.Require().NoError(rows.Err())
+
+	// Should still have exactly 2 original rows (id=3 was silently ignored)
+	suite.Require().Len(results, 2)
+	suite.Require().Equal(1, results[0].id)
+	suite.Require().Equal("alice@example.com", results[0].email)
+	suite.Require().Equal(2, results[1].id)
+	suite.Require().Equal("bob@example.com", results[1].email)
+}
+
+// TestMultipleDMLEventsInBatch tests that multiple DML events are processed in a single transaction
+// and that if one fails due to a warning, the entire batch is rolled back - including events that
+// come AFTER the failure. This proves true transaction atomicity.
+func (suite *ApplierTestSuite) TestMultipleDMLEventsInBatch() {
+	ctx := context.Background()
+
+	var err error
+
+	// Create table with id and email columns
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100));", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Create ghost table with unique index on email
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, email VARCHAR(100), UNIQUE KEY email_unique (email));", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.PanicOnWarnings = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "email"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Insert initial rows into ghost table
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, email) VALUES (1, 'alice@example.com'), (3, 'charlie@example.com');", getTestGhostTableName()))
+	suite.Require().NoError(err)
+
+	// Simulate multiple binlog events in a batch:
+	// 1. Duplicate on PRIMARY KEY (allowed - expected during binlog replay)
+	// 2. Duplicate on email index (should fail) ← FAILURE IN MIDDLE
+	// 3. Valid insert (would succeed) ← SUCCESS AFTER FAILURE
+	//
+	// The critical test: Even though event #3 would succeed on its own, it must be rolled back
+	// because event #2 failed. This proves the entire batch is truly atomic.
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{1, "alice@example.com"}), // duplicate PRIMARY (normally allowed)
+		},
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{4, "alice@example.com"}), // duplicate email (FAILS)
+		},
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{2, "bob@example.com"}), // valid insert (would succeed)
+		},
+	}
+
+	// Should fail due to the second event
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().Error(err)
+	suite.Require().Contains(err.Error(), "Duplicate entry")
+
+	// Verify that the entire batch was rolled back - still only the original 2 rows
+	// Critically: id=2 (bob@example.com) from event #3 should NOT be present
+	rows, err := suite.db.Query("SELECT id, email FROM " + getTestGhostTableName() + " ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var results []struct {
+		id    int
+		email string
+	}
+	for rows.Next() {
+		var id int
+		var email string
+		err = rows.Scan(&id, &email)
+		suite.Require().NoError(err)
+		results = append(results, struct {
+			id    int
+			email string
+		}{id, email})
+	}
+	suite.Require().NoError(rows.Err())
+
+	// Should still have exactly 2 original rows (entire batch was rolled back)
+	// This proves that even event #3 (which would have succeeded) was rolled back
+	suite.Require().Len(results, 2)
+	suite.Require().Equal(1, results[0].id)
+	suite.Require().Equal("alice@example.com", results[0].email)
+	suite.Require().Equal(3, results[1].id)
+	suite.Require().Equal("charlie@example.com", results[1].email)
+	// Critically: id=2 (bob@example.com) is NOT present, proving event #3 was rolled back
 }
 
 func TestApplier(t *testing.T) {
