@@ -81,6 +81,8 @@ func main() {
 	flag.BoolVar(&migrationContext.SkipRenamedColumns, "skip-renamed-columns", false, "in case your `ALTER` statement renames columns, gh-ost will note that and offer its interpretation of the rename. By default gh-ost does not proceed to execute. This flag tells gh-ost to skip the renamed columns, i.e. to treat what gh-ost thinks are renamed columns as unrelated columns. NOTE: you may lose column data")
 	flag.BoolVar(&migrationContext.IsTungsten, "tungsten", false, "explicitly let gh-ost know that you are running on a tungsten-replication based topology (you are likely to also provide --assume-master-host)")
 	flag.BoolVar(&migrationContext.DiscardForeignKeys, "discard-foreign-keys", false, "DANGER! This flag will migrate a table that has foreign keys and will NOT create foreign keys on the ghost table, thus your altered table will have NO foreign keys. This is useful for intentional dropping of foreign keys")
+	flag.BoolVar(&migrationContext.AllowChildForeignKeys, "allow-child-foreign-keys", false, "Allow gh-ost to create foreign keys on the ghost table when the child table has foreign keys")
+	flag.StringVar(&migrationContext.ForeignKeyRenamePrefix, "foreign-key-rename-prefix", "_", "Rename foreign keys in the ghost table by adding this prefix")
 	flag.BoolVar(&migrationContext.SkipForeignKeyChecks, "skip-foreign-key-checks", false, "set to 'true' when you know for certain there are no foreign keys on your table, and wish to skip the time it takes for gh-ost to verify that")
 	flag.BoolVar(&migrationContext.SkipStrictMode, "skip-strict-mode", false, "explicitly tell gh-ost binlog applier not to enforce strict sql mode")
 	flag.BoolVar(&migrationContext.AllowZeroInDate, "allow-zero-in-date", false, "explicitly tell gh-ost binlog applier to ignore NO_ZERO_IN_DATE,NO_ZERO_DATE in sql_mode")
@@ -235,6 +237,9 @@ func main() {
 		}
 		if migrationContext.DiscardForeignKeys {
 			log.Warning("--discard-foreign-keys was provided with --revert, it will be ignored")
+		}
+		if migrationContext.AllowChildForeignKeys {
+			log.Warning("--allow-child-foreign-keys was provided with --revert, it will be ignored")
 		}
 	}
 
