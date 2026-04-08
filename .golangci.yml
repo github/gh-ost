@@ -1,9 +1,5 @@
-version: 2
-run:
-  timeout: 5m
+version: "2"
 linters:
-  disable:
-    - errcheck
   enable:
     - bodyclose
     - containedctx
@@ -12,7 +8,6 @@ linters:
     - durationcheck
     - errname
     - errorlint
-    - gofmt
     - misspell
     - nilerr
     - nilnil
@@ -24,6 +19,27 @@ linters:
     - sqlclosecheck
     - unconvert
     - unparam
-    - unused
     - wastedassign
     - whitespace
+  disable:
+    - errcheck
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
