@@ -148,8 +148,9 @@ func (this *HooksExecutor) onInteractiveCommand(command string) error {
 	return this.executeHooks(onInteractiveCommand, v)
 }
 
-func (this *HooksExecutor) onSuccess() error {
-	return this.executeHooks(onSuccess)
+func (this *HooksExecutor) onSuccess(instantDDL bool) error {
+	v := fmt.Sprintf("GH_OST_INSTANT_DDL=%t", instantDDL)
+	return this.executeHooks(onSuccess, v)
 }
 
 func (this *HooksExecutor) onFailure() error {

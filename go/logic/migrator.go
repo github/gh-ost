@@ -492,7 +492,7 @@ func (this *Migrator) Migrate() (err error) {
 				if err := this.finalCleanup(); err != nil {
 					return nil
 				}
-				if err := this.hooksExecutor.onSuccess(); err != nil {
+				if err := this.hooksExecutor.onSuccess(true); err != nil {
 					return err
 				}
 				this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -628,7 +628,7 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.finalCleanup(); err != nil {
 		return nil
 	}
-	if err := this.hooksExecutor.onSuccess(); err != nil {
+	if err := this.hooksExecutor.onSuccess(false); err != nil {
 		return err
 	}
 	this.migrationContext.Log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -742,7 +742,7 @@ func (this *Migrator) Revert() error {
 	if err := this.finalCleanup(); err != nil {
 		return nil
 	}
-	if err := this.hooksExecutor.onSuccess(); err != nil {
+	if err := this.hooksExecutor.onSuccess(false); err != nil {
 		return err
 	}
 	this.migrationContext.Log.Infof("Done reverting %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
