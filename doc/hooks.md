@@ -81,7 +81,7 @@ The following variables are available on all hooks:
 
 The following variable are available on particular hooks:
 
-- `GH_OST_INSTANT_DDL` is only available in `gh-ost-on-success`. The value is true if instant DDL was successful.
+- `GH_OST_INSTANT_DDL` is only available in `gh-ost-on-success`. The value is `true` if instant DDL was successful, and `false` if it was not.
 - `GH_OST_COMMAND` is only available in `gh-ost-on-interactive-command`
 - `GH_OST_STATUS` is only available in `gh-ost-on-status`
 - `GH_OST_LAST_BATCH_COPY_ERROR` is only available in `gh-ost-on-batch-copy-retry`

@@ -105,6 +105,8 @@ func TestHooksExecutorExecuteHooks(t *testing.T) {
 				require.Equal(t, 50.0, progress)
 			case "GH_OST_TABLE_NAME":
 				require.Equal(t, migrationContext.OriginalTableName, split[1])
+			case "GH_OST_INSTANT_DDL":
+				require.Equal(t, "false", split[1])
 			case "TEST":
 				require.Equal(t, t.Name(), split[1])
 			}

@@ -478,7 +478,6 @@ func (this *Migrator) Migrate() (err error) {
 	if this.migrationContext.AttemptInstantDDL {
 		if this.migrationContext.Noop {
 			this.migrationContext.Log.Debugf("Noop operation; not really attempting instant DDL")
-			return this.hooksExecutor.onSuccess(true)
 		} else {
 			this.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := this.applier.AttemptInstantDDL(); err == nil {
