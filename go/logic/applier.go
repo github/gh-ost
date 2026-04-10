@@ -279,38 +279,6 @@ func (this *Applier) ValidateOrDropExistingTables() error {
 	return nil
 }
 
-// AttemptInstantDDL attempts to use instant DDL (from MySQL 8.0, and earlier in Aurora and some others).
-// If successful, the operation is only a meta-data change so a lot of time is saved!
-// The risk of attempting to instant DDL when not supported is that a metadata lock may be acquired.
-// This is minor, since gh-ost will eventually require a metadata lock anyway, but at the cut-over stage.
-// Instant operations include:
-// - Adding a column
-// - Dropping a column
-// - Dropping an index
-// - Extending a VARCHAR column
-// - Adding a virtual generated column
-// It is not reliable to parse the `alter` statement to determine if it is instant or not.
-// This is because the table might be in an older row format, or have some other incompatibility
-// that is difficult to identify.
-func (this *Applier) AttemptInstantDDL() error {
-	query := this.generateInstantDDLQuery()
-	this.migrationContext.Log.Infof("INSTANT DDL query is: %s", query)
-
-	// Reuse cut-over-lock-timeout from regular migration process to reduce risk
-	// in situations where there may be long-running transactions.
-	tableLockTimeoutSeconds := this.migrationContext.CutOverLockTimeoutSeconds * 2
-	this.migrationContext.Log.Infof("Setting LOCK timeout as %d seconds", tableLockTimeoutSeconds)
-	lockTimeoutQuery := fmt.Sprintf(`set /* gh-ost */ session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
-	if _, err := this.db.Exec(lockTimeoutQuery); err != nil {
-		return err
-	}
-	// We don't need a trx, because for instant DDL the SQL mode doesn't matter.
-	return retryOnLockWaitTimeout(func() error {
-		_, err := this.db.Exec(query)
-		return err
-	}, this.migrationContext.Log)
-}
-
 // retryOnLockWaitTimeout retries the given operation on MySQL lock wait timeout
 // (errno 1205). Non-timeout errors return immediately. This is used for instant
 // DDL attempts where the operation may be blocked by a long-running transaction.

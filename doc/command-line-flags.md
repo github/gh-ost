@@ -62,6 +62,8 @@ MySQL 8.0 supports "instant DDL" for some operations. If an alter statement can 
 
 It is not reliable to parse the `ALTER` statement to determine if it is instant or not. This is because the table might be in an older row format, or have some other incompatibility that is difficult to identify.
 
+When `--attempt-instant-ddl` is enabled, `gh-ost` will attempt `ALGORITHM=INSTANT` **early**, right after connecting to the inspector and before creating ghost tables or starting binlog streaming. If instant DDL succeeds, the migration completes immediately without any of the normal setup overhead. This is especially beneficial for large tables where the ghost table creation and binlog streaming setup would otherwise add significant time.
+
 `--attempt-instant-ddl` is disabled by default, but the risks of enabling it are relatively minor: `gh-ost` may need to acquire a metadata lock at the start of the operation. This is not a problem for most scenarios, but it could be a problem for users that start the DDL during a period with long running transactions.
 
 `gh-ost` will automatically fallback to the normal DDL process if the attempt to use instant DDL is unsuccessful.
