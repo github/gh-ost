@@ -133,7 +133,7 @@ func TestConvertArgVarbinaryBytesWithInvalidUTF8Bytes(t *testing.T) {
 	result := col.convertArg(rawBytes)
 
 	require.IsType(t, []byte{}, result)
-	require.Equal(t, []byte(rawBytes), result.([]byte))
+	require.Equal(t, rawBytes, result.([]byte))
 }
 
 func TestConvertArgBinaryColumnNoPaddingWhenFull(t *testing.T) {
