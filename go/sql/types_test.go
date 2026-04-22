@@ -107,15 +107,15 @@ func TestConvertArgVarbinaryStringWithInvalidUTF8Bytes(t *testing.T) {
 
 	col := Column{
 		Name:      "uuid",
-		Charset:   "",          // varbinary has no character set
-		MySQLType: "varbinary", // set by inspect.go from information_schema data_type
+		Charset:   "",              // varbinary has no character set
+		MySQLType: "varbinary(16)", // set by inspect.go from information_schema COLUMN_TYPE
 	}
 
 	result := col.convertArg(string(rawBytes))
 
 	require.IsType(t, []byte{}, result,
 		"varbinary value from binlog (Go string) must be returned as []byte, not string, "+
-			"to prevent MySQL driver from sending it with utf8mb4 charset metadata")
+			"to prevent MySQL driver from sending it with the connection's charset metadata")
 	require.Equal(t, rawBytes, result.([]byte))
 }
 
@@ -127,7 +127,7 @@ func TestConvertArgVarbinaryBytesWithInvalidUTF8Bytes(t *testing.T) {
 	col := Column{
 		Name:      "uuid",
 		Charset:   "",
-		MySQLType: "varbinary",
+		MySQLType: "varbinary(16)", // set by inspect.go from information_schema COLUMN_TYPE
 	}
 
 	result := col.convertArg(rawBytes)
