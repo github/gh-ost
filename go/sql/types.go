@@ -70,6 +70,13 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 	if arg2Bytes != nil {
 		if this.Charset != "" && this.charsetConversion == nil {
 			arg = arg2Bytes
+		} else if this.Charset == "" && (strings.Contains(this.MySQLType, "binary") || strings.HasSuffix(this.MySQLType, "blob")) {
+			// varbinary/binary/blob column: no charset means binary storage. Return []byte so
+			// the MySQL driver sends MYSQL_TYPE_BLOB (binary) rather than MYSQL_TYPE_VAR_STRING
+			// (text with the connection's charset/collation metadata, often utf8mb4), which would
+			// cause MySQL to validate the bytes and emit Warning 1300 for byte sequences that are
+			// invalid in that charset.
+			arg = arg2Bytes
 		} else {
 			if encoding, ok := charsetEncodingMap[this.Charset]; ok {
 				decodedBytes, _ := encoding.NewDecoder().Bytes(arg2Bytes)
