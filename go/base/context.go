@@ -225,6 +225,7 @@ type MigrationContext struct {
 	CutOverCompleteFlag                    int64
 	InCutOverCriticalSectionFlag           int64
 	PanicAbort                             chan error
+	OptimizerSwitch                        string
 
 	// Context for cancellation signaling across all goroutines
 	// Stored in struct as it spans the entire migration lifecycle, not per-function.
