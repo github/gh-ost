@@ -89,7 +89,7 @@ func (this *Inspector) ValidateOriginalTable() (err error) {
 	if err := this.validateTable(); err != nil {
 		return err
 	}
-	if err := this.validateTableForeignKeys(this.migrationContext.DiscardForeignKeys); err != nil {
+	if err := this.validateTableForeignKeys(this.migrationContext.DiscardForeignKeys || this.migrationContext.AllowChildForeignKeys); err != nil {
 		return err
 	}
 	if err := this.validateTableTriggers(); err != nil {
@@ -539,7 +539,7 @@ func (this *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) erro
 	}
 	if numChildForeignKeys > 0 {
 		if allowChildForeignKeys {
-			this.migrationContext.Log.Debugf("Foreign keys found and will be dropped, as per given --discard-foreign-keys flag")
+			this.migrationContext.Log.Debugf("Foreign keys are found and will be removed using the --discard-foreign-keys flag or copied using the --allow-child-foreign-keys flag")
 			return nil
 		}
 		return this.migrationContext.Log.Errorf("Found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
