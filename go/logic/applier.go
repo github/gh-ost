@@ -749,6 +749,11 @@ func (this *Applier) InitiateHeartbeat() {
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return
 		}
+
+		if atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
+			return
+		}
+
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
 		// have this block the loop rather than spam the master in the event something
 		// goes wrong
