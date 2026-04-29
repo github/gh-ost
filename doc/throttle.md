@@ -76,6 +76,26 @@ In addition to the above, you are able to take control and throttle the operatio
     echo no-throttle | nc -U /tmp/gh-ost.test.sample_data_0.sock
   ```
 
+### Copy-specific lag throttle (--copy-max-lag-millis)
+
+When using parallel row-copy (`--copy-concurrency` > 1), gh-ost uses a bounded drain strategy that gives row-copy more execution turns. This can cause the binlog processing to fall behind, resulting in increasing "HeartbeatLag" — the time since the last heartbeat event was *processed* from the binlog stream.
+
+`--copy-max-lag-millis` (default: `60000`, i.e. 60 seconds) sets a threshold for how far behind binlog processing may fall during the row-copy phase. When HeartbeatLag exceeds this threshold, row-copy is paused and gh-ost drains the binlog event queue exclusively until lag drops to half the threshold (hysteresis to prevent oscillation).
+
+**How it differs from `--max-lag-millis`:**
+
+| | `--max-lag-millis` | `--copy-max-lag-millis` |
+|---|---|---|
+| **What it measures** | Replication lag on downstream replicas (via heartbeat table queries or `SHOW SLAVE STATUS`) | Binlog processing lag *within gh-ost itself* (wall-clock time since last heartbeat event was read from the binlog stream) |
+| **What it throttles** | The entire migration — all reads and writes pause | Only row-copy — DML event processing continues at full speed |
+| **When it matters** | Always — protects replicas from falling behind | Only with parallel row-copy (`--copy-concurrency` > 1) |
+| **Default** | 1500ms (strict — sub-second replica lag) | 60000ms (permissive — allows some internal lag buildup for speed) |
+| **Resume behavior** | Resumes immediately when lag drops below threshold | Resumes when lag drops to threshold/2 (hysteresis) |
+
+**Why both are needed:** `--max-lag-millis` protects *downstream replicas* from excessive replication lag. `--copy-max-lag-millis` protects against *gh-ost's own internal lag* — which only occurs with parallel row-copy because the bounded drain budget gives copy more turns at the expense of binlog processing. With single-copy mode (the default), `ProcessEventsUntilDrained()` blocks indefinitely so internal lag never accumulates.
+
+Set `--copy-max-lag-millis=0` to disable the throttle entirely (maximum copy speed, unbounded lag growth).
+
 ### Throttle precedence
 
 Any single factor in the above that suggests the migration should throttle - causes throttling. That is, once some component decides to throttle, you cannot override it; you cannot force continued execution of the migration.

@@ -16,6 +16,7 @@ toxiproxy=false
 gtid=false
 storage_engine=innodb
 exec_command_file=/tmp/gh-ost-test.bash
+generate_load_file=/tmp/gh-ost-generate-load.bash
 ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv

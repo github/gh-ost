@@ -1,8 +1,11 @@
 package logic
 
 import (
+	"bufio"
+	"bytes"
 	"os"
 	"path"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,5 +104,124 @@ func TestServerCreatePostponeCutOverFlagFile(t *testing.T) {
 		err = s.createPostponeCutOverFlagFile(filePath)
 		require.NoError(t, err)
 		require.FileExists(t, filePath)
+	})
+}
+
+func newTestServer() *Server {
+	ctx := base.NewMigrationContext()
+	return &Server{
+		migrationContext: ctx,
+		hooksExecutor:    NewHooksExecutor(ctx),
+	}
+}
+
+func applyCommand(t *testing.T, s *Server, command string) (PrintStatusRule, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := bufio.NewWriter(&buf)
+	rule, err := s.applyServerCommand(command, writer)
+	require.NoError(t, err)
+	writer.Flush()
+	return rule, buf.String()
+}
+
+func TestServerCopyConcurrencyCommand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("query default", func(t *testing.T) {
+		s := newTestServer()
+		// NewMigrationContext defaults to 0; CLI flag sets it to 1
+		_, output := applyCommand(t, s, "copy-concurrency=?")
+		require.Equal(t, "0\n", output)
+	})
+
+	t.Run("set valid value", func(t *testing.T) {
+		s := newTestServer()
+		rule, _ := applyCommand(t, s, "copy-concurrency=8")
+		require.EqualValues(t, ForcePrintStatusAndHintRule, rule)
+		require.Equal(t, int64(8), atomic.LoadInt64(&s.migrationContext.CopyConcurrency))
+	})
+
+	t.Run("set to 1 (single-threaded)", func(t *testing.T) {
+		s := newTestServer()
+		atomic.StoreInt64(&s.migrationContext.CopyConcurrency, 4)
+		rule, _ := applyCommand(t, s, "copy-concurrency=1")
+		require.EqualValues(t, ForcePrintStatusAndHintRule, rule)
+		require.Equal(t, int64(1), atomic.LoadInt64(&s.migrationContext.CopyConcurrency))
+	})
+
+	t.Run("set max value", func(t *testing.T) {
+		s := newTestServer()
+		rule, _ := applyCommand(t, s, "copy-concurrency=32")
+		require.EqualValues(t, ForcePrintStatusAndHintRule, rule)
+		require.Equal(t, int64(32), atomic.LoadInt64(&s.migrationContext.CopyConcurrency))
+	})
+
+	t.Run("reject zero", func(t *testing.T) {
+		s := newTestServer()
+		var buf bytes.Buffer
+		writer := bufio.NewWriter(&buf)
+		_, err := s.applyServerCommand("copy-concurrency=0", writer)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "between 1 and 32")
+	})
+
+	t.Run("reject too high", func(t *testing.T) {
+		s := newTestServer()
+		var buf bytes.Buffer
+		writer := bufio.NewWriter(&buf)
+		_, err := s.applyServerCommand("copy-concurrency=33", writer)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "between 1 and 32")
+	})
+
+	t.Run("reject non-numeric", func(t *testing.T) {
+		s := newTestServer()
+		var buf bytes.Buffer
+		writer := bufio.NewWriter(&buf)
+		_, err := s.applyServerCommand("copy-concurrency=abc", writer)
+		require.Error(t, err)
+	})
+}
+
+func TestServerCopyMaxLagMillisCommand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("query default", func(t *testing.T) {
+		s := newTestServer()
+		_, output := applyCommand(t, s, "copy-max-lag-millis=?")
+		require.Equal(t, "0\n", output) // NewMigrationContext defaults to 0
+	})
+
+	t.Run("set valid value", func(t *testing.T) {
+		s := newTestServer()
+		rule, _ := applyCommand(t, s, "copy-max-lag-millis=60000")
+		require.EqualValues(t, ForcePrintStatusAndHintRule, rule)
+		require.Equal(t, int64(60000), atomic.LoadInt64(&s.migrationContext.CopyMaxLagMillis))
+	})
+
+	t.Run("set to zero (disabled)", func(t *testing.T) {
+		s := newTestServer()
+		atomic.StoreInt64(&s.migrationContext.CopyMaxLagMillis, 60000)
+		rule, _ := applyCommand(t, s, "copy-max-lag-millis=0")
+		require.EqualValues(t, ForcePrintStatusAndHintRule, rule)
+		require.Equal(t, int64(0), atomic.LoadInt64(&s.migrationContext.CopyMaxLagMillis))
+	})
+
+	t.Run("reject negative", func(t *testing.T) {
+		s := newTestServer()
+		var buf bytes.Buffer
+		writer := bufio.NewWriter(&buf)
+		_, err := s.applyServerCommand("copy-max-lag-millis=-1", writer)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), ">= 0")
+	})
+
+	t.Run("reject non-numeric", func(t *testing.T) {
+		s := newTestServer()
+		var buf bytes.Buffer
+		writer := bufio.NewWriter(&buf)
+		_, err := s.applyServerCommand("copy-max-lag-millis=abc", writer)
+		require.Error(t, err)
 	})
 }

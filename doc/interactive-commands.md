@@ -24,6 +24,8 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `chunk-size=<newsize>`: modify the `chunk-size`; applies on next running copy-iteration
 - `dml-batch-size=<newsize>`: modify the `dml-batch-size`; applies on next applying of binary log events
 - `max-lag-millis=<max-lag>`: modify the maximum replication lag threshold (milliseconds, minimum value is `100`, i.e. `0.1` second)
+- `copy-concurrency=<N>`: modify the number of parallel row-copy workers (range 1-32). Setting to `1` switches to single-threaded legacy behavior. Takes effect on the next copy iteration.
+- `copy-max-lag-millis=<millis>`: modify the heartbeat lag threshold for copy throttling (milliseconds). Set `0` to disable. Takes effect immediately on the next drain check.
 - `max-load=<max-load-thresholds>`: modify the `max-load` config; applies on next running copy-iteration
   - The `max-load` format must be: `some_status=<numeric-threshold>[,some_status=<numeric-threshold>...]`'
   - For example: `Threads_running=50,threads_connected=1000`, and you would then write/echo `max-load=Threads_running=50,threads_connected=1000` to the socket.

@@ -185,6 +185,32 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 		require.Equal(t, 123456, res[0].args[2])
 		require.Equal(t, 42, res[0].args[3])
 	})
+
+	t.Run("uk-modifying update restores DML type", func(t *testing.T) {
+		// When a UK column changes value, buildDMLEventQuery expands the UPDATE
+		// into DELETE + INSERT. It must restore dmlEvent.DML to UpdateDML afterward.
+		oldValues := sql.ToColumnValues([]interface{}{100, 42})
+		newValues := sql.ToColumnValues([]interface{}{200, 42}) // id (UK col) changed
+		binlogEvent := &binlog.BinlogDMLEvent{
+			DatabaseName:      "test",
+			DML:               binlog.UpdateDML,
+			WhereColumnValues: oldValues,
+			NewColumnValues:   newValues,
+		}
+
+		res := applier.buildDMLEventQuery(binlogEvent)
+		require.Len(t, res, 2, "UK-modifying UPDATE should expand to DELETE + INSERT")
+		require.NoError(t, res[0].err)
+		require.NoError(t, res[1].err)
+
+		// Verify the queries are DELETE then INSERT
+		require.Contains(t, res[0].query, "delete")
+		require.Contains(t, res[1].query, "insert")
+
+		// The critical assertion: DML type must be restored to UpdateDML
+		require.Equal(t, binlog.UpdateDML, binlogEvent.DML,
+			"buildDMLEventQuery must restore dmlEvent.DML to UpdateDML after UK-modifying expansion")
+	})
 }
 
 func TestApplierInstantDDL(t *testing.T) {
@@ -198,6 +224,359 @@ func TestApplierInstantDDL(t *testing.T) {
 	t.Run("instantDDLstmt", func(t *testing.T) {
 		stmt := applier.generateInstantDDLQuery()
 		require.Equal(t, "ALTER /* gh-ost */ TABLE `test`.`mytable` ADD INDEX (foo), ALGORITHM=INSTANT", stmt)
+	})
+}
+
+func TestApplierMergeDMLEvents(t *testing.T) {
+	columns := sql.NewColumnList([]string{"id", "name"})
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.OriginalTableColumns = columns
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "PRIMARY",
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+
+	mkInsert := func(id int, name string) *binlog.BinlogDMLEvent {
+		return &binlog.BinlogDMLEvent{
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{id, name}),
+		}
+	}
+	mkUpdate := func(id int, oldName, newName string) *binlog.BinlogDMLEvent {
+		return &binlog.BinlogDMLEvent{
+			DML:               binlog.UpdateDML,
+			WhereColumnValues: sql.ToColumnValues([]interface{}{id, oldName}),
+			NewColumnValues:   sql.ToColumnValues([]interface{}{id, newName}),
+		}
+	}
+	mkDelete := func(id int, name string) *binlog.BinlogDMLEvent {
+		return &binlog.BinlogDMLEvent{
+			DML:               binlog.DeleteDML,
+			WhereColumnValues: sql.ToColumnValues([]interface{}{id, name}),
+		}
+	}
+
+	t.Run("empty", func(t *testing.T) {
+		result := applier.mergeDMLEvents(nil)
+		require.Nil(t, result)
+	})
+
+	t.Run("single event unchanged", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{mkInsert(1, "alice")}
+		result := applier.mergeDMLEvents(events)
+		require.Len(t, result, 1)
+		require.Equal(t, binlog.InsertDML, result[0].DML)
+	})
+
+	t.Run("different PKs unchanged", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			mkInsert(1, "alice"),
+			mkInsert(2, "bob"),
+			mkUpdate(3, "old", "new"),
+		}
+		result := applier.mergeDMLEvents(events)
+		require.Len(t, result, 3)
+	})
+
+	t.Run("insert then delete cancels", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			mkInsert(1, "alice"),
+			mkInsert(2, "bob"),
+			mkDelete(1, "alice"),
+		}
+		result := applier.mergeDMLEvents(events)
+		require.Len(t, result, 1)
+		require.Equal(t, binlog.InsertDML, result[0].DML)
+		require.Equal(t, 2, result[0].NewColumnValues.AbstractValues()[0])
+	})
+
+	t.Run("insert then update merges", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			mkInsert(1, "alice"),
+			mkUpdate(1, "alice", "alice_updated"),
+		}
+		result := applier.mergeDMLEvents(events)
+		require.Len(t, result, 1)
+		require.Equal(t, binlog.InsertDML, result[0].DML)
+		require.Equal(t, "alice_updated", result[0].NewColumnValues.AbstractValues()[1])
+	})
+
+	t.Run("update then update merges", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			mkUpdate(1, "v1", "v2"),
+			mkUpdate(1, "v2", "v3"),
+		}
+		result := applier.mergeDMLEvents(events)
+		require.Len(t, result, 1)
+		require.Equal(t, binlog.UpdateDML, result[0].DML)
+		// WHERE should be from first update, SET from last
+		require.Equal(t, "v1", result[0].WhereColumnValues.AbstractValues()[1])
+		require.Equal(t, "v3", result[0].NewColumnValues.AbstractValues()[1])
+	})
+
+	t.Run("update then delete becomes delete", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			mkUpdate(1, "v1", "v2"),
+			mkDelete(1, "v2"),
+		}
+		result := applier.mergeDMLEvents(events)
+		require.Len(t, result, 1)
+		require.Equal(t, binlog.DeleteDML, result[0].DML)
+	})
+
+	t.Run("delete then insert kept separate", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			mkDelete(1, "alice"),
+			mkInsert(1, "alice_new"),
+		}
+		result := applier.mergeDMLEvents(events)
+		require.Len(t, result, 2)
+		require.Equal(t, binlog.DeleteDML, result[0].DML)
+		require.Equal(t, binlog.InsertDML, result[1].DML)
+	})
+
+	t.Run("multiple updates same PK", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			mkUpdate(1, "v1", "v2"),
+			mkUpdate(1, "v2", "v3"),
+			mkUpdate(1, "v3", "v4"),
+			mkUpdate(1, "v4", "v5"),
+		}
+		result := applier.mergeDMLEvents(events)
+		require.Len(t, result, 1)
+		require.Equal(t, "v5", result[0].NewColumnValues.AbstractValues()[1])
+		require.Equal(t, "v1", result[0].WhereColumnValues.AbstractValues()[1])
+	})
+
+	t.Run("mixed PKs partial merge", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			mkInsert(1, "alice"),
+			mkUpdate(2, "bob_old", "bob_new"),
+			mkUpdate(1, "alice", "alice_v2"),
+			mkDelete(3, "charlie"),
+			mkUpdate(2, "bob_new", "bob_final"),
+		}
+		result := applier.mergeDMLEvents(events)
+		require.Len(t, result, 3) // PK1: INSERT(alice_v2), PK2: UPDATE(bob_final), PK3: DELETE
+		require.Equal(t, binlog.InsertDML, result[0].DML)
+		require.Equal(t, "alice_v2", result[0].NewColumnValues.AbstractValues()[1])
+		require.Equal(t, binlog.UpdateDML, result[1].DML)
+		require.Equal(t, "bob_final", result[1].NewColumnValues.AbstractValues()[1])
+		require.Equal(t, binlog.DeleteDML, result[2].DML)
+	})
+
+	t.Run("uk-modifying update excluded from merge", func(t *testing.T) {
+		// UK-modifying UPDATEs change the PK itself, so they can't safely
+		// merge with prior events on the old PK. They should be kept separate.
+		mkUKUpdate := func(oldID, newID int, name string) *binlog.BinlogDMLEvent {
+			return &binlog.BinlogDMLEvent{
+				DML:               binlog.UpdateDML,
+				WhereColumnValues: sql.ToColumnValues([]interface{}{oldID, name}),
+				NewColumnValues:   sql.ToColumnValues([]interface{}{newID, name}),
+			}
+		}
+
+		events := []*binlog.BinlogDMLEvent{
+			mkInsert(1, "alice"),
+			mkUKUpdate(1, 2, "alice"), // PK changes: 1 → 2; excluded from merge
+		}
+		result := applier.mergeDMLEvents(events)
+		// Both events should be preserved (not merged)
+		require.Len(t, result, 2)
+		require.Equal(t, binlog.InsertDML, result[0].DML)
+		require.Equal(t, binlog.UpdateDML, result[1].DML)
+	})
+}
+
+func TestApplierFilterDMLEventsByFrontier(t *testing.T) {
+	columns := sql.NewColumnList([]string{"id", "name"})
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.OriginalTableColumns = columns
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "PRIMARY",
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+	migrationContext.CopyConcurrency = 1
+
+	applier := NewApplier(migrationContext)
+
+	mkUpdate := func(id int) *binlog.BinlogDMLEvent {
+		return &binlog.BinlogDMLEvent{
+			DML:               binlog.UpdateDML,
+			WhereColumnValues: sql.ToColumnValues([]interface{}{id, "old"}),
+			NewColumnValues:   sql.ToColumnValues([]interface{}{id, "new"}),
+		}
+	}
+	mkInsert := func(id int) *binlog.BinlogDMLEvent {
+		return &binlog.BinlogDMLEvent{
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{id, "val"}),
+		}
+	}
+	mkDelete := func(id int) *binlog.BinlogDMLEvent {
+		return &binlog.BinlogDMLEvent{
+			DML:               binlog.DeleteDML,
+			WhereColumnValues: sql.ToColumnValues([]interface{}{id, "val"}),
+		}
+	}
+
+	t.Run("no frontier skips nothing", func(t *testing.T) {
+		applier.LastIterationRangeMaxValues = nil
+		events := []*binlog.BinlogDMLEvent{mkUpdate(50), mkUpdate(100)}
+		result := applier.filterDMLEventsByFrontier(events)
+		require.Len(t, result, 2)
+	})
+
+	t.Run("events below frontier kept", func(t *testing.T) {
+		applier.LastIterationRangeMaxValues = sql.ToColumnValues([]interface{}{500, ""})
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{1000, ""})
+		events := []*binlog.BinlogDMLEvent{mkUpdate(100), mkUpdate(400), mkUpdate(500)}
+		result := applier.filterDMLEventsByFrontier(events)
+		require.Len(t, result, 3) // all PK <= 500
+	})
+
+	t.Run("events above frontier and within range skipped", func(t *testing.T) {
+		applier.LastIterationRangeMaxValues = sql.ToColumnValues([]interface{}{500, ""})
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{1000, ""})
+		events := []*binlog.BinlogDMLEvent{
+			mkUpdate(100), // PK=100 <= 500 → keep
+			mkUpdate(600), // PK=600: 500 < 600 <= 1000 → skip
+			mkUpdate(900), // PK=900: 500 < 900 <= 1000 → skip
+		}
+		result := applier.filterDMLEventsByFrontier(events)
+		require.Len(t, result, 1)
+		require.Equal(t, 100, result[0].WhereColumnValues.AbstractValues()[0])
+	})
+
+	t.Run("events above migration max kept", func(t *testing.T) {
+		applier.LastIterationRangeMaxValues = sql.ToColumnValues([]interface{}{500, ""})
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{1000, ""})
+		events := []*binlog.BinlogDMLEvent{
+			mkInsert(1500), // PK=1500 > 1000 → never bulk-copied → keep
+			mkUpdate(600),  // PK=600: skip
+		}
+		result := applier.filterDMLEventsByFrontier(events)
+		require.Len(t, result, 1)
+		require.Equal(t, binlog.InsertDML, result[0].DML)
+	})
+
+	t.Run("delete events also filtered", func(t *testing.T) {
+		applier.LastIterationRangeMaxValues = sql.ToColumnValues([]interface{}{500, ""})
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{1000, ""})
+		events := []*binlog.BinlogDMLEvent{
+			mkDelete(100), // keep
+			mkDelete(700), // skip
+		}
+		result := applier.filterDMLEventsByFrontier(events)
+		require.Len(t, result, 1)
+	})
+
+	t.Run("mixed scenario", func(t *testing.T) {
+		applier.LastIterationRangeMaxValues = sql.ToColumnValues([]interface{}{500, ""})
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{1000, ""})
+		events := []*binlog.BinlogDMLEvent{
+			mkUpdate(50),   // keep (below frontier)
+			mkInsert(750),  // skip (above frontier, within range)
+			mkUpdate(500),  // keep (at frontier)
+			mkDelete(999),  // skip
+			mkInsert(1001), // keep (above migration max)
+			mkUpdate(1),    // keep
+		}
+		result := applier.filterDMLEventsByFrontier(events)
+		require.Len(t, result, 4)
+	})
+}
+
+func TestApplierFilterDMLEventsByFrontierCompoundPK(t *testing.T) {
+	// Table has columns (a, b, c) but UK is (a, c) — non-contiguous ordinals
+	tableColumns := sql.NewColumnList([]string{"a", "b", "c"})
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.OriginalTableColumns = tableColumns
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "PRIMARY",
+		Columns: *sql.NewColumnList([]string{"a", "c"}),
+	}
+	migrationContext.CopyConcurrency = 1
+
+	applier := NewApplier(migrationContext)
+
+	mkUpdate := func(a, b, c int) *binlog.BinlogDMLEvent {
+		return &binlog.BinlogDMLEvent{
+			DML:               binlog.UpdateDML,
+			WhereColumnValues: sql.ToColumnValues([]interface{}{a, b, c}),
+			NewColumnValues:   sql.ToColumnValues([]interface{}{a, b, c}),
+		}
+	}
+
+	t.Run("compound PK does not panic", func(t *testing.T) {
+		// frontier = (a=5, c=50), migration max = (a=10, c=100)
+		// These are stored in UK column order: [5, 50] and [10, 100]
+		applier.LastIterationRangeMaxValues = sql.ToColumnValues([]interface{}{5, 50})
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{10, 100})
+		events := []*binlog.BinlogDMLEvent{
+			mkUpdate(3, 99, 30), // a=3 < 5 → keep
+			mkUpdate(7, 99, 60), // a=7 > 5 → between frontier and max → skip
+		}
+		// Must not panic (previously panicked with index out of range)
+		result := applier.filterDMLEventsByFrontier(events)
+		require.Len(t, result, 1)
+		require.Equal(t, 3, result[0].WhereColumnValues.AbstractValues()[0])
+	})
+
+	t.Run("compound PK at frontier kept", func(t *testing.T) {
+		applier.LastIterationRangeMaxValues = sql.ToColumnValues([]interface{}{5, 50})
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{10, 100})
+		events := []*binlog.BinlogDMLEvent{
+			mkUpdate(5, 99, 50), // exactly at frontier → keep
+		}
+		result := applier.filterDMLEventsByFrontier(events)
+		require.Len(t, result, 1)
+	})
+
+	t.Run("compound PK above max kept", func(t *testing.T) {
+		applier.LastIterationRangeMaxValues = sql.ToColumnValues([]interface{}{5, 50})
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{10, 100})
+		events := []*binlog.BinlogDMLEvent{
+			mkUpdate(15, 99, 200), // a=15 > 10 → above max → keep
+		}
+		result := applier.filterDMLEventsByFrontier(events)
+		require.Len(t, result, 1)
+	})
+}
+
+func TestComparePKValues(t *testing.T) {
+	t.Run("single int", func(t *testing.T) {
+		cmp, ok := comparePKValues([]interface{}{100}, []interface{}{200})
+		require.True(t, ok)
+		require.Equal(t, -1, cmp)
+
+		cmp, ok = comparePKValues([]interface{}{200}, []interface{}{100})
+		require.True(t, ok)
+		require.Equal(t, 1, cmp)
+
+		cmp, ok = comparePKValues([]interface{}{100}, []interface{}{100})
+		require.True(t, ok)
+		require.Equal(t, 0, cmp)
+	})
+
+	t.Run("composite int", func(t *testing.T) {
+		cmp, ok := comparePKValues([]interface{}{1, 5}, []interface{}{1, 10})
+		require.True(t, ok)
+		require.Equal(t, -1, cmp)
+
+		cmp, ok = comparePKValues([]interface{}{2, 1}, []interface{}{1, 100})
+		require.True(t, ok)
+		require.Equal(t, 1, cmp)
+	})
+
+	t.Run("non-numeric returns not ok", func(t *testing.T) {
+		_, ok := comparePKValues([]interface{}{"abc"}, []interface{}{"def"})
+		require.False(t, ok)
 	})
 }
 
@@ -333,7 +712,7 @@ func (suite *ApplierTestSuite) TestInitDBConnections() {
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	mysqlVersion, _ := strings.CutPrefix(testMysqlContainerImage, "mysql:")
@@ -374,7 +753,7 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	dmlEvents := []*binlog.BinlogDMLEvent{
@@ -431,7 +810,7 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	err = applier.ValidateOrDropExistingTables()
@@ -463,7 +842,7 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExi
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	err = applier.ValidateOrDropExistingTables()
@@ -494,7 +873,7 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExi
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	err = applier.ValidateOrDropExistingTables()
@@ -531,7 +910,7 @@ func (suite *ApplierTestSuite) TestCreateGhostTable() {
 	applier := NewApplier(migrationContext)
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	err = applier.CreateGhostTable()
@@ -583,7 +962,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySuc
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(8)
 	suite.Require().NoError(err)
 
 	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, item_id) VALUES (123456, 42);", getTestTableName()))
@@ -673,7 +1052,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQueryFai
 	}
 	applier := NewApplier(migrationContext)
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(1)
 	suite.Require().NoError(err)
 
 	err = applier.CreateChangelogTable()
@@ -740,7 +1119,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 
 	applier := NewApplier(migrationContext)
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(1)
 	suite.Require().NoError(err)
 
 	err = applier.CreateChangelogTable()
@@ -822,7 +1201,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateKeyOnNonMigration
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(1)
 	suite.Require().NoError(err)
 
 	// Insert initial rows into ghost table (simulating bulk copy phase)
@@ -911,7 +1290,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateCompositeUniqueKe
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(1)
 	suite.Require().NoError(err)
 
 	// Insert initial rows into ghost table (simulating bulk copy phase)
@@ -1013,7 +1392,7 @@ func (suite *ApplierTestSuite) TestUpdateModifyingUniqueKeyWithDuplicateOnOtherI
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(1)
 	suite.Require().NoError(err)
 
 	// Setup: Insert initial rows into ghost table
@@ -1108,7 +1487,7 @@ func (suite *ApplierTestSuite) TestNormalUpdateWithPanicOnWarnings() {
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(1)
 	suite.Require().NoError(err)
 
 	// Setup: Insert initial rows into ghost table
@@ -1188,7 +1567,7 @@ func (suite *ApplierTestSuite) TestDuplicateOnMigrationKeyAllowedInBinlogReplay(
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(1)
 	suite.Require().NoError(err)
 
 	// Insert initial rows into ghost table (simulating bulk copy phase)
@@ -1279,7 +1658,7 @@ func (suite *ApplierTestSuite) TestRegexMetacharactersInIndexName() {
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(1)
 	suite.Require().NoError(err)
 
 	// Insert initial rows
@@ -1381,7 +1760,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsDisabled() {
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(1)
 	suite.Require().NoError(err)
 
 	// Insert initial rows into ghost table
@@ -1470,7 +1849,7 @@ func (suite *ApplierTestSuite) TestMultipleDMLEventsInBatch() {
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
 
-	err = applier.InitDBConnections()
+	err = applier.InitDBConnections(1)
 	suite.Require().NoError(err)
 
 	// Insert initial rows into ghost table
