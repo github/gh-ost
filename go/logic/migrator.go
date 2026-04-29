@@ -104,21 +104,15 @@ type Migrator struct {
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 	migrator := &Migrator{
-		appVersion:                 appVersion,
-		hooksExecutor:              NewHooksExecutor(context),
-		migrationContext:           context,
-		parser:                     sql.NewAlterTableParser(),
-		ghostTableMigrated:         make(chan bool),
-		firstThrottlingCollected:   make(chan bool, 3),
-		rowCopyComplete:            make(chan error),
-		// Buffered to MaxRetries() to prevent a deadlock when waitForEventsUpToLock times
-		// out. The sentinel applyEventFunc may still be queued in applyEventsQueue when the
-		// timeout fires; when the worker eventually executes it, it sends on this channel
-		// with no active receiver. An unbuffered channel would block the worker permanently:
-		// the queue fills, the listener goroutine stalls, heartbeat lag grows unboundedly,
-		// and no further cutover attempts are made. With a buffer sized to the retry limit
-		// the send always completes immediately. Stale sentinels accumulate in the buffer
-		// and are discarded by the stale-skip loop in waitForEventsUpToLock.
+		appVersion:               appVersion,
+		hooksExecutor:            NewHooksExecutor(context),
+		migrationContext:         context,
+		parser:                   sql.NewAlterTableParser(),
+		ghostTableMigrated:       make(chan bool),
+		firstThrottlingCollected: make(chan bool, 3),
+		rowCopyComplete:          make(chan error),
+		// Buffered to MaxRetries() to prevent a deadlock when waitForEventsUpToLock times out.
+		// (see https://github.com/github/gh-ost/pull/1637)
 		allEventsUpToLockProcessed: make(chan *lockProcessedStruct, context.MaxRetries()),
 
 		copyRowsQueue:     make(chan tableWriteFunc),
