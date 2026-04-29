@@ -750,7 +750,7 @@ func (this *Applier) InitiateHeartbeat() {
 			return
 		}
 
-		if atomic.LoadInt64(&this.migrationContext.CutOverCompleteFlag) > 0 {
+		if atomic.LoadInt64(&this.migrationContext.CleanupImminentFlag) > 0 {
 			return
 		}
 
