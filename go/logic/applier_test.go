@@ -216,7 +216,7 @@ func TestRetryOnLockWaitTimeout(t *testing.T) {
 		err := retryOnLockWaitTimeout(func() error {
 			calls++
 			return nil
-		}, logger)
+		}, int64(5), logger)
 		require.NoError(t, err)
 		require.Equal(t, 1, calls)
 	})
@@ -229,7 +229,7 @@ func TestRetryOnLockWaitTimeout(t *testing.T) {
 				return lockWaitTimeoutErr
 			}
 			return nil
-		}, logger)
+		}, int64(5), logger)
 		require.NoError(t, err)
 		require.Equal(t, 3, calls)
 	})
@@ -239,7 +239,7 @@ func TestRetryOnLockWaitTimeout(t *testing.T) {
 		err := retryOnLockWaitTimeout(func() error {
 			calls++
 			return nonRetryableErr
-		}, logger)
+		}, int64(5), logger)
 		require.ErrorIs(t, err, nonRetryableErr)
 		require.Equal(t, 1, calls)
 	})
@@ -250,7 +250,7 @@ func TestRetryOnLockWaitTimeout(t *testing.T) {
 		err := retryOnLockWaitTimeout(func() error {
 			calls++
 			return genericErr
-		}, logger)
+		}, int64(5), logger)
 		require.ErrorIs(t, err, genericErr)
 		require.Equal(t, 1, calls)
 	})
@@ -260,7 +260,7 @@ func TestRetryOnLockWaitTimeout(t *testing.T) {
 		err := retryOnLockWaitTimeout(func() error {
 			calls++
 			return lockWaitTimeoutErr
-		}, logger)
+		}, int64(5), logger)
 		require.ErrorIs(t, err, lockWaitTimeoutErr)
 		require.Equal(t, 5, calls)
 	})
