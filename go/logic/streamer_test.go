@@ -260,5 +260,8 @@ func (suite *EventsStreamerTestSuite) TestStreamEventsAutomaticallyReconnects() 
 }
 
 func TestEventsStreamer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping events streamer test suite in short mode")
+	}
 	suite.Run(t, new(EventsStreamerTestSuite))
 }

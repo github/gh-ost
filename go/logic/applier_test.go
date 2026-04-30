@@ -1546,5 +1546,8 @@ func (suite *ApplierTestSuite) TestMultipleDMLEventsInBatch() {
 }
 
 func TestApplier(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping applier test suite in short mode")
+	}
 	suite.Run(t, new(ApplierTestSuite))
 }
