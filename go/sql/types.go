@@ -58,7 +58,7 @@ type Column struct {
 	MySQLType         string
 }
 
-func (this *Column) ConvertArg(arg interface{}) interface{} {
+func (this *Column) convertArg(arg interface{}) interface{} {
 	var arg2Bytes []byte
 	if s, ok := arg.(string); ok {
 		arg2Bytes = []byte(s)
@@ -96,6 +96,7 @@ func (this *Column) ConvertArg(arg interface{}) interface{} {
 			}
 		}
 
+		// We convert BIT col to uint64 to force correct value comparison.
 		if this.Type == BitColumnType {
 			var n uint64
 			for _, b := range arg2Bytes {
@@ -349,6 +350,12 @@ func ToColumnValues(abstractValues []interface{}) *ColumnValues {
 
 func (this *ColumnValues) AbstractValues() []interface{} {
 	return this.abstractValues
+}
+
+func (this *ColumnValues) NormalizeValues(columns ColumnList) {
+	for i, col := range columns.Columns() {
+		this.abstractValues[i] = col.convertArg(this.abstractValues[i])
+	}
 }
 
 func (this *ColumnValues) StringColumn(index int) string {

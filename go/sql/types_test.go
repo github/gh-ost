@@ -62,7 +62,7 @@ func TestConvertArgCharsetDecoding(t *testing.T) {
 	}
 
 	// Should decode []uint8
-	str := col.ConvertArg(latin1Bytes)
+	str := col.convertArg(latin1Bytes)
 	require.Equal(t, "Garçon !", str)
 }
 
@@ -85,7 +85,7 @@ func TestConvertArgBinaryColumnPadding(t *testing.T) {
 		BinaryOctetLength: 20,
 	}
 
-	result := col.ConvertArg(truncatedValue)
+	result := col.convertArg(truncatedValue)
 	resultBytes := result.([]byte)
 
 	require.Equal(t, 20, len(resultBytes), "binary column should be padded to declared length")
@@ -111,7 +111,7 @@ func TestConvertArgVarbinaryStringWithInvalidUTF8Bytes(t *testing.T) {
 		MySQLType: "varbinary(16)", // set by inspect.go from information_schema COLUMN_TYPE
 	}
 
-	result := col.ConvertArg(string(rawBytes))
+	result := col.convertArg(string(rawBytes))
 
 	require.IsType(t, []byte{}, result,
 		"varbinary value from binlog (Go string) must be returned as []byte, not string, "+
@@ -130,7 +130,7 @@ func TestConvertArgVarbinaryBytesWithInvalidUTF8Bytes(t *testing.T) {
 		MySQLType: "varbinary(16)", // set by inspect.go from information_schema COLUMN_TYPE
 	}
 
-	result := col.ConvertArg(rawBytes)
+	result := col.convertArg(rawBytes)
 
 	require.IsType(t, []byte{}, result)
 	require.Equal(t, rawBytes, result.([]byte))
@@ -150,9 +150,19 @@ func TestConvertArgBinaryColumnNoPaddingWhenFull(t *testing.T) {
 		BinaryOctetLength: 20,
 	}
 
-	result := col.ConvertArg(fullValue)
+	result := col.convertArg(fullValue)
 	resultBytes := result.([]byte)
 
 	require.Equal(t, 20, len(resultBytes))
 	require.Equal(t, fullValue, resultBytes)
+}
+
+func TestConvertArgBitColumn(t *testing.T) {
+	b := []uint8{0x00, 0x00, 0xa3}
+	col := Column{
+		Name: "bit_col",
+		Type: BitColumnType,
+	}
+	result := col.convertArg(b)
+	require.Equal(t, uint64(163), result)
 }

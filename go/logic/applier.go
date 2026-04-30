@@ -805,13 +805,10 @@ func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if this.migrationContext.MigrationRangeMinValues != nil {
-		abstractVals := this.migrationContext.MigrationRangeMinValues.AbstractValues()
-		for i, col := range uniqueKey.Columns.Columns() {
-			abstractVals[i] = col.ConvertArg(abstractVals[i])
-		}
-	}
 	this.migrationContext.Log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
+	if this.migrationContext.MigrationRangeMinValues != nil {
+		this.migrationContext.MigrationRangeMinValues.NormalizeValues(uniqueKey.Columns)
+	}
 
 	return nil
 }
@@ -839,14 +836,11 @@ func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
 	if this.migrationContext.MigrationRangeMaxValues != nil {
-		abstractVals := this.migrationContext.MigrationRangeMaxValues.AbstractValues()
-		for i, col := range uniqueKey.Columns.Columns() {
-			abstractVals[i] = col.ConvertArg(abstractVals[i])
-		}
+		this.migrationContext.MigrationRangeMaxValues.NormalizeValues(uniqueKey.Columns)
 	}
 
-	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
 	return nil
 }
 
@@ -929,11 +923,8 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			return hasFurtherRange, err
 		}
 		if hasFurtherRange {
-			rangeMaxAbstractVals := iterationRangeMaxValues.AbstractValues()
-			for i, col := range this.migrationContext.UniqueKey.Columns.Columns() {
-				rangeMaxAbstractVals[i] = col.ConvertArg(rangeMaxAbstractVals[i])
-			}
 			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
+			this.migrationContext.MigrationIterationRangeMaxValues.NormalizeValues(this.migrationContext.UniqueKey.Columns)
 			return hasFurtherRange, nil
 		}
 	}
