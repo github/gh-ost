@@ -111,9 +111,10 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		ghostTableMigrated:       make(chan bool),
 		firstThrottlingCollected: make(chan bool, 3),
 		rowCopyComplete:          make(chan error),
-		// Buffered to MaxRetries() to prevent a deadlock when waitForEventsUpToLock times out.
-		// (see https://github.com/github/gh-ost/pull/1637)
-		allEventsUpToLockProcessed: make(chan *lockProcessedStruct, context.MaxRetries()),
+		// Buffered with capacity 1; the send uses overwrite-oldest semantics
+		// to prevent both deadlock (see https://github.com/github/gh-ost/pull/1637)
+		// and OOM when MaxRetries() is extremely large.
+		allEventsUpToLockProcessed: make(chan *lockProcessedStruct, 1),
 
 		copyRowsQueue:     make(chan tableWriteFunc),
 		applyEventsQueue:  make(chan *applyEventStruct, base.MaxEventsBatchSize),
@@ -276,11 +277,32 @@ func (this *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 		// Use helper to prevent deadlock if migration aborts before receiver is ready
 		_ = base.SendWithContext(this.migrationContext.GetContext(), this.ghostTableMigrated, true)
 	case AllEventsUpToLockProcessed:
+		lps := &lockProcessedStruct{
+			state:  changelogStateString,
+			coords: dmlEntry.Coordinates.Clone(),
+		}
 		var applyEventFunc tableWriteFunc = func() error {
-			return base.SendWithContext(this.migrationContext.GetContext(), this.allEventsUpToLockProcessed, &lockProcessedStruct{
-				state:  changelogStateString,
-				coords: dmlEntry.Coordinates.Clone(),
-			})
+			// Non-blocking send with overwrite-oldest semantics: if the buffer is
+			// full (receiver timed out on a previous attempt), drain the stale
+			// message first so the current sentinel is always delivered. This
+			// prevents both goroutine leaks (the original PR #1637 issue) and OOM
+			// when MaxRetries() is very large.
+			select {
+			case this.allEventsUpToLockProcessed <- lps:
+			default:
+				// Buffer full — drain the stale value, then send the current one.
+				select {
+				case <-this.allEventsUpToLockProcessed:
+				default:
+				}
+				select {
+				case this.allEventsUpToLockProcessed <- lps:
+				default:
+					// Concurrent drain by another goroutine or receiver; the current
+					// value is no longer needed since a newer sentinel will follow.
+				}
+			}
+			return nil
 		}
 		// at this point we know all events up to lock have been read from the streamer,
 		// because the streamer works sequentially. So those events are either already handled,
