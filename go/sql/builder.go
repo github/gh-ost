@@ -58,6 +58,8 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 			token = fmt.Sprintf("ELT(?, %s)", column.EnumValues)
 		} else if column.Type == JSONColumnType {
 			token = "convert(? using utf8mb4)"
+		} else if column.Type == BitColumnType {
+			token = "cast(? as unsigned)"
 		} else {
 			token = "?"
 		}
@@ -169,11 +171,11 @@ func (b *CheckpointInsertQueryBuilder) BuildQuery(uniqueKeyArgs []interface{}) (
 	}
 	convertedArgs := make([]interface{}, 0, 2*b.uniqueKeyColumns.Len())
 	for i, column := range b.uniqueKeyColumns.Columns() {
-		minArg := column.convertArg(uniqueKeyArgs[i])
+		minArg := column.ConvertArg(uniqueKeyArgs[i])
 		convertedArgs = append(convertedArgs, minArg)
 	}
 	for i, column := range b.uniqueKeyColumns.Columns() {
-		minArg := column.convertArg(uniqueKeyArgs[i+b.uniqueKeyColumns.Len()])
+		minArg := column.ConvertArg(uniqueKeyArgs[i+b.uniqueKeyColumns.Len()])
 		convertedArgs = append(convertedArgs, minArg)
 	}
 	return b.preparedStatement, convertedArgs, nil
@@ -340,6 +342,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 	if includeRangeStartValues {
 		startRangeComparisonSign = GreaterThanOrEqualsComparisonSign
 	}
+
 	rangeStartComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeStartArgs, startRangeComparisonSign)
 	if err != nil {
 		return "", explodedArgs, err
@@ -533,7 +536,7 @@ func (b *DMLDeleteQueryBuilder) BuildQuery(args []interface{}) (string, []interf
 	uniqueKeyArgs := make([]interface{}, 0, b.uniqueKeyColumns.Len())
 	for _, column := range b.uniqueKeyColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal])
+		arg := column.ConvertArg(args[tableOrdinal])
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 	return b.preparedStatement, uniqueKeyArgs, nil
@@ -595,7 +598,7 @@ func (b *DMLInsertQueryBuilder) BuildQuery(args []interface{}) (string, []interf
 	sharedArgs := make([]interface{}, 0, b.sharedColumns.Len())
 	for _, column := range b.sharedColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal])
+		arg := column.ConvertArg(args[tableOrdinal])
 		sharedArgs = append(sharedArgs, arg)
 	}
 	return b.preparedStatement, sharedArgs, nil
@@ -665,12 +668,12 @@ func (b *DMLUpdateQueryBuilder) BuildQuery(valueArgs, whereArgs []interface{}) (
 	args := make([]interface{}, 0, b.sharedColumns.Len()+b.uniqueKeyColumns.Len())
 	for _, column := range b.sharedColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(valueArgs[tableOrdinal])
+		arg := column.ConvertArg(valueArgs[tableOrdinal])
 		args = append(args, arg)
 	}
 	for _, column := range b.uniqueKeyColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(whereArgs[tableOrdinal])
+		arg := column.ConvertArg(whereArgs[tableOrdinal])
 		args = append(args, arg)
 	}
 

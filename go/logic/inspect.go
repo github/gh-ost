@@ -748,6 +748,9 @@ func (this *Inspector) applyColumnTypes(databaseName, tableName string, columnsL
 				column.Type = sql.BinaryColumnType
 				column.BinaryOctetLength = columnOctetLength
 			}
+			if strings.HasPrefix(columnType, "bit") {
+				column.Type = sql.BitColumnType
+			}
 			if strings.Contains(extra, " GENERATED") {
 				column.IsVirtual = true
 			}

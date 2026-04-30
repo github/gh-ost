@@ -802,6 +802,10 @@ func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 			return err
 		}
 	}
+	abstractVals := this.migrationContext.MigrationRangeMinValues.AbstractValues()
+	for i, col := range uniqueKey.Columns.Columns() {
+		abstractVals[i] = col.ConvertArg(abstractVals[i])
+	}
 	this.migrationContext.Log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
 
 	return rows.Err()
@@ -826,6 +830,10 @@ func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 		if err = rows.Scan(this.migrationContext.MigrationRangeMaxValues.ValuesPointers...); err != nil {
 			return err
 		}
+	}
+	abstractVals := this.migrationContext.MigrationRangeMaxValues.AbstractValues()
+	for i, col := range uniqueKey.Columns.Columns() {
+		abstractVals[i] = col.ConvertArg(abstractVals[i])
 	}
 	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
 
@@ -911,6 +919,10 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 			return hasFurtherRange, err
 		}
 		if hasFurtherRange {
+			rangeMaxAbstractVals := iterationRangeMaxValues.AbstractValues()
+			for i, col := range this.migrationContext.UniqueKey.Columns.Columns() {
+				rangeMaxAbstractVals[i] = col.ConvertArg(rangeMaxAbstractVals[i])
+			}
 			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
 			return hasFurtherRange, nil
 		}

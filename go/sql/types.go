@@ -24,6 +24,7 @@ const (
 	JSONColumnType
 	FloatColumnType
 	BinaryColumnType
+	BitColumnType
 )
 
 const maxMediumintUnsigned int32 = 16777215
@@ -57,7 +58,7 @@ type Column struct {
 	MySQLType         string
 }
 
-func (this *Column) convertArg(arg interface{}) interface{} {
+func (this *Column) ConvertArg(arg interface{}) interface{} {
 	var arg2Bytes []byte
 	if s, ok := arg.(string); ok {
 		arg2Bytes = []byte(s)
@@ -93,6 +94,14 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 				}
 				arg = buf.Bytes()
 			}
+		}
+
+		if this.Type == BitColumnType {
+			var n uint64
+			for _, b := range arg2Bytes {
+				n = (n << 8) | uint64(b)
+			}
+			arg = n
 		}
 
 		return arg
