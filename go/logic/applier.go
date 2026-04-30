@@ -801,9 +801,15 @@ func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 			return err
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	this.migrationContext.Log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
+	if this.migrationContext.MigrationRangeMinValues != nil {
+		this.migrationContext.MigrationRangeMinValues.NormalizeValues(uniqueKey.Columns)
+	}
 
-	return rows.Err()
+	return nil
 }
 
 // readMigrationMaxValues returns the maximum values to be iterated on rowcopy
@@ -826,9 +832,15 @@ func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 			return err
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+	if this.migrationContext.MigrationRangeMaxValues != nil {
+		this.migrationContext.MigrationRangeMaxValues.NormalizeValues(uniqueKey.Columns)
+	}
 
-	return rows.Err()
+	return nil
 }
 
 // ReadMigrationRangeValues reads min/max values that will be used for rowcopy.
@@ -911,6 +923,7 @@ func (this *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange boo
 		}
 		if hasFurtherRange {
 			this.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
+			this.migrationContext.MigrationIterationRangeMaxValues.NormalizeValues(this.migrationContext.UniqueKey.Columns)
 			return hasFurtherRange, nil
 		}
 	}

@@ -156,3 +156,13 @@ func TestConvertArgBinaryColumnNoPaddingWhenFull(t *testing.T) {
 	require.Equal(t, 20, len(resultBytes))
 	require.Equal(t, fullValue, resultBytes)
 }
+
+func TestConvertArgBitColumn(t *testing.T) {
+	b := []uint8{0x00, 0x00, 0xa3}
+	col := Column{
+		Name: "bit_col",
+		Type: BitColumnType,
+	}
+	result := col.convertArg(b)
+	require.Equal(t, uint64(163), result)
+}

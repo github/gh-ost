@@ -58,6 +58,8 @@ func buildColumnsPreparedValues(columns *ColumnList) []string {
 			token = fmt.Sprintf("ELT(?, %s)", column.EnumValues)
 		} else if column.Type == JSONColumnType {
 			token = "convert(? using utf8mb4)"
+		} else if column.Type == BitColumnType {
+			token = "cast(? as unsigned)"
 		} else {
 			token = "?"
 		}
@@ -340,6 +342,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 	if includeRangeStartValues {
 		startRangeComparisonSign = GreaterThanOrEqualsComparisonSign
 	}
+
 	rangeStartComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeStartArgs, startRangeComparisonSign)
 	if err != nil {
 		return "", explodedArgs, err

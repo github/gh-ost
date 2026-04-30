@@ -24,6 +24,7 @@ const (
 	JSONColumnType
 	FloatColumnType
 	BinaryColumnType
+	BitColumnType
 )
 
 const maxMediumintUnsigned int32 = 16777215
@@ -93,6 +94,15 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 				}
 				arg = buf.Bytes()
 			}
+		}
+
+		// We convert BIT col to uint64 to force correct value comparison.
+		if this.Type == BitColumnType {
+			var n uint64
+			for _, b := range arg2Bytes {
+				n = (n << 8) | uint64(b)
+			}
+			arg = n
 		}
 
 		return arg
@@ -340,6 +350,12 @@ func ToColumnValues(abstractValues []interface{}) *ColumnValues {
 
 func (this *ColumnValues) AbstractValues() []interface{} {
 	return this.abstractValues
+}
+
+func (this *ColumnValues) NormalizeValues(columns ColumnList) {
+	for i, col := range columns.Columns() {
+		this.abstractValues[i] = col.convertArg(this.abstractValues[i])
+	}
 }
 
 func (this *ColumnValues) StringColumn(index int) string {
