@@ -113,3 +113,17 @@ func TestGetDBTLSConfigKey(t *testing.T) {
 	configKey := GetDBTLSConfigKey("myhost")
 	require.Equal(t, "ghost-myhost", configKey)
 }
+
+func TestGetDBUriMariaDB(t *testing.T) {
+	c := NewConnectionConfig()
+	c.Key = InstanceKey{Hostname: "mariadb-host", Port: 3307}
+	c.User = "maria"
+	c.Password = "dba"
+	c.Timeout = 2.0
+	c.TransactionIsolation = transactionIsolation
+	c.Charset = "utf8mb4"
+	c.IsMariaDB = true
+
+	uri := c.GetDBUri("analytics")
+	require.Equal(t, `maria:dba@tcp(mariadb-host:3307)/analytics?autocommit=true&interpolateParams=true&charset=utf8mb4&tls=false&tx_isolation="REPEATABLE-READ"&timeout=2.000000s&readTimeout=2.000000s&writeTimeout=2.000000s`, uri)
+}
