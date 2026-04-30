@@ -308,16 +308,15 @@ func (this *Applier) AttemptInstantDDL() error {
 	return retryOnLockWaitTimeout(func() error {
 		_, err := this.db.Exec(query)
 		return err
-	}, this.migrationContext.Log)
+	}, this.migrationContext.MaxRetries(), this.migrationContext.Log)
 }
 
 // retryOnLockWaitTimeout retries the given operation on MySQL lock wait timeout
 // (errno 1205). Non-timeout errors return immediately. This is used for instant
 // DDL attempts where the operation may be blocked by a long-running transaction.
-func retryOnLockWaitTimeout(operation func() error, logger base.Logger) error {
-	const maxRetries = 5
+func retryOnLockWaitTimeout(operation func() error, maxRetries int64, logger base.Logger) error {
 	var err error
-	for i := 0; i < maxRetries; i++ {
+	for i := int64(0); i < maxRetries; i++ {
 		if i != 0 {
 			logger.Infof("Retrying after lock wait timeout (attempt %d/%d)", i+1, maxRetries)
 			RetrySleepFn(time.Duration(i) * 5 * time.Second)
