@@ -802,13 +802,18 @@ func (this *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 			return err
 		}
 	}
-	abstractVals := this.migrationContext.MigrationRangeMinValues.AbstractValues()
-	for i, col := range uniqueKey.Columns.Columns() {
-		abstractVals[i] = col.ConvertArg(abstractVals[i])
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if this.migrationContext.MigrationRangeMinValues != nil {
+		abstractVals := this.migrationContext.MigrationRangeMinValues.AbstractValues()
+		for i, col := range uniqueKey.Columns.Columns() {
+			abstractVals[i] = col.ConvertArg(abstractVals[i])
+		}
 	}
 	this.migrationContext.Log.Infof("Migration min values: [%s]", this.migrationContext.MigrationRangeMinValues)
 
-	return rows.Err()
+	return nil
 }
 
 // readMigrationMaxValues returns the maximum values to be iterated on rowcopy
@@ -831,13 +836,18 @@ func (this *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueK
 			return err
 		}
 	}
-	abstractVals := this.migrationContext.MigrationRangeMaxValues.AbstractValues()
-	for i, col := range uniqueKey.Columns.Columns() {
-		abstractVals[i] = col.ConvertArg(abstractVals[i])
+	if err := rows.Err(); err != nil {
+		return err
 	}
-	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+	if this.migrationContext.MigrationRangeMaxValues != nil {
+		abstractVals := this.migrationContext.MigrationRangeMaxValues.AbstractValues()
+		for i, col := range uniqueKey.Columns.Columns() {
+			abstractVals[i] = col.ConvertArg(abstractVals[i])
+		}
+	}
 
-	return rows.Err()
+	this.migrationContext.Log.Infof("Migration max values: [%s]", this.migrationContext.MigrationRangeMaxValues)
+	return nil
 }
 
 // ReadMigrationRangeValues reads min/max values that will be used for rowcopy.
