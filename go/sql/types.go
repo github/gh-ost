@@ -57,7 +57,7 @@ type Column struct {
 	MySQLType         string
 }
 
-func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interface{} {
+func (this *Column) convertArg(arg interface{}) interface{} {
 	var arg2Bytes []byte
 	if s, ok := arg.(string); ok {
 		arg2Bytes = []byte(s)
@@ -70,6 +70,13 @@ func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interfac
 	if arg2Bytes != nil {
 		if this.Charset != "" && this.charsetConversion == nil {
 			arg = arg2Bytes
+		} else if this.Charset == "" && (strings.Contains(this.MySQLType, "binary") || strings.HasSuffix(this.MySQLType, "blob")) {
+			// varbinary/binary/blob column: no charset means binary storage. Return []byte so
+			// the MySQL driver sends MYSQL_TYPE_BLOB (binary) rather than MYSQL_TYPE_VAR_STRING
+			// (text with the connection's charset/collation metadata, often utf8mb4), which would
+			// cause MySQL to validate the bytes and emit Warning 1300 for byte sequences that are
+			// invalid in that charset.
+			arg = arg2Bytes
 		} else {
 			if encoding, ok := charsetEncodingMap[this.Charset]; ok {
 				decodedBytes, _ := encoding.NewDecoder().Bytes(arg2Bytes)
@@ -77,14 +84,14 @@ func (this *Column) convertArg(arg interface{}, isUniqueKeyColumn bool) interfac
 			}
 		}
 
-		if this.Type == BinaryColumnType && isUniqueKeyColumn {
+		if this.Type == BinaryColumnType {
 			size := len(arg2Bytes)
 			if uint(size) < this.BinaryOctetLength {
 				buf := bytes.NewBuffer(arg2Bytes)
 				for i := uint(0); i < (this.BinaryOctetLength - uint(size)); i++ {
 					buf.Write([]byte{0})
 				}
-				arg = buf.String()
+				arg = buf.Bytes()
 			}
 		}
 

@@ -6,6 +6,7 @@
 package base
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -104,6 +105,8 @@ type MigrationContext struct {
 	AzureMySQL               bool
 	AttemptInstantDDL        bool
 	Resume                   bool
+	Revert                   bool
+	OldTableName             string
 
 	// SkipPortValidation allows skipping the port validation in `ValidateConnection`
 	// This is useful when connecting to a MySQL instance where the external port
@@ -223,6 +226,16 @@ type MigrationContext struct {
 	InCutOverCriticalSectionFlag           int64
 	PanicAbort                             chan error
 
+	// Context for cancellation signaling across all goroutines
+	// Stored in struct as it spans the entire migration lifecycle, not per-function.
+	// context.Context is safe for concurrent use by multiple goroutines.
+	ctx        context.Context //nolint:containedctx
+	cancelFunc context.CancelFunc
+
+	// Stores the fatal error that triggered abort
+	AbortError error
+	abortMutex *sync.Mutex
+
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableVirtualColumns      *sql.ColumnList
@@ -254,6 +267,7 @@ type MigrationContext struct {
 
 	BinlogSyncerMaxReconnectAttempts  int
 	AllowSetupMetadataLockInstruments bool
+	SkipMetadataLockCheck             bool
 	IsOpenMetadataLockInstruments     bool
 
 	Log Logger
@@ -290,6 +304,7 @@ type ContextConfig struct {
 }
 
 func NewMigrationContext() *MigrationContext {
+	ctx, cancelFunc := context.WithCancel(context.Background())
 	return &MigrationContext{
 		Uuid:                                uuid.NewString(),
 		defaultNumRetries:                   60,
@@ -310,6 +325,9 @@ func NewMigrationContext() *MigrationContext {
 		lastHeartbeatOnChangelogMutex:       &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
+		ctx:                                 ctx,
+		cancelFunc:                          cancelFunc,
+		abortMutex:                          &sync.Mutex{},
 		Log:                                 NewDefaultLogger(),
 	}
 }
@@ -348,6 +366,10 @@ func getSafeTableName(baseName string, suffix string) string {
 // GetGhostTableName generates the name of ghost table, based on original table name
 // or a given table name
 func (this *MigrationContext) GetGhostTableName() string {
+	if this.Revert {
+		// When reverting the "ghost" table is the _del table from the original migration.
+		return this.OldTableName
+	}
 	if this.ForceTmpTableName != "" {
 		return getSafeTableName(this.ForceTmpTableName, "gho")
 	} else {
@@ -364,14 +386,18 @@ func (this *MigrationContext) GetOldTableName() string {
 		tableName = this.OriginalTableName
 	}
 
+	suffix := "del"
+	if this.Revert {
+		suffix = "rev_del"
+	}
 	if this.TimestampOldTable {
 		t := this.StartTime
 		timestamp := fmt.Sprintf("%d%02d%02d%02d%02d%02d",
 			t.Year(), t.Month(), t.Day(),
 			t.Hour(), t.Minute(), t.Second())
-		return getSafeTableName(tableName, fmt.Sprintf("%s_del", timestamp))
+		return getSafeTableName(tableName, fmt.Sprintf("%s_%s", timestamp, suffix))
 	}
-	return getSafeTableName(tableName, "del")
+	return getSafeTableName(tableName, suffix)
 }
 
 // GetChangelogTableName generates the name of changelog table, based on original table name
@@ -598,6 +624,13 @@ func (this *MigrationContext) GetTotalRowsCopied() int64 {
 
 func (this *MigrationContext) GetIteration() int64 {
 	return atomic.LoadInt64(&this.Iteration)
+}
+
+func (this *MigrationContext) SetNextIterationRangeMinValues() {
+	this.MigrationIterationRangeMinValues = this.MigrationIterationRangeMaxValues
+	if this.MigrationIterationRangeMinValues == nil {
+		this.MigrationIterationRangeMinValues = this.MigrationRangeMinValues
+	}
 }
 
 func (this *MigrationContext) MarkPointOfInterest() int64 {
@@ -959,9 +992,59 @@ func (this *MigrationContext) GetGhostTriggerName(triggerName string) string {
 	return triggerName + this.TriggerSuffix
 }
 
-// validateGhostTriggerLength check if the ghost trigger name length is not more than 64 characters
+// ValidateGhostTriggerLengthBelowMaxLength checks if the given trigger name (already transformed
+// by GetGhostTriggerName) does not exceed the maximum allowed length.
 func (this *MigrationContext) ValidateGhostTriggerLengthBelowMaxLength(triggerName string) bool {
-	ghostTriggerName := this.GetGhostTriggerName(triggerName)
+	return utf8.RuneCountInString(triggerName) <= mysql.MaxTableNameLength
+}
 
-	return utf8.RuneCountInString(ghostTriggerName) <= mysql.MaxTableNameLength
+// GetContext returns the migration context for cancellation checking
+func (this *MigrationContext) GetContext() context.Context {
+	return this.ctx
+}
+
+// SetAbortError stores the fatal error that triggered abort
+// Only the first error is stored (subsequent errors are ignored)
+func (this *MigrationContext) SetAbortError(err error) {
+	this.abortMutex.Lock()
+	defer this.abortMutex.Unlock()
+	if this.AbortError == nil {
+		this.AbortError = err
+	}
+}
+
+// GetAbortError retrieves the stored abort error
+func (this *MigrationContext) GetAbortError() error {
+	this.abortMutex.Lock()
+	defer this.abortMutex.Unlock()
+	return this.AbortError
+}
+
+// CancelContext cancels the migration context to signal all goroutines to stop
+// The cancel function is safe to call multiple times and from multiple goroutines.
+func (this *MigrationContext) CancelContext() {
+	if this.cancelFunc != nil {
+		this.cancelFunc()
+	}
+}
+
+// SendWithContext attempts to send a value to a channel, but returns early
+// if the context is cancelled. This prevents goroutine deadlocks when the
+// channel receiver has exited due to an error.
+//
+// Use this instead of bare channel sends (ch <- val) in goroutines to ensure
+// proper cleanup when the migration is aborted.
+//
+// Example:
+//
+//	if err := base.SendWithContext(ctx, ch, value); err != nil {
+//	    return err  // context was cancelled
+//	}
+func SendWithContext[T any](ctx context.Context, ch chan<- T, val T) error {
+	select {
+	case ch <- val:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

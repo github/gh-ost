@@ -19,6 +19,24 @@ Here are a few things you can do that will increase the likelihood of your pull 
 - Keep your change as focused as possible. If there are multiple changes you would like to make that are not dependent upon each other, consider submitting them as separate pull requests.
 - Write a [good commit message](http://tbaggery.com/2008/04/19/a-note-about-git-commit-messages.html).
 
+## Development Guidelines
+
+### Channel Safety
+
+When working with channels in goroutines, it's critical to prevent deadlocks that can occur when a channel receiver exits due to an error while senders are still trying to send values. Always use `base.SendWithContext` for channel sends to avoid deadlocks:
+
+```go
+// ✅ CORRECT - Uses helper to prevent deadlock
+if err := base.SendWithContext(ctx, ch, value); err != nil {
+    return err  // context was cancelled
+}
+
+// ❌ WRONG - Can deadlock if receiver exits
+ch <- value
+```
+
+Even if the destination channel is buffered, deadlocks could still occur if the buffer fills up and the receiver exits, so it's important to use `SendWithContext` in those cases as well.
+
 ## Resources
 
 - [Contributing to Open Source on GitHub](https://guides.github.com/activities/contributing-to-open-source/)

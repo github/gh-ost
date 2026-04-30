@@ -186,7 +186,12 @@ func (this *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	// The next should block and execute forever, unless there's a serious error.
 	var successiveFailures int
 	var reconnectCoords mysql.BinlogCoordinates
+	ctx := this.migrationContext.GetContext()
 	for {
+		// Check for context cancellation each iteration
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if canStopStreaming() {
 			return nil
 		}

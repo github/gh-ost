@@ -44,6 +44,11 @@ func ReadChangelogState(s string) ChangelogState {
 
 type tableWriteFunc func() error
 
+type lockProcessedStruct struct {
+	state  string
+	coords mysql.BinlogCoordinates
+}
+
 type applyEventStruct struct {
 	writeFunc *tableWriteFunc
 	dmlEvent  *binlog.BinlogDMLEvent
@@ -85,7 +90,8 @@ type Migrator struct {
 	firstThrottlingCollected   chan bool
 	ghostTableMigrated         chan bool
 	rowCopyComplete            chan error
-	allEventsUpToLockProcessed chan string
+	allEventsUpToLockProcessed chan *lockProcessedStruct
+	lastLockProcessed          *lockProcessedStruct
 
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
@@ -98,14 +104,17 @@ type Migrator struct {
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 	migrator := &Migrator{
-		appVersion:                 appVersion,
-		hooksExecutor:              NewHooksExecutor(context),
-		migrationContext:           context,
-		parser:                     sql.NewAlterTableParser(),
-		ghostTableMigrated:         make(chan bool),
-		firstThrottlingCollected:   make(chan bool, 3),
-		rowCopyComplete:            make(chan error),
-		allEventsUpToLockProcessed: make(chan string),
+		appVersion:               appVersion,
+		hooksExecutor:            NewHooksExecutor(context),
+		migrationContext:         context,
+		parser:                   sql.NewAlterTableParser(),
+		ghostTableMigrated:       make(chan bool),
+		firstThrottlingCollected: make(chan bool, 3),
+		rowCopyComplete:          make(chan error),
+		// Buffered with capacity 1; the send uses overwrite-oldest semantics
+		// to prevent both deadlock (see https://github.com/github/gh-ost/pull/1637)
+		// and OOM when MaxRetries() is extremely large.
+		allEventsUpToLockProcessed: make(chan *lockProcessedStruct, 1),
 
 		copyRowsQueue:     make(chan tableWriteFunc),
 		applyEventsQueue:  make(chan *applyEventStruct, base.MaxEventsBatchSize),
@@ -118,6 +127,10 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 // (or fails with error)
 func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 	for {
+		// Check for abort before continuing
+		if err := this.checkAbort(); err != nil {
+			return err
+		}
 		shouldSleep, err := operation()
 		if err != nil {
 			return err
@@ -129,6 +142,18 @@ func (this *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 	}
 }
 
+func (this *Migrator) retryBatchCopyWithHooks(operation func() error, notFatalHint ...bool) (err error) {
+	wrappedOperation := func() error {
+		if err := operation(); err != nil {
+			this.hooksExecutor.onBatchCopyRetry(err.Error())
+			return err
+		}
+		return nil
+	}
+
+	return this.retryOperation(wrappedOperation, notFatalHint...)
+}
+
 // retryOperation attempts up to `count` attempts at running given function,
 // exiting as soon as it returns with non-error.
 func (this *Migrator) retryOperation(operation func() error, notFatalHint ...bool) (err error) {
@@ -138,14 +163,26 @@ func (this *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 			// sleep after previous iteration
 			RetrySleepFn(1 * time.Second)
 		}
+		// Check for abort/context cancellation before each retry
+		if abortErr := this.checkAbort(); abortErr != nil {
+			return abortErr
+		}
 		err = operation()
 		if err == nil {
 			return nil
 		}
+		// Check if this is an unrecoverable error (data consistency issues won't resolve on retry)
+		if strings.Contains(err.Error(), "warnings detected") {
+			if len(notFatalHint) == 0 {
+				_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+			}
+			return err
+		}
 		// there's an error. Let's try again.
 	}
 	if len(notFatalHint) == 0 {
-		this.migrationContext.PanicAbort <- err
+		// Use helper to prevent deadlock if listenOnPanicAbort already exited
+		_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
 	}
 	return err
 }
@@ -167,13 +204,25 @@ func (this *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 		if i != 0 {
 			RetrySleepFn(time.Duration(interval) * time.Second)
 		}
+		// Check for abort/context cancellation before each retry
+		if abortErr := this.checkAbort(); abortErr != nil {
+			return abortErr
+		}
 		err = operation()
 		if err == nil {
 			return nil
 		}
+		// Check if this is an unrecoverable error (data consistency issues won't resolve on retry)
+		if strings.Contains(err.Error(), "warnings detected") {
+			if len(notFatalHint) == 0 {
+				_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+			}
+			return err
+		}
 	}
 	if len(notFatalHint) == 0 {
-		this.migrationContext.PanicAbort <- err
+		// Use helper to prevent deadlock if listenOnPanicAbort already exited
+		_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
 	}
 	return err
 }
@@ -182,14 +231,19 @@ func (this *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 // consumes and drops any further incoming events that may be left hanging.
 func (this *Migrator) consumeRowCopyComplete() {
 	if err := <-this.rowCopyComplete; err != nil {
-		this.migrationContext.PanicAbort <- err
+		// Abort synchronously to ensure checkAbort() sees the error immediately
+		this.abort(err)
+		// Don't mark row copy as complete if there was an error
+		return
 	}
 	atomic.StoreInt64(&this.rowCopyCompleteFlag, 1)
 	this.migrationContext.MarkRowCopyEndTime()
 	go func() {
 		for err := range this.rowCopyComplete {
 			if err != nil {
-				this.migrationContext.PanicAbort <- err
+				// Abort synchronously to ensure the error is stored immediately
+				this.abort(err)
+				return
 			}
 		}
 	}()
@@ -220,10 +274,34 @@ func (this *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 	case Migrated, ReadMigrationRangeValues:
 		// no-op event
 	case GhostTableMigrated:
-		this.ghostTableMigrated <- true
+		// Use helper to prevent deadlock if migration aborts before receiver is ready
+		_ = base.SendWithContext(this.migrationContext.GetContext(), this.ghostTableMigrated, true)
 	case AllEventsUpToLockProcessed:
+		lps := &lockProcessedStruct{
+			state:  changelogStateString,
+			coords: dmlEntry.Coordinates.Clone(),
+		}
 		var applyEventFunc tableWriteFunc = func() error {
-			this.allEventsUpToLockProcessed <- changelogStateString
+			// Non-blocking send with overwrite-oldest semantics: if the buffer is
+			// full (receiver timed out on a previous attempt), drain the stale
+			// message first so the current sentinel is always delivered. This
+			// prevents both goroutine leaks (the original PR #1637 issue) and OOM
+			// when MaxRetries() is very large.
+			select {
+			case this.allEventsUpToLockProcessed <- lps:
+			default:
+				// Buffer full — drain the stale value, then send the current one.
+				select {
+				case <-this.allEventsUpToLockProcessed:
+				default:
+				}
+				select {
+				case this.allEventsUpToLockProcessed <- lps:
+				default:
+					// Concurrent drain by another goroutine or receiver; the current
+					// value is no longer needed since a newer sentinel will follow.
+				}
+			}
 			return nil
 		}
 		// at this point we know all events up to lock have been read from the streamer,
@@ -232,7 +310,8 @@ func (this *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 		// So as not to create a potential deadlock, we write this func to applyEventsQueue
 		// asynchronously, understanding it doesn't really matter.
 		go func() {
-			this.applyEventsQueue <- newApplyEventStructByFunc(&applyEventFunc)
+			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.applyEventsQueue, newApplyEventStructByFunc(&applyEventFunc))
 		}()
 	default:
 		return fmt.Errorf("Unknown changelog state: %+v", changelogState)
@@ -256,10 +335,24 @@ func (this *Migrator) onChangelogHeartbeatEvent(dmlEntry *binlog.BinlogEntry) (e
 	}
 }
 
-// listenOnPanicAbort aborts on abort request
+// abort stores the error, cancels the context, and logs the abort.
+// This is the common abort logic used by both listenOnPanicAbort and
+// consumeRowCopyComplete to ensure consistent error handling.
+func (this *Migrator) abort(err error) {
+	// Store the error for Migrate() to return
+	this.migrationContext.SetAbortError(err)
+
+	// Cancel the context to signal all goroutines to stop
+	this.migrationContext.CancelContext()
+
+	// Log the error (but don't panic or exit)
+	this.migrationContext.Log.Errorf("Migration aborted: %v", err)
+}
+
+// listenOnPanicAbort listens for fatal errors and initiates graceful shutdown
 func (this *Migrator) listenOnPanicAbort() {
 	err := <-this.migrationContext.PanicAbort
-	this.migrationContext.Log.Fatale(err)
+	this.abort(err)
 }
 
 // validateAlterStatement validates the `alter` statement meets criteria.
@@ -327,10 +420,36 @@ func (this *Migrator) createFlagFiles() (err error) {
 	return nil
 }
 
+// checkAbort returns abort error if migration was aborted
+func (this *Migrator) checkAbort() error {
+	if abortErr := this.migrationContext.GetAbortError(); abortErr != nil {
+		return abortErr
+	}
+
+	ctx := this.migrationContext.GetContext()
+	if ctx != nil {
+		select {
+		case <-ctx.Done():
+			// Context cancelled but no abort error stored yet
+			if abortErr := this.migrationContext.GetAbortError(); abortErr != nil {
+				return abortErr
+			}
+			return ctx.Err()
+		default:
+			// Not cancelled
+		}
+	}
+	return nil
+}
+
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (this *Migrator) Migrate() (err error) {
 	this.migrationContext.Log.Infof("Migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	this.migrationContext.StartTime = time.Now()
+
+	// Ensure context is cancelled on exit (cleanup)
+	defer this.migrationContext.CancelContext()
+
 	if this.migrationContext.Hostname, err = os.Hostname(); err != nil {
 		return err
 	}
@@ -354,16 +473,25 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.initiateInspector(); err != nil {
 		return err
 	}
+	if err := this.checkAbort(); err != nil {
+		return err
+	}
 	// If we are resuming, we will initiateStreaming later when we know
-	// the coordinates to resume streaming.
+	// the binlog coordinates to resume streaming from.
 	// If not resuming, the streamer must be initiated before the applier,
 	// so that the "GhostTableMigrated" event gets processed.
 	if !this.migrationContext.Resume {
 		if err := this.initiateStreaming(); err != nil {
 			return err
 		}
+		if err := this.checkAbort(); err != nil {
+			return err
+		}
 	}
 	if err := this.initiateApplier(); err != nil {
+		return err
+	}
+	if err := this.checkAbort(); err != nil {
 		return err
 	}
 	if err := this.createFlagFiles(); err != nil {
@@ -380,7 +508,7 @@ func (this *Migrator) Migrate() (err error) {
 				if err := this.finalCleanup(); err != nil {
 					return nil
 				}
-				if err := this.hooksExecutor.onSuccess(); err != nil {
+				if err := this.hooksExecutor.onSuccess(true); err != nil {
 					return err
 				}
 				this.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
@@ -461,7 +589,12 @@ func (this *Migrator) Migrate() (err error) {
 	if err := this.hooksExecutor.onBeforeRowCopy(); err != nil {
 		return err
 	}
-	go this.executeWriteFuncs()
+	go func() {
+		if err := this.executeWriteFuncs(); err != nil {
+			// Send error to PanicAbort to trigger abort
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+		}
+	}()
 	go this.iterateChunks()
 	this.migrationContext.MarkRowCopyStartTime()
 	go this.initiateStatus()
@@ -472,6 +605,10 @@ func (this *Migrator) Migrate() (err error) {
 	this.migrationContext.Log.Debugf("Operating until row copy is complete")
 	this.consumeRowCopyComplete()
 	this.migrationContext.Log.Infof("Row copy complete")
+	// Check if row copy was aborted due to error
+	if err := this.checkAbort(); err != nil {
+		return err
+	}
 	if err := this.hooksExecutor.onRowCopyComplete(); err != nil {
 		return err
 	}
@@ -495,13 +632,136 @@ func (this *Migrator) Migrate() (err error) {
 	}
 	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
 
+	if this.migrationContext.Checkpoint && !this.migrationContext.Noop {
+		cutoverChk, err := this.CheckpointAfterCutOver()
+		if err != nil {
+			this.migrationContext.Log.Warningf("failed to checkpoint after cutover: %+v", err)
+		} else {
+			this.migrationContext.Log.Infof("checkpoint success after cutover at coords=%+v", cutoverChk.LastTrxCoords.DisplayString())
+		}
+	}
+
 	if err := this.finalCleanup(); err != nil {
 		return nil
 	}
-	if err := this.hooksExecutor.onSuccess(); err != nil {
+	if err := this.hooksExecutor.onSuccess(false); err != nil {
 		return err
 	}
 	this.migrationContext.Log.Infof("Done migrating %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
+	// Final check for abort before declaring success
+	if err := this.checkAbort(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Revert reverts a migration that previously completed by applying all DML events that happened
+// after the original cutover, then doing another cutover to swap the tables back.
+// The steps are similar to Migrate(), but without row copying.
+func (this *Migrator) Revert() error {
+	this.migrationContext.Log.Infof("Reverting %s.%s from %s.%s",
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName),
+		sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OldTableName))
+	this.migrationContext.StartTime = time.Now()
+
+	// Ensure context is cancelled on exit (cleanup)
+	defer this.migrationContext.CancelContext()
+
+	var err error
+	if this.migrationContext.Hostname, err = os.Hostname(); err != nil {
+		return err
+	}
+
+	go this.listenOnPanicAbort()
+
+	if err := this.hooksExecutor.onStartup(); err != nil {
+		return err
+	}
+	if err := this.validateAlterStatement(); err != nil {
+		return err
+	}
+	defer this.teardown()
+
+	if err := this.initiateInspector(); err != nil {
+		return err
+	}
+	if err := this.checkAbort(); err != nil {
+		return err
+	}
+	if err := this.initiateApplier(); err != nil {
+		return err
+	}
+	if err := this.checkAbort(); err != nil {
+		return err
+	}
+	if err := this.createFlagFiles(); err != nil {
+		return err
+	}
+	if err := this.inspector.inspectOriginalAndGhostTables(); err != nil {
+		return err
+	}
+	if err := this.applier.prepareQueries(); err != nil {
+		return err
+	}
+
+	lastCheckpoint, err := this.applier.ReadLastCheckpoint()
+	if err != nil {
+		return this.migrationContext.Log.Errorf("No checkpoint found, unable to revert: %+v", err)
+	}
+	if !lastCheckpoint.IsCutover {
+		return this.migrationContext.Log.Errorf("Last checkpoint is not after cutover, unable to revert: coords=%+v time=%+v", lastCheckpoint.LastTrxCoords, lastCheckpoint.Timestamp)
+	}
+	this.migrationContext.InitialStreamerCoords = lastCheckpoint.LastTrxCoords
+	this.migrationContext.TotalRowsCopied = lastCheckpoint.RowsCopied
+	this.migrationContext.MigrationIterationRangeMinValues = lastCheckpoint.IterationRangeMin
+	this.migrationContext.MigrationIterationRangeMaxValues = lastCheckpoint.IterationRangeMax
+	if err := this.initiateStreaming(); err != nil {
+		return err
+	}
+	if err := this.checkAbort(); err != nil {
+		return err
+	}
+	if err := this.hooksExecutor.onValidated(); err != nil {
+		return err
+	}
+	if err := this.initiateServer(); err != nil {
+		return err
+	}
+	defer this.server.RemoveSocketFile()
+	if err := this.addDMLEventsListener(); err != nil {
+		return err
+	}
+
+	this.initiateThrottler()
+	go this.initiateStatus()
+	go func() {
+		if err := this.executeDMLWriteFuncs(); err != nil {
+			// Send error to PanicAbort to trigger abort
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
+		}
+	}()
+
+	this.printStatus(ForcePrintStatusRule)
+	var retrier func(func() error, ...bool) error
+	if this.migrationContext.CutOverExponentialBackoff {
+		retrier = this.retryOperationWithExponentialBackoff
+	} else {
+		retrier = this.retryOperation
+	}
+	if err := this.hooksExecutor.onBeforeCutOver(); err != nil {
+		return err
+	}
+	if err := retrier(this.cutOver); err != nil {
+		return err
+	}
+	atomic.StoreInt64(&this.migrationContext.CutOverCompleteFlag, 1)
+	if err := this.finalCleanup(); err != nil {
+		return nil
+	}
+	if err := this.hooksExecutor.onSuccess(false); err != nil {
+		return err
+	}
+	this.migrationContext.Log.Infof("Done reverting %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.OriginalTableName))
 	return nil
 }
 
@@ -555,7 +815,7 @@ func (this *Migrator) cutOver() (err error) {
 
 	this.migrationContext.MarkPointOfInterest()
 	this.migrationContext.Log.Debugf("checking for cut-over postpone")
-	this.sleepWhileTrue(
+	if err := this.sleepWhileTrue(
 		func() (bool, error) {
 			heartbeatLag := this.migrationContext.TimeSinceLastHeartbeatOnChangelog()
 			maxLagMillisecondsThrottle := time.Duration(atomic.LoadInt64(&this.migrationContext.MaxLagMillisecondsThrottleThreshold)) * time.Millisecond
@@ -583,7 +843,9 @@ func (this *Migrator) cutOver() (err error) {
 			}
 			return false, nil
 		},
-	)
+	); err != nil {
+		return err
+	}
 	atomic.StoreInt64(&this.migrationContext.IsPostponingCutOver, 0)
 	this.migrationContext.MarkPointOfInterest()
 	this.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
@@ -622,7 +884,7 @@ func (this *Migrator) cutOver() (err error) {
 
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
-func (this *Migrator) waitForEventsUpToLock() (err error) {
+func (this *Migrator) waitForEventsUpToLock() error {
 	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
 
 	this.migrationContext.MarkPointOfInterest()
@@ -635,19 +897,21 @@ func (this *Migrator) waitForEventsUpToLock() (err error) {
 	}
 	this.migrationContext.Log.Infof("Waiting for events up to lock")
 	atomic.StoreInt64(&this.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 1)
+	var lockProcessed *lockProcessedStruct
 	for found := false; !found; {
 		select {
 		case <-timeout.C:
 			{
 				return this.migrationContext.Log.Errorf("Timeout while waiting for events up to lock")
 			}
-		case state := <-this.allEventsUpToLockProcessed:
+		case lockProcessed = <-this.allEventsUpToLockProcessed:
 			{
-				if state == allEventsUpToLockProcessedChallenge {
-					this.migrationContext.Log.Infof("Waiting for events up to lock: got %s", state)
+				if lockProcessed.state == allEventsUpToLockProcessedChallenge {
+					this.migrationContext.Log.Infof("Waiting for events up to lock: got %s", lockProcessed.state)
 					found = true
+					this.lastLockProcessed = lockProcessed
 				} else {
-					this.migrationContext.Log.Infof("Waiting for events up to lock: skipping %s", state)
+					this.migrationContext.Log.Infof("Waiting for events up to lock: skipping %s", lockProcessed.state)
 				}
 			}
 		}
@@ -730,7 +994,7 @@ func (this *Migrator) atomicCutOver() (err error) {
 	// If we need to create triggers we need to do it here (only create part)
 	if this.migrationContext.IncludeTriggers && len(this.migrationContext.Triggers) > 0 {
 		if err := this.applier.CreateTriggersOnGhost(); err != nil {
-			this.migrationContext.Log.Errore(err)
+			return this.migrationContext.Log.Errore(err)
 		}
 	}
 
@@ -1169,7 +1433,8 @@ func (this *Migrator) initiateStreaming() error {
 		this.migrationContext.Log.Debugf("Beginning streaming")
 		err := this.eventsStreamer.StreamEvents(this.canStopStreaming)
 		if err != nil {
-			this.migrationContext.PanicAbort <- err
+			// Use helper to prevent deadlock if listenOnPanicAbort already exited
+			_ = base.SendWithContext(this.migrationContext.GetContext(), this.migrationContext.PanicAbort, err)
 		}
 		this.migrationContext.Log.Debugf("Done streaming")
 	}()
@@ -1195,8 +1460,9 @@ func (this *Migrator) addDMLEventsListener() error {
 		this.migrationContext.DatabaseName,
 		this.migrationContext.OriginalTableName,
 		func(dmlEntry *binlog.BinlogEntry) error {
-			this.applyEventsQueue <- newApplyEventStructByDML(dmlEntry)
-			return nil
+			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
+			// This is critical because this callback blocks the event streamer
+			return base.SendWithContext(this.migrationContext.GetContext(), this.applyEventsQueue, newApplyEventStructByDML(dmlEntry))
 		},
 	)
 	return err
@@ -1220,7 +1486,12 @@ func (this *Migrator) initiateApplier() error {
 	if err := this.applier.InitDBConnections(); err != nil {
 		return err
 	}
-	if !this.migrationContext.Resume {
+	if this.migrationContext.Revert {
+		if err := this.applier.CreateChangelogTable(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			return err
+		}
+	} else if !this.migrationContext.Resume {
 		if err := this.applier.ValidateOrDropExistingTables(); err != nil {
 			return err
 		}
@@ -1245,12 +1516,22 @@ func (this *Migrator) initiateApplier() error {
 				return err
 			}
 		}
-		this.applier.WriteChangelogState(string(GhostTableMigrated))
+		if _, err := this.applier.WriteChangelogState(string(GhostTableMigrated)); err != nil {
+			return err
+		}
 	}
+
+	// ensure performance_schema.metadata_locks is available.
 	if err := this.applier.StateMetadataLockInstrument(); err != nil {
-		this.migrationContext.Log.Errorf("Unable to enable metadata lock instrument, see further error details. Bailing out")
-		return err
+		this.migrationContext.Log.Warning("Unable to enable metadata lock instrument, see further error details.")
 	}
+	if !this.migrationContext.IsOpenMetadataLockInstruments {
+		if !this.migrationContext.SkipMetadataLockCheck {
+			return this.migrationContext.Log.Errorf("Bailing out because metadata lock instrument not enabled. Use --skip-metadata-lock-check if you wish to proceed without. See https://github.com/github/gh-ost/pull/1536 for details.")
+		}
+		this.migrationContext.Log.Warning("Proceeding without metadata lock check. There is a small chance of data loss if another session accesses the ghost table during cut-over. See https://github.com/github/gh-ost/pull/1536 for details.")
+	}
+
 	go this.applier.InitiateHeartbeat()
 	return nil
 }
@@ -1259,7 +1540,7 @@ func (this *Migrator) initiateApplier() error {
 // a chunk of rows onto the ghost table.
 func (this *Migrator) iterateChunks() error {
 	terminateRowIteration := func(err error) error {
-		this.rowCopyComplete <- err
+		_ = base.SendWithContext(this.migrationContext.GetContext(), this.rowCopyComplete, err)
 		return this.migrationContext.Log.Errore(err)
 	}
 	if this.migrationContext.Noop {
@@ -1274,33 +1555,33 @@ func (this *Migrator) iterateChunks() error {
 	var hasNoFurtherRangeFlag int64
 	// Iterate per chunk:
 	for {
+		if err := this.checkAbort(); err != nil {
+			return terminateRowIteration(err)
+		}
 		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
 			// Done
 			// There's another such check down the line
 			return nil
 		}
 		copyRowsFunc := func() error {
-			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
-				// Done.
-				// There's another such check down the line
-				return nil
-			}
-
-			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
-
-			hasFurtherRange := false
-			if err := this.retryOperation(func() (e error) {
-				hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
-				return e
-			}); err != nil {
-				return terminateRowIteration(err)
-			}
-			if !hasFurtherRange {
-				atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
-				return terminateRowIteration(nil)
-			}
+			this.migrationContext.SetNextIterationRangeMinValues()
 			// Copy task:
 			applyCopyRowsFunc := func() error {
+				if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
+					// Done.
+					// There's another such check down the line
+					return nil
+				}
+
+				// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
+				hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
+				if err != nil {
+					return err // wrapping call will retry
+				}
+				if !hasFurtherRange {
+					atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
+					return terminateRowIteration(nil)
+				}
 				if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
 					// No need for more writes.
 					// This is the de-facto place where we avoid writing in the event of completed cut-over.
@@ -1323,7 +1604,7 @@ func (this *Migrator) iterateChunks() error {
 							this.migrationContext.Log.Infof("ApplyIterationInsertQuery has SQL warnings! %s", warning)
 						}
 						joinedWarnings := strings.Join(this.migrationContext.MigrationLastInsertSQLWarnings, "; ")
-						terminateRowIteration(fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings))
+						return terminateRowIteration(fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings))
 					}
 				}
 
@@ -1331,13 +1612,29 @@ func (this *Migrator) iterateChunks() error {
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
 				return nil
 			}
-			if err := this.retryOperation(applyCopyRowsFunc); err != nil {
+			if err := this.retryBatchCopyWithHooks(applyCopyRowsFunc); err != nil {
 				return terminateRowIteration(err)
 			}
+
+			// record last successfully copied range
+			this.applier.LastIterationRangeMutex.Lock()
+			if this.migrationContext.MigrationIterationRangeMinValues != nil && this.migrationContext.MigrationIterationRangeMaxValues != nil {
+				this.applier.LastIterationRangeMinValues = this.migrationContext.MigrationIterationRangeMinValues.Clone()
+				this.applier.LastIterationRangeMaxValues = this.migrationContext.MigrationIterationRangeMaxValues.Clone()
+			}
+			this.applier.LastIterationRangeMutex.Unlock()
+
 			return nil
 		}
 		// Enqueue copy operation; to be executed by executeWriteFuncs()
-		this.copyRowsQueue <- copyRowsFunc
+		// Use helper to prevent deadlock if executeWriteFuncs exits
+		if err := base.SendWithContext(this.migrationContext.GetContext(), this.copyRowsQueue, copyRowsFunc); err != nil {
+			// Context cancelled, check for abort and exit
+			if abortErr := this.checkAbort(); abortErr != nil {
+				return terminateRowIteration(abortErr)
+			}
+			return terminateRowIteration(err)
+		}
 	}
 }
 
@@ -1418,21 +1715,48 @@ func (this *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 	this.applier.LastIterationRangeMutex.Unlock()
 
 	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-			this.applier.CurrentCoordinatesMutex.Lock()
-			if coords.SmallerThanOrEquals(this.applier.CurrentCoordinates) {
-				id, err := this.applier.WriteCheckpoint(chk)
-				chk.Id = id
-				this.applier.CurrentCoordinatesMutex.Unlock()
-				return chk, err
-			}
-			this.applier.CurrentCoordinatesMutex.Unlock()
-			time.Sleep(500 * time.Millisecond)
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		this.applier.CurrentCoordinatesMutex.Lock()
+		if coords.SmallerThanOrEquals(this.applier.CurrentCoordinates) {
+			id, err := this.applier.WriteCheckpoint(chk)
+			chk.Id = id
+			this.applier.CurrentCoordinatesMutex.Unlock()
+			return chk, err
+		}
+		this.applier.CurrentCoordinatesMutex.Unlock()
+		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// CheckpointAfterCutOver writes a final checkpoint after the cutover completes successfully.
+func (this *Migrator) CheckpointAfterCutOver() (*Checkpoint, error) {
+	if this.lastLockProcessed == nil || this.lastLockProcessed.coords.IsEmpty() {
+		return nil, this.migrationContext.Log.Errorf("lastLockProcessed coords are empty")
+	}
+
+	chk := &Checkpoint{
+		IsCutover:         true,
+		LastTrxCoords:     this.lastLockProcessed.coords,
+		IterationRangeMin: sql.NewColumnValues(this.migrationContext.UniqueKey.Len()),
+		IterationRangeMax: sql.NewColumnValues(this.migrationContext.UniqueKey.Len()),
+		Iteration:         this.migrationContext.GetIteration(),
+		RowsCopied:        atomic.LoadInt64(&this.migrationContext.TotalRowsCopied),
+		DMLApplied:        atomic.LoadInt64(&this.migrationContext.TotalDMLEventsApplied),
+	}
+	this.applier.LastIterationRangeMutex.Lock()
+	if this.applier.LastIterationRangeMinValues != nil {
+		chk.IterationRangeMin = this.applier.LastIterationRangeMinValues.Clone()
+	}
+	if this.applier.LastIterationRangeMaxValues != nil {
+		chk.IterationRangeMax = this.applier.LastIterationRangeMaxValues.Clone()
+	}
+	this.applier.LastIterationRangeMutex.Unlock()
+
+	id, err := this.applier.WriteCheckpoint(chk)
+	chk.Id = id
+	return chk, err
 }
 
 func (this *Migrator) checkpointLoop() {
@@ -1443,8 +1767,11 @@ func (this *Migrator) checkpointLoop() {
 	checkpointInterval := time.Duration(this.migrationContext.CheckpointIntervalSeconds) * time.Second
 	ticker := time.NewTicker(checkpointInterval)
 	for t := range ticker.C {
-		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 || atomic.LoadInt64(&this.migrationContext.CutOverCompleteFlag) > 0 {
 			return
+		}
+		if atomic.LoadInt64(&this.migrationContext.InCutOverCriticalSectionFlag) > 0 {
+			continue
 		}
 		this.migrationContext.Log.Infof("starting checkpoint at %+v", t)
 		ctx, cancel := context.WithTimeout(context.Background(), checkpointTimeout)
@@ -1472,6 +1799,9 @@ func (this *Migrator) executeWriteFuncs() error {
 		return nil
 	}
 	for {
+		if err := this.checkAbort(); err != nil {
+			return err
+		}
 		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
 			return nil
 		}
@@ -1517,6 +1847,31 @@ func (this *Migrator) executeWriteFuncs() error {
 	}
 }
 
+func (this *Migrator) executeDMLWriteFuncs() error {
+	if this.migrationContext.Noop {
+		this.migrationContext.Log.Debugf("Noop operation; not really executing DML write funcs")
+		return nil
+	}
+	for {
+		if atomic.LoadInt64(&this.finishedMigrating) > 0 {
+			return nil
+		}
+
+		this.throttler.throttle(nil)
+
+		select {
+		case eventStruct := <-this.applyEventsQueue:
+			{
+				if err := this.onApplyEventStruct(eventStruct); err != nil {
+					return err
+				}
+			}
+		case <-time.After(time.Second):
+			continue
+		}
+	}
+}
+
 // finalCleanup takes actions at very end of migration, dropping tables etc.
 func (this *Migrator) finalCleanup() error {
 	atomic.StoreInt64(&this.migrationContext.CleanupImminentFlag, 1)
@@ -1541,17 +1896,19 @@ func (this *Migrator) finalCleanup() error {
 	if err := this.retryOperation(this.applier.DropChangelogTable); err != nil {
 		return err
 	}
-	if err := this.retryOperation(this.applier.DropCheckpointTable); err != nil {
-		return err
-	}
 	if this.migrationContext.OkToDropTable && !this.migrationContext.TestOnReplica {
 		if err := this.retryOperation(this.applier.DropOldTable); err != nil {
 			return err
 		}
-	} else {
-		if !this.migrationContext.Noop {
-			this.migrationContext.Log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add `--ok-to-drop-table` next time. But I prefer you do not. To drop the old table, issue:")
-			this.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
+		if err := this.retryOperation(this.applier.DropCheckpointTable); err != nil {
+			return err
+		}
+	} else if !this.migrationContext.Noop {
+		this.migrationContext.Log.Infof("Am not dropping old table because I want this operation to be as live as possible. If you insist I should do it, please add `--ok-to-drop-table` next time. But I prefer you do not. To drop the old table, issue:")
+		this.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetOldTableName()))
+		if this.migrationContext.Checkpoint {
+			this.migrationContext.Log.Infof("Am not dropping checkpoint table without `--ok-to-drop-table`. To drop the checkpoint table, issue:")
+			this.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(this.migrationContext.DatabaseName), sql.EscapeName(this.migrationContext.GetCheckpointTableName()))
 		}
 	}
 	if this.migrationContext.Noop {
