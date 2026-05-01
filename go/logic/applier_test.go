@@ -468,7 +468,7 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExi
 
 	err = applier.ValidateOrDropExistingTables()
 	suite.Require().Error(err)
-	suite.Require().EqualError(err, "Table `_testing_gho` already exists. Panicking. Use --initially-drop-ghost-table to force dropping it, though I really prefer that you drop it or rename it away")
+	suite.Require().EqualError(err, "table `_testing_gho` already exists. Panicking. Use --initially-drop-ghost-table to force dropping it, though I really prefer that you drop it or rename it away")
 }
 
 func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExistingAndInitiallyDropGhostTableSet() {
@@ -502,7 +502,6 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExi
 
 	// Check that the ghost table was dropped
 	var tableName string
-	//nolint:execinquery
 	err = suite.db.QueryRow(fmt.Sprintf("SHOW TABLES IN test LIKE '_%s_gho'", testMysqlTableName)).Scan(&tableName)
 	suite.Require().Error(err)
 	suite.Require().Equal(gosql.ErrNoRows, err)
@@ -540,14 +539,12 @@ func (suite *ApplierTestSuite) TestCreateGhostTable() {
 
 	// Check that the ghost table was created
 	var tableName string
-	//nolint:execinquery
 	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_gho'").Scan(&tableName)
 	suite.Require().NoError(err)
 	suite.Require().Equal("_testing_gho", tableName)
 
 	// Check that the ghost table has the same columns as the original table
 	var createDDL string
-	//nolint:execinquery
 	err = suite.db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", getTestGhostTableName())).Scan(&tableName, &createDDL)
 	suite.Require().NoError(err)
 	suite.Require().Equal("CREATE TABLE `_testing_gho` (\n  `id` int DEFAULT NULL,\n  `item_id` int DEFAULT NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createDDL)

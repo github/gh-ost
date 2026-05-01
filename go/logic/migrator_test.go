@@ -426,7 +426,6 @@ func (suite *MigratorTestSuite) TestMigrateEmpty() {
 
 	// Verify the new column was added
 	var tableName, createTableSQL string
-	//nolint:execinquery
 	err = suite.db.QueryRow("SHOW CREATE TABLE "+getTestTableName()).Scan(&tableName, &createTableSQL)
 	suite.Require().NoError(err)
 
@@ -434,13 +433,11 @@ func (suite *MigratorTestSuite) TestMigrateEmpty() {
 	suite.Require().Equal("CREATE TABLE `testing` (\n  `id` int NOT NULL,\n  `name` varchar(64) DEFAULT NULL,\n  `foobar` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createTableSQL)
 
 	// Verify the changelog table was claned up
-	//nolint:execinquery
 	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_ghc'").Scan(&tableName)
 	suite.Require().Error(err)
 	suite.Require().Equal(gosql.ErrNoRows, err)
 
 	// Verify the old table was renamed
-	//nolint:execinquery
 	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_del'").Scan(&tableName)
 	suite.Require().NoError(err)
 	suite.Require().Equal("_testing_del", tableName)
@@ -958,7 +955,6 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 	suite.Require().LessOrEqual(delValue, OriginalValue)
 
 	var tableName, createTableSQL string
-	//nolint:execinquery
 	err = suite.db.QueryRow("SHOW CREATE TABLE "+getTestTableName()).Scan(&tableName, &createTableSQL)
 	suite.Require().NoError(err)
 

@@ -51,18 +51,18 @@ func ParseLoadMap(loadList string) (LoadMap, error) {
 }
 
 // Duplicate creates a clone of this map
-func (this *LoadMap) Duplicate() LoadMap {
+func (lm *LoadMap) Duplicate() LoadMap {
 	dup := make(map[string]int64)
-	for k, v := range *this {
+	for k, v := range *lm {
 		dup[k] = v
 	}
 	return dup
 }
 
 // String() returns a string representation of this map
-func (this *LoadMap) String() string {
+func (lm *LoadMap) String() string {
 	tokens := []string{}
-	for key, val := range *this {
+	for key, val := range *lm {
 		token := fmt.Sprintf("%s=%d", key, val)
 		tokens = append(tokens, token)
 	}

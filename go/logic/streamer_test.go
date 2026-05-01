@@ -2,7 +2,6 @@ package logic
 
 import (
 	"context"
-	"database/sql"
 	gosql "database/sql"
 	"fmt"
 	"testing"
@@ -201,7 +200,6 @@ func (suite *EventsStreamerTestSuite) TestStreamEventsAutomaticallyReconnects() 
 			return err
 		}
 
-		//nolint:execinquery
 		rows, err := suite.db.Query("SHOW FULL PROCESSLIST")
 		if err != nil {
 			return err
@@ -211,7 +209,7 @@ func (suite *EventsStreamerTestSuite) TestStreamEventsAutomaticallyReconnects() 
 		connectionIdsToKill := make([]int, 0)
 
 		var id, stateTime int
-		var user, host, dbName, command, state, info sql.NullString
+		var user, host, dbName, command, state, info gosql.NullString
 		for rows.Next() {
 			err = rows.Scan(&id, &user, &host, &dbName, &command, &stateTime, &state, &info)
 			if err != nil {

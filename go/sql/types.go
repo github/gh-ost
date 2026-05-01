@@ -57,7 +57,7 @@ type Column struct {
 	MySQLType         string
 }
 
-func (this *Column) convertArg(arg interface{}) interface{} {
+func (cl *Column) convertArg(arg interface{}) interface{} {
 	var arg2Bytes []byte
 	if s, ok := arg.(string); ok {
 		arg2Bytes = []byte(s)
@@ -68,9 +68,9 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 	}
 
 	if arg2Bytes != nil {
-		if this.Charset != "" && this.charsetConversion == nil {
+		if cl.Charset != "" && cl.charsetConversion == nil {
 			arg = arg2Bytes
-		} else if this.Charset == "" && (strings.Contains(this.MySQLType, "binary") || strings.HasSuffix(this.MySQLType, "blob")) {
+		} else if cl.Charset == "" && (strings.Contains(cl.MySQLType, "binary") || strings.HasSuffix(cl.MySQLType, "blob")) {
 			// varbinary/binary/blob column: no charset means binary storage. Return []byte so
 			// the MySQL driver sends MYSQL_TYPE_BLOB (binary) rather than MYSQL_TYPE_VAR_STRING
 			// (text with the connection's charset/collation metadata, often utf8mb4), which would
@@ -78,17 +78,17 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 			// invalid in that charset.
 			arg = arg2Bytes
 		} else {
-			if encoding, ok := charsetEncodingMap[this.Charset]; ok {
+			if encoding, ok := charsetEncodingMap[cl.Charset]; ok {
 				decodedBytes, _ := encoding.NewDecoder().Bytes(arg2Bytes)
 				arg = string(decodedBytes)
 			}
 		}
 
-		if this.Type == BinaryColumnType {
+		if cl.Type == BinaryColumnType {
 			size := len(arg2Bytes)
-			if uint(size) < this.BinaryOctetLength {
+			if uint(size) < cl.BinaryOctetLength {
 				buf := bytes.NewBuffer(arg2Bytes)
-				for i := uint(0); i < (this.BinaryOctetLength - uint(size)); i++ {
+				for i := uint(0); i < (cl.BinaryOctetLength - uint(size)); i++ {
 					buf.Write([]byte{0})
 				}
 				arg = buf.Bytes()
@@ -98,7 +98,7 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 		return arg
 	}
 
-	if this.IsUnsigned {
+	if cl.IsUnsigned {
 		if i, ok := arg.(int8); ok {
 			return uint8(i)
 		}
@@ -106,7 +106,7 @@ func (this *Column) convertArg(arg interface{}) interface{} {
 			return uint16(i)
 		}
 		if i, ok := arg.(int32); ok {
-			if this.Type == MediumIntColumnType {
+			if cl.Type == MediumIntColumnType {
 				// problem with mediumint is that it's a 3-byte type. There is no compatible golang type to match that.
 				// So to convert from negative to positive we'd need to convert the value manually
 				if i >= 0 {
@@ -179,85 +179,85 @@ func ParseColumnList(names string) *ColumnList {
 	return result
 }
 
-func (this *ColumnList) Columns() []Column {
-	return this.columns
+func (cl *ColumnList) Columns() []Column {
+	return cl.columns
 }
 
-func (this *ColumnList) Names() []string {
-	names := make([]string, len(this.columns))
-	for i := range this.columns {
-		names[i] = this.columns[i].Name
+func (cl *ColumnList) Names() []string {
+	names := make([]string, len(cl.columns))
+	for i := range cl.columns {
+		names[i] = cl.columns[i].Name
 	}
 	return names
 }
 
-func (this *ColumnList) GetColumn(columnName string) *Column {
-	if ordinal, ok := this.Ordinals[columnName]; ok {
-		return &this.columns[ordinal]
+func (cl *ColumnList) GetColumn(columnName string) *Column {
+	if ordinal, ok := cl.Ordinals[columnName]; ok {
+		return &cl.columns[ordinal]
 	}
 	return nil
 }
 
-func (this *ColumnList) SetUnsigned(columnName string) {
-	this.GetColumn(columnName).IsUnsigned = true
+func (cl *ColumnList) SetUnsigned(columnName string) {
+	cl.GetColumn(columnName).IsUnsigned = true
 }
 
-func (this *ColumnList) IsUnsigned(columnName string) bool {
-	return this.GetColumn(columnName).IsUnsigned
+func (cl *ColumnList) IsUnsigned(columnName string) bool {
+	return cl.GetColumn(columnName).IsUnsigned
 }
 
-func (this *ColumnList) SetCharset(columnName string, charset string) {
-	this.GetColumn(columnName).Charset = charset
+func (cl *ColumnList) SetCharset(columnName string, charset string) {
+	cl.GetColumn(columnName).Charset = charset
 }
 
-func (this *ColumnList) GetCharset(columnName string) string {
-	return this.GetColumn(columnName).Charset
+func (cl *ColumnList) GetCharset(columnName string) string {
+	return cl.GetColumn(columnName).Charset
 }
 
-func (this *ColumnList) SetColumnType(columnName string, columnType ColumnType) {
-	this.GetColumn(columnName).Type = columnType
+func (cl *ColumnList) SetColumnType(columnName string, columnType ColumnType) {
+	cl.GetColumn(columnName).Type = columnType
 }
 
-func (this *ColumnList) GetColumnType(columnName string) ColumnType {
-	return this.GetColumn(columnName).Type
+func (cl *ColumnList) GetColumnType(columnName string) ColumnType {
+	return cl.GetColumn(columnName).Type
 }
 
-func (this *ColumnList) SetConvertDatetimeToTimestamp(columnName string, toTimezone string) {
-	this.GetColumn(columnName).timezoneConversion = &TimezoneConversion{ToTimezone: toTimezone}
+func (cl *ColumnList) SetConvertDatetimeToTimestamp(columnName string, toTimezone string) {
+	cl.GetColumn(columnName).timezoneConversion = &TimezoneConversion{ToTimezone: toTimezone}
 }
 
-func (this *ColumnList) HasTimezoneConversion(columnName string) bool {
-	return this.GetColumn(columnName).timezoneConversion != nil
+func (cl *ColumnList) HasTimezoneConversion(columnName string) bool {
+	return cl.GetColumn(columnName).timezoneConversion != nil
 }
 
-func (this *ColumnList) SetEnumToTextConversion(columnName string) {
-	this.GetColumn(columnName).enumToTextConversion = true
+func (cl *ColumnList) SetEnumToTextConversion(columnName string) {
+	cl.GetColumn(columnName).enumToTextConversion = true
 }
 
-func (this *ColumnList) IsEnumToTextConversion(columnName string) bool {
-	return this.GetColumn(columnName).enumToTextConversion
+func (cl *ColumnList) IsEnumToTextConversion(columnName string) bool {
+	return cl.GetColumn(columnName).enumToTextConversion
 }
 
-func (this *ColumnList) SetEnumValues(columnName string, enumValues string) {
-	this.GetColumn(columnName).EnumValues = enumValues
+func (cl *ColumnList) SetEnumValues(columnName string, enumValues string) {
+	cl.GetColumn(columnName).EnumValues = enumValues
 }
 
-func (this *ColumnList) String() string {
-	return strings.Join(this.Names(), ",")
+func (cl *ColumnList) String() string {
+	return strings.Join(cl.Names(), ",")
 }
 
-func (this *ColumnList) Equals(other *ColumnList) bool {
-	return reflect.DeepEqual(this.Columns, other.Columns)
+func (cl *ColumnList) Equals(other *ColumnList) bool {
+	return reflect.DeepEqual(cl.Columns, other.Columns)
 }
 
-func (this *ColumnList) EqualsByNames(other *ColumnList) bool {
-	return reflect.DeepEqual(this.Names(), other.Names())
+func (cl *ColumnList) EqualsByNames(other *ColumnList) bool {
+	return reflect.DeepEqual(cl.Names(), other.Names())
 }
 
-// IsSubsetOf returns 'true' when column names of this list are a subset of
+// IsSubsetOf returns 'true' when column names of cl list are a subset of
 // another list, in arbitrary order (order agnostic)
-func (this *ColumnList) IsSubsetOf(other *ColumnList) bool {
-	for _, column := range this.columns {
+func (cl *ColumnList) IsSubsetOf(other *ColumnList) bool {
+	for _, column := range cl.columns {
 		if _, exists := other.Ordinals[column.Name]; !exists {
 			return false
 		}
@@ -265,22 +265,22 @@ func (this *ColumnList) IsSubsetOf(other *ColumnList) bool {
 	return true
 }
 
-func (this *ColumnList) FilterBy(f func(Column) bool) *ColumnList {
-	filteredCols := make([]Column, 0, len(this.columns))
-	for _, column := range this.columns {
+func (cl *ColumnList) FilterBy(f func(Column) bool) *ColumnList {
+	filteredCols := make([]Column, 0, len(cl.columns))
+	for _, column := range cl.columns {
 		if f(column) {
 			filteredCols = append(filteredCols, column)
 		}
 	}
-	return &ColumnList{Ordinals: this.Ordinals, columns: filteredCols}
+	return &ColumnList{Ordinals: cl.Ordinals, columns: filteredCols}
 }
 
-func (this *ColumnList) Len() int {
-	return len(this.columns)
+func (cl *ColumnList) Len() int {
+	return len(cl.columns)
 }
 
-func (this *ColumnList) SetCharsetConversion(columnName string, fromCharset string, toCharset string) {
-	this.GetColumn(columnName).charsetConversion = &CharacterSetConversion{FromCharset: fromCharset, ToCharset: toCharset}
+func (cl *ColumnList) SetCharsetConversion(columnName string, fromCharset string, toCharset string) {
+	cl.GetColumn(columnName).charsetConversion = &CharacterSetConversion{FromCharset: fromCharset, ToCharset: toCharset}
 }
 
 // UniqueKey is the combination of a key's name and columns
@@ -293,20 +293,20 @@ type UniqueKey struct {
 }
 
 // IsPrimary checks if this unique key is primary
-func (this *UniqueKey) IsPrimary() bool {
-	return this.Name == "PRIMARY"
+func (uk *UniqueKey) IsPrimary() bool {
+	return uk.Name == "PRIMARY"
 }
 
-func (this *UniqueKey) Len() int {
-	return this.Columns.Len()
+func (uk *UniqueKey) Len() int {
+	return uk.Columns.Len()
 }
 
-func (this *UniqueKey) String() string {
-	description := this.Name
-	if this.IsAutoIncrement {
+func (uk *UniqueKey) String() string {
+	description := uk.Name
+	if uk.IsAutoIncrement {
 		description = fmt.Sprintf("%s (auto_increment)", description)
 	}
-	return fmt.Sprintf("%s: %s; has nullable: %+v", description, this.Columns.Names(), this.HasNullable)
+	return fmt.Sprintf("%s: %s; has nullable: %+v", description, uk.Columns.Names(), uk.HasNullable)
 }
 
 type ColumnValues struct {
@@ -338,28 +338,28 @@ func ToColumnValues(abstractValues []interface{}) *ColumnValues {
 	return result
 }
 
-func (this *ColumnValues) AbstractValues() []interface{} {
-	return this.abstractValues
+func (cv *ColumnValues) AbstractValues() []interface{} {
+	return cv.abstractValues
 }
 
-func (this *ColumnValues) StringColumn(index int) string {
-	val := this.AbstractValues()[index]
+func (cv *ColumnValues) StringColumn(index int) string {
+	val := cv.AbstractValues()[index]
 	if ints, ok := val.([]uint8); ok {
 		return fmt.Sprintf("%x", ints)
 	}
 	return fmt.Sprintf("%+v", val)
 }
 
-func (this *ColumnValues) String() string {
+func (cv *ColumnValues) String() string {
 	stringValues := []string{}
-	for i := range this.AbstractValues() {
-		stringValues = append(stringValues, this.StringColumn(i))
+	for i := range cv.AbstractValues() {
+		stringValues = append(stringValues, cv.StringColumn(i))
 	}
 	return strings.Join(stringValues, ",")
 }
 
-func (this *ColumnValues) Clone() *ColumnValues {
-	cv := NewColumnValues(len(this.abstractValues))
-	copy(cv.abstractValues, this.abstractValues)
-	return cv
+func (cv *ColumnValues) Clone() *ColumnValues {
+	newCv := NewColumnValues(len(cv.abstractValues))
+	copy(newCv.abstractValues, cv.abstractValues)
+	return newCv
 }
