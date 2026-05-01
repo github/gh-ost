@@ -62,6 +62,6 @@ func NewBinlogDMLEvent(databaseName, tableName string, dml EventDML) *BinlogDMLE
 	return event
 }
 
-func (this *BinlogDMLEvent) String() string {
-	return fmt.Sprintf("[%+v on %s:%s]", this.DML, this.DatabaseName, this.TableName)
+func (bde *BinlogDMLEvent) String() string {
+	return fmt.Sprintf("[%+v on %s:%s]", bde.DML, bde.DatabaseName, bde.TableName)
 }

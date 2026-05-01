@@ -23,6 +23,8 @@ linters:
     - whitespace
   disable:
     - errcheck
+    - noctx
+    - prealloc
   exclusions:
     generated: lax
     presets:

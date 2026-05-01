@@ -17,76 +17,76 @@ func NewInstanceKeyMap() *InstanceKeyMap {
 	return &InstanceKeyMap{}
 }
 
-func (this *InstanceKeyMap) Len() int {
-	return len(*this)
+func (ikm *InstanceKeyMap) Len() int {
+	return len(*ikm)
 }
 
 // AddKey adds a single key to this map
-func (this *InstanceKeyMap) AddKey(key InstanceKey) {
-	(*this)[key] = true
+func (ikm *InstanceKeyMap) AddKey(key InstanceKey) {
+	(*ikm)[key] = true
 }
 
 // AddKeys adds all given keys to this map
-func (this *InstanceKeyMap) AddKeys(keys []InstanceKey) {
+func (ikm *InstanceKeyMap) AddKeys(keys []InstanceKey) {
 	for _, key := range keys {
-		this.AddKey(key)
+		ikm.AddKey(key)
 	}
 }
 
 // HasKey checks if given key is within the map
-func (this *InstanceKeyMap) HasKey(key InstanceKey) bool {
-	_, ok := (*this)[key]
+func (ikm *InstanceKeyMap) HasKey(key InstanceKey) bool {
+	_, ok := (*ikm)[key]
 	return ok
 }
 
 // GetInstanceKeys returns keys in this map in the form of an array
-func (this *InstanceKeyMap) GetInstanceKeys() []InstanceKey {
+func (ikm *InstanceKeyMap) GetInstanceKeys() []InstanceKey {
 	res := []InstanceKey{}
-	for key := range *this {
+	for key := range *ikm {
 		res = append(res, key)
 	}
 	return res
 }
 
 // MarshalJSON will marshal this map as JSON
-func (this *InstanceKeyMap) MarshalJSON() ([]byte, error) {
-	return json.Marshal(this.GetInstanceKeys())
+func (ikm *InstanceKeyMap) MarshalJSON() ([]byte, error) {
+	return json.Marshal(ikm.GetInstanceKeys())
 }
 
 // ToJSON will marshal this map as JSON
-func (this *InstanceKeyMap) ToJSON() (string, error) {
-	bytes, err := this.MarshalJSON()
+func (ikm *InstanceKeyMap) ToJSON() (string, error) {
+	bytes, err := ikm.MarshalJSON()
 	return string(bytes), err
 }
 
 // ToJSONString will marshal this map as JSON
-func (this *InstanceKeyMap) ToJSONString() string {
-	s, _ := this.ToJSON()
+func (ikm *InstanceKeyMap) ToJSONString() string {
+	s, _ := ikm.ToJSON()
 	return s
 }
 
 // ToCommaDelimitedList will export this map in comma delimited format
-func (this *InstanceKeyMap) ToCommaDelimitedList() string {
+func (ikm *InstanceKeyMap) ToCommaDelimitedList() string {
 	keyDisplays := []string{}
-	for key := range *this {
+	for key := range *ikm {
 		keyDisplays = append(keyDisplays, key.DisplayString())
 	}
 	return strings.Join(keyDisplays, ",")
 }
 
 // ReadJson unmarshalls a json into this map
-func (this *InstanceKeyMap) ReadJson(jsonString string) error {
+func (ikm *InstanceKeyMap) ReadJson(jsonString string) error {
 	var keys []InstanceKey
 	err := json.Unmarshal([]byte(jsonString), &keys)
 	if err != nil {
 		return err
 	}
-	this.AddKeys(keys)
+	ikm.AddKeys(keys)
 	return err
 }
 
 // ReadJson unmarshalls a json into this map
-func (this *InstanceKeyMap) ReadCommaDelimitedList(list string) error {
+func (ikm *InstanceKeyMap) ReadCommaDelimitedList(list string) error {
 	if list == "" {
 		return nil
 	}
@@ -96,7 +96,7 @@ func (this *InstanceKeyMap) ReadCommaDelimitedList(list string) error {
 		if err != nil {
 			return err
 		}
-		this.AddKey(*key)
+		ikm.AddKey(*key)
 	}
 	return nil
 }
