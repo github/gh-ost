@@ -308,16 +308,15 @@ func (apl *Applier) AttemptInstantDDL() error {
 	return retryOnLockWaitTimeout(func() error {
 		_, err := apl.db.Exec(query)
 		return err
-	}, apl.migrationContext.Log)
+	}, apl.migrationContext.MaxRetries(), apl.migrationContext.Log)
 }
 
 // retryOnLockWaitTimeout retries the given operation on MySQL lock wait timeout
 // (errno 1205). Non-timeout errors return immediately. This is used for instant
 // DDL attempts where the operation may be blocked by a long-running transaction.
-func retryOnLockWaitTimeout(operation func() error, logger base.Logger) error {
-	const maxRetries = 5
+func retryOnLockWaitTimeout(operation func() error, maxRetries int64, logger base.Logger) error {
 	var err error
-	for i := 0; i < maxRetries; i++ {
+	for i := int64(0); i < maxRetries; i++ {
 		if i != 0 {
 			logger.Infof("Retrying after lock wait timeout (attempt %d/%d)", i+1, maxRetries)
 			RetrySleepFn(time.Duration(i) * 5 * time.Second)
@@ -749,6 +748,11 @@ func (apl *Applier) InitiateHeartbeat() {
 		if atomic.LoadInt64(&apl.finishedMigrating) > 0 {
 			return
 		}
+
+		if atomic.LoadInt64(&apl.migrationContext.CleanupImminentFlag) > 0 {
+			return
+		}
+
 		// Generally speaking, we would issue a goroutine, but I'd actually rather
 		// have this block the loop rather than spam the master in the event something
 		// goes wrong

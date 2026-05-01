@@ -81,6 +81,66 @@ func TestMigratorOnChangelogEvent(t *testing.T) {
 		wg.Wait()
 	})
 
+	t.Run("state-AllEventsUpToLockProcessed-overwrite-oldest", func(t *testing.T) {
+		// Simulate the scenario where the receiver (waitForEventsUpToLock) timed out
+		// and a stale message sits in the channel buffer. The next sentinel must
+		// overwrite the stale one so the current attempt's message is delivered.
+		m := NewMigrator(base.NewMigrationContext(), "test")
+		m.applier = NewApplier(m.migrationContext)
+
+		sendChangelogEvent := func(challenge string) {
+			columnValues := sql.ToColumnValues([]interface{}{
+				123,
+				time.Now().Unix(),
+				"state",
+				challenge,
+			})
+			require.NoError(t, m.onChangelogEvent(&binlog.BinlogEntry{
+				DmlEvent: &binlog.BinlogDMLEvent{
+					DatabaseName:    "test",
+					DML:             binlog.InsertDML,
+					NewColumnValues: columnValues},
+				Coordinates: mysql.NewFileBinlogCoordinates("mysql-bin.000004", int64(4)),
+			}))
+		}
+
+		executeWriteFunc := func() {
+			es := <-m.applyEventsQueue
+			require.NotNil(t, es.writeFunc)
+			require.NoError(t, (*es.writeFunc)())
+		}
+
+		// Attempt 1: send sentinel and execute the writeFunc to deliver it
+		sendChangelogEvent("AllEventsUpToLockProcessed:attempt1")
+		executeWriteFunc()
+
+		// The message sits unconsumed in allEventsUpToLockProcessed (simulating a timeout)
+		require.Len(t, m.allEventsUpToLockProcessed, 1)
+
+		// Attempt 2: send a new sentinel — must overwrite the stale one
+		sendChangelogEvent("AllEventsUpToLockProcessed:attempt2")
+		executeWriteFunc()
+
+		// The channel should contain exactly the latest message
+		require.Len(t, m.allEventsUpToLockProcessed, 1)
+		msg := <-m.allEventsUpToLockProcessed
+		require.Equal(t, "AllEventsUpToLockProcessed:attempt2", msg.state)
+	})
+
+	t.Run("NewMigrator-with-extreme-MaxRetries", func(t *testing.T) {
+		// Regression test: an extremely large --default-retries value must not
+		// cause an OOM when creating the migrator. Before the fix,
+		// allEventsUpToLockProcessed was buffered to MaxRetries(), which tried
+		// to allocate a ~10 trillion element channel.
+		ctx := base.NewMigrationContext()
+		ctx.SetDefaultNumRetries(9999999999999)
+		require.Equal(t, int64(9999999999999), ctx.MaxRetries())
+
+		m := NewMigrator(ctx, "test")
+		require.NotNil(t, m)
+		require.Equal(t, 1, cap(m.allEventsUpToLockProcessed))
+	})
+
 	t.Run("state-GhostTableMigrated", func(t *testing.T) {
 		go func() {
 			require.True(t, <-migrator.ghostTableMigrated)

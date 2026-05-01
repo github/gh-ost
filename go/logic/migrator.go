@@ -104,14 +104,17 @@ type Migrator struct {
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 	migrator := &Migrator{
-		appVersion:                 appVersion,
-		hooksExecutor:              NewHooksExecutor(context),
-		migrationContext:           context,
-		parser:                     sql.NewAlterTableParser(),
-		ghostTableMigrated:         make(chan bool),
-		firstThrottlingCollected:   make(chan bool, 3),
-		rowCopyComplete:            make(chan error),
-		allEventsUpToLockProcessed: make(chan *lockProcessedStruct),
+		appVersion:               appVersion,
+		hooksExecutor:            NewHooksExecutor(context),
+		migrationContext:         context,
+		parser:                   sql.NewAlterTableParser(),
+		ghostTableMigrated:       make(chan bool),
+		firstThrottlingCollected: make(chan bool, 3),
+		rowCopyComplete:          make(chan error),
+		// Buffered with capacity 1; the send uses overwrite-oldest semantics
+		// to prevent both deadlock (see https://github.com/github/gh-ost/pull/1637)
+		// and OOM when MaxRetries() is extremely large.
+		allEventsUpToLockProcessed: make(chan *lockProcessedStruct, 1),
 
 		copyRowsQueue:     make(chan tableWriteFunc),
 		applyEventsQueue:  make(chan *applyEventStruct, base.MaxEventsBatchSize),
@@ -274,11 +277,32 @@ func (mgtr *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 		// Use helper to prevent deadlock if migration aborts before receiver is ready
 		_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.ghostTableMigrated, true)
 	case AllEventsUpToLockProcessed:
+		lps := &lockProcessedStruct{
+			state:  changelogStateString,
+			coords: dmlEntry.Coordinates.Clone(),
+		}
 		var applyEventFunc tableWriteFunc = func() error {
-			return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.allEventsUpToLockProcessed, &lockProcessedStruct{
-				state:  changelogStateString,
-				coords: dmlEntry.Coordinates.Clone(),
-			})
+			// Non-blocking send with overwrite-oldest semantics: if the buffer is
+			// full (receiver timed out on a previous attempt), drain the stale
+			// message first so the current sentinel is always delivered. This
+			// prevents both goroutine leaks (the original PR #1637 issue) and OOM
+			// when MaxRetries() is very large.
+			select {
+			case mgtr.allEventsUpToLockProcessed <- lps:
+			default:
+				// Buffer full — drain the stale value, then send the current one.
+				select {
+				case <-mgtr.allEventsUpToLockProcessed:
+				default:
+				}
+				select {
+				case mgtr.allEventsUpToLockProcessed <- lps:
+				default:
+					// Concurrent drain by another goroutine or receiver; the current
+					// value is no longer needed since a newer sentinel will follow.
+				}
+			}
+			return nil
 		}
 		// at this point we know all events up to lock have been read from the streamer,
 		// because the streamer works sequentially. So those events are either already handled,
@@ -484,7 +508,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 				if err := mgtr.finalCleanup(); err != nil {
 					return nil
 				}
-				if err := mgtr.hooksExecutor.onSuccess(); err != nil {
+				if err := mgtr.hooksExecutor.onSuccess(true); err != nil {
 					return err
 				}
 				mgtr.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))
@@ -620,7 +644,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.finalCleanup(); err != nil {
 		return nil
 	}
-	if err := mgtr.hooksExecutor.onSuccess(); err != nil {
+	if err := mgtr.hooksExecutor.onSuccess(false); err != nil {
 		return err
 	}
 	mgtr.migrationContext.Log.Infof("Done migrating %s.%s", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))
@@ -734,7 +758,7 @@ func (mgtr *Migrator) Revert() error {
 	if err := mgtr.finalCleanup(); err != nil {
 		return nil
 	}
-	if err := mgtr.hooksExecutor.onSuccess(); err != nil {
+	if err := mgtr.hooksExecutor.onSuccess(false); err != nil {
 		return err
 	}
 	mgtr.migrationContext.Log.Infof("Done reverting %s.%s", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))

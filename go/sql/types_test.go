@@ -95,6 +95,47 @@ func TestConvertArgBinaryColumnPadding(t *testing.T) {
 	require.Equal(t, []byte{0x00, 0x00}, resultBytes[18:])
 }
 
+func TestConvertArgVarbinaryStringWithInvalidUTF8Bytes(t *testing.T) {
+	// go-mysql returns varbinary binlog row values as Go `string` (not `[]uint8`).
+	// When convertArg receives a string for a column with no Charset (varbinary),
+	// it must return []byte — not the original string. The Go MySQL driver sends
+	// string args as MYSQL_TYPE_VAR_STRING with utf8mb4 charset metadata, which
+	// causes MySQL to validate the bytes and emit Warning 1300 for invalid sequences.
+	// gh-ost's panic-on-warnings then turns that warning into a fatal migration error.
+	// See: uuid varbinary(16) rows whose binary UUID bytes happen to be invalid utf8mb4.
+	rawBytes := []byte{0x91, 0xC3, 0xCD, 0x00, 0x01, 0x02}
+
+	col := Column{
+		Name:      "uuid",
+		Charset:   "",              // varbinary has no character set
+		MySQLType: "varbinary(16)", // set by inspect.go from information_schema COLUMN_TYPE
+	}
+
+	result := col.convertArg(string(rawBytes))
+
+	require.IsType(t, []byte{}, result,
+		"varbinary value from binlog (Go string) must be returned as []byte, not string, "+
+			"to prevent MySQL driver from sending it with the connection's charset metadata")
+	require.Equal(t, rawBytes, result.([]byte))
+}
+
+func TestConvertArgVarbinaryBytesWithInvalidUTF8Bytes(t *testing.T) {
+	// When go-mysql returns varbinary values as []uint8 (rather than string),
+	// convertArg should also return []byte consistently.
+	rawBytes := []uint8{0x91, 0xC3, 0xCD, 0x00, 0x01, 0x02}
+
+	col := Column{
+		Name:      "uuid",
+		Charset:   "",
+		MySQLType: "varbinary(16)", // set by inspect.go from information_schema COLUMN_TYPE
+	}
+
+	result := col.convertArg(rawBytes)
+
+	require.IsType(t, []byte{}, result)
+	require.Equal(t, rawBytes, result.([]byte))
+}
+
 func TestConvertArgBinaryColumnNoPaddingWhenFull(t *testing.T) {
 	// When binary value is already at full length, no padding should occur
 	fullValue := []uint8{
