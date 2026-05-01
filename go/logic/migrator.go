@@ -1658,20 +1658,20 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		availableEvents := len(mgtr.applyEventsQueue)
 		batchSize := int(atomic.LoadInt64(&mgtr.migrationContext.DMLBatchSize))
 		if availableEvents > batchSize-1 {
-			// The "- 1" is because we already consumed one event: the original event that led to mgtr function getting called.
+			// The "- 1" is because we already consumed one event: the original event that led to this function getting called.
 			// So, if DMLBatchSize==1 we wish to not process any further events
 			availableEvents = batchSize - 1
 		}
 		for i := 0; i < availableEvents; i++ {
 			additionalStruct := <-mgtr.applyEventsQueue
 			if additionalStruct.dmlEvent == nil {
-				// Not a DML. We don't group mgtr, and we don't batch any further
+				// Not a DML. We don't group this, and we don't batch any further
 				nonDmlStructToApply = additionalStruct
 				break
 			}
 			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
 		}
-		// Create a task to apply the DML event; mgtr will be execute by executeWriteFuncs()
+		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 		var applyEventFunc tableWriteFunc = func() error {
 			return mgtr.applier.ApplyDMLEventQueries(dmlEvents)
 		}

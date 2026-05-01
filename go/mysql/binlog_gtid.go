@@ -36,7 +36,7 @@ func (coord GTIDBinlogCoordinates) String() string {
 	return coord.GTIDSet.String()
 }
 
-// Equals tests equality of coord coordinate and another one.
+// Equals tests equality of this coordinate and another one.
 func (coord *GTIDBinlogCoordinates) Equals(other BinlogCoordinates) bool {
 	if other == nil || coord.IsEmpty() || other.IsEmpty() {
 		return false
@@ -55,7 +55,7 @@ func (coord *GTIDBinlogCoordinates) IsEmpty() bool {
 	return coord.GTIDSet == nil
 }
 
-// SmallerThan returns true if coord coordinate is strictly smaller than the other.
+// SmallerThan returns true if this coordinate is strictly smaller than the other.
 func (coord *GTIDBinlogCoordinates) SmallerThan(other BinlogCoordinates) bool {
 	if other == nil || coord.IsEmpty() || other.IsEmpty() {
 		return false
@@ -66,11 +66,11 @@ func (coord *GTIDBinlogCoordinates) SmallerThan(other BinlogCoordinates) bool {
 	}
 
 	// if 'coord' does not contain the same sets we assume we are behind 'other'.
-	// there are probably edge cases where coord isn't true
+	// there are probably edge cases where this isn't true
 	return !coord.GTIDSet.Contain(otherCoords.GTIDSet)
 }
 
-// SmallerThanOrEquals returns true if coord coordinate is the same or equal to the other one.
+// SmallerThanOrEquals returns true if this coordinate is the same or equal to the other one.
 func (coord *GTIDBinlogCoordinates) SmallerThanOrEquals(other BinlogCoordinates) bool {
 	return coord.Equals(other) || coord.SmallerThan(other)
 }

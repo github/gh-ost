@@ -453,7 +453,7 @@ func (mctx *MigrationContext) GetInspectorHostname() string {
 }
 
 // InspectorIsAlsoApplier is `true` when the both inspector and applier are the
-// same database instance. Mctx would be true when running directly on master or when
+// same database instance. This would be true when running directly on master or when
 // testing on replica.
 func (mctx *MigrationContext) InspectorIsAlsoApplier() bool {
 	return mctx.InspectorConnectionConfig.Equals(mctx.ApplierConnectionConfig)
