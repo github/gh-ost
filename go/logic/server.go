@@ -435,7 +435,7 @@ help                                 # This message
 				fmt.Fprintf(writer, "Unpostponed\n")
 				return ForcePrintStatusAndHintRule, nil
 			}
-			fmt.Fprintf(writer, "You may only invoke this when gh-ost is actively postponing migration. At this time it is not")
+			fmt.Fprintf(writer, "You may only invoke this when gh-ost is actively postponing migration. At this time it is not\n")
 			return NoPrintStatusRule, nil
 		}
 	case "panic":

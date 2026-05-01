@@ -82,10 +82,10 @@ func duplicateNames(names []string) []string {
 
 func BuildValueComparison(column string, value string, comparisonSign ValueComparisonSign) (result string, err error) {
 	if column == "" {
-		return "", fmt.Errorf("empty column in GetValueComparison")
+		return "", fmt.Errorf("empty column in BuildValueComparison")
 	}
 	if value == "" {
-		return "", fmt.Errorf("empty value in GetValueComparison")
+		return "", fmt.Errorf("empty value in BuildValueComparison")
 	}
 	comparison := fmt.Sprintf("(%s %s %s)", EscapeName(column), string(comparisonSign), value)
 	return comparison, err
@@ -93,10 +93,10 @@ func BuildValueComparison(column string, value string, comparisonSign ValueCompa
 
 func BuildEqualsComparison(columns []string, values []string) (result string, err error) {
 	if len(columns) == 0 {
-		return "", fmt.Errorf("got 0 columns in GetEqualsComparison")
+		return "", fmt.Errorf("got 0 columns in BuildEqualsComparison")
 	}
 	if len(columns) != len(values) {
-		return "", fmt.Errorf("got %d columns but %d values in GetEqualsComparison", len(columns), len(values))
+		return "", fmt.Errorf("got %d columns but %d values in BuildEqualsComparison", len(columns), len(values))
 	}
 	comparisons := []string{}
 	for i, column := range columns {
@@ -202,13 +202,13 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 
 func BuildRangeComparison(columns []string, values []string, args []interface{}, comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
 	if len(columns) == 0 {
-		return "", explodedArgs, fmt.Errorf("got 0 columns in GetRangeComparison")
+		return "", explodedArgs, fmt.Errorf("got 0 columns in BuildRangeComparison")
 	}
 	if len(columns) != len(values) {
-		return "", explodedArgs, fmt.Errorf("got %d columns but %d values in GetEqualsComparison", len(columns), len(values))
+		return "", explodedArgs, fmt.Errorf("got %d columns but %d values in BuildRangeComparison", len(columns), len(values))
 	}
 	if len(columns) != len(args) {
-		return "", explodedArgs, fmt.Errorf("got %d columns but %d args in GetEqualsComparison", len(columns), len(args))
+		return "", explodedArgs, fmt.Errorf("got %d columns but %d args in BuildRangeComparison", len(columns), len(args))
 	}
 	includeEquals := false
 	if comparisonSign == LessThanOrEqualsComparisonSign {

@@ -135,7 +135,7 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 	originalNamesOnApplier := isp.migrationContext.OriginalTableColumnsOnApplier.Names()
 	originalNames := isp.migrationContext.OriginalTableColumns.Names()
 	if !reflect.DeepEqual(originalNames, originalNamesOnApplier) {
-		return fmt.Errorf("it seems like table structure is not identical between master and replica. Isp scenario is not supported")
+		return fmt.Errorf("it seems like table structure is not identical between master and replica. This scenario is not supported")
 	}
 
 	isp.migrationContext.GhostTableColumns, isp.migrationContext.GhostTableVirtualColumns, isp.migrationContext.GhostTableUniqueKeys, err = isp.InspectTableColumnsAndUniqueKeys(isp.migrationContext.GetGhostTableName())
