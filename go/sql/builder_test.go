@@ -192,6 +192,7 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		require.Equal(t, []interface{}{3, 3, 103, 103}, explodedArgs)
 	}
 	{
+		// Different first-column values → 3-part UNION insert.
 		uniqueKey := "name_position_uidx"
 		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 		rangeStartValues := []string{"@v1s", "@v2s"}
@@ -203,27 +204,14 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		require.NoError(t, err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
-			into
-				mydb.ghost
-				(id, name, position)
-			(
-				select id, name, position
-				from
-					mydb.tbl
-				force index (name_position_uidx)
-				where
-					(((name > @v1s) or (((name = @v1s))
-					AND (position > @v2s))
-					or ((name = @v1s)
-					and (position = @v2s)))
-					and ((name < @v1e)
-					or (((name = @v1e))
-					AND (position < @v2e))
-					or ((name = @v1e) and (position = @v2e))))
-				for share nowait
-			)`
+			into mydb.ghost (id, name, position)
+			((select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position >= @v2s for share nowait)
+			union all
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name > @v1s and name < @v1e for share nowait)
+			union all
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e for share nowait))`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
+		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
 	}
 }
 
@@ -274,23 +262,14 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		require.NoError(t, err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
-			into
-				mydb.ghost
-				(id, name, location)
-			(
-				select id, name, position
-				from
-					mydb.tbl
-				force index (name_position_uidx)
-				where
-					(((name > @v1s) or (((name = @v1s))
-					AND (position > @v2s)) or ((name = @v1s) and (position = @v2s)))
-					and ((name < @v1e) or (((name = @v1e)) AND (position < @v2e))
-					or ((name = @v1e) and (position = @v2e))))
-				for share nowait
-			)`
+			into mydb.ghost (id, name, location)
+			((select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position >= @v2s for share nowait)
+			union all
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name > @v1s and name < @v1e for share nowait)
+			union all
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e for share nowait))`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
+		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
 	}
 }
 
@@ -309,19 +288,14 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 		require.NoError(t, err)
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
-			into
-				mydb.ghost
-				(id, name, position)
-			(
-				select id, name, position
-				from
-					mydb.tbl
-				force index (name_position_uidx)
-				where (((name > ?) or (((name = ?)) AND (position > ?)) or ((name = ?) and (position = ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?))))
-				for share nowait
-			)`
+			into mydb.ghost (id, name, position)
+			((select id, name, position from mydb.tbl force index (name_position_uidx) where name = ? and position >= ? for share nowait)
+			union all
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name > ? and name < ? for share nowait)
+			union all
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = ? and position <= ? for share nowait))`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
+		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
 	}
 }
 
@@ -330,6 +304,7 @@ func TestBuildUniqueKeyRangeEndPreparedQueryViaOffset(t *testing.T) {
 	originalTableName := "tbl"
 	var chunkSize int64 = 500
 	{
+		// Different first-column values → 3-part UNION for efficient boundary seeks.
 		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
@@ -340,15 +315,39 @@ func TestBuildUniqueKeyRangeEndPreparedQueryViaOffset(t *testing.T) {
 			select /* gh-ost mydb.tbl test */
 				name, position
 			from
-				mydb.tbl
-			where
-				((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
+				((select name, position from mydb.tbl where name = ? and position > ? order by name asc, position asc limit 500)
+				union all
+				(select name, position from mydb.tbl where name > ? and name < ? order by name asc, position asc limit 500)
+				union all
+				(select name, position from mydb.tbl where name = ? and position <= ? order by name asc, position asc limit 500)) t
 			order by
 				name asc, position asc
 			limit 1
 			offset 499`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
+		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
+	}
+	{
+		// Same first-column value → single range query (no UNION needed).
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+		rangeStartArgs := []interface{}{3, 17}
+		rangeEndArgs := []interface{}{3, 117}
+
+		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		require.NoError(t, err)
+		expected := `
+			select /* gh-ost mydb.tbl test */
+				name, position
+			from
+				mydb.tbl
+			where
+				(name = ? and position > ? and position <= ?)
+			order by
+				name asc, position asc
+			limit 1
+			offset 499`
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, 17, 117}, explodedArgs)
 	}
 }
 
@@ -357,6 +356,7 @@ func TestBuildUniqueKeyRangeEndPreparedQueryViaTemptable(t *testing.T) {
 	originalTableName := "tbl"
 	var chunkSize int64 = 500
 	{
+		// Different first-column values → 3-part UNION for efficient boundary seeks.
 		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
@@ -364,23 +364,44 @@ func TestBuildUniqueKeyRangeEndPreparedQueryViaTemptable(t *testing.T) {
 		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		require.NoError(t, err)
 		expected := `
-			select /* gh-ost mydb.tbl test */
-				name, position
+			select /* gh-ost mydb.tbl test */ name, position
 			from (
-				select
-					name, position
+				select name, position
 				from
-					mydb.tbl
-				where ((name > ?) or (((name = ?)) AND (position > ?))) and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?)))
-				order by
-					name asc, position asc
+					((select name, position from mydb.tbl where name = ? and position > ? order by name asc, position asc limit 500)
+					union all
+					(select name, position from mydb.tbl where name > ? and name < ? order by name asc, position asc limit 500)
+					union all
+					(select name, position from mydb.tbl where name = ? and position <= ? order by name asc, position asc limit 500)) t
+				order by name asc, position asc
 				limit 500
 			) select_osc_chunk
-			order by
-				name desc, position desc
+			order by name desc, position desc
 			limit 1`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
-		require.Equal(t, []interface{}{3, 3, 17, 103, 103, 117, 103, 117}, explodedArgs)
+		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
+	}
+	{
+		// Same first-column value → single range query (no UNION needed).
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+		rangeStartArgs := []interface{}{3, 17}
+		rangeEndArgs := []interface{}{3, 117}
+
+		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		require.NoError(t, err)
+		expected := `
+			select /* gh-ost mydb.tbl test */ name, position
+			from (
+				select name, position
+				from mydb.tbl
+				where (name = ? and position > ? and position <= ?)
+				order by name asc, position asc
+				limit 500
+			) select_osc_chunk
+			order by name desc, position desc
+			limit 1`
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []interface{}{3, 17, 117}, explodedArgs)
 	}
 }
 
