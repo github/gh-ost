@@ -91,8 +91,10 @@ func TestThrottleCallsOnThrottledCallback(t *testing.T) {
 	thlr.migrationContext.SetThrottled(true, "test", base.NoThrottleReasonHint)
 
 	var callCount atomic.Int32
+	done := make(chan struct{})
 	go func() {
 		thlr.throttle(func() { callCount.Add(1) })
+		close(done)
 	}()
 
 	// wait long enough for at least two callback invocations
@@ -100,4 +102,9 @@ func TestThrottleCallsOnThrottledCallback(t *testing.T) {
 	assert.GreaterOrEqual(t, callCount.Load(), int32(2))
 
 	thlr.migrationContext.CancelContext()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("throttle() did not return after context cancellation")
+	}
 }
