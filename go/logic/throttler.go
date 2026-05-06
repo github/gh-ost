@@ -513,7 +513,11 @@ func (thlr *Throttler) throttle(onThrottled func()) {
 		if onThrottled != nil {
 			onThrottled()
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-thlr.migrationContext.GetContext().Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 }
 
