@@ -3,6 +3,7 @@ module github.com/github/gh-ost
 go 1.25.9
 
 require (
+	github.com/DataDog/datadog-go/v5 v5.8.3
 	github.com/go-ini/ini v1.67.0
 	github.com/go-mysql-org/go-mysql v1.11.0
 	github.com/go-sql-driver/mysql v1.8.1

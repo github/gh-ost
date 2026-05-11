@@ -19,6 +19,7 @@ import (
 
 	uuid "github.com/google/uuid"
 
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/openark/golib/log"
@@ -236,6 +237,8 @@ type MigrationContext struct {
 	// Stores the fatal error that triggered abort
 	AbortError error
 	abortMutex *sync.Mutex
+
+	Metrics *metrics.Client
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
