@@ -5,8 +5,8 @@ set -e
 . script/bootstrap
 
 echo "Verifying code is formatted via 'gofmt -s -w  go/'"
-gofmt -s -w  go/
-git diff --exit-code --quiet
+gofmt -s -w go/
+git diff --exit-code --quiet go/
 
 echo "Building"
 script/build
@@ -14,4 +14,4 @@ script/build
 cd .gopath/src/github.com/github/gh-ost
 
 echo "Running unit tests"
-go test -v -covermode=atomic ./go/...
+go test "$@" -v -covermode=atomic ./go/...

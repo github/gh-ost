@@ -82,10 +82,10 @@ func duplicateNames(names []string) []string {
 
 func BuildValueComparison(column string, value string, comparisonSign ValueComparisonSign) (result string, err error) {
 	if column == "" {
-		return "", fmt.Errorf("Empty column in GetValueComparison")
+		return "", fmt.Errorf("empty column in BuildValueComparison")
 	}
 	if value == "" {
-		return "", fmt.Errorf("Empty value in GetValueComparison")
+		return "", fmt.Errorf("empty value in BuildValueComparison")
 	}
 	comparison := fmt.Sprintf("(%s %s %s)", EscapeName(column), string(comparisonSign), value)
 	return comparison, err
@@ -93,10 +93,10 @@ func BuildValueComparison(column string, value string, comparisonSign ValueCompa
 
 func BuildEqualsComparison(columns []string, values []string) (result string, err error) {
 	if len(columns) == 0 {
-		return "", fmt.Errorf("Got 0 columns in GetEqualsComparison")
+		return "", fmt.Errorf("got 0 columns in BuildEqualsComparison")
 	}
 	if len(columns) != len(values) {
-		return "", fmt.Errorf("Got %d columns but %d values in GetEqualsComparison", len(columns), len(values))
+		return "", fmt.Errorf("got %d columns but %d values in BuildEqualsComparison", len(columns), len(values))
 	}
 	comparisons := []string{}
 	for i, column := range columns {
@@ -125,7 +125,7 @@ type CheckpointInsertQueryBuilder struct {
 
 func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns *ColumnList) (*CheckpointInsertQueryBuilder, error) {
 	if uniqueKeyColumns.Len() == 0 {
-		return nil, fmt.Errorf("Got 0 columns in BuildSetCheckpointInsertQuery")
+		return nil, fmt.Errorf("got 0 columns in BuildSetCheckpointInsertQuery")
 	}
 	values := buildColumnsPreparedValues(uniqueKeyColumns)
 	minUniqueColNames := []string{}
@@ -142,11 +142,11 @@ func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns 
 		insert /* gh-ost */
 		into %s.%s
 			(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
-			 gh_ost_rows_copied, gh_ost_dml_applied,
+			 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
   			 %s, %s)
 		values
 			(unix_timestamp(now()), ?, ?,
-			 ?, ?,
+			 ?, ?, ?,
 			 %s, %s)`,
 		databaseName, tableName,
 		strings.Join(minUniqueColNames, ", "),
@@ -169,11 +169,11 @@ func (b *CheckpointInsertQueryBuilder) BuildQuery(uniqueKeyArgs []interface{}) (
 	}
 	convertedArgs := make([]interface{}, 0, 2*b.uniqueKeyColumns.Len())
 	for i, column := range b.uniqueKeyColumns.Columns() {
-		minArg := column.convertArg(uniqueKeyArgs[i], true)
+		minArg := column.convertArg(uniqueKeyArgs[i])
 		convertedArgs = append(convertedArgs, minArg)
 	}
 	for i, column := range b.uniqueKeyColumns.Columns() {
-		minArg := column.convertArg(uniqueKeyArgs[i+b.uniqueKeyColumns.Len()], true)
+		minArg := column.convertArg(uniqueKeyArgs[i+b.uniqueKeyColumns.Len()])
 		convertedArgs = append(convertedArgs, minArg)
 	}
 	return b.preparedStatement, convertedArgs, nil
@@ -181,7 +181,7 @@ func (b *CheckpointInsertQueryBuilder) BuildQuery(uniqueKeyArgs []interface{}) (
 
 func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 	if columns.Len() == 0 {
-		return "", fmt.Errorf("Got 0 columns in BuildSetPreparedClause")
+		return "", fmt.Errorf("got 0 columns in BuildSetPreparedClause")
 	}
 	setTokens := []string{}
 	for _, column := range columns.Columns() {
@@ -202,13 +202,13 @@ func BuildSetPreparedClause(columns *ColumnList) (result string, err error) {
 
 func BuildRangeComparison(columns []string, values []string, args []interface{}, comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
 	if len(columns) == 0 {
-		return "", explodedArgs, fmt.Errorf("Got 0 columns in GetRangeComparison")
+		return "", explodedArgs, fmt.Errorf("got 0 columns in BuildRangeComparison")
 	}
 	if len(columns) != len(values) {
-		return "", explodedArgs, fmt.Errorf("Got %d columns but %d values in GetEqualsComparison", len(columns), len(values))
+		return "", explodedArgs, fmt.Errorf("got %d columns but %d values in BuildRangeComparison", len(columns), len(values))
 	}
 	if len(columns) != len(args) {
-		return "", explodedArgs, fmt.Errorf("Got %d columns but %d args in GetEqualsComparison", len(columns), len(args))
+		return "", explodedArgs, fmt.Errorf("got %d columns but %d args in BuildRangeComparison", len(columns), len(args))
 	}
 	includeEquals := false
 	if comparisonSign == LessThanOrEqualsComparisonSign {
@@ -262,7 +262,7 @@ func BuildRangePreparedComparison(columns *ColumnList, args []interface{}, compa
 
 func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, noWait bool) (result string, explodedArgs []interface{}, err error) {
 	if len(sharedColumns) == 0 {
-		return "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
+		return "", explodedArgs, fmt.Errorf("got 0 shared columns in BuildRangeInsertQuery")
 	}
 	databaseName = EscapeName(databaseName)
 	originalTableName = EscapeName(originalTableName)
@@ -281,7 +281,7 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	sharedColumnsListing := strings.Join(sharedColumns, ", ")
 
 	uniqueKey = EscapeName(uniqueKey)
-	var minRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
+	var minRangeComparisonSign = GreaterThanComparisonSign
 	if includeRangeStartValues {
 		minRangeComparisonSign = GreaterThanOrEqualsComparisonSign
 	}
@@ -331,12 +331,12 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 
 func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
 	if uniqueKeyColumns.Len() == 0 {
-		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
+		return "", explodedArgs, fmt.Errorf("got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
-	var startRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
+	var startRangeComparisonSign = GreaterThanComparisonSign
 	if includeRangeStartValues {
 		startRangeComparisonSign = GreaterThanOrEqualsComparisonSign
 	}
@@ -384,12 +384,12 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 
 func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
 	if uniqueKeyColumns.Len() == 0 {
-		return "", explodedArgs, fmt.Errorf("Got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
+		return "", explodedArgs, fmt.Errorf("got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 
-	var startRangeComparisonSign ValueComparisonSign = GreaterThanComparisonSign
+	var startRangeComparisonSign = GreaterThanComparisonSign
 	if includeRangeStartValues {
 		startRangeComparisonSign = GreaterThanOrEqualsComparisonSign
 	}
@@ -452,7 +452,7 @@ func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, unique
 
 func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uniqueKey *UniqueKey, order string) (string, error) {
 	if uniqueKey.Columns.Len() == 0 {
-		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
+		return "", fmt.Errorf("got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
@@ -533,7 +533,7 @@ func (b *DMLDeleteQueryBuilder) BuildQuery(args []interface{}) (string, []interf
 	uniqueKeyArgs := make([]interface{}, 0, b.uniqueKeyColumns.Len())
 	for _, column := range b.uniqueKeyColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal], true)
+		arg := column.convertArg(args[tableOrdinal])
 		uniqueKeyArgs = append(uniqueKeyArgs, arg)
 	}
 	return b.preparedStatement, uniqueKeyArgs, nil
@@ -566,7 +566,7 @@ func NewDMLInsertQueryBuilder(databaseName, tableName string, tableColumns, shar
 	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
 
 	stmt := fmt.Sprintf(`
-		replace /* gh-ost %s.%s */
+		insert /* gh-ost %s.%s */ ignore
 		into
 			%s.%s
 			(%s)
@@ -595,7 +595,7 @@ func (b *DMLInsertQueryBuilder) BuildQuery(args []interface{}) (string, []interf
 	sharedArgs := make([]interface{}, 0, b.sharedColumns.Len())
 	for _, column := range b.sharedColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(args[tableOrdinal], false)
+		arg := column.convertArg(args[tableOrdinal])
 		sharedArgs = append(sharedArgs, arg)
 	}
 	return b.preparedStatement, sharedArgs, nil
@@ -661,20 +661,18 @@ func NewDMLUpdateQueryBuilder(databaseName, tableName string, tableColumns, shar
 
 // BuildQuery builds the arguments array for a DML event UPDATE query.
 // It returns the query string, the shared arguments array, and the unique key arguments array.
-func (b *DMLUpdateQueryBuilder) BuildQuery(valueArgs, whereArgs []interface{}) (string, []interface{}, []interface{}, error) {
-	sharedArgs := make([]interface{}, 0, b.sharedColumns.Len())
+func (b *DMLUpdateQueryBuilder) BuildQuery(valueArgs, whereArgs []interface{}) (string, []interface{}, error) {
+	args := make([]interface{}, 0, b.sharedColumns.Len()+b.uniqueKeyColumns.Len())
 	for _, column := range b.sharedColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(valueArgs[tableOrdinal], false)
-		sharedArgs = append(sharedArgs, arg)
+		arg := column.convertArg(valueArgs[tableOrdinal])
+		args = append(args, arg)
 	}
-
-	uniqueKeyArgs := make([]interface{}, 0, b.uniqueKeyColumns.Len())
 	for _, column := range b.uniqueKeyColumns.Columns() {
 		tableOrdinal := b.tableColumns.Ordinals[column.Name]
-		arg := column.convertArg(whereArgs[tableOrdinal], true)
-		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+		arg := column.convertArg(whereArgs[tableOrdinal])
+		args = append(args, arg)
 	}
 
-	return b.preparedStatement, sharedArgs, uniqueKeyArgs, nil
+	return b.preparedStatement, args, nil
 }

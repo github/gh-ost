@@ -1,0 +1,27 @@
+# mysql server configuration for testcontainer
+[mysqld]
+max_connections = 200
+innodb_log_file_size = 64M
+innodb_flush_log_at_trx_commit = 2
+innodb_flush_method = O_DIRECT
+skip-name-resolve
+skip-ssl
+
+character-set-server = utf8mb4
+collation-server = utf8mb4_0900_ai_ci
+
+default-time-zone = '+00:00'
+
+sql_mode = STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION
+
+general_log = 0
+general_log_file = /var/log/mysql/general.log
+slow_query_log = 0
+slow_query_log_file = /var/log/mysql/slow.log
+long_query_time = 2
+
+gtid_mode=ON
+enforce_gtid_consistency=ON
+
+[client]
+default-character-set = utf8mb4

@@ -28,6 +28,20 @@ jobs:
       - name: Run tests
         run: script/docker-gh-ost-replica-tests run
 
+      - name: Set artifact name
+        if: failure()
+        run: |
+          ARTIFACT_NAME=$(echo "${{ matrix.image }}" | tr '/:' '-')
+          echo "ARTIFACT_NAME=test-logs-${ARTIFACT_NAME}" >> $GITHUB_ENV
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: /tmp/gh-ost-test.*
+          retention-days: 7
+
       - name: Teardown environment
         if: always()
         run: script/docker-gh-ost-replica-tests down

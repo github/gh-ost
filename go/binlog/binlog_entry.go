@@ -26,6 +26,6 @@ func NewBinlogEntryAt(coordinates mysql.BinlogCoordinates) *BinlogEntry {
 }
 
 // String() returns a string representation of this binlog entry
-func (this *BinlogEntry) String() string {
-	return fmt.Sprintf("[BinlogEntry at %+v; dml:%+v]", this.Coordinates, this.DmlEvent)
+func (ble *BinlogEntry) String() string {
+	return fmt.Sprintf("[BinlogEntry at %+v; dml:%+v]", ble.Coordinates, ble.DmlEvent)
 }

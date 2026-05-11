@@ -49,6 +49,7 @@ The full list of supported hooks is best found in code: [hooks.go](https://githu
 - `gh-ost-on-before-cut-over`
 - `gh-ost-on-success`
 - `gh-ost-on-failure`
+- `gh-ost-on-batch-copy-retry`
 
 ### Context
 
@@ -76,11 +77,14 @@ The following variables are available on all hooks:
 - `GH_OST_HOOKS_HINT_OWNER` - copy of `--hooks-hint-owner` value
 - `GH_OST_HOOKS_HINT_TOKEN` - copy of `--hooks-hint-token` value
 - `GH_OST_DRY_RUN` - whether or not the `gh-ost` run is a dry run
+- `GH_OST_REVERT` - whether or not `gh-ost` is running in revert mode
 
 The following variable are available on particular hooks:
 
+- `GH_OST_INSTANT_DDL` is only available in `gh-ost-on-success`. The value is `true` if instant DDL was successful, and `false` if it was not.
 - `GH_OST_COMMAND` is only available in `gh-ost-on-interactive-command`
 - `GH_OST_STATUS` is only available in `gh-ost-on-status`
+- `GH_OST_LAST_BATCH_COPY_ERROR` is only available in `gh-ost-on-batch-copy-retry`
 
 ### Examples
 
