@@ -7,6 +7,7 @@ package logic
 
 import (
 	"context"
+	stdsql "database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -476,6 +477,23 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
+
+	// In MySQL 8.0 (and possibly earlier) some DDL statements can be applied instantly.
+	// Attempt this EARLY, before creating ghost tables or starting binlog streaming,
+	// to avoid unnecessary overhead for large tables when instant DDL is possible.
+	// Skip during resume (the DDL may have already been applied) and noop mode.
+	if mgtr.migrationContext.AttemptInstantDDL && !mgtr.migrationContext.Resume {
+		if mgtr.migrationContext.Noop {
+			mgtr.migrationContext.Log.Debugf("Noop operation; not really attempting instant DDL")
+		} else {
+			if err := mgtr.attemptInstantDDLEarly(); err == nil {
+				return nil
+			} else {
+				mgtr.migrationContext.Log.Infof("instant DDL attempt failed (%v); proceeding with normal migration", err)
+			}
+		}
+	}
+
 	// If we are resuming, we will initiateStreaming later when we know
 	// the binlog coordinates to resume streaming from.
 	// If not resuming, the streamer must be initiated before the applier,
@@ -496,27 +514,6 @@ func (mgtr *Migrator) Migrate() (err error) {
 	}
 	if err := mgtr.createFlagFiles(); err != nil {
 		return err
-	}
-	// In MySQL 8.0 (and possibly earlier) some DDL statements can be applied instantly.
-	// Attempt to do this if AttemptInstantDDL is set.
-	if mgtr.migrationContext.AttemptInstantDDL {
-		if mgtr.migrationContext.Noop {
-			mgtr.migrationContext.Log.Debugf("Noop operation; not really attempting instant DDL")
-		} else {
-			mgtr.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
-			if err := mgtr.applier.AttemptInstantDDL(); err == nil {
-				if err := mgtr.finalCleanup(); err != nil {
-					return nil
-				}
-				if err := mgtr.hooksExecutor.onSuccess(true); err != nil {
-					return err
-				}
-				mgtr.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))
-				return nil
-			} else {
-				mgtr.migrationContext.Log.Infof("ALGORITHM=INSTANT not supported for this operation, proceeding with original algorithm: %s", err)
-			}
-		}
 	}
 
 	initialLag, _ := mgtr.inspector.getReplicationLag()
@@ -1073,6 +1070,60 @@ func (mgtr *Migrator) initiateServer() (err error) {
 	}
 
 	go mgtr.server.Serve()
+	return nil
+}
+
+// attemptInstantDDLEarly attempts to execute the ALTER with ALGORITHM=INSTANT
+// before any ghost table or binlog streaming setup. This avoids the overhead of
+// creating ghost tables, changelog tables, and streaming binlog events for
+// operations that MySQL 8.0+ can execute as instant metadata-only changes.
+// If instant DDL succeeds, the migration is complete. If it fails, the caller
+// should proceed with the normal migration flow.
+func (mgtr *Migrator) attemptInstantDDLEarly() error {
+	mgtr.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT before full migration setup")
+
+	// Open a temporary connection to the master for the instant DDL attempt.
+	// This avoids initializing the full Applier (ghost table, changelog, etc.).
+	connConfig := mgtr.migrationContext.ApplierConnectionConfig
+	uri := connConfig.GetDBUri(mgtr.migrationContext.DatabaseName)
+	db, err := stdsql.Open("mysql", uri)
+	if err != nil {
+		mgtr.migrationContext.Log.Infof("Could not open connection for instant DDL attempt: %s", err)
+		return err
+	}
+	defer db.Close()
+
+	tableLockTimeoutSeconds := mgtr.migrationContext.CutOverLockTimeoutSeconds * 2
+	mgtr.migrationContext.Log.Infof("Setting LOCK timeout as %d seconds for instant DDL attempt", tableLockTimeoutSeconds)
+	lockTimeoutQuery := fmt.Sprintf(`set /* gh-ost */ session lock_wait_timeout:=%d`, tableLockTimeoutSeconds)
+	if _, err := db.Exec(lockTimeoutQuery); err != nil {
+		mgtr.migrationContext.Log.Infof("Could not set lock timeout for instant DDL: %s", err)
+		return err
+	}
+
+	query := fmt.Sprintf(`ALTER /* gh-ost */ TABLE %s.%s %s, ALGORITHM=INSTANT`,
+		sql.EscapeName(mgtr.migrationContext.DatabaseName),
+		sql.EscapeName(mgtr.migrationContext.OriginalTableName),
+		mgtr.migrationContext.AlterStatementOptions,
+	)
+	mgtr.migrationContext.Log.Infof("INSTANT DDL query: %s", query)
+
+	// We don't need a trx, because for instant DDL the SQL mode doesn't matter.
+	if err := retryOnLockWaitTimeout(func() error {
+		_, err := db.Exec(query)
+		return err
+	}, mgtr.migrationContext.MaxRetries(), mgtr.migrationContext.Log); err != nil {
+		mgtr.migrationContext.Log.Infof("ALGORITHM=INSTANT is not supported for this operation, proceeding with regular algorithm: %s", err)
+		return err
+	}
+
+	if err := mgtr.hooksExecutor.onSuccess(true); err != nil {
+		return err
+	}
+	mgtr.migrationContext.Log.Infof("Successfully executed instant DDL on %s.%s (no ghost table was needed)",
+		sql.EscapeName(mgtr.migrationContext.DatabaseName),
+		sql.EscapeName(mgtr.migrationContext.OriginalTableName),
+	)
 	return nil
 }
 
