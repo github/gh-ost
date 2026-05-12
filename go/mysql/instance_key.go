@@ -20,7 +20,7 @@ var (
 	ipv4HostRegexp     = regexp.MustCompile("^([^:]+)$")
 
 	// e.g. [2001:db8:1f70::999:de8:7648:6e8]:3308
-	ipv6HostPortRegexp = regexp.MustCompile("^\\[([:0-9a-fA-F]+)\\]:([0-9]+)$") //nolint:gosimple
+	ipv6HostPortRegexp = regexp.MustCompile(`^\[([0-9a-fA-F:]+)\]:(\d{1,5})$`) //nolint:gosimple
 	// e.g. 2001:db8:1f70::999:de8:7648:6e8
 	ipv6HostRegexp = regexp.MustCompile("^([:0-9a-fA-F]+)$")
 )
@@ -47,13 +47,13 @@ func NewRawInstanceKey(hostPort string) (*InstanceKey, error) {
 	} else if submatch := ipv6HostRegexp.FindStringSubmatch(hostPort); len(submatch) > 0 {
 		hostname = submatch[1]
 	} else {
-		return nil, fmt.Errorf("Cannot parse address: %s", hostPort)
+		return nil, fmt.Errorf("cannot parse address: %s", hostPort)
 	}
 	instanceKey := &InstanceKey{Hostname: hostname, Port: DefaultInstancePort}
 	if port != "" {
 		var err error
 		if instanceKey.Port, err = strconv.Atoi(port); err != nil {
-			return instanceKey, fmt.Errorf("Invalid port: %s", port)
+			return instanceKey, fmt.Errorf("invalid port: %s", port)
 		}
 	}
 
@@ -67,68 +67,68 @@ func ParseInstanceKey(hostPort string) (*InstanceKey, error) {
 }
 
 // Equals tests equality between this key and another key
-func (this *InstanceKey) Equals(other *InstanceKey) bool {
+func (ik *InstanceKey) Equals(other *InstanceKey) bool {
 	if other == nil {
 		return false
 	}
-	return this.Hostname == other.Hostname && this.Port == other.Port
+	return ik.Hostname == other.Hostname && ik.Port == other.Port
 }
 
 // SmallerThan returns true if this key is dictionary-smaller than another.
 // This is used for consistent sorting/ordering; there's nothing magical about it.
-func (this *InstanceKey) SmallerThan(other *InstanceKey) bool {
-	if this.Hostname < other.Hostname {
+func (ik *InstanceKey) SmallerThan(other *InstanceKey) bool {
+	if ik.Hostname < other.Hostname {
 		return true
 	}
-	if this.Hostname == other.Hostname && this.Port < other.Port {
+	if ik.Hostname == other.Hostname && ik.Port < other.Port {
 		return true
 	}
 	return false
 }
 
 // IsDetached returns 'true' when this hostname is logically "detached"
-func (this *InstanceKey) IsDetached() bool {
-	return strings.HasPrefix(this.Hostname, detachHint)
+func (ik *InstanceKey) IsDetached() bool {
+	return strings.HasPrefix(ik.Hostname, detachHint)
 }
 
 // IsValid uses simple heuristics to see whether this key represents an actual instance
-func (this *InstanceKey) IsValid() bool {
-	if this.Hostname == "_" {
+func (ik *InstanceKey) IsValid() bool {
+	if ik.Hostname == "_" {
 		return false
 	}
-	if this.IsDetached() {
+	if ik.IsDetached() {
 		return false
 	}
-	return len(this.Hostname) > 0 && this.Port > 0
+	return len(ik.Hostname) > 0 && ik.Port > 0
 }
 
 // DetachedKey returns an instance key whose hostname is detached: invalid, but recoverable
-func (this *InstanceKey) DetachedKey() *InstanceKey {
-	if this.IsDetached() {
-		return this
+func (ik *InstanceKey) DetachedKey() *InstanceKey {
+	if ik.IsDetached() {
+		return ik
 	}
-	return &InstanceKey{Hostname: fmt.Sprintf("%s%s", detachHint, this.Hostname), Port: this.Port}
+	return &InstanceKey{Hostname: fmt.Sprintf("%s%s", detachHint, ik.Hostname), Port: ik.Port}
 }
 
 // ReattachedKey returns an instance key whose hostname is detached: invalid, but recoverable
-func (this *InstanceKey) ReattachedKey() *InstanceKey {
-	if !this.IsDetached() {
-		return this
+func (ik *InstanceKey) ReattachedKey() *InstanceKey {
+	if !ik.IsDetached() {
+		return ik
 	}
-	return &InstanceKey{Hostname: this.Hostname[len(detachHint):], Port: this.Port}
+	return &InstanceKey{Hostname: ik.Hostname[len(detachHint):], Port: ik.Port}
 }
 
 // StringCode returns an official string representation of this key
-func (this *InstanceKey) StringCode() string {
-	return fmt.Sprintf("%s:%d", this.Hostname, this.Port)
+func (ik *InstanceKey) StringCode() string {
+	return fmt.Sprintf("%s:%d", ik.Hostname, ik.Port)
 }
 
 // DisplayString returns a user-friendly string representation of this key
-func (this *InstanceKey) DisplayString() string {
-	return this.StringCode()
+func (ik *InstanceKey) DisplayString() string {
+	return ik.StringCode()
 }
 
 // String returns a user-friendly string representation of this key
-func (this InstanceKey) String() string {
-	return this.StringCode()
+func (ik InstanceKey) String() string {
+	return ik.StringCode()
 }

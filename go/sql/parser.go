@@ -62,7 +62,7 @@ func NewParserFromAlterStatement(alterStatement string) *AlterTableParser {
 	return parser
 }
 
-func (this *AlterTableParser) tokenizeAlterStatement(alterStatement string) (tokens []string) {
+func (atp *AlterTableParser) tokenizeAlterStatement(alterStatement string) (tokens []string) {
 	terminatingQuote := rune(0)
 	f := func(c rune) bool {
 		switch {
@@ -89,13 +89,13 @@ func (this *AlterTableParser) tokenizeAlterStatement(alterStatement string) (tok
 	return tokens
 }
 
-func (this *AlterTableParser) sanitizeQuotesFromAlterStatement(alterStatement string) (strippedStatement string) {
+func (atp *AlterTableParser) sanitizeQuotesFromAlterStatement(alterStatement string) (strippedStatement string) {
 	strippedStatement = alterStatement
 	strippedStatement = sanitizeQuotesRegexp.ReplaceAllString(strippedStatement, "''")
 	return strippedStatement
 }
 
-func (this *AlterTableParser) parseAlterToken(alterToken string) {
+func (atp *AlterTableParser) parseAlterToken(alterToken string) {
 	{
 		// rename
 		allStringSubmatch := renameColumnRegexp.FindAllStringSubmatch(alterToken, -1)
@@ -106,7 +106,7 @@ func (this *AlterTableParser) parseAlterToken(alterToken string) {
 			if unquoted, err := strconv.Unquote(submatch[3]); err == nil {
 				submatch[3] = unquoted
 			}
-			this.columnRenameMap[submatch[2]] = submatch[3]
+			atp.columnRenameMap[submatch[2]] = submatch[3]
 		}
 	}
 	{
@@ -116,51 +116,51 @@ func (this *AlterTableParser) parseAlterToken(alterToken string) {
 			if unquoted, err := strconv.Unquote(submatch[2]); err == nil {
 				submatch[2] = unquoted
 			}
-			this.droppedColumns[submatch[2]] = true
+			atp.droppedColumns[submatch[2]] = true
 		}
 	}
 	{
 		// rename table
 		if renameTableRegexp.MatchString(alterToken) {
-			this.isRenameTable = true
+			atp.isRenameTable = true
 		}
 	}
 	{
 		// auto_increment
 		if autoIncrementRegexp.MatchString(alterToken) {
-			this.isAutoIncrementDefined = true
+			atp.isAutoIncrementDefined = true
 		}
 	}
 }
 
-func (this *AlterTableParser) ParseAlterStatement(alterStatement string) (err error) {
-	this.alterStatementOptions = alterStatement
+func (atp *AlterTableParser) ParseAlterStatement(alterStatement string) (err error) {
+	atp.alterStatementOptions = alterStatement
 	for _, alterTableRegexp := range alterTableExplicitSchemaTableRegexps {
-		if submatch := alterTableRegexp.FindStringSubmatch(this.alterStatementOptions); len(submatch) > 0 {
-			this.explicitSchema = submatch[1]
-			this.explicitTable = submatch[2]
-			this.alterStatementOptions = submatch[3]
+		if submatch := alterTableRegexp.FindStringSubmatch(atp.alterStatementOptions); len(submatch) > 0 {
+			atp.explicitSchema = submatch[1]
+			atp.explicitTable = submatch[2]
+			atp.alterStatementOptions = submatch[3]
 			break
 		}
 	}
 	for _, alterTableRegexp := range alterTableExplicitTableRegexps {
-		if submatch := alterTableRegexp.FindStringSubmatch(this.alterStatementOptions); len(submatch) > 0 {
-			this.explicitTable = submatch[1]
-			this.alterStatementOptions = submatch[2]
+		if submatch := alterTableRegexp.FindStringSubmatch(atp.alterStatementOptions); len(submatch) > 0 {
+			atp.explicitTable = submatch[1]
+			atp.alterStatementOptions = submatch[2]
 			break
 		}
 	}
-	for _, alterToken := range this.tokenizeAlterStatement(this.alterStatementOptions) {
-		alterToken = this.sanitizeQuotesFromAlterStatement(alterToken)
-		this.parseAlterToken(alterToken)
-		this.alterTokens = append(this.alterTokens, alterToken)
+	for _, alterToken := range atp.tokenizeAlterStatement(atp.alterStatementOptions) {
+		alterToken = atp.sanitizeQuotesFromAlterStatement(alterToken)
+		atp.parseAlterToken(alterToken)
+		atp.alterTokens = append(atp.alterTokens, alterToken)
 	}
 	return nil
 }
 
-func (this *AlterTableParser) GetNonTrivialRenames() map[string]string {
+func (atp *AlterTableParser) GetNonTrivialRenames() map[string]string {
 	result := make(map[string]string)
-	for column, renamed := range this.columnRenameMap {
+	for column, renamed := range atp.columnRenameMap {
 		if column != renamed {
 			result[column] = renamed
 		}
@@ -168,40 +168,40 @@ func (this *AlterTableParser) GetNonTrivialRenames() map[string]string {
 	return result
 }
 
-func (this *AlterTableParser) HasNonTrivialRenames() bool {
-	return len(this.GetNonTrivialRenames()) > 0
+func (atp *AlterTableParser) HasNonTrivialRenames() bool {
+	return len(atp.GetNonTrivialRenames()) > 0
 }
 
-func (this *AlterTableParser) DroppedColumnsMap() map[string]bool {
-	return this.droppedColumns
+func (atp *AlterTableParser) DroppedColumnsMap() map[string]bool {
+	return atp.droppedColumns
 }
 
-func (this *AlterTableParser) IsRenameTable() bool {
-	return this.isRenameTable
+func (atp *AlterTableParser) IsRenameTable() bool {
+	return atp.isRenameTable
 }
 
-func (this *AlterTableParser) IsAutoIncrementDefined() bool {
-	return this.isAutoIncrementDefined
+func (atp *AlterTableParser) IsAutoIncrementDefined() bool {
+	return atp.isAutoIncrementDefined
 }
 
-func (this *AlterTableParser) GetExplicitSchema() string {
-	return this.explicitSchema
+func (atp *AlterTableParser) GetExplicitSchema() string {
+	return atp.explicitSchema
 }
 
-func (this *AlterTableParser) HasExplicitSchema() bool {
-	return this.GetExplicitSchema() != ""
+func (atp *AlterTableParser) HasExplicitSchema() bool {
+	return atp.GetExplicitSchema() != ""
 }
 
-func (this *AlterTableParser) GetExplicitTable() string {
-	return this.explicitTable
+func (atp *AlterTableParser) GetExplicitTable() string {
+	return atp.explicitTable
 }
 
-func (this *AlterTableParser) HasExplicitTable() bool {
-	return this.GetExplicitTable() != ""
+func (atp *AlterTableParser) HasExplicitTable() bool {
+	return atp.GetExplicitTable() != ""
 }
 
-func (this *AlterTableParser) GetAlterStatementOptions() string {
-	return this.alterStatementOptions
+func (atp *AlterTableParser) GetAlterStatementOptions() string {
+	return atp.alterStatementOptions
 }
 
 func ParseEnumValues(enumColumnType string) string {
