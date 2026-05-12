@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"regexp"
 	"syscall"
+	"time"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
@@ -174,6 +175,7 @@ func main() {
 	statsdAddr := flag.String("statsd-addr", "", "StatsD endpoint (host:port or unix socket); empty disables StatsD")
 	var statsdTags statsdTagList
 	flag.Var(&statsdTags, "statsd-tags", "global StatsD tags applied to every metric (repeatable), format key:value. Example: --statsd-tags 'env:prod,service:my-service'")
+	runtimeMetricsInterval := flag.Int("runtime-metrics-interval", 10, "Seconds between Go runtime memory/GC gauge samples (requires --statsd-addr); 0 disables")
 	quiet := flag.Bool("quiet", false, "quiet")
 	verbose := flag.Bool("verbose", false, "verbose")
 	debug := flag.Bool("debug", false, "debug mode (very verbose)")
@@ -400,6 +402,9 @@ func main() {
 	defer func() { _ = metricsClient.Close() }()
 	migrationContext.Metrics = metricsClient
 	metricsClient.Count("startup", 1)
+	if *runtimeMetricsInterval > 0 {
+		metrics.StartGoRuntimeReporter(migrationContext.GetContext(), metricsClient, time.Duration(*runtimeMetricsInterval)*time.Second)
+	}
 
 	migrator := logic.NewMigrator(migrationContext, AppVersion)
 	var err error
