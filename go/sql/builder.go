@@ -394,7 +394,7 @@ func buildRangeInsertQueryTwoColumn(
 	result = fmt.Sprintf(`
 		insert /* gh-ost %s.%s */ ignore
 		into %s.%s (%s)
-		(%s union all %s union all %s)`,
+		%s union all %s union all %s`,
 		databaseName, originalTableName,
 		databaseName, ghostTableName, mappedSharedColumnsListing,
 		part1, part2, part3,

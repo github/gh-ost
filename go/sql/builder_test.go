@@ -205,11 +205,11 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into mydb.ghost (id, name, position)
-			((select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position >= @v2s for share nowait)
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position >= @v2s for share nowait)
 			union all
 			(select id, name, position from mydb.tbl force index (name_position_uidx) where name > @v1s and name < @v1e for share nowait)
 			union all
-			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e for share nowait))`
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e for share nowait)`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
 	}
@@ -254,11 +254,11 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into mydb.ghost (id, name, position)
-			((select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position > @v2s for share nowait)
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position > @v2s for share nowait)
 			union all
 			(select id, name, position from mydb.tbl force index (name_position_uidx) where name > @v1s and name < @v1e for share nowait)
 			union all
-			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e for share nowait))`
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e for share nowait)`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
 	}
@@ -276,11 +276,11 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into mydb.ghost (id, name, position)
-			((select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position >= @v2s )
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position >= @v2s )
 			union all
 			(select id, name, position from mydb.tbl force index (name_position_uidx) where name > @v1s and name < @v1e )
 			union all
-			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e ))`
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e )`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
 	}
@@ -298,11 +298,11 @@ func TestBuildRangeInsertQuery(t *testing.T) {
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into mydb.ghost (id, name, position)
-			((select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position >= @v2s lock in share mode)
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position >= @v2s lock in share mode)
 			union all
 			(select id, name, position from mydb.tbl force index (name_position_uidx) where name > @v1s and name < @v1e lock in share mode)
 			union all
-			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e lock in share mode))`
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e lock in share mode)`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
 	}
@@ -356,11 +356,11 @@ func TestBuildRangeInsertQueryRenameMap(t *testing.T) {
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into mydb.ghost (id, name, location)
-			((select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position >= @v2s for share nowait)
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1s and position >= @v2s for share nowait)
 			union all
 			(select id, name, position from mydb.tbl force index (name_position_uidx) where name > @v1s and name < @v1e for share nowait)
 			union all
-			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e for share nowait))`
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = @v1e and position <= @v2e for share nowait)`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
 	}
@@ -382,11 +382,11 @@ func TestBuildRangeInsertPreparedQuery(t *testing.T) {
 		expected := `
 			insert /* gh-ost mydb.tbl */ ignore
 			into mydb.ghost (id, name, position)
-			((select id, name, position from mydb.tbl force index (name_position_uidx) where name = ? and position >= ? for share nowait)
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = ? and position >= ? for share nowait)
 			union all
 			(select id, name, position from mydb.tbl force index (name_position_uidx) where name > ? and name < ? for share nowait)
 			union all
-			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = ? and position <= ? for share nowait))`
+			(select id, name, position from mydb.tbl force index (name_position_uidx) where name = ? and position <= ? for share nowait)`
 		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
 		require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
 	}
