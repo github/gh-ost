@@ -100,11 +100,16 @@ import (
     "github.com/github/gh-ost/go/logic"
 )
 
+const version = "1.1.8"
+
 type myHooks struct{}
 
 func (myHooks) OnSuccess(instantDDL bool) error { return nil }
 func (myHooks) OnFailure() error                { return nil }
 // ... implement the remaining base.Hooks methods.
+
+ctx := base.NewMigrationContext()
+// ... configure ctx (DatabaseName, OriginalTableName, AlterStatement, etc.)
 
 ctx.Hooks = &myHooks{}
 m := logic.NewMigrator(ctx, version)

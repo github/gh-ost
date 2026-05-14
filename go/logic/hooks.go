@@ -39,6 +39,9 @@ type CompositeHooks []base.Hooks
 
 func (c CompositeHooks) OnStartup() error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnStartup(); err != nil {
 			return err
 		}
@@ -48,6 +51,9 @@ func (c CompositeHooks) OnStartup() error {
 
 func (c CompositeHooks) OnValidated() error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnValidated(); err != nil {
 			return err
 		}
@@ -57,6 +63,9 @@ func (c CompositeHooks) OnValidated() error {
 
 func (c CompositeHooks) OnRowCountComplete() error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnRowCountComplete(); err != nil {
 			return err
 		}
@@ -66,6 +75,9 @@ func (c CompositeHooks) OnRowCountComplete() error {
 
 func (c CompositeHooks) OnBeforeRowCopy() error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnBeforeRowCopy(); err != nil {
 			return err
 		}
@@ -75,6 +87,9 @@ func (c CompositeHooks) OnBeforeRowCopy() error {
 
 func (c CompositeHooks) OnRowCopyComplete() error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnRowCopyComplete(); err != nil {
 			return err
 		}
@@ -84,6 +99,9 @@ func (c CompositeHooks) OnRowCopyComplete() error {
 
 func (c CompositeHooks) OnBeginPostponed() error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnBeginPostponed(); err != nil {
 			return err
 		}
@@ -93,6 +111,9 @@ func (c CompositeHooks) OnBeginPostponed() error {
 
 func (c CompositeHooks) OnBeforeCutOver() error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnBeforeCutOver(); err != nil {
 			return err
 		}
@@ -102,6 +123,9 @@ func (c CompositeHooks) OnBeforeCutOver() error {
 
 func (c CompositeHooks) OnInteractiveCommand(command string) error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnInteractiveCommand(command); err != nil {
 			return err
 		}
@@ -111,6 +135,9 @@ func (c CompositeHooks) OnInteractiveCommand(command string) error {
 
 func (c CompositeHooks) OnSuccess(instantDDL bool) error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnSuccess(instantDDL); err != nil {
 			return err
 		}
@@ -120,6 +147,9 @@ func (c CompositeHooks) OnSuccess(instantDDL bool) error {
 
 func (c CompositeHooks) OnFailure() error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnFailure(); err != nil {
 			return err
 		}
@@ -129,6 +159,9 @@ func (c CompositeHooks) OnFailure() error {
 
 func (c CompositeHooks) OnBatchCopyRetry(errorMessage string) error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnBatchCopyRetry(errorMessage); err != nil {
 			return err
 		}
@@ -138,6 +171,9 @@ func (c CompositeHooks) OnBatchCopyRetry(errorMessage string) error {
 
 func (c CompositeHooks) OnStatus(statusMessage string) error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnStatus(statusMessage); err != nil {
 			return err
 		}
@@ -147,6 +183,9 @@ func (c CompositeHooks) OnStatus(statusMessage string) error {
 
 func (c CompositeHooks) OnStopReplication() error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnStopReplication(); err != nil {
 			return err
 		}
@@ -156,6 +195,9 @@ func (c CompositeHooks) OnStopReplication() error {
 
 func (c CompositeHooks) OnStartReplication() error {
 	for _, h := range c {
+		if h == nil {
+			continue
+		}
 		if err := h.OnStartReplication(); err != nil {
 			return err
 		}

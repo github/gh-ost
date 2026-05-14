@@ -73,6 +73,20 @@ func TestCompositeHooks_FanOut(t *testing.T) {
 	}, calls)
 }
 
+func TestCompositeHooks_SkipsNil(t *testing.T) {
+	var calls []string
+	composite := CompositeHooks{
+		nil,
+		&recordingHooks{name: "a", calls: &calls},
+		nil,
+		&recordingHooks{name: "b", calls: &calls},
+	}
+
+	require.NoError(t, composite.OnStartup())
+	require.NoError(t, composite.OnSuccess(false))
+	require.Equal(t, []string{"a:OnStartup", "b:OnStartup", "a:OnSuccess", "b:OnSuccess"}, calls)
+}
+
 func TestCompositeHooks_FirstErrorWins(t *testing.T) {
 	var calls []string
 	boom := errors.New("boom")
