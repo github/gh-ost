@@ -89,3 +89,35 @@ The following variable are available on particular hooks:
 ### Examples
 
 See [sample hooks](https://github.com/github/gh-ost/tree/master/resources/hooks-sample), as `bash` implementation samples.
+
+### Embedded usage: registering Go callbacks
+
+When `gh-ost` is consumed as a library (importing `github.com/github/gh-ost/go/logic`), callers can register Go functions for any hook event instead of, or in addition to, the on-disk script contract. Implement the `base.Hooks` interface and assign it to `MigrationContext.Hooks` before calling `logic.NewMigrator`:
+
+```go
+import (
+    "github.com/github/gh-ost/go/base"
+    "github.com/github/gh-ost/go/logic"
+)
+
+type myHooks struct{}
+
+func (myHooks) OnSuccess(instantDDL bool) error { return nil }
+func (myHooks) OnFailure() error                { return nil }
+// ... implement the remaining base.Hooks methods.
+
+ctx.Hooks = &myHooks{}
+m := logic.NewMigrator(ctx, version)
+err := m.Migrate()
+```
+
+To run shell hooks from `--hooks-path` and Go callbacks together, wrap both in `logic.CompositeHooks`. Each member is invoked in order; the first non-nil error short-circuits, matching the script executor's behavior:
+
+```go
+ctx.Hooks = logic.CompositeHooks{
+    logic.NewHooksExecutor(ctx), // existing scripts under HooksPath
+    &myHooks{},                  // additional Go callbacks
+}
+```
+
+`MigrationContext.Hooks` is opt-in. When it is nil, `NewMigrator` wires the default script executor and behavior is identical to the CLI. Hooks are read once at `NewMigrator` time, so reassigning the field afterwards has no effect on the running migration.

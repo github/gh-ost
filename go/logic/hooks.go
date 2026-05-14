@@ -34,6 +34,135 @@ const (
 	onStartReplication   = "gh-ost-on-start-replication"
 )
 
+// CompositeHooks invokes each member in order, returning the first non-nil error.
+type CompositeHooks []base.Hooks
+
+func (c CompositeHooks) OnStartup() error {
+	for _, h := range c {
+		if err := h.OnStartup(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnValidated() error {
+	for _, h := range c {
+		if err := h.OnValidated(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnRowCountComplete() error {
+	for _, h := range c {
+		if err := h.OnRowCountComplete(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnBeforeRowCopy() error {
+	for _, h := range c {
+		if err := h.OnBeforeRowCopy(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnRowCopyComplete() error {
+	for _, h := range c {
+		if err := h.OnRowCopyComplete(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnBeginPostponed() error {
+	for _, h := range c {
+		if err := h.OnBeginPostponed(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnBeforeCutOver() error {
+	for _, h := range c {
+		if err := h.OnBeforeCutOver(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnInteractiveCommand(command string) error {
+	for _, h := range c {
+		if err := h.OnInteractiveCommand(command); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnSuccess(instantDDL bool) error {
+	for _, h := range c {
+		if err := h.OnSuccess(instantDDL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnFailure() error {
+	for _, h := range c {
+		if err := h.OnFailure(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnBatchCopyRetry(errorMessage string) error {
+	for _, h := range c {
+		if err := h.OnBatchCopyRetry(errorMessage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnStatus(statusMessage string) error {
+	for _, h := range c {
+		if err := h.OnStatus(statusMessage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnStopReplication() error {
+	for _, h := range c {
+		if err := h.OnStopReplication(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnStartReplication() error {
+	for _, h := range c {
+		if err := h.OnStartReplication(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type HooksExecutor struct {
 	migrationContext *base.MigrationContext
 	writer           io.Writer
@@ -111,61 +240,61 @@ func (he *HooksExecutor) executeHooks(baseName string, extraVariables ...string)
 	return nil
 }
 
-func (he *HooksExecutor) onStartup() error {
+func (he *HooksExecutor) OnStartup() error {
 	return he.executeHooks(onStartup)
 }
 
-func (he *HooksExecutor) onValidated() error {
+func (he *HooksExecutor) OnValidated() error {
 	return he.executeHooks(onValidated)
 }
 
-func (he *HooksExecutor) onRowCountComplete() error {
+func (he *HooksExecutor) OnRowCountComplete() error {
 	return he.executeHooks(onRowCountComplete)
 }
-func (he *HooksExecutor) onBeforeRowCopy() error {
+func (he *HooksExecutor) OnBeforeRowCopy() error {
 	return he.executeHooks(onBeforeRowCopy)
 }
 
-func (he *HooksExecutor) onBatchCopyRetry(errorMessage string) error {
+func (he *HooksExecutor) OnBatchCopyRetry(errorMessage string) error {
 	v := fmt.Sprintf("GH_OST_LAST_BATCH_COPY_ERROR=%s", errorMessage)
 	return he.executeHooks(onBatchCopyRetry, v)
 }
 
-func (he *HooksExecutor) onRowCopyComplete() error {
+func (he *HooksExecutor) OnRowCopyComplete() error {
 	return he.executeHooks(onRowCopyComplete)
 }
 
-func (he *HooksExecutor) onBeginPostponed() error {
+func (he *HooksExecutor) OnBeginPostponed() error {
 	return he.executeHooks(onBeginPostponed)
 }
 
-func (he *HooksExecutor) onBeforeCutOver() error {
+func (he *HooksExecutor) OnBeforeCutOver() error {
 	return he.executeHooks(onBeforeCutOver)
 }
 
-func (he *HooksExecutor) onInteractiveCommand(command string) error {
+func (he *HooksExecutor) OnInteractiveCommand(command string) error {
 	v := fmt.Sprintf("GH_OST_COMMAND='%s'", command)
 	return he.executeHooks(onInteractiveCommand, v)
 }
 
-func (he *HooksExecutor) onSuccess(instantDDL bool) error {
+func (he *HooksExecutor) OnSuccess(instantDDL bool) error {
 	v := fmt.Sprintf("GH_OST_INSTANT_DDL=%t", instantDDL)
 	return he.executeHooks(onSuccess, v)
 }
 
-func (he *HooksExecutor) onFailure() error {
+func (he *HooksExecutor) OnFailure() error {
 	return he.executeHooks(onFailure)
 }
 
-func (he *HooksExecutor) onStatus(statusMessage string) error {
+func (he *HooksExecutor) OnStatus(statusMessage string) error {
 	v := fmt.Sprintf("GH_OST_STATUS='%s'", statusMessage)
 	return he.executeHooks(onStatus, v)
 }
 
-func (he *HooksExecutor) onStopReplication() error {
+func (he *HooksExecutor) OnStopReplication() error {
 	return he.executeHooks(onStopReplication)
 }
 
-func (he *HooksExecutor) onStartReplication() error {
+func (he *HooksExecutor) OnStartReplication() error {
 	return he.executeHooks(onStartReplication)
 }

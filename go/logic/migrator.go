@@ -84,7 +84,7 @@ type Migrator struct {
 	eventsStreamer   *EventsStreamer
 	server           *Server
 	throttler        *Throttler
-	hooksExecutor    *HooksExecutor
+	hooksExecutor    base.Hooks
 	migrationContext *base.MigrationContext
 
 	firstThrottlingCollected   chan bool
@@ -103,9 +103,13 @@ type Migrator struct {
 }
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
+	hooks := context.Hooks
+	if hooks == nil {
+		hooks = NewHooksExecutor(context)
+	}
 	migrator := &Migrator{
 		appVersion:               appVersion,
-		hooksExecutor:            NewHooksExecutor(context),
+		hooksExecutor:            hooks,
 		migrationContext:         context,
 		parser:                   sql.NewAlterTableParser(),
 		ghostTableMigrated:       make(chan bool),
@@ -145,7 +149,7 @@ func (mgtr *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 func (mgtr *Migrator) retryBatchCopyWithHooks(operation func() error, notFatalHint ...bool) (err error) {
 	wrappedOperation := func() error {
 		if err := operation(); err != nil {
-			mgtr.hooksExecutor.onBatchCopyRetry(err.Error())
+			mgtr.hooksExecutor.OnBatchCopyRetry(err.Error())
 			return err
 		}
 		return nil
@@ -388,7 +392,7 @@ func (mgtr *Migrator) countTableRows() (err error) {
 		if err := mgtr.inspector.CountTableRows(ctx); err != nil {
 			return err
 		}
-		if err := mgtr.hooksExecutor.onRowCountComplete(); err != nil {
+		if err := mgtr.hooksExecutor.OnRowCountComplete(); err != nil {
 			return err
 		}
 		return nil
@@ -456,7 +460,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 
 	go mgtr.listenOnPanicAbort()
 
-	if err := mgtr.hooksExecutor.onStartup(); err != nil {
+	if err := mgtr.hooksExecutor.OnStartup(); err != nil {
 		return err
 	}
 	if err := mgtr.parser.ParseAlterStatement(mgtr.migrationContext.AlterStatement); err != nil {
@@ -508,7 +512,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 				if err := mgtr.finalCleanup(); err != nil {
 					return nil
 				}
-				if err := mgtr.hooksExecutor.onSuccess(true); err != nil {
+				if err := mgtr.hooksExecutor.OnSuccess(true); err != nil {
 					return err
 				}
 				mgtr.migrationContext.Log.Infof("Success! table %s.%s migrated instantly", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))
@@ -565,7 +569,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	}
 
 	// Validation complete! We're good to execute this migration
-	if err := mgtr.hooksExecutor.onValidated(); err != nil {
+	if err := mgtr.hooksExecutor.OnValidated(); err != nil {
 		return err
 	}
 
@@ -586,7 +590,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 
 	mgtr.initiateThrottler()
 
-	if err := mgtr.hooksExecutor.onBeforeRowCopy(); err != nil {
+	if err := mgtr.hooksExecutor.OnBeforeRowCopy(); err != nil {
 		return err
 	}
 	go func() {
@@ -609,7 +613,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
-	if err := mgtr.hooksExecutor.onRowCopyComplete(); err != nil {
+	if err := mgtr.hooksExecutor.OnRowCopyComplete(); err != nil {
 		return err
 	}
 	mgtr.printStatus(ForcePrintStatusRule)
@@ -618,7 +622,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 		mgtr.migrationContext.Log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
 		mgtr.migrationContext.CancelTableRowsCount()
 	}
-	if err := mgtr.hooksExecutor.onBeforeCutOver(); err != nil {
+	if err := mgtr.hooksExecutor.OnBeforeCutOver(); err != nil {
 		return err
 	}
 	var retrier func(func() error, ...bool) error
@@ -644,7 +648,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.finalCleanup(); err != nil {
 		return nil
 	}
-	if err := mgtr.hooksExecutor.onSuccess(false); err != nil {
+	if err := mgtr.hooksExecutor.OnSuccess(false); err != nil {
 		return err
 	}
 	mgtr.migrationContext.Log.Infof("Done migrating %s.%s", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))
@@ -674,7 +678,7 @@ func (mgtr *Migrator) Revert() error {
 
 	go mgtr.listenOnPanicAbort()
 
-	if err := mgtr.hooksExecutor.onStartup(); err != nil {
+	if err := mgtr.hooksExecutor.OnStartup(); err != nil {
 		return err
 	}
 	if err := mgtr.validateAlterStatement(); err != nil {
@@ -721,7 +725,7 @@ func (mgtr *Migrator) Revert() error {
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
-	if err := mgtr.hooksExecutor.onValidated(); err != nil {
+	if err := mgtr.hooksExecutor.OnValidated(); err != nil {
 		return err
 	}
 	if err := mgtr.initiateServer(); err != nil {
@@ -748,7 +752,7 @@ func (mgtr *Migrator) Revert() error {
 	} else {
 		retrier = mgtr.retryOperation
 	}
-	if err := mgtr.hooksExecutor.onBeforeCutOver(); err != nil {
+	if err := mgtr.hooksExecutor.OnBeforeCutOver(); err != nil {
 		return err
 	}
 	if err := retrier(mgtr.cutOver); err != nil {
@@ -758,7 +762,7 @@ func (mgtr *Migrator) Revert() error {
 	if err := mgtr.finalCleanup(); err != nil {
 		return nil
 	}
-	if err := mgtr.hooksExecutor.onSuccess(false); err != nil {
+	if err := mgtr.hooksExecutor.OnSuccess(false); err != nil {
 		return err
 	}
 	mgtr.migrationContext.Log.Infof("Done reverting %s.%s", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))
@@ -768,7 +772,7 @@ func (mgtr *Migrator) Revert() error {
 // ExecOnFailureHook executes the onFailure hook, and this method is provided as the only external
 // hook access point
 func (mgtr *Migrator) ExecOnFailureHook() (err error) {
-	return mgtr.hooksExecutor.onFailure()
+	return mgtr.hooksExecutor.OnFailure()
 }
 
 func (mgtr *Migrator) handleCutOverResult(cutOverError error) (err error) {
@@ -786,7 +790,7 @@ func (mgtr *Migrator) handleCutOverResult(cutOverError error) (err error) {
 		// the same cut-over phase as the master would use. That means we take locks
 		// and swap the tables.
 		// The difference is that we will later swap the tables back.
-		if err := mgtr.hooksExecutor.onStartReplication(); err != nil {
+		if err := mgtr.hooksExecutor.OnStartReplication(); err != nil {
 			return mgtr.migrationContext.Log.Errore(err)
 		}
 		if mgtr.migrationContext.TestOnReplicaSkipReplicaStop {
@@ -834,7 +838,7 @@ func (mgtr *Migrator) cutOver() (err error) {
 			if base.FileExists(mgtr.migrationContext.PostponeCutOverFlagFile) {
 				// Postpone file defined and exists!
 				if atomic.LoadInt64(&mgtr.migrationContext.IsPostponingCutOver) == 0 {
-					if err := mgtr.hooksExecutor.onBeginPostponed(); err != nil {
+					if err := mgtr.hooksExecutor.OnBeginPostponed(); err != nil {
 						return true, err
 					}
 				}
@@ -855,7 +859,7 @@ func (mgtr *Migrator) cutOver() (err error) {
 		// the same cut-over phase as the master would use. That means we take locks
 		// and swap the tables.
 		// The difference is that we will later swap the tables back.
-		if err := mgtr.hooksExecutor.onStopReplication(); err != nil {
+		if err := mgtr.hooksExecutor.OnStopReplication(); err != nil {
 			return err
 		}
 		if mgtr.migrationContext.TestOnReplicaSkipReplicaStop {
@@ -1410,7 +1414,7 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	hooksStatusIntervalSec := mgtr.migrationContext.HooksStatusIntervalSec
 	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {
-		mgtr.hooksExecutor.onStatus(status)
+		mgtr.hooksExecutor.OnStatus(status)
 	}
 }
 

@@ -38,12 +38,12 @@ type Server struct {
 	migrationContext *base.MigrationContext
 	unixListener     net.Listener
 	tcpListener      net.Listener
-	hooksExecutor    *HooksExecutor
+	hooksExecutor    base.Hooks
 	printStatus      printStatusFunc
 	isCPUProfiling   int64
 }
 
-func NewServer(migrationContext *base.MigrationContext, hooksExecutor *HooksExecutor, printStatus printStatusFunc) *Server {
+func NewServer(migrationContext *base.MigrationContext, hooksExecutor base.Hooks, printStatus printStatusFunc) *Server {
 	return &Server{
 		migrationContext: migrationContext,
 		hooksExecutor:    hooksExecutor,
@@ -206,7 +206,7 @@ func (srv *Server) applyServerCommand(command string, writer *bufio.Writer) (pri
 	argIsQuestion := (arg == "?")
 	throttleHint := "# Note: you may only throttle for as long as your binary logs are not purged"
 
-	if err := srv.hooksExecutor.onInteractiveCommand(command); err != nil {
+	if err := srv.hooksExecutor.OnInteractiveCommand(command); err != nil {
 		return NoPrintStatusRule, err
 	}
 

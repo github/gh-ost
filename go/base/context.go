@@ -156,6 +156,7 @@ type MigrationContext struct {
 	HooksHintOwner                      string
 	HooksHintToken                      string
 	HooksStatusIntervalSec              int64
+	Hooks                               Hooks
 	PanicOnWarnings                     bool
 	Checkpoint                          bool
 	CheckpointIntervalSeconds           int64
