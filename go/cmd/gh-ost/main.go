@@ -446,6 +446,8 @@ func main() {
 	var err error
 	if migrationContext.Revert {
 		err = migrator.Revert()
+	} else if migrationContext.IsMoveTablesMode() {
+		err = migrator.MoveTables()
 	} else {
 		err = migrator.Migrate()
 	}

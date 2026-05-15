@@ -790,6 +790,10 @@ func (mgtr *Migrator) Revert() error {
 	return nil
 }
 
+func (mgtr *Migrator) MoveTables() error {
+	return nil
+}
+
 // ExecOnFailureHook executes the onFailure hook, and this method is provided as the only external
 // hook access point
 func (mgtr *Migrator) ExecOnFailureHook() (err error) {
