@@ -1,6 +1,6 @@
 module github.com/github/gh-ost
 
-go 1.24.0
+go 1.25.9
 
 require (
 	github.com/go-ini/ini v1.67.0

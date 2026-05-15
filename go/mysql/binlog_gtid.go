@@ -24,21 +24,21 @@ func NewGTIDBinlogCoordinates(gtidSet string) (*GTIDBinlogCoordinates, error) {
 }
 
 // DisplayString returns a user-friendly string representation of these current UUID set or the full GTID set.
-func (this *GTIDBinlogCoordinates) DisplayString() string {
-	if this.UUIDSet != nil {
-		return this.UUIDSet.String()
+func (coord *GTIDBinlogCoordinates) DisplayString() string {
+	if coord.UUIDSet != nil {
+		return coord.UUIDSet.String()
 	}
-	return this.String()
+	return coord.String()
 }
 
 // String returns a user-friendly string representation of these full GTID set.
-func (this GTIDBinlogCoordinates) String() string {
-	return this.GTIDSet.String()
+func (coord GTIDBinlogCoordinates) String() string {
+	return coord.GTIDSet.String()
 }
 
 // Equals tests equality of this coordinate and another one.
-func (this *GTIDBinlogCoordinates) Equals(other BinlogCoordinates) bool {
-	if other == nil || this.IsEmpty() || other.IsEmpty() {
+func (coord *GTIDBinlogCoordinates) Equals(other BinlogCoordinates) bool {
+	if other == nil || coord.IsEmpty() || other.IsEmpty() {
 		return false
 	}
 
@@ -47,17 +47,17 @@ func (this *GTIDBinlogCoordinates) Equals(other BinlogCoordinates) bool {
 		return false
 	}
 
-	return this.GTIDSet.Equal(otherCoords.GTIDSet)
+	return coord.GTIDSet.Equal(otherCoords.GTIDSet)
 }
 
 // IsEmpty returns true if the GTID set is empty.
-func (this *GTIDBinlogCoordinates) IsEmpty() bool {
-	return this.GTIDSet == nil
+func (coord *GTIDBinlogCoordinates) IsEmpty() bool {
+	return coord.GTIDSet == nil
 }
 
 // SmallerThan returns true if this coordinate is strictly smaller than the other.
-func (this *GTIDBinlogCoordinates) SmallerThan(other BinlogCoordinates) bool {
-	if other == nil || this.IsEmpty() || other.IsEmpty() {
+func (coord *GTIDBinlogCoordinates) SmallerThan(other BinlogCoordinates) bool {
+	if other == nil || coord.IsEmpty() || other.IsEmpty() {
 		return false
 	}
 	otherCoords, ok := other.(*GTIDBinlogCoordinates)
@@ -65,23 +65,23 @@ func (this *GTIDBinlogCoordinates) SmallerThan(other BinlogCoordinates) bool {
 		return false
 	}
 
-	// if 'this' does not contain the same sets we assume we are behind 'other'.
+	// if 'coord' does not contain the same sets we assume we are behind 'other'.
 	// there are probably edge cases where this isn't true
-	return !this.GTIDSet.Contain(otherCoords.GTIDSet)
+	return !coord.GTIDSet.Contain(otherCoords.GTIDSet)
 }
 
 // SmallerThanOrEquals returns true if this coordinate is the same or equal to the other one.
-func (this *GTIDBinlogCoordinates) SmallerThanOrEquals(other BinlogCoordinates) bool {
-	return this.Equals(other) || this.SmallerThan(other)
+func (coord *GTIDBinlogCoordinates) SmallerThanOrEquals(other BinlogCoordinates) bool {
+	return coord.Equals(other) || coord.SmallerThan(other)
 }
 
-func (this *GTIDBinlogCoordinates) Clone() BinlogCoordinates {
+func (coord *GTIDBinlogCoordinates) Clone() BinlogCoordinates {
 	out := &GTIDBinlogCoordinates{}
-	if this.GTIDSet != nil {
-		out.GTIDSet = this.GTIDSet.Clone().(*gomysql.MysqlGTIDSet)
+	if coord.GTIDSet != nil {
+		out.GTIDSet = coord.GTIDSet.Clone().(*gomysql.MysqlGTIDSet)
 	}
-	if this.UUIDSet != nil {
-		out.UUIDSet = this.UUIDSet.Clone()
+	if coord.UUIDSet != nil {
+		out.UUIDSet = coord.UUIDSet.Clone()
 	}
 	return out
 }

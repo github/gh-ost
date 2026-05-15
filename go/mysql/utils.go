@@ -40,8 +40,8 @@ func NewNoReplicationLagResult() *ReplicationLagResult {
 	return &ReplicationLagResult{Lag: 0, Err: nil}
 }
 
-func (this *ReplicationLagResult) HasLag() bool {
-	return this.Lag > 0
+func (rlg *ReplicationLagResult) HasLag() bool {
+	return rlg.Lag > 0
 }
 
 // knownDBs is a DB cache by uri
@@ -110,7 +110,7 @@ func GetMasterKeyFromSlaveStatus(dbVersion string, connectionConfig *ConnectionC
 		slaveSQLRunning := rowMap.GetString(sqlRunningTerm)
 
 		if slaveIORunning != "Yes" || slaveSQLRunning != "Yes" {
-			return fmt.Errorf("Replication on %+v is broken: %s: %s, %s: %s. Please make sure replication runs before using gh-ost.",
+			return fmt.Errorf("replication on %+v is broken: %s: %s, %s: %s. Please make sure replication runs before using gh-ost",
 				connectionConfig.Key,
 				ioRunningTerm,
 				slaveIORunning,
@@ -153,7 +153,7 @@ func GetMasterConnectionConfigSafe(dbVersion string, connectionConfig *Connectio
 		if allowMasterMaster {
 			return connectionConfig, nil
 		}
-		return nil, fmt.Errorf("There seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
+		return nil, fmt.Errorf("there seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
 	}
 	visitedKeys.AddKey(masterConfig.Key)
 	return GetMasterConnectionConfigSafe(dbVersion, masterConfig, visitedKeys, allowMasterMaster)
@@ -232,7 +232,7 @@ func GetTableColumns(db *gosql.DB, databaseName, tableName string) (*sql.ColumnL
 		return nil, nil, err
 	}
 	if len(columnNames) == 0 {
-		return nil, nil, log.Errorf("Found 0 columns on %s.%s. Bailing out",
+		return nil, nil, log.Errorf("found 0 columns on %s.%s. Bailing out",
 			sql.EscapeName(databaseName),
 			sql.EscapeName(tableName),
 		)

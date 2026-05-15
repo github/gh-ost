@@ -49,68 +49,68 @@ func ParseFileBinlogCoordinates(logFileLogPos string) (*FileBinlogCoordinates, e
 }
 
 // DisplayString returns a user-friendly string representation of these coordinates
-func (this *FileBinlogCoordinates) DisplayString() string {
-	return fmt.Sprintf("%s:%d", this.LogFile, this.LogPos)
+func (fbc *FileBinlogCoordinates) DisplayString() string {
+	return fmt.Sprintf("%s:%d", fbc.LogFile, fbc.LogPos)
 }
 
 // String returns a user-friendly string representation of these coordinates
-func (this FileBinlogCoordinates) String() string {
-	return this.DisplayString()
+func (fbc FileBinlogCoordinates) String() string {
+	return fbc.DisplayString()
 }
 
 // Equals tests equality of this coordinate and another one.
-func (this *FileBinlogCoordinates) Equals(other BinlogCoordinates) bool {
+func (fbc *FileBinlogCoordinates) Equals(other BinlogCoordinates) bool {
 	coord, ok := other.(*FileBinlogCoordinates)
 	if !ok || other == nil {
 		return false
 	}
-	return this.LogFile == coord.LogFile && this.LogPos == coord.LogPos
+	return fbc.LogFile == coord.LogFile && fbc.LogPos == coord.LogPos
 }
 
 // IsEmpty returns true if the log file is empty, unnamed
-func (this *FileBinlogCoordinates) IsEmpty() bool {
-	return this.LogFile == ""
+func (fbc *FileBinlogCoordinates) IsEmpty() bool {
+	return fbc.LogFile == ""
 }
 
 // SmallerThan returns true if this coordinate is strictly smaller than the other.
-func (this *FileBinlogCoordinates) SmallerThan(other BinlogCoordinates) bool {
+func (fbc *FileBinlogCoordinates) SmallerThan(other BinlogCoordinates) bool {
 	coord, ok := other.(*FileBinlogCoordinates)
 	if !ok || other == nil {
 		return false
 	}
 
-	fileNumberDist := this.FileNumberDistance(coord)
+	fileNumberDist := fbc.FileNumberDistance(coord)
 	if fileNumberDist == 0 {
-		return this.LogPos < coord.LogPos
+		return fbc.LogPos < coord.LogPos
 	}
 	return fileNumberDist > 0
 }
 
 // SmallerThanOrEquals returns true if this coordinate is the same or equal to the other one.
-// We do NOT compare the type so we can not use this.Equals()
-func (this *FileBinlogCoordinates) SmallerThanOrEquals(other BinlogCoordinates) bool {
+// We do NOT compare the type so we can not use fbc.Equals()
+func (fbc *FileBinlogCoordinates) SmallerThanOrEquals(other BinlogCoordinates) bool {
 	coord, ok := other.(*FileBinlogCoordinates)
 	if !ok || other == nil {
 		return false
 	}
-	if this.SmallerThan(other) {
+	if fbc.SmallerThan(other) {
 		return true
 	}
-	return this.LogFile == coord.LogFile && this.LogPos == coord.LogPos // No Type comparison
+	return fbc.LogFile == coord.LogFile && fbc.LogPos == coord.LogPos // No Type comparison
 }
 
 // FileNumberDistance returns the numeric distance between this coordinate's file number and the other's.
 // Effectively it means "how many rotates/FLUSHes would make these coordinates's file reach the other's"
-func (this *FileBinlogCoordinates) FileNumberDistance(other *FileBinlogCoordinates) int {
-	thisNumber, _ := this.FileNumber()
+func (fbc *FileBinlogCoordinates) FileNumberDistance(other *FileBinlogCoordinates) int {
+	fbcNumber, _ := fbc.FileNumber()
 	otherNumber, _ := other.FileNumber()
-	return otherNumber - thisNumber
+	return otherNumber - fbcNumber
 }
 
 // FileNumber returns the numeric value of the file, and the length in characters representing the number in the filename.
 // Example: FileNumber() of mysqld.log.000789 is (789, 6)
-func (this *FileBinlogCoordinates) FileNumber() (int, int) {
-	tokens := strings.Split(this.LogFile, ".")
+func (fbc *FileBinlogCoordinates) FileNumber() (int, int) {
+	tokens := strings.Split(fbc.LogFile, ".")
 	numPart := tokens[len(tokens)-1]
 	numLen := len(numPart)
 	fileNum, err := strconv.Atoi(numPart)
@@ -121,55 +121,55 @@ func (this *FileBinlogCoordinates) FileNumber() (int, int) {
 }
 
 // PreviousFileCoordinatesBy guesses the filename of the previous binlog/relaylog, by given offset (number of files back)
-func (this *FileBinlogCoordinates) PreviousFileCoordinatesBy(offset int) (BinlogCoordinates, error) {
+func (fbc *FileBinlogCoordinates) PreviousFileCoordinatesBy(offset int) (BinlogCoordinates, error) {
 	result := &FileBinlogCoordinates{}
 
-	fileNum, numLen := this.FileNumber()
+	fileNum, numLen := fbc.FileNumber()
 	if fileNum == 0 {
-		return result, errors.New("Log file number is zero, cannot detect previous file")
+		return result, errors.New("log file number is zero, cannot detect previous file")
 	}
 	newNumStr := fmt.Sprintf("%d", (fileNum - offset))
 	newNumStr = strings.Repeat("0", numLen-len(newNumStr)) + newNumStr
 
-	tokens := strings.Split(this.LogFile, ".")
+	tokens := strings.Split(fbc.LogFile, ".")
 	tokens[len(tokens)-1] = newNumStr
 	result.LogFile = strings.Join(tokens, ".")
 	return result, nil
 }
 
 // PreviousFileCoordinates guesses the filename of the previous binlog/relaylog
-func (this *FileBinlogCoordinates) PreviousFileCoordinates() (BinlogCoordinates, error) {
-	return this.PreviousFileCoordinatesBy(1)
+func (fbc *FileBinlogCoordinates) PreviousFileCoordinates() (BinlogCoordinates, error) {
+	return fbc.PreviousFileCoordinatesBy(1)
 }
 
 // PreviousFileCoordinates guesses the filename of the previous binlog/relaylog
-func (this *FileBinlogCoordinates) NextFileCoordinates() (BinlogCoordinates, error) {
+func (fbc *FileBinlogCoordinates) NextFileCoordinates() (BinlogCoordinates, error) {
 	result := &FileBinlogCoordinates{}
 
-	fileNum, numLen := this.FileNumber()
+	fileNum, numLen := fbc.FileNumber()
 	newNumStr := fmt.Sprintf("%d", (fileNum + 1))
 	newNumStr = strings.Repeat("0", numLen-len(newNumStr)) + newNumStr
 
-	tokens := strings.Split(this.LogFile, ".")
+	tokens := strings.Split(fbc.LogFile, ".")
 	tokens[len(tokens)-1] = newNumStr
 	result.LogFile = strings.Join(tokens, ".")
 	return result, nil
 }
 
 // FileSmallerThan returns true if this coordinate's file is strictly smaller than the other's.
-func (this *FileBinlogCoordinates) DetachedCoordinates() (isDetached bool, detachedLogFile string, detachedLogPos string) {
-	detachedCoordinatesSubmatch := detachPattern.FindStringSubmatch(this.LogFile)
+func (fbc *FileBinlogCoordinates) DetachedCoordinates() (isDetached bool, detachedLogFile string, detachedLogPos string) {
+	detachedCoordinatesSubmatch := detachPattern.FindStringSubmatch(fbc.LogFile)
 	if len(detachedCoordinatesSubmatch) == 0 {
 		return false, "", ""
 	}
 	return true, detachedCoordinatesSubmatch[1], detachedCoordinatesSubmatch[2]
 }
 
-func (this *FileBinlogCoordinates) Clone() BinlogCoordinates {
+func (fbc *FileBinlogCoordinates) Clone() BinlogCoordinates {
 	return &FileBinlogCoordinates{
-		LogPos:    this.LogPos,
-		LogFile:   this.LogFile,
-		EventSize: this.EventSize,
+		LogPos:    fbc.LogPos,
+		LogFile:   fbc.LogFile,
+		EventSize: fbc.EventSize,
 	}
 }
 
@@ -178,7 +178,7 @@ func (this *FileBinlogCoordinates) Clone() BinlogCoordinates {
 // https://github.com/go-mysql-org/go-mysql/blob/master/replication/event.go
 // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_replication_binlog_event.html#sect_protocol_replication_binlog_event_header
 // Issue: https://github.com/github/gh-ost/issues/1366
-func (this *FileBinlogCoordinates) IsLogPosOverflowBeyond4Bytes(preCoordinate *FileBinlogCoordinates) bool {
+func (fbc *FileBinlogCoordinates) IsLogPosOverflowBeyond4Bytes(preCoordinate *FileBinlogCoordinates) bool {
 	if preCoordinate == nil {
 		return false
 	}
@@ -186,11 +186,11 @@ func (this *FileBinlogCoordinates) IsLogPosOverflowBeyond4Bytes(preCoordinate *F
 		return false
 	}
 
-	if this.LogFile != preCoordinate.LogFile {
+	if fbc.LogFile != preCoordinate.LogFile {
 		return false
 	}
 
-	if preCoordinate.LogPos+this.EventSize >= 1<<32 {
+	if preCoordinate.LogPos+fbc.EventSize >= 1<<32 {
 		// Unexpected rows event, the previous binlog log_pos + current binlog event_size is overflow 4 bytes
 		return true
 	}

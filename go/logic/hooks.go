@@ -34,6 +34,177 @@ const (
 	onStartReplication   = "gh-ost-on-start-replication"
 )
 
+// CompositeHooks invokes each member in order, returning the first non-nil error.
+type CompositeHooks []base.Hooks
+
+func (c CompositeHooks) OnStartup() error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnStartup(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnValidated() error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnValidated(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnRowCountComplete() error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnRowCountComplete(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnBeforeRowCopy() error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnBeforeRowCopy(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnRowCopyComplete() error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnRowCopyComplete(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnBeginPostponed() error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnBeginPostponed(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnBeforeCutOver() error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnBeforeCutOver(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnInteractiveCommand(command string) error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnInteractiveCommand(command); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnSuccess(instantDDL bool) error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnSuccess(instantDDL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnFailure() error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnFailure(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnBatchCopyRetry(errorMessage string) error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnBatchCopyRetry(errorMessage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnStatus(statusMessage string) error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnStatus(statusMessage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnStopReplication() error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnStopReplication(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c CompositeHooks) OnStartReplication() error {
+	for _, h := range c {
+		if h == nil {
+			continue
+		}
+		if err := h.OnStartReplication(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type HooksExecutor struct {
 	migrationContext *base.MigrationContext
 	writer           io.Writer
@@ -46,31 +217,31 @@ func NewHooksExecutor(migrationContext *base.MigrationContext) *HooksExecutor {
 	}
 }
 
-func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []string {
+func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []string {
 	env := os.Environ()
-	env = append(env, fmt.Sprintf("GH_OST_DATABASE_NAME=%s", this.migrationContext.DatabaseName))
-	env = append(env, fmt.Sprintf("GH_OST_TABLE_NAME=%s", this.migrationContext.OriginalTableName))
-	env = append(env, fmt.Sprintf("GH_OST_GHOST_TABLE_NAME=%s", this.migrationContext.GetGhostTableName()))
-	env = append(env, fmt.Sprintf("GH_OST_OLD_TABLE_NAME=%s", this.migrationContext.GetOldTableName()))
-	env = append(env, fmt.Sprintf("GH_OST_DDL=%s", this.migrationContext.AlterStatement))
-	env = append(env, fmt.Sprintf("GH_OST_ELAPSED_SECONDS=%f", this.migrationContext.ElapsedTime().Seconds()))
-	env = append(env, fmt.Sprintf("GH_OST_ELAPSED_COPY_SECONDS=%f", this.migrationContext.ElapsedRowCopyTime().Seconds()))
-	estimatedRows := atomic.LoadInt64(&this.migrationContext.RowsEstimate) + atomic.LoadInt64(&this.migrationContext.RowsDeltaEstimate)
+	env = append(env, fmt.Sprintf("GH_OST_DATABASE_NAME=%s", he.migrationContext.DatabaseName))
+	env = append(env, fmt.Sprintf("GH_OST_TABLE_NAME=%s", he.migrationContext.OriginalTableName))
+	env = append(env, fmt.Sprintf("GH_OST_GHOST_TABLE_NAME=%s", he.migrationContext.GetGhostTableName()))
+	env = append(env, fmt.Sprintf("GH_OST_OLD_TABLE_NAME=%s", he.migrationContext.GetOldTableName()))
+	env = append(env, fmt.Sprintf("GH_OST_DDL=%s", he.migrationContext.AlterStatement))
+	env = append(env, fmt.Sprintf("GH_OST_ELAPSED_SECONDS=%f", he.migrationContext.ElapsedTime().Seconds()))
+	env = append(env, fmt.Sprintf("GH_OST_ELAPSED_COPY_SECONDS=%f", he.migrationContext.ElapsedRowCopyTime().Seconds()))
+	estimatedRows := atomic.LoadInt64(&he.migrationContext.RowsEstimate) + atomic.LoadInt64(&he.migrationContext.RowsDeltaEstimate)
 	env = append(env, fmt.Sprintf("GH_OST_ESTIMATED_ROWS=%d", estimatedRows))
-	totalRowsCopied := this.migrationContext.GetTotalRowsCopied()
+	totalRowsCopied := he.migrationContext.GetTotalRowsCopied()
 	env = append(env, fmt.Sprintf("GH_OST_COPIED_ROWS=%d", totalRowsCopied))
-	env = append(env, fmt.Sprintf("GH_OST_MIGRATED_HOST=%s", this.migrationContext.GetApplierHostname()))
-	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_HOST=%s", this.migrationContext.GetInspectorHostname()))
-	env = append(env, fmt.Sprintf("GH_OST_EXECUTING_HOST=%s", this.migrationContext.Hostname))
-	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_LAG=%f", this.migrationContext.GetCurrentLagDuration().Seconds()))
-	env = append(env, fmt.Sprintf("GH_OST_HEARTBEAT_LAG=%f", this.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds()))
-	env = append(env, fmt.Sprintf("GH_OST_PROGRESS=%f", this.migrationContext.GetProgressPct()))
-	env = append(env, fmt.Sprintf("GH_OST_ETA_SECONDS=%d", this.migrationContext.GetETASeconds()))
-	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT=%s", this.migrationContext.HooksHintMessage))
-	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT_OWNER=%s", this.migrationContext.HooksHintOwner))
-	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT_TOKEN=%s", this.migrationContext.HooksHintToken))
-	env = append(env, fmt.Sprintf("GH_OST_DRY_RUN=%t", this.migrationContext.Noop))
-	env = append(env, fmt.Sprintf("GH_OST_REVERT=%t", this.migrationContext.Revert))
+	env = append(env, fmt.Sprintf("GH_OST_MIGRATED_HOST=%s", he.migrationContext.GetApplierHostname()))
+	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_HOST=%s", he.migrationContext.GetInspectorHostname()))
+	env = append(env, fmt.Sprintf("GH_OST_EXECUTING_HOST=%s", he.migrationContext.Hostname))
+	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_LAG=%f", he.migrationContext.GetCurrentLagDuration().Seconds()))
+	env = append(env, fmt.Sprintf("GH_OST_HEARTBEAT_LAG=%f", he.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds()))
+	env = append(env, fmt.Sprintf("GH_OST_PROGRESS=%f", he.migrationContext.GetProgressPct()))
+	env = append(env, fmt.Sprintf("GH_OST_ETA_SECONDS=%d", he.migrationContext.GetETASeconds()))
+	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT=%s", he.migrationContext.HooksHintMessage))
+	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT_OWNER=%s", he.migrationContext.HooksHintOwner))
+	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT_TOKEN=%s", he.migrationContext.HooksHintToken))
+	env = append(env, fmt.Sprintf("GH_OST_DRY_RUN=%t", he.migrationContext.Noop))
+	env = append(env, fmt.Sprintf("GH_OST_REVERT=%t", he.migrationContext.Revert))
 
 	env = append(env, extraVariables...)
 	return env
@@ -78,93 +249,94 @@ func (this *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) [
 
 // executeHook executes a command, and sets relevant environment variables
 // combined output & error are printed to the configured writer.
-func (this *HooksExecutor) executeHook(hook string, extraVariables ...string) error {
-	this.migrationContext.Log.Infof("executing hook: %+v", hook)
+func (he *HooksExecutor) executeHook(hook string, extraVariables ...string) error {
+	he.migrationContext.Log.Infof("executing hook: %+v", hook)
 	cmd := exec.Command(hook)
-	cmd.Env = this.applyEnvironmentVariables(extraVariables...)
+	cmd.Env = he.applyEnvironmentVariables(extraVariables...)
 
 	combinedOutput, err := cmd.CombinedOutput()
-	fmt.Fprintln(this.writer, string(combinedOutput))
+	fmt.Fprintln(he.writer, string(combinedOutput))
 	return log.Errore(err)
 }
 
-func (this *HooksExecutor) detectHooks(baseName string) (hooks []string, err error) {
-	if this.migrationContext.HooksPath == "" {
+func (he *HooksExecutor) detectHooks(baseName string) (hooks []string, err error) {
+	if he.migrationContext.HooksPath == "" {
 		return hooks, err
 	}
-	pattern := fmt.Sprintf("%s/%s*", this.migrationContext.HooksPath, baseName)
+	pattern := fmt.Sprintf("%s/%s*", he.migrationContext.HooksPath, baseName)
 	hooks, err = filepath.Glob(pattern)
 	return hooks, err
 }
 
-func (this *HooksExecutor) executeHooks(baseName string, extraVariables ...string) error {
-	hooks, err := this.detectHooks(baseName)
+func (he *HooksExecutor) executeHooks(baseName string, extraVariables ...string) error {
+	hooks, err := he.detectHooks(baseName)
 	if err != nil {
 		return err
 	}
 	for _, hook := range hooks {
 		log.Infof("executing %+v hook: %+v", baseName, hook)
-		if err := this.executeHook(hook, extraVariables...); err != nil {
+		if err := he.executeHook(hook, extraVariables...); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (this *HooksExecutor) onStartup() error {
-	return this.executeHooks(onStartup)
+func (he *HooksExecutor) OnStartup() error {
+	return he.executeHooks(onStartup)
 }
 
-func (this *HooksExecutor) onValidated() error {
-	return this.executeHooks(onValidated)
+func (he *HooksExecutor) OnValidated() error {
+	return he.executeHooks(onValidated)
 }
 
-func (this *HooksExecutor) onRowCountComplete() error {
-	return this.executeHooks(onRowCountComplete)
+func (he *HooksExecutor) OnRowCountComplete() error {
+	return he.executeHooks(onRowCountComplete)
 }
-func (this *HooksExecutor) onBeforeRowCopy() error {
-	return this.executeHooks(onBeforeRowCopy)
+func (he *HooksExecutor) OnBeforeRowCopy() error {
+	return he.executeHooks(onBeforeRowCopy)
 }
 
-func (this *HooksExecutor) onBatchCopyRetry(errorMessage string) error {
+func (he *HooksExecutor) OnBatchCopyRetry(errorMessage string) error {
 	v := fmt.Sprintf("GH_OST_LAST_BATCH_COPY_ERROR=%s", errorMessage)
-	return this.executeHooks(onBatchCopyRetry, v)
+	return he.executeHooks(onBatchCopyRetry, v)
 }
 
-func (this *HooksExecutor) onRowCopyComplete() error {
-	return this.executeHooks(onRowCopyComplete)
+func (he *HooksExecutor) OnRowCopyComplete() error {
+	return he.executeHooks(onRowCopyComplete)
 }
 
-func (this *HooksExecutor) onBeginPostponed() error {
-	return this.executeHooks(onBeginPostponed)
+func (he *HooksExecutor) OnBeginPostponed() error {
+	return he.executeHooks(onBeginPostponed)
 }
 
-func (this *HooksExecutor) onBeforeCutOver() error {
-	return this.executeHooks(onBeforeCutOver)
+func (he *HooksExecutor) OnBeforeCutOver() error {
+	return he.executeHooks(onBeforeCutOver)
 }
 
-func (this *HooksExecutor) onInteractiveCommand(command string) error {
+func (he *HooksExecutor) OnInteractiveCommand(command string) error {
 	v := fmt.Sprintf("GH_OST_COMMAND='%s'", command)
-	return this.executeHooks(onInteractiveCommand, v)
+	return he.executeHooks(onInteractiveCommand, v)
 }
 
-func (this *HooksExecutor) onSuccess() error {
-	return this.executeHooks(onSuccess)
+func (he *HooksExecutor) OnSuccess(instantDDL bool) error {
+	v := fmt.Sprintf("GH_OST_INSTANT_DDL=%t", instantDDL)
+	return he.executeHooks(onSuccess, v)
 }
 
-func (this *HooksExecutor) onFailure() error {
-	return this.executeHooks(onFailure)
+func (he *HooksExecutor) OnFailure() error {
+	return he.executeHooks(onFailure)
 }
 
-func (this *HooksExecutor) onStatus(statusMessage string) error {
+func (he *HooksExecutor) OnStatus(statusMessage string) error {
 	v := fmt.Sprintf("GH_OST_STATUS='%s'", statusMessage)
-	return this.executeHooks(onStatus, v)
+	return he.executeHooks(onStatus, v)
 }
 
-func (this *HooksExecutor) onStopReplication() error {
-	return this.executeHooks(onStopReplication)
+func (he *HooksExecutor) OnStopReplication() error {
+	return he.executeHooks(onStopReplication)
 }
 
-func (this *HooksExecutor) onStartReplication() error {
-	return this.executeHooks(onStartReplication)
+func (he *HooksExecutor) OnStartReplication() error {
+	return he.executeHooks(onStartReplication)
 }
