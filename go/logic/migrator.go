@@ -234,10 +234,14 @@ func (mgtr *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 // consumeRowCopyComplete blocks on the rowCopyComplete channel once, and then
 // consumes and drops any further incoming events that may be left hanging.
 func (mgtr *Migrator) consumeRowCopyComplete() {
-	if err := <-mgtr.rowCopyComplete; err != nil {
-		// Abort synchronously to ensure checkAbort() sees the error immediately
-		mgtr.abort(err)
-		// Don't mark row copy as complete if there was an error
+	select {
+	case err := <-mgtr.rowCopyComplete:
+		if err != nil {
+			mgtr.abort(err)
+			return
+		}
+	case <-mgtr.migrationContext.GetContext().Done():
+		// Abort cancelled the context
 		return
 	}
 	atomic.StoreInt64(&mgtr.rowCopyCompleteFlag, 1)
