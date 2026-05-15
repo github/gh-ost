@@ -784,12 +784,12 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 	}
 }
 
-func TestMoveTablesCopySelectQueryBuilder(t *testing.T) {
+func TestMoveTableCopySelectQueryBuilder(t *testing.T) {
 	t.Run("single column unique key", func(t *testing.T) {
 		sharedColumns := NewColumnList([]string{"id", "name", "position"})
 		uniqueKeyColumns := NewColumnList([]string{"id"})
 
-		builder, err := NewMoveTablesCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, true)
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, true)
 		require.NoError(t, err)
 
 		query, args, err := builder.BuildQuery([]any{3}, []any{103})
@@ -811,7 +811,7 @@ func TestMoveTablesCopySelectQueryBuilder(t *testing.T) {
 		sharedColumns := NewColumnList([]string{"id", "name", "position"})
 		uniqueKeyColumns := NewColumnList([]string{"id"})
 
-		builder, err := NewMoveTablesCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, false)
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, false)
 		require.NoError(t, err)
 
 		query, args, err := builder.BuildQuery([]any{3}, []any{103})
@@ -833,7 +833,7 @@ func TestMoveTablesCopySelectQueryBuilder(t *testing.T) {
 		sharedColumns := NewColumnList([]string{"id", "name", "position"})
 		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 
-		builder, err := NewMoveTablesCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "name_position_uidx", uniqueKeyColumns, true)
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "name_position_uidx", uniqueKeyColumns, true)
 		require.NoError(t, err)
 
 		query, args, err := builder.BuildQuery([]any{3, 17}, []any{103, 117})
@@ -856,7 +856,7 @@ func TestMoveTablesCopySelectQueryBuilder(t *testing.T) {
 		sharedColumns := NewColumnList([]string{"id", "name"})
 		uniqueKeyColumns := NewColumnList([]string{"id"})
 
-		builder, err := NewMoveTablesCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, true)
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, true)
 		require.NoError(t, err)
 
 		query1, args1, err := builder.BuildQuery([]any{1}, []any{10})
@@ -873,7 +873,7 @@ func TestMoveTablesCopySelectQueryBuilder(t *testing.T) {
 		sharedColumns := NewColumnList([]string{"id", "name"})
 		uniqueKeyColumns := NewColumnList([]string{"id"})
 
-		builder, err := NewMoveTablesCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, true)
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, true)
 		require.NoError(t, err)
 
 		_, _, err = builder.BuildQuery([]any{1, 2}, []any{10})
@@ -881,11 +881,11 @@ func TestMoveTablesCopySelectQueryBuilder(t *testing.T) {
 	})
 }
 
-func BenchmarkMoveTablesCopySelectQueryBuilderBuildQuery(b *testing.B) {
+func BenchmarkMoveTableCopySelectQueryBuilderBuildQuery(b *testing.B) {
 	sharedColumns := NewColumnList([]string{"id", "name", "position"})
 	uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 
-	builder, err := NewMoveTablesCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "name_position_uidx", uniqueKeyColumns, true)
+	builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "name_position_uidx", uniqueKeyColumns, true)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -902,11 +902,11 @@ func BenchmarkMoveTablesCopySelectQueryBuilderBuildQuery(b *testing.B) {
 	}
 }
 
-func TestMoveTablesCopyInsertQueryBuilder(t *testing.T) {
+func TestMoveTableCopyInsertQueryBuilder(t *testing.T) {
 	t.Run("single row", func(t *testing.T) {
 		sharedColumns := NewColumnList([]string{"id", "name", "position"})
 
-		builder, err := NewMoveTablesCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
+		builder, err := NewMoveTableCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
 		require.NoError(t, err)
 
 		values := []*ColumnValues{
@@ -930,7 +930,7 @@ func TestMoveTablesCopyInsertQueryBuilder(t *testing.T) {
 	t.Run("multiple rows", func(t *testing.T) {
 		sharedColumns := NewColumnList([]string{"id", "name", "position"})
 
-		builder, err := NewMoveTablesCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
+		builder, err := NewMoveTableCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
 		require.NoError(t, err)
 
 		values := []*ColumnValues{
@@ -958,7 +958,7 @@ func TestMoveTablesCopyInsertQueryBuilder(t *testing.T) {
 	t.Run("wrong column count", func(t *testing.T) {
 		sharedColumns := NewColumnList([]string{"id", "name", "position"})
 
-		builder, err := NewMoveTablesCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
+		builder, err := NewMoveTableCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
 		require.NoError(t, err)
 
 		values := []*ColumnValues{
@@ -971,7 +971,7 @@ func TestMoveTablesCopyInsertQueryBuilder(t *testing.T) {
 	t.Run("reuses prepared statement", func(t *testing.T) {
 		sharedColumns := NewColumnList([]string{"id", "name"})
 
-		builder, err := NewMoveTablesCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
+		builder, err := NewMoveTableCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
 		require.NoError(t, err)
 
 		values1 := []*ColumnValues{ToColumnValues([]interface{}{1, "a"})}
@@ -988,10 +988,10 @@ func TestMoveTablesCopyInsertQueryBuilder(t *testing.T) {
 	})
 }
 
-func BenchmarkMoveTablesCopyInsertQueryBuilderBuildQuery(b *testing.B) {
+func BenchmarkMoveTableCopyInsertQueryBuilderBuildQuery(b *testing.B) {
 	sharedColumns := NewColumnList([]string{"id", "name", "position"})
 
-	builder, err := NewMoveTablesCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
+	builder, err := NewMoveTableCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
 	if err != nil {
 		b.Fatal(err)
 	}
