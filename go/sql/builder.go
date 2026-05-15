@@ -426,13 +426,13 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, noWait)
 }
 
-type MoveTablesCopySelectQueryBuilder struct {
+type MoveTableCopySelectQueryBuilder struct {
 	preparedStatement string
 	argsMapping       []int
 	argsCount         int
 }
 
-func NewMoveTablesCopySelectQueryBuilder(sourceDatabaseName, sourceTableName string, sharedColumns *ColumnList, uniqueKey string, uniqueKeyColumns *ColumnList, includeRangeStartValues bool) (*MoveTablesCopySelectQueryBuilder, error) {
+func NewMoveTableCopySelectQueryBuilder(sourceDatabaseName, sourceTableName string, sharedColumns *ColumnList, uniqueKey string, uniqueKeyColumns *ColumnList, includeRangeStartValues bool) (*MoveTableCopySelectQueryBuilder, error) {
 	sourceDatabaseName = EscapeName(sourceDatabaseName)
 	sourceTableName = EscapeName(sourceTableName)
 	sharedColumnsNames := sharedColumns.Names()
@@ -490,14 +490,14 @@ func NewMoveTablesCopySelectQueryBuilder(sourceDatabaseName, sourceTableName str
 		uniqueKey,
 		rangeStartComparison, rangeEndComparison,
 	)
-	return &MoveTablesCopySelectQueryBuilder{
+	return &MoveTableCopySelectQueryBuilder{
 		preparedStatement: stmt,
 		argsMapping:       argsMapping,
 		argsCount:         len(dummyArgs) * 2,
 	}, nil
 }
 
-func (b *MoveTablesCopySelectQueryBuilder) BuildQuery(rangeStartArgs, rangeEndArgs []any) (string, []any, error) {
+func (b *MoveTableCopySelectQueryBuilder) BuildQuery(rangeStartArgs, rangeEndArgs []any) (string, []any, error) {
 	if len(rangeStartArgs)+len(rangeEndArgs) != b.argsCount {
 		return "", nil, fmt.Errorf("got %d args but expected %d", len(rangeStartArgs)+len(rangeEndArgs), b.argsCount)
 	}
@@ -512,13 +512,13 @@ func (b *MoveTablesCopySelectQueryBuilder) BuildQuery(rangeStartArgs, rangeEndAr
 	return b.preparedStatement, explodedArgs, nil
 }
 
-type MoveTablesCopyInsertQueryBuilder struct {
+type MoveTableCopyInsertQueryBuilder struct {
 	preparedStatement    string
 	valueListPlaceholder string
 	valueListSize        int
 }
 
-func NewMoveTablesCopyInsertQueryBuilder(targetDatabaseName, targetTableName string, sharedColumns *ColumnList) (*MoveTablesCopyInsertQueryBuilder, error) {
+func NewMoveTableCopyInsertQueryBuilder(targetDatabaseName, targetTableName string, sharedColumns *ColumnList) (*MoveTableCopyInsertQueryBuilder, error) {
 	targetDatabaseName = EscapeName(targetDatabaseName)
 	targetTableName = EscapeName(targetTableName)
 	sharedColumnsNames := sharedColumns.Names()
@@ -539,14 +539,14 @@ func NewMoveTablesCopyInsertQueryBuilder(targetDatabaseName, targetTableName str
 		targetDatabaseName, targetTableName,
 		sharedColumnsListing,
 	)
-	return &MoveTablesCopyInsertQueryBuilder{
+	return &MoveTableCopyInsertQueryBuilder{
 		preparedStatement:    stmt,
 		valueListPlaceholder: valueListPlaceholder,
 		valueListSize:        valueListSize,
 	}, nil
 }
 
-func (b *MoveTablesCopyInsertQueryBuilder) BuildQuery(values []*ColumnValues) (string, []any, error) {
+func (b *MoveTableCopyInsertQueryBuilder) BuildQuery(values []*ColumnValues) (string, []any, error) {
 	var explodedArgs []any
 	var builder strings.Builder
 	builder.WriteString(b.preparedStatement)
