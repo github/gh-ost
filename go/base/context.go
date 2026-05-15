@@ -1039,6 +1039,11 @@ func (mctx *MigrationContext) CancelContext() {
 	}
 }
 
+// IsMoveTablesMode returns true if gh-ost should be used for moving tables instead of running a schema migration.
+func (mctx *MigrationContext) IsMoveTablesMode() bool {
+	return len(mctx.MoveTables.TableNames) > 0
+}
+
 // SendWithContext attempts to send a value to a channel, but returns early
 // if the context is cancelled. This prevents goroutine deadlocks when the
 // channel receiver has exited due to an error.
