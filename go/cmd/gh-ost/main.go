@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strings"
 	"syscall"
 
 	"github.com/github/gh-ost/go/base"
@@ -164,8 +165,16 @@ func main() {
 	version := flag.Bool("version", false, "Print version & exit")
 	checkFlag := flag.Bool("check-flag", false, "Check if another flag exists/supported. This allows for cross-version scripting. Exits with 0 when all additional provided flags exist, nonzero otherwise. You must provide (dummy) values for flags that require a value. Example: gh-ost --check-flag --cut-over-lock-timeout-seconds --nice-ratio 0")
 	flag.StringVar(&migrationContext.ForceTmpTableName, "force-table-names", "", "table name prefix to be used on the temporary tables")
-	flag.CommandLine.SetOutput(os.Stdout)
 
+	// move tables flags
+	moveTables := flag.String("move-tables", "", "Comma delimited list of tables to move. e.g. 'table1,table2,table3'. This is a special mode that allows you to move tables between database clusters. This mode is mutually exclusive with --alter, --table, --test-on-replica, --migrate-on-replica, --execute-on-replica, and --revert.")
+	flag.StringVar(&migrationContext.MoveTables.TargetHost, "target-host", "", "Target MySQL hostname for --move-tables mode. Must be specified if --move-tables is specified.")
+	flag.IntVar(&migrationContext.MoveTables.TargetPort, "target-port", 3306, "Target MySQL port for --move-tables mode. Defaults to 3306.")
+	flag.StringVar(&migrationContext.MoveTables.TargetUser, "target-user", "", "Target MySQL username for --move-tables mode. If not provided, uses the same user as the source connection")
+	flag.StringVar(&migrationContext.MoveTables.TargetPass, "target-password", "", "Target MySQL password for --move-tables mode. If not provided, uses the same password as the source connection")
+	flag.StringVar(&migrationContext.MoveTables.TargetDatabase, "target-database", "", "Target MySQL database name for --move-tables mode. If not provided, uses the same database name as the source connection")
+
+	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Parse()
 
 	if *checkFlag {
@@ -318,6 +327,33 @@ func main() {
 	}
 	if migrationContext.CountTableRows && migrationContext.PanicOnWarnings {
 		migrationContext.Log.Warning("--exact-rowcount with --panic-on-warnings: row counts cannot be exact due to warning detection")
+	}
+
+	if *moveTables != "" {
+		if migrationContext.AlterStatement != "" {
+			log.Fatal("--move-tables is mutually exclusive with --alter")
+		}
+		if migrationContext.OriginalTableName != "" {
+			log.Fatal("--move-tables is mutually exclusive with --table")
+		}
+		if migrationContext.TestOnReplica {
+			log.Fatal("--move-tables is mutually exclusive with --test-on-replica")
+		}
+		if migrationContext.MigrateOnReplica {
+			log.Fatal("--move-tables is mutually exclusive with --migrate-on-replica")
+		}
+		if migrationContext.Revert {
+			log.Fatal("--move-tables is mutually exclusive with --revert")
+		}
+		if migrationContext.MoveTables.TargetHost == "" {
+			log.Fatal("--target-host must be specified when using --move-tables")
+		}
+		migrationContext.MoveTables.TableNames = strings.Split(*moveTables, ",")
+		if len(migrationContext.MoveTables.TableNames) > 1 {
+			// Future version will support moving multiple tables at the same time.
+			// For now, we only support moving a single table at a time.
+			log.Fatal("--move-tables currently supports only a single table")
+		}
 	}
 
 	switch *cutOver {

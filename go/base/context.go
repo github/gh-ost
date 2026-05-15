@@ -271,6 +271,16 @@ type MigrationContext struct {
 	SkipMetadataLockCheck             bool
 	IsOpenMetadataLockInstruments     bool
 
+	// move tables:
+	MoveTables struct {
+		TableNames     []string // List of table names to be moved.
+		TargetHost     string   // Target hostname for the move. This must be a primary/writable host.
+		TargetPort     int      // Target MySQL port for the move.
+		TargetUser     string   // Target username for the move. If not specified, it will default to the source user.
+		TargetPass     string   // Target password for the move. If not specified, it will default to the source password.
+		TargetDatabase string   // Target database name for the move. If not specified, it will default to the source database name.
+	}
+
 	Log Logger
 }
 
