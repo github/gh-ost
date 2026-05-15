@@ -237,7 +237,9 @@ func (mgtr *Migrator) consumeRowCopyComplete() {
 	select {
 	case err := <-mgtr.rowCopyComplete:
 		if err != nil {
+			// Abort synchronously to ensure checkAbort() sees the error immediately
 			mgtr.abort(err)
+			// Don't mark row copy as complete if there was an error
 			return
 		}
 	case <-mgtr.migrationContext.GetContext().Done():
