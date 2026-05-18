@@ -769,7 +769,106 @@ func (mgtr *Migrator) Revert() error {
 	return nil
 }
 
-func (mgtr *Migrator) MoveTables() error {
+func (mgtr *Migrator) MoveTables() (err error) {
+	mgtr.migrationContext.Log.Infof("Moving tables %v from %s to %s (%s)",
+		mgtr.migrationContext.MoveTables.TableNames,
+		sql.EscapeName(mgtr.migrationContext.DatabaseName),
+		sql.EscapeName(mgtr.migrationContext.MoveTables.TargetDatabase), mgtr.migrationContext.MoveTables.TargetHost)
+	mgtr.migrationContext.StartTime = time.Now()
+
+	// Ensure context is cancelled on exit (cleanup)
+	defer mgtr.migrationContext.CancelContext()
+
+	if mgtr.migrationContext.Hostname, err = os.Hostname(); err != nil {
+		return err
+	}
+
+	go mgtr.listenOnPanicAbort()
+
+	// Run on-startup hook:
+	if err := mgtr.hooksExecutor.OnStartup(); err != nil {
+		return err
+	}
+
+	// After this point, we'll need to teardown anything that's been started
+	// so we don't leave things hanging around
+	defer mgtr.teardown()
+
+	if err := mgtr.initiateInspector(); err != nil {
+		return err
+	}
+	if err := mgtr.checkAbort(); err != nil {
+		return err
+	}
+	if err := mgtr.initiateApplier(); err != nil {
+		return err
+	}
+	if err := mgtr.checkAbort(); err != nil {
+		return err
+	}
+
+	// Validation complete! Run on-validated hook.
+	if err := mgtr.hooksExecutor.OnValidated(); err != nil {
+		return err
+	}
+
+	if err := mgtr.initiateServer(); err != nil {
+		return err
+	}
+	defer mgtr.server.RemoveSocketFile()
+
+	if err := mgtr.countTableRows(); err != nil {
+		return err
+	}
+	if err := mgtr.addDMLEventsListener(); err != nil {
+		return err
+	}
+	if err := mgtr.applier.ReadMigrationRangeValues(); err != nil {
+		return err
+	}
+
+	mgtr.initiateThrottler()
+
+	// Run on-before-row-copy hook
+	if err := mgtr.hooksExecutor.OnBeforeRowCopy(); err != nil {
+		return err
+	}
+	go func() {
+		if err := mgtr.executeWriteFuncs(); err != nil {
+			// Send error to PanicAbort to trigger abort
+			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+		}
+	}()
+	go mgtr.iterateChunks()
+	mgtr.migrationContext.MarkRowCopyStartTime()
+	go mgtr.initiateStatus()
+
+	mgtr.migrationContext.Log.Debugf("Operating until row copy is complete")
+	mgtr.consumeRowCopyComplete()
+	mgtr.migrationContext.Log.Infof("Row copy complete")
+	// Check if row copy was aborted due to error
+	if err := mgtr.checkAbort(); err != nil {
+		return err
+	}
+	if err := mgtr.hooksExecutor.OnRowCopyComplete(); err != nil {
+		return err
+	}
+
+	//TODO: cutover here
+
+	if err := mgtr.finalCleanup(); err != nil {
+		return nil
+	}
+	if err := mgtr.hooksExecutor.OnSuccess(false); err != nil {
+		return err
+	}
+	mgtr.migrationContext.Log.Infof("Done moving tables %v from %s to %s (%s)",
+		mgtr.migrationContext.MoveTables.TableNames, sql.EscapeName(mgtr.migrationContext.DatabaseName),
+		sql.EscapeName(mgtr.migrationContext.MoveTables.TargetDatabase), mgtr.migrationContext.MoveTables.TargetHost)
+	// Final check for abort before declaring success
+	if err := mgtr.checkAbort(); err != nil {
+		return err
+	}
 	return nil
 }
 
