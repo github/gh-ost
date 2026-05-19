@@ -990,6 +990,7 @@ func (suite *MigratorTestSuite) TestRevertEmpty() {
 		err = migrator.Migrate()
 		oldTableName = migrationContext.GetOldTableName()
 		suite.Require().NoError(err)
+		suite.Require().Less(migrationContext.TimeSinceLastHeartbeatOnChangelog(), 24*time.Hour)
 	}
 
 	// revert the original migration
@@ -1008,6 +1009,7 @@ func (suite *MigratorTestSuite) TestRevertEmpty() {
 
 		err = migrator.Revert()
 		suite.Require().NoError(err)
+		suite.Require().Less(migrationContext.TimeSinceLastHeartbeatOnChangelog(), 24*time.Hour)
 	}
 }
 
