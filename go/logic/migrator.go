@@ -1700,7 +1700,12 @@ func (mgtr *Migrator) iterateChunks() error {
 					// _ghost_ table, which no longer exists. So, bothering error messages and all, but no damage.
 					return nil
 				}
-				_, rowsAffected, _, err := mgtr.applier.ApplyIterationInsertQuery()
+				var rowsAffected int64
+				if mgtr.migrationContext.IsMoveTablesMode() {
+					_, rowsAffected, _, err = mgtr.applier.ApplyIterationMoveTableCopyQueries()
+				} else {
+					_, rowsAffected, _, err = mgtr.applier.ApplyIterationInsertQuery()
+				}
 				if err != nil {
 					return err // wrapping call will retry
 				}
