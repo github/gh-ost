@@ -658,6 +658,50 @@ func TestBuildTwoColumnUnionParts(t *testing.T) {
 	require.Equal(t, []interface{}{3, 17, 3, 103, 103, 117}, explodedArgs)
 }
 
+func TestBuildRangeInsertQueryTwoColumnGuards(t *testing.T) {
+	databaseName := "mydb"
+	originalTableName := "tbl"
+	ghostTableName := "ghost"
+	sharedColumnsListing := "id, name, position"
+	uniqueKey := "name_position_uidx"
+	uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+	validValues := []string{"@v1", "@v2"}
+	validArgs := []interface{}{3, 17}
+
+	call := func(rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}) error {
+		_, _, err := buildRangeInsertQueryTwoColumn(
+			databaseName, originalTableName, ghostTableName,
+			sharedColumnsListing, sharedColumnsListing,
+			uniqueKey, uniqueKeyColumns,
+			rangeStartValues, rangeEndValues,
+			rangeStartArgs, rangeEndArgs,
+			GreaterThanOrEqualsComparisonSign, "",
+		)
+		return err
+	}
+
+	{
+		// rangeStartValues length mismatch.
+		err := call([]string{"@v1"}, validValues, validArgs, validArgs)
+		require.ErrorContains(t, err, "got 2 columns but 1 rangeStartValues")
+	}
+	{
+		// rangeEndValues length mismatch.
+		err := call(validValues, []string{"@v1", "@v2", "@v3"}, validArgs, validArgs)
+		require.ErrorContains(t, err, "got 2 columns but 3 rangeEndValues")
+	}
+	{
+		// rangeStartArgs length mismatch.
+		err := call(validValues, validValues, []interface{}{3}, validArgs)
+		require.ErrorContains(t, err, "got 2 columns but 1 rangeStartArgs")
+	}
+	{
+		// rangeEndArgs length mismatch.
+		err := call(validValues, validValues, validArgs, []interface{}{})
+		require.ErrorContains(t, err, "got 2 columns but 0 rangeEndArgs")
+	}
+}
+
 func TestBuildUniqueKeyMinValuesPreparedQuery(t *testing.T) {
 	databaseName := "mydb"
 	originalTableName := "tbl"

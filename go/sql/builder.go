@@ -349,6 +349,20 @@ func buildRangeInsertQueryTwoColumn(
 	transactionalClause string,
 ) (result string, explodedArgs []interface{}, err error) {
 	cols := uniqueKeyColumns.Columns()
+
+	if len(cols) != len(rangeStartValues) {
+		return "", explodedArgs, fmt.Errorf("got %d columns but %d rangeStartValues in buildRangeInsertQueryTwoColumn", len(cols), len(rangeStartValues))
+	}
+	if len(cols) != len(rangeEndValues) {
+		return "", explodedArgs, fmt.Errorf("got %d columns but %d rangeEndValues in buildRangeInsertQueryTwoColumn", len(cols), len(rangeEndValues))
+	}
+	if len(cols) != len(rangeStartArgs) {
+		return "", explodedArgs, fmt.Errorf("got %d columns but %d rangeStartArgs in buildRangeInsertQueryTwoColumn", len(cols), len(rangeStartArgs))
+	}
+	if len(cols) != len(rangeEndArgs) {
+		return "", explodedArgs, fmt.Errorf("got %d columns but %d rangeEndArgs in buildRangeInsertQueryTwoColumn", len(cols), len(rangeEndArgs))
+	}
+
 	col1Name := EscapeName(cols[0].Name)
 	col2Name := EscapeName(cols[1].Name)
 	col1StartVal := rangeStartValues[0]
