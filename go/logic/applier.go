@@ -91,6 +91,11 @@ type Applier struct {
 	migrationLockName string
 	migrationLockStop chan struct{}
 	migrationLockDone chan struct{}
+
+	moveTablesTargetDB                    *gosql.DB
+	moveTablesCopySelectFirstQueryBuilder *sql.MoveTableCopySelectQueryBuilder
+	moveTablesCopySelectNextQueryBuilder  *sql.MoveTableCopySelectQueryBuilder
+	moveTablesCopyInsertQueryBuilder      *sql.MoveTableCopyInsertQueryBuilder
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -1161,6 +1166,121 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 		apl.migrationContext.MigrationIterationRangeMaxValues,
 		apl.migrationContext.GetIteration(),
 		chunkSize)
+	return chunkSize, rowsAffected, duration, nil
+}
+
+// ApplyIterationMoveTableCopyQueries issues a SELECT query on the original table and an INSERT query on the target table,
+// copying a chunk of rows. It is used when `--move-table` is specified, instead of ApplyIterationInsertQuery.
+func (apl *Applier) ApplyIterationMoveTableCopyQueries() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+	startTime := time.Now()
+	chunkSize = atomic.LoadInt64(&apl.migrationContext.ChunkSize)
+
+	// First, select data from the source database:
+	rows, err := func() ([]*sql.ColumnValues, error) {
+		var qb *sql.MoveTableCopySelectQueryBuilder
+		if apl.migrationContext.GetIteration() == 0 {
+			qb = apl.moveTablesCopySelectFirstQueryBuilder
+		} else {
+			qb = apl.moveTablesCopySelectNextQueryBuilder
+		}
+		query, explodedArgs, err := qb.BuildQuery(
+			apl.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
+			apl.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		sqlRows, err := apl.db.Query(query, explodedArgs...)
+		if err != nil {
+			return nil, err
+		}
+		defer sqlRows.Close()
+		chunkRows := make([]*sql.ColumnValues, 0, chunkSize)
+		for sqlRows.Next() {
+			row := sql.NewColumnValues(apl.migrationContext.SharedColumns.Len())
+			err := sqlRows.Scan(row.ValuesPointers...)
+			if err != nil {
+				return nil, err
+			}
+			chunkRows = append(chunkRows, row)
+		}
+		return chunkRows, nil
+	}()
+	if err != nil {
+		return chunkSize, rowsAffected, duration, err
+	}
+
+	// Then, insert data into the destination database:
+	sqlResult, err := func() (gosql.Result, error) {
+		query, explodedArgs, err := apl.moveTablesCopyInsertQueryBuilder.BuildQuery(rows)
+		if err != nil {
+			return nil, err
+		}
+		tx, err := apl.moveTablesTargetDB.Begin()
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s', %s`,
+			apl.migrationContext.ApplierTimeZone,
+			apl.generateSqlModeQuery())
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return nil, err
+		}
+
+		sqlResult, err := tx.Exec(query, explodedArgs...)
+		if err != nil {
+			return nil, err
+		}
+
+		if apl.migrationContext.PanicOnWarnings {
+			rows, err := tx.Query("SHOW WARNINGS")
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			if err = rows.Err(); err != nil {
+				return nil, err
+			}
+			migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
+			if err != nil {
+				return nil, err
+			}
+			var sqlWarnings []string
+			for rows.Next() {
+				var level, message string
+				var code int
+				if err := rows.Scan(&level, &code, &message); err != nil {
+					apl.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+					continue
+				}
+				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
+					continue
+				}
+				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+			}
+			apl.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
+		}
+
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return sqlResult, nil
+	}()
+	if err != nil {
+		return chunkSize, rowsAffected, duration, err
+	}
+	rowsAffected, _ = sqlResult.RowsAffected()
+	duration = time.Since(startTime)
+	apl.migrationContext.Log.Debugf(
+		"Issued SELECT+INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
+		apl.migrationContext.MigrationIterationRangeMinValues,
+		apl.migrationContext.MigrationIterationRangeMaxValues,
+		apl.migrationContext.GetIteration(),
+		chunkSize,
+	)
+
 	return chunkSize, rowsAffected, duration, nil
 }
 

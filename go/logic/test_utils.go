@@ -17,6 +17,7 @@ var (
 	testMysqlUser           = "root"
 	testMysqlPass           = "root-password"
 	testMysqlDatabase       = "test"
+	testMysqlDatabaseOther  = "test_other"
 	testMysqlTableName      = "testing"
 )
 
@@ -34,6 +35,10 @@ func getTestRevertedTableName() string {
 
 func getTestOldTableName() string {
 	return fmt.Sprintf("`%s`.`_%s_del`", testMysqlDatabase, testMysqlTableName)
+}
+
+func getTestOtherTableName() string {
+	return fmt.Sprintf("`%s`.`%s`", testMysqlDatabaseOther, testMysqlTableName)
 }
 
 func getTestConnectionConfig(ctx context.Context, container testcontainers.Container) (*mysql.ConnectionConfig, error) {
