@@ -338,6 +338,35 @@ func (apl *Applier) prepareQueries() (err error) {
 			return err
 		}
 	}
+	if apl.migrationContext.IsMoveTablesMode() {
+		if apl.moveTablesCopySelectFirstQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
+			apl.migrationContext.DatabaseName,
+			apl.migrationContext.OriginalTableName,
+			apl.migrationContext.SharedColumns,
+			apl.migrationContext.UniqueKey.Name,
+			&apl.migrationContext.UniqueKey.Columns,
+			true, // <-- include start range values for first select query
+		); err != nil {
+			return err
+		}
+		if apl.moveTablesCopySelectNextQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
+			apl.migrationContext.DatabaseName,
+			apl.migrationContext.OriginalTableName,
+			apl.migrationContext.SharedColumns,
+			apl.migrationContext.UniqueKey.Name,
+			&apl.migrationContext.UniqueKey.Columns,
+			false,
+		); err != nil {
+			return err
+		}
+		if apl.moveTablesCopyInsertQueryBuilder, err = sql.NewMoveTableCopyInsertQueryBuilder(
+			apl.migrationContext.MoveTables.TargetDatabase,
+			apl.migrationContext.OriginalTableName,
+			apl.migrationContext.SharedColumns,
+		); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

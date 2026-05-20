@@ -1662,32 +1662,14 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 		Name:    "PRIMARY",
 		Columns: *sql.NewColumnList([]string{"id"}),
 	}
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
 	applier := NewApplier(migrationContext)
+	applier.prepareQueries()
 	defer applier.Teardown()
 
 	err = applier.InitDBConnections()
-	suite.Require().NoError(err)
-
-	// Set up the move-tables query builders and target DB
-	applier.moveTablesCopySelectFirstQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
-		testMysqlDatabase, testMysqlTableName,
-		migrationContext.SharedColumns, migrationContext.UniqueKey.Name,
-		&migrationContext.UniqueKey.Columns, true,
-	)
-	suite.Require().NoError(err)
-
-	applier.moveTablesCopySelectNextQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
-		testMysqlDatabase, testMysqlTableName,
-		migrationContext.SharedColumns, migrationContext.UniqueKey.Name,
-		&migrationContext.UniqueKey.Columns, false,
-	)
-	suite.Require().NoError(err)
-
-	applier.moveTablesCopyInsertQueryBuilder, err = sql.NewMoveTableCopyInsertQueryBuilder(
-		testMysqlDatabaseOther, testMysqlTableName,
-		migrationContext.MappedSharedColumns,
-	)
 	suite.Require().NoError(err)
 
 	applier.moveTablesTargetDB = suite.otherDB
