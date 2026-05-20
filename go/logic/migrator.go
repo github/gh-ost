@@ -234,10 +234,16 @@ func (mgtr *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 // consumeRowCopyComplete blocks on the rowCopyComplete channel once, and then
 // consumes and drops any further incoming events that may be left hanging.
 func (mgtr *Migrator) consumeRowCopyComplete() {
-	if err := <-mgtr.rowCopyComplete; err != nil {
-		// Abort synchronously to ensure checkAbort() sees the error immediately
-		mgtr.abort(err)
-		// Don't mark row copy as complete if there was an error
+	select {
+	case err := <-mgtr.rowCopyComplete:
+		if err != nil {
+			// Abort synchronously to ensure checkAbort() sees the error immediately
+			mgtr.abort(err)
+			// Don't mark row copy as complete if there was an error
+			return
+		}
+	case <-mgtr.migrationContext.GetContext().Done():
+		// Abort cancelled the context
 		return
 	}
 	atomic.StoreInt64(&mgtr.rowCopyCompleteFlag, 1)
@@ -450,6 +456,7 @@ func (mgtr *Migrator) checkAbort() error {
 func (mgtr *Migrator) Migrate() (err error) {
 	mgtr.migrationContext.Log.Infof("Migrating %s.%s", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))
 	mgtr.migrationContext.StartTime = time.Now()
+	mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(mgtr.migrationContext.StartTime)
 
 	// Ensure context is cancelled on exit (cleanup)
 	defer mgtr.migrationContext.CancelContext()
@@ -667,6 +674,7 @@ func (mgtr *Migrator) Revert() error {
 		sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName),
 		sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OldTableName))
 	mgtr.migrationContext.StartTime = time.Now()
+	mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(mgtr.migrationContext.StartTime)
 
 	// Ensure context is cancelled on exit (cleanup)
 	defer mgtr.migrationContext.CancelContext()
