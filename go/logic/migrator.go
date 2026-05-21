@@ -348,7 +348,13 @@ func (mgtr *Migrator) onChangelogHeartbeatEvent(dmlEntry *binlog.BinlogEntry) (e
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
 		return nil
 	}
-	mgtr.applyEventsQueue <- newApplyEventStructByFunc(&writeFunc)
+	if err := base.SendWithContext(
+		mgtr.migrationContext.GetContext(),
+		mgtr.applyEventsQueue,
+		newApplyEventStructByFunc(&writeFunc),
+	); err != nil {
+		return mgtr.migrationContext.Log.Errore(err)
+	}
 	return nil
 }
 
