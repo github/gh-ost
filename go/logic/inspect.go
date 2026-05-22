@@ -10,7 +10,9 @@ import (
 	gosql "database/sql"
 	"errors"
 	"fmt"
+	"math/big"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -146,7 +148,11 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 	for i, sharedUniqueKey := range sharedUniqueKeys {
 		isp.applyColumnTypes(isp.migrationContext.DatabaseName, isp.migrationContext.OriginalTableName, &sharedUniqueKey.Columns)
 		uniqueKeyIsValid := true
+		isMemoryComparable := true
 		for _, column := range sharedUniqueKey.Columns.Columns() {
+			if column.FormatValueFunc == nil {
+				isMemoryComparable = false
+			}
 			switch column.Type {
 			case sql.FloatColumnType:
 				{
@@ -164,6 +170,7 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 		}
 		if uniqueKeyIsValid {
 			isp.migrationContext.UniqueKey = sharedUniqueKeys[i]
+			isp.migrationContext.UniqueKey.IsMemoryComparable = isMemoryComparable
 			break
 		}
 	}
@@ -698,6 +705,100 @@ func (isp *Inspector) CountTableRows(ctx context.Context) error {
 }
 
 // applyColumnTypes
+// isIntegerColumnType returns true for MySQL integer column types.
+func isIntegerColumnType(lowerColumnType string) bool {
+	baseType := strings.Split(lowerColumnType, "(")[0]
+	baseType = strings.Fields(baseType)[0]
+	switch baseType {
+	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint":
+		return true
+	}
+	return false
+}
+
+// isDecimalColumnType returns true for MySQL decimal/float column types.
+func isDecimalColumnType(lowerColumnType string) bool {
+	baseType := strings.Split(lowerColumnType, "(")[0]
+	baseType = strings.Fields(baseType)[0]
+	switch baseType {
+	case "decimal", "numeric", "float", "double":
+		return true
+	}
+	return false
+}
+
+func formatNumericValue(arg interface{}) (string, error) {
+	if arg == nil {
+		return "", fmt.Errorf("format numeric value: nil")
+	}
+	switch v := arg.(type) {
+	case int:
+		return strconv.FormatInt(int64(v), 10), nil
+	case int8:
+		return strconv.FormatInt(int64(v), 10), nil
+	case int16:
+		return strconv.FormatInt(int64(v), 10), nil
+	case int32:
+		return strconv.FormatInt(int64(v), 10), nil
+	case int64:
+		return strconv.FormatInt(v, 10), nil
+	case uint:
+		return strconv.FormatUint(uint64(v), 10), nil
+	case uint8:
+		return strconv.FormatUint(uint64(v), 10), nil
+	case uint16:
+		return strconv.FormatUint(uint64(v), 10), nil
+	case uint32:
+		return strconv.FormatUint(uint64(v), 10), nil
+	case uint64:
+		return strconv.FormatUint(v, 10), nil
+	case float32:
+		return strconv.FormatFloat(float64(v), 'g', -1, 32), nil
+	case float64:
+		return strconv.FormatFloat(v, 'g', -1, 64), nil
+	case string:
+		// Binlog may decode numeric columns as strings; validate it's numeric
+		if _, ok := new(big.Int).SetString(v, 10); ok {
+			return v, nil
+		}
+		if _, ok := new(big.Float).SetString(v); ok {
+			return v, nil
+		}
+		return "", fmt.Errorf("format numeric value: non-numeric string %q", v)
+	}
+	return "", fmt.Errorf("format numeric value: unsupported type %T", arg)
+}
+
+func compareIntegralValues(a interface{}, b interface{}) (int, error) {
+	if a == nil || b == nil {
+		return 0, fmt.Errorf("compare integral values: nil argument")
+	}
+	left := new(big.Int)
+	if _, ok := left.SetString(fmt.Sprintf("%v", a), 10); !ok {
+		return 0, fmt.Errorf("compare integral values: cannot parse %v", a)
+	}
+	right := new(big.Int)
+	if _, ok := right.SetString(fmt.Sprintf("%v", b), 10); !ok {
+		return 0, fmt.Errorf("compare integral values: cannot parse %v", b)
+	}
+	return left.Cmp(right), nil
+}
+
+func compareDecimalValues(a interface{}, b interface{}) (int, error) {
+	if a == nil || b == nil {
+		return 0, fmt.Errorf("compare decimal values: nil argument")
+	}
+	left, ok := new(big.Float).SetString(fmt.Sprintf("%v", a))
+	if !ok {
+		return 0, fmt.Errorf("compare decimal values: cannot parse %v", a)
+	}
+	right, ok := new(big.Float).SetString(fmt.Sprintf("%v", b))
+	if !ok {
+		return 0, fmt.Errorf("compare decimal values: cannot parse %v", b)
+	}
+	return left.Cmp(right), nil
+}
+
 func (isp *Inspector) applyColumnTypes(databaseName, tableName string, columnsLists ...*sql.ColumnList) error {
 	query := `
 		select /* gh-ost */ *
@@ -709,6 +810,7 @@ func (isp *Inspector) applyColumnTypes(databaseName, tableName string, columnsLi
 	err := sqlutils.QueryRowsMap(isp.db, query, func(m sqlutils.RowMap) error {
 		columnName := m.GetString("COLUMN_NAME")
 		columnType := m.GetString("COLUMN_TYPE")
+		lowerColumnType := strings.ToLower(columnType)
 		columnOctetLength := m.GetUint("CHARACTER_OCTET_LENGTH")
 		isNullable := m.GetString("IS_NULLABLE")
 		extra := m.GetString("EXTRA")
@@ -722,29 +824,37 @@ func (isp *Inspector) applyColumnTypes(databaseName, tableName string, columnsLi
 				column.Nullable = true
 			}
 
-			if strings.Contains(columnType, "unsigned") {
+			if strings.Contains(lowerColumnType, "unsigned") {
 				column.IsUnsigned = true
 			}
-			if strings.Contains(columnType, "mediumint") {
+			if isIntegerColumnType(lowerColumnType) {
+				column.CompareValueFunc = compareIntegralValues
+				column.FormatValueFunc = formatNumericValue
+			}
+			if isDecimalColumnType(lowerColumnType) {
+				column.CompareValueFunc = compareDecimalValues
+				column.FormatValueFunc = formatNumericValue
+			}
+			if strings.Contains(lowerColumnType, "mediumint") {
 				column.Type = sql.MediumIntColumnType
 			}
-			if strings.Contains(columnType, "timestamp") {
+			if strings.Contains(lowerColumnType, "timestamp") {
 				column.Type = sql.TimestampColumnType
 			}
-			if strings.Contains(columnType, "datetime") {
+			if strings.Contains(lowerColumnType, "datetime") {
 				column.Type = sql.DateTimeColumnType
 			}
-			if strings.Contains(columnType, "json") {
+			if strings.Contains(lowerColumnType, "json") {
 				column.Type = sql.JSONColumnType
 			}
-			if strings.Contains(columnType, "float") {
+			if strings.Contains(lowerColumnType, "float") {
 				column.Type = sql.FloatColumnType
 			}
-			if strings.HasPrefix(columnType, "enum") {
+			if strings.HasPrefix(lowerColumnType, "enum") {
 				column.Type = sql.EnumColumnType
 				column.EnumValues = sql.ParseEnumValues(m.GetString("COLUMN_TYPE"))
 			}
-			if strings.HasPrefix(columnType, "binary") {
+			if strings.HasPrefix(lowerColumnType, "binary") {
 				column.Type = sql.BinaryColumnType
 				column.BinaryOctetLength = columnOctetLength
 			}

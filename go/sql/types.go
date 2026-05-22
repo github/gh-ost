@@ -55,6 +55,8 @@ type Column struct {
 	CharacterSetName  string
 	Nullable          bool
 	MySQLType         string
+	CompareValueFunc  func(a interface{}, b interface{}) (int, error)
+	FormatValueFunc   func(a interface{}) (string, error)
 }
 
 func (cl *Column) convertArg(arg interface{}) interface{} {
@@ -124,6 +126,11 @@ func (cl *Column) convertArg(arg interface{}) interface{} {
 		}
 	}
 	return arg
+}
+
+// ConvertArg applies type-specific conversion to the given argument value.
+func (cl *Column) ConvertArg(arg interface{}) interface{} {
+	return cl.convertArg(arg)
 }
 
 func NewColumns(names []string) []Column {
@@ -290,6 +297,9 @@ type UniqueKey struct {
 	Columns          ColumnList
 	HasNullable      bool
 	IsAutoIncrement  bool
+	// IsMemoryComparable indicates all columns in this key have numeric types
+	// that can be safely compared and formatted in-memory for merge-DML batching.
+	IsMemoryComparable bool
 }
 
 // IsPrimary checks if this unique key is primary
@@ -307,6 +317,26 @@ func (uk *UniqueKey) String() string {
 		description = fmt.Sprintf("%s (auto_increment)", description)
 	}
 	return fmt.Sprintf("%s: %s; has nullable: %+v", description, uk.Columns.Names(), uk.HasNullable)
+}
+
+// FormatValues formats the given argument values as string representations suitable
+// for use as map keys and SQL literals in batched merge-DML operations.
+func (uk *UniqueKey) FormatValues(args []interface{}) ([]string, error) {
+	if len(args) != uk.Columns.Len() {
+		return nil, fmt.Errorf("unique key args count mismatch: got %d, want %d", len(args), uk.Columns.Len())
+	}
+	values := make([]string, 0, len(args))
+	for i, column := range uk.Columns.Columns() {
+		if column.FormatValueFunc == nil {
+			return nil, fmt.Errorf("column %s does not support format value", column.Name)
+		}
+		val, err := column.FormatValueFunc(args[i])
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, val)
+	}
+	return values, nil
 }
 
 type ColumnValues struct {
