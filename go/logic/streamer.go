@@ -81,6 +81,25 @@ func (es *EventsStreamer) AddListener(
 	return nil
 }
 
+// shouldDecodeRowsEvent returns true when at least one listener is registered for
+// the table on which the rows event operates. This is used by the binlog parser
+// after it decodes the row event header/table map, but before it decodes row data.
+func (es *EventsStreamer) shouldDecodeRowsEvent(databaseName, tableName string) bool {
+	es.listenersMutex.Lock()
+	defer es.listenersMutex.Unlock()
+
+	for _, listener := range es.listeners {
+		if !strings.EqualFold(listener.databaseName, databaseName) {
+			continue
+		}
+		if !strings.EqualFold(listener.tableName, tableName) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // notifyListeners will notify relevant listeners with given DML event. Only
 // listeners registered for changes on the table on which the DML operates are notified.
 func (es *EventsStreamer) notifyListeners(binlogEntry *binlog.BinlogEntry) {
@@ -129,7 +148,7 @@ func (es *EventsStreamer) InitDBConnections() (err error) {
 
 // initBinlogReader creates and connects the reader: we hook up to a MySQL server as a replica
 func (es *EventsStreamer) initBinlogReader(binlogCoordinates mysql.BinlogCoordinates) error {
-	goMySQLReader := binlog.NewGoMySQLReader(es.migrationContext)
+	goMySQLReader := binlog.NewGoMySQLReader(es.migrationContext, es.shouldDecodeRowsEvent)
 	if err := goMySQLReader.ConnectBinlogStreamer(binlogCoordinates); err != nil {
 		return err
 	}
