@@ -26,6 +26,16 @@ import (
 	"github.com/go-ini/ini"
 )
 
+// IterationRangeValues holds the range boundaries for a single chunk-copy iteration.
+// Used by concurrent row-copy to pass isolated range values to each worker goroutine.
+type IterationRangeValues struct {
+	Min              *sql.ColumnValues
+	Max              *sql.ColumnValues
+	Size             int64
+	IncludeMinValues bool
+	HasFurtherRange  bool
+}
+
 // RowsEstimateMethod is the type of row number estimation
 type RowsEstimateMethod string
 
@@ -130,6 +140,7 @@ type MigrationContext struct {
 	HeartbeatIntervalMilliseconds       int64
 	defaultNumRetries                   int64
 	ChunkSize                           int64
+	ChunkConcurrentSize                 int64
 	niceRatio                           float64
 	MaxLagMillisecondsThrottleThreshold int64
 	throttleControlReplicaKeys          *mysql.InstanceKeyMap
@@ -237,27 +248,28 @@ type MigrationContext struct {
 	AbortError error
 	abortMutex *sync.Mutex
 
-	OriginalTableColumnsOnApplier    *sql.ColumnList
-	OriginalTableColumns             *sql.ColumnList
-	OriginalTableVirtualColumns      *sql.ColumnList
-	OriginalTableUniqueKeys          [](*sql.UniqueKey)
-	OriginalTableAutoIncrement       uint64
-	GhostTableColumns                *sql.ColumnList
-	GhostTableVirtualColumns         *sql.ColumnList
-	GhostTableUniqueKeys             [](*sql.UniqueKey)
-	UniqueKey                        *sql.UniqueKey
-	SharedColumns                    *sql.ColumnList
-	ColumnRenameMap                  map[string]string
-	DroppedColumnsMap                map[string]bool
-	MappedSharedColumns              *sql.ColumnList
-	MigrationLastInsertSQLWarnings   []string
-	MigrationRangeMinValues          *sql.ColumnValues
-	MigrationRangeMaxValues          *sql.ColumnValues
-	Iteration                        int64
-	MigrationIterationRangeMinValues *sql.ColumnValues
-	MigrationIterationRangeMaxValues *sql.ColumnValues
-	InitialStreamerCoords            mysql.BinlogCoordinates
-	ForceTmpTableName                string
+	OriginalTableColumnsOnApplier            *sql.ColumnList
+	OriginalTableColumns                     *sql.ColumnList
+	OriginalTableVirtualColumns              *sql.ColumnList
+	OriginalTableUniqueKeys                  [](*sql.UniqueKey)
+	OriginalTableAutoIncrement               uint64
+	GhostTableColumns                        *sql.ColumnList
+	GhostTableVirtualColumns                 *sql.ColumnList
+	GhostTableUniqueKeys                     [](*sql.UniqueKey)
+	UniqueKey                                *sql.UniqueKey
+	SharedColumns                            *sql.ColumnList
+	ColumnRenameMap                          map[string]string
+	DroppedColumnsMap                        map[string]bool
+	MappedSharedColumns                      *sql.ColumnList
+	MigrationLastInsertSQLWarnings           []string
+	MigrationRangeMinValues                  *sql.ColumnValues
+	MigrationRangeMaxValues                  *sql.ColumnValues
+	Iteration                                int64
+	MigrationIterationRangeMinValues         *sql.ColumnValues
+	MigrationIterationRangeMaxValues         *sql.ColumnValues
+	CalculateNextIterationRangeEndValuesLock *sync.Mutex
+	InitialStreamerCoords                    mysql.BinlogCoordinates
+	ForceTmpTableName                        string
 
 	IncludeTriggers     bool
 	RemoveTriggerSuffix bool
@@ -307,29 +319,31 @@ type ContextConfig struct {
 func NewMigrationContext() *MigrationContext {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	return &MigrationContext{
-		Uuid:                                uuid.NewString(),
-		defaultNumRetries:                   60,
-		ChunkSize:                           1000,
-		InspectorConnectionConfig:           mysql.NewConnectionConfig(),
-		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
-		MaxLagMillisecondsThrottleThreshold: 1500,
-		CutOverLockTimeoutSeconds:           3,
-		DMLBatchSize:                        10,
-		etaNanoseonds:                       ETAUnknown,
-		maxLoad:                             NewLoadMap(),
-		criticalLoad:                        NewLoadMap(),
-		throttleMutex:                       &sync.Mutex{},
-		throttleHTTPMutex:                   &sync.Mutex{},
-		throttleControlReplicaKeys:          mysql.NewInstanceKeyMap(),
-		configMutex:                         &sync.Mutex{},
-		pointOfInterestTimeMutex:            &sync.Mutex{},
-		lastHeartbeatOnChangelogMutex:       &sync.Mutex{},
-		ColumnRenameMap:                     make(map[string]string),
-		PanicAbort:                          make(chan error),
-		ctx:                                 ctx,
-		cancelFunc:                          cancelFunc,
-		abortMutex:                          &sync.Mutex{},
-		Log:                                 NewDefaultLogger(),
+		Uuid:                                     uuid.NewString(),
+		defaultNumRetries:                        60,
+		ChunkSize:                                1000,
+		ChunkConcurrentSize:                      1,
+		InspectorConnectionConfig:                mysql.NewConnectionConfig(),
+		ApplierConnectionConfig:                  mysql.NewConnectionConfig(),
+		MaxLagMillisecondsThrottleThreshold:      1500,
+		CutOverLockTimeoutSeconds:                3,
+		DMLBatchSize:                             10,
+		etaNanoseonds:                            ETAUnknown,
+		maxLoad:                                  NewLoadMap(),
+		criticalLoad:                             NewLoadMap(),
+		throttleMutex:                            &sync.Mutex{},
+		throttleHTTPMutex:                        &sync.Mutex{},
+		throttleControlReplicaKeys:               mysql.NewInstanceKeyMap(),
+		configMutex:                              &sync.Mutex{},
+		pointOfInterestTimeMutex:                 &sync.Mutex{},
+		lastHeartbeatOnChangelogMutex:            &sync.Mutex{},
+		CalculateNextIterationRangeEndValuesLock: &sync.Mutex{},
+		ColumnRenameMap:                          make(map[string]string),
+		PanicAbort:                               make(chan error),
+		ctx:                                      ctx,
+		cancelFunc:                               cancelFunc,
+		abortMutex:                               &sync.Mutex{},
+		Log:                                      NewDefaultLogger(),
 	}
 }
 
@@ -688,6 +702,13 @@ func (mctx *MigrationContext) SetChunkSize(chunkSize int64) {
 		chunkSize = 100000
 	}
 	atomic.StoreInt64(&mctx.ChunkSize, chunkSize)
+}
+
+func (mctx *MigrationContext) SetChunkConcurrentSize(chunkConcurrentSize int64) {
+	if chunkConcurrentSize < 1 {
+		chunkConcurrentSize = 1
+	}
+	atomic.StoreInt64(&mctx.ChunkConcurrentSize, chunkConcurrentSize)
 }
 
 func (mctx *MigrationContext) SetDMLBatchSize(batchSize int64) {
