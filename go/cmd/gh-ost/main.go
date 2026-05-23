@@ -112,6 +112,11 @@ func main() {
 	flag.BoolVar(&migrationContext.PanicOnWarnings, "panic-on-warnings", false, "Panic when SQL warnings are encountered when copying a batch indicating data loss")
 	cutOverLockTimeoutSeconds := flag.Int64("cut-over-lock-timeout-seconds", 3, "Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout) or attempting instant DDL")
 	niceRatio := flag.Float64("nice-ratio", 0, "force being 'nice', imply sleep time per chunk time; range: [0.0..100.0]. Example values: 0 is aggressive. 1: for every 1ms spent copying rows, sleep additional 1ms (effectively doubling runtime); 0.7: for every 10ms spend in a rowcopy chunk, spend 7ms sleeping immediately after")
+	flag.IntVar(&migrationContext.NumWorkers, "workers", 8, "Number of concurrent workers for applying DML events. Each worker uses one goroutine.")
+	flag.Int64Var(&migrationContext.CopyConcurrency, "copy-concurrency", 1, "Number of concurrent row-copy goroutines. Higher values speed up row-copy under write load by using parallel INSERT...SELECT operations on non-overlapping ranges. (range 1-32)")
+	flag.BoolVar(&migrationContext.SkipDMLMerge, "skip-dml-merge", false, "Disable DML event merging within batches (for benchmarking)")
+	flag.BoolVar(&migrationContext.SkipDMLFrontierFilter, "skip-dml-frontier-filter", false, "Disable frontier-based DML skip optimization (for benchmarking)")
+	flag.Int64Var(&migrationContext.CopyMaxLagMillis, "copy-max-lag-millis", 60000, "Heartbeat lag (ms) at which row-copy pauses to let binlog catch up. Only active with --copy-concurrency > 1. Set 0 to disable. Default 60s balances copy speed vs lag growth.")
 
 	maxLagMillis := flag.Int64("max-lag-millis", 1500, "replication lag at which to throttle operation")
 	replicationLagQuery := flag.String("replication-lag-query", "", "Deprecated. gh-ost uses an internal, subsecond resolution query")

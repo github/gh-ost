@@ -176,6 +176,23 @@ type MigrationContext struct {
 	CutOverType                  CutOver
 	ReplicaServerId              uint
 
+	// Number of workers used by the trx coordinator
+	NumWorkers int
+
+	// Number of concurrent row-copy goroutines (default 1 = legacy behavior)
+	CopyConcurrency int64
+
+	// SkipDMLMerge disables DML event merging within batches
+	SkipDMLMerge bool
+
+	// SkipDMLFrontierFilter disables the frontier-based DML skip optimization
+	SkipDMLFrontierFilter bool
+
+	// CopyMaxLagMillis is the heartbeat lag threshold (in ms) at which row-copy
+	// is paused to let binlog processing catch up. Only applies when copy-concurrency > 1.
+	// Default 60000 (60s). Set to 0 to disable lag-based copy throttling.
+	CopyMaxLagMillis int64
+
 	Hostname                               string
 	AssumeMasterHostname                   string
 	ApplierTimeZone                        string

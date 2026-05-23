@@ -67,6 +67,7 @@ func newDmlBuildResultError(err error) *dmlBuildResult {
 type Applier struct {
 	connectionConfig  *mysql.ConnectionConfig
 	db                *gosql.DB
+	copyDB            *gosql.DB // dedicated pool for parallel row-copy
 	singletonDB       *gosql.DB
 	migrationContext  *base.MigrationContext
 	finishedMigrating int64
@@ -109,12 +110,29 @@ func (apl *Applier) compileMigrationKeyWarningRegex() (*regexp.Regexp, error) {
 	return migrationKeyRegex, nil
 }
 
-func (apl *Applier) InitDBConnections() (err error) {
+func (apl *Applier) InitDBConnections(maxConns int) (err error) {
 	applierUri := apl.connectionConfig.GetDBUri(apl.migrationContext.DatabaseName)
 	uriWithMulti := fmt.Sprintf("%s&multiStatements=true", applierUri)
 	if apl.db, _, err = mysql.GetDB(apl.migrationContext.Uuid, uriWithMulti); err != nil {
 		return err
 	}
+	apl.db.SetMaxOpenConns(maxConns)
+	apl.db.SetMaxIdleConns(maxConns)
+
+	// Dedicated pool for parallel row-copy, separate from DML worker pool.
+	// We bypass the GetDB cache by opening a new *sql.DB directly, ensuring
+	// this pool is fully independent (separate MaxOpenConns from apl.db).
+	copyConcurrency := int(atomic.LoadInt64(&apl.migrationContext.CopyConcurrency))
+	if copyConcurrency < 1 {
+		copyConcurrency = 1
+	}
+	copyUri := fmt.Sprintf("%s&multiStatements=true", applierUri)
+	if apl.copyDB, err = gosql.Open("mysql", copyUri); err != nil {
+		return err
+	}
+	apl.copyDB.SetMaxOpenConns(copyConcurrency)
+	apl.copyDB.SetMaxIdleConns(copyConcurrency)
+
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
 	if apl.singletonDB, _, err = mysql.GetDB(apl.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
@@ -1013,6 +1031,153 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 	return chunkSize, rowsAffected, duration, nil
 }
 
+// CopyChunk holds immutable state for a single row-copy chunk.
+// It is pre-computed by the chunk allocator and consumed by parallel copy workers.
+type CopyChunk struct {
+	Seq               int64
+	RangeMinValues    []interface{}
+	RangeMaxValues    []interface{}
+	IncludeRangeStart bool
+	Iteration         int64
+}
+
+// ApplyCopyChunk executes a single INSERT IGNORE ... SELECT chunk using the
+// dedicated copyDB pool. All chunk-specific state is in the CopyChunk struct,
+// so this is safe to call from multiple goroutines concurrently.
+func (apl *Applier) ApplyCopyChunk(chunk *CopyChunk) (rowsAffected int64, duration time.Duration, err error) {
+	startTime := time.Now()
+	chunkSize := atomic.LoadInt64(&apl.migrationContext.ChunkSize)
+
+	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
+		apl.migrationContext.DatabaseName,
+		apl.migrationContext.OriginalTableName,
+		apl.migrationContext.GetGhostTableName(),
+		apl.migrationContext.SharedColumns.Names(),
+		apl.migrationContext.MappedSharedColumns.Names(),
+		apl.migrationContext.UniqueKey.Name,
+		&apl.migrationContext.UniqueKey.Columns,
+		chunk.RangeMinValues,
+		chunk.RangeMaxValues,
+		chunk.IncludeRangeStart,
+		apl.migrationContext.IsTransactionalTable(),
+		strings.HasPrefix(apl.migrationContext.ApplierMySQLVersion, "8."),
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	sqlResult, err := func() (gosql.Result, error) {
+		tx, err := apl.copyDB.Begin()
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, apl.migrationContext.ApplierTimeZone)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, apl.generateSqlModeQuery())
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return nil, err
+		}
+		result, err := tx.Exec(query, explodedArgs...)
+		if err != nil {
+			return nil, err
+		}
+
+		if apl.migrationContext.PanicOnWarnings {
+			//nolint:execinquery
+			rows, err := tx.Query("SHOW WARNINGS")
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			if err = rows.Err(); err != nil {
+				return nil, err
+			}
+			migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
+			if err != nil {
+				return nil, err
+			}
+			var sqlWarnings []string
+			for rows.Next() {
+				var level, message string
+				var code int
+				if err := rows.Scan(&level, &code, &message); err != nil {
+					apl.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+					continue
+				}
+				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
+					continue
+				}
+				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+			}
+			if len(sqlWarnings) > 0 {
+				return nil, fmt.Errorf("applyCopyChunk failed because of SQL warnings: [%s]", strings.Join(sqlWarnings, "; "))
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}()
+
+	if err != nil {
+		return 0, 0, err
+	}
+	rowsAffected, _ = sqlResult.RowsAffected()
+	duration = time.Since(startTime)
+	apl.migrationContext.Log.Debugf(
+		"Issued copy chunk #%d on range [%v]..[%v]; chunk-size: %d",
+		chunk.Seq, chunk.RangeMinValues, chunk.RangeMaxValues, chunkSize)
+	return rowsAffected, duration, nil
+}
+
+// CalculateNextChunkRange determines the end of the next chunk range.
+// It uses the copyDB pool to avoid contention with DML workers.
+// Returns the range max values and whether there are more rows to copy.
+func (apl *Applier) CalculateNextChunkRange(rangeMinValues []interface{}, rangeMaxValues []interface{}, chunkSize int64, isFirstChunk bool, iteration int64) (chunkMaxValues *sql.ColumnValues, hasFurtherRange bool, err error) {
+	for i := 0; i < 2; i++ {
+		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
+		if i == 1 {
+			buildFunc = sql.BuildUniqueKeyRangeEndPreparedQueryViaTemptable
+		}
+		query, explodedArgs, err := buildFunc(
+			apl.migrationContext.DatabaseName,
+			apl.migrationContext.OriginalTableName,
+			&apl.migrationContext.UniqueKey.Columns,
+			rangeMinValues,
+			rangeMaxValues,
+			chunkSize,
+			isFirstChunk,
+			fmt.Sprintf("iteration:%d", iteration),
+		)
+		if err != nil {
+			return nil, false, err
+		}
+
+		rows, err := apl.copyDB.Query(query, explodedArgs...)
+		if err != nil {
+			return nil, false, err
+		}
+		defer rows.Close()
+
+		iterationRangeMaxValues := sql.NewColumnValues(apl.migrationContext.UniqueKey.Len())
+		for rows.Next() {
+			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
+				return nil, false, err
+			}
+			hasFurtherRange = true
+		}
+		if err = rows.Err(); err != nil {
+			return nil, false, err
+		}
+		if hasFurtherRange {
+			return iterationRangeMaxValues, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
 // LockOriginalTable places a write lock on the original table
 func (apl *Applier) LockOriginalTable() error {
 	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
@@ -1492,6 +1657,287 @@ func (apl *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEve
 	return "", false
 }
 
+// extractDMLEventPKKey extracts the unique key column values from a DML event
+// and returns them as a canonicalized string key for deduplication.
+// For INSERT events, values come from NewColumnValues; for UPDATE/DELETE, from WhereColumnValues.
+func (apl *Applier) extractDMLEventPKKey(dmlEvent *binlog.BinlogDMLEvent) string {
+	var values []interface{}
+	switch dmlEvent.DML {
+	case binlog.InsertDML:
+		values = dmlEvent.NewColumnValues.AbstractValues()
+	case binlog.UpdateDML, binlog.DeleteDML:
+		values = dmlEvent.WhereColumnValues.AbstractValues()
+	default:
+		return ""
+	}
+
+	var buf strings.Builder
+	for i, column := range apl.migrationContext.UniqueKey.Columns.Columns() {
+		if i > 0 {
+			buf.WriteByte(0) // null byte separator
+		}
+		ordinal := apl.migrationContext.OriginalTableColumns.Ordinals[column.Name]
+		val := values[ordinal]
+		fmt.Fprintf(&buf, "%v", val)
+	}
+	return buf.String()
+}
+
+// extractDMLEventPKValues extracts the unique key column values from a DML event
+// as a slice of interface{} values (one per UK column, in UK column order).
+func (apl *Applier) extractDMLEventPKValues(dmlEvent *binlog.BinlogDMLEvent) []interface{} {
+	var allValues []interface{}
+	switch dmlEvent.DML {
+	case binlog.InsertDML:
+		allValues = dmlEvent.NewColumnValues.AbstractValues()
+	case binlog.UpdateDML, binlog.DeleteDML:
+		allValues = dmlEvent.WhereColumnValues.AbstractValues()
+	default:
+		return nil
+	}
+
+	ukCols := apl.migrationContext.UniqueKey.Columns.Columns()
+	pkVals := make([]interface{}, len(ukCols))
+	for i, column := range ukCols {
+		ordinal := apl.migrationContext.OriginalTableColumns.Ordinals[column.Name]
+		pkVals[i] = allValues[ordinal]
+	}
+	return pkVals
+}
+
+// compareNumericValues compares two values as int64. Returns -1, 0, or 1.
+// Returns ok=false if either value is not a numeric type.
+func compareNumericValues(a, b interface{}) (cmp int, ok bool) {
+	ai, aOk := toInt64(a)
+	bi, bOk := toInt64(b)
+	if !aOk || !bOk {
+		return 0, false
+	}
+	switch {
+	case ai < bi:
+		return -1, true
+	case ai > bi:
+		return 1, true
+	default:
+		return 0, true
+	}
+}
+
+func toInt64(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int8:
+		return int64(n), true
+	case int16:
+		return int64(n), true
+	case int32:
+		return int64(n), true
+	case int64:
+		return n, true
+	case uint:
+		return int64(n), true
+	case uint8:
+		return int64(n), true
+	case uint16:
+		return int64(n), true
+	case uint32:
+		return int64(n), true
+	case uint64:
+		return int64(n), true
+	case float32:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	default:
+		return 0, false
+	}
+}
+
+// comparePKValues compares two sets of PK column values lexicographically.
+// Returns -1 if a < b, 0 if a == b, 1 if a > b.
+// Returns ok=false if comparison is not possible (unsupported types).
+func comparePKValues(a, b []interface{}) (cmp int, ok bool) {
+	if len(a) != len(b) {
+		return 0, false
+	}
+	for i := range a {
+		c, cOk := compareNumericValues(a[i], b[i])
+		if !cOk {
+			return 0, false
+		}
+		if c != 0 {
+			return c, true
+		}
+	}
+	return 0, true
+}
+
+// filterDMLEventsByFrontier removes DML events that target rows beyond the copy
+// frontier (not yet copied) and within the initial migration range. These rows
+// will be captured by future row-copy operations which take a fresh snapshot.
+//
+// Safety: Only safe when copy-concurrency=1 (serial drain→copy→drain) AND when
+// operating directly on the master. The frontier is well-defined and no in-flight
+// chunks exist during drain. Events for rows beyond the initial migration max
+// are NEVER skipped (they are never bulk-copied).
+//
+// NOT safe in --test-on-replica or --migrate-on-replica modes: binlog events may
+// be read ahead of the replica SQL thread's apply position, so row-copy SELECT
+// may not yet see the skipped event's data.
+func (apl *Applier) filterDMLEventsByFrontier(dmlEvents []*binlog.BinlogDMLEvent) []*binlog.BinlogDMLEvent {
+	apl.LastIterationRangeMutex.Lock()
+	frontier := apl.LastIterationRangeMaxValues
+	apl.LastIterationRangeMutex.Unlock()
+
+	// Before first chunk completes, frontier is nil — can't skip anything
+	if frontier == nil {
+		return dmlEvents
+	}
+
+	migrationMax := apl.migrationContext.MigrationRangeMaxValues
+	if migrationMax == nil {
+		return dmlEvents
+	}
+
+	// Extract frontier PK values.
+	// frontier and migrationMax store values in unique-key column order (not table-column order),
+	// so index them sequentially — do NOT use OriginalTableColumns.Ordinals.
+	ukCols := apl.migrationContext.UniqueKey.Columns.Columns()
+	frontierValues := frontier.AbstractValues()
+	maxValues := migrationMax.AbstractValues()
+	if len(frontierValues) < len(ukCols) || len(maxValues) < len(ukCols) {
+		return dmlEvents
+	}
+	frontierPK := frontierValues[:len(ukCols)]
+	maxPK := maxValues[:len(ukCols)]
+
+	result := make([]*binlog.BinlogDMLEvent, 0, len(dmlEvents))
+	for _, event := range dmlEvents {
+		// PK-changing UPDATEs: check both old and new PKs
+		if event.DML == binlog.UpdateDML {
+			if _, isModified := apl.updateModifiesUniqueKeyColumns(event); isModified {
+				// Keep the event — per-op frontier evaluation is complex;
+				// PK-changing UPDATEs are rare enough to not matter for perf
+				result = append(result, event)
+				continue
+			}
+		}
+
+		eventPK := apl.extractDMLEventPKValues(event)
+		if eventPK == nil {
+			result = append(result, event)
+			continue
+		}
+
+		// Compare event PK against frontier
+		cmpFrontier, frontierOk := comparePKValues(eventPK, frontierPK)
+		if !frontierOk {
+			// Can't compare (non-numeric PK) — keep event conservatively
+			result = append(result, event)
+			continue
+		}
+
+		if cmpFrontier <= 0 {
+			// PK <= frontier: row already copied, must apply DML
+			result = append(result, event)
+			continue
+		}
+
+		// PK > frontier: check if within initial migration range
+		cmpMax, maxOk := comparePKValues(eventPK, maxPK)
+		if !maxOk || cmpMax > 0 {
+			// PK > migration max (or can't compare): row never bulk-copied, must apply
+			result = append(result, event)
+			continue
+		}
+
+		// PK is between frontier and migration max — safe to skip
+	}
+	return result
+}
+
+// mergeDMLEvents deduplicates DML events within a batch that target the same unique key.
+// This reduces the number of SQL statements executed when the same row is modified
+// multiple times within a batch. Merge rules:
+//   - INSERT + UPDATE → INSERT with updated values
+//   - INSERT + DELETE → skip both (net zero)
+//   - UPDATE + UPDATE → UPDATE with final values
+//   - UPDATE + DELETE → DELETE
+//   - All other combinations (e.g., DELETE + INSERT) → keep both
+//
+// PK-changing UPDATEs are excluded from merging (they expand to DELETE+INSERT on different PKs).
+func (apl *Applier) mergeDMLEvents(dmlEvents []*binlog.BinlogDMLEvent) []*binlog.BinlogDMLEvent {
+	if len(dmlEvents) <= 1 {
+		return dmlEvents
+	}
+
+	// result preserves order; pkIndex maps PK→position in result (or -1 if cancelled)
+	result := make([]*binlog.BinlogDMLEvent, 0, len(dmlEvents))
+	pkIndex := make(map[string]int, len(dmlEvents))
+
+	for _, event := range dmlEvents {
+		// PK-changing UPDATEs expand to DELETE(oldPK)+INSERT(newPK) — don't merge these
+		if event.DML == binlog.UpdateDML {
+			if _, isModified := apl.updateModifiesUniqueKeyColumns(event); isModified {
+				result = append(result, event)
+				continue
+			}
+		}
+
+		key := apl.extractDMLEventPKKey(event)
+		prevIdx, exists := pkIndex[key]
+
+		if !exists {
+			pkIndex[key] = len(result)
+			result = append(result, event)
+			continue
+		}
+
+		prev := result[prevIdx]
+		if prev == nil {
+			// Previous entry was cancelled; treat as new
+			pkIndex[key] = len(result)
+			result = append(result, event)
+			continue
+		}
+
+		switch {
+		case prev.DML == binlog.InsertDML && event.DML == binlog.UpdateDML:
+			// INSERT + UPDATE → INSERT with updated values
+			prev.NewColumnValues = event.NewColumnValues
+
+		case prev.DML == binlog.InsertDML && event.DML == binlog.DeleteDML:
+			// INSERT + DELETE → skip both (net zero)
+			result[prevIdx] = nil
+			delete(pkIndex, key)
+
+		case prev.DML == binlog.UpdateDML && event.DML == binlog.UpdateDML:
+			// UPDATE + UPDATE → UPDATE with final values (keep original WHERE)
+			prev.NewColumnValues = event.NewColumnValues
+
+		case prev.DML == binlog.UpdateDML && event.DML == binlog.DeleteDML:
+			// UPDATE + DELETE → DELETE
+			prev.DML = binlog.DeleteDML
+			prev.NewColumnValues = nil
+
+		default:
+			// Can't merge safely (e.g., DELETE + INSERT) — keep both
+			pkIndex[key] = len(result)
+			result = append(result, event)
+		}
+	}
+
+	// Compact: remove nil entries
+	compacted := make([]*binlog.BinlogDMLEvent, 0, len(result))
+	for _, event := range result {
+		if event != nil {
+			compacted = append(compacted, event)
+		}
+	}
+	return compacted
+}
+
 // buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
 // event entry on the original table.
 func (apl *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBuildResult {
@@ -1510,10 +1956,12 @@ func (apl *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBu
 		{
 			if _, isModified := apl.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
 				results := make([]*dmlBuildResult, 0, 2)
+				originalDML := dmlEvent.DML
 				dmlEvent.DML = binlog.DeleteDML
 				results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
 				dmlEvent.DML = binlog.InsertDML
 				results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
+				dmlEvent.DML = originalDML
 				return results
 			}
 			query, updateArgs, err := apl.dmlUpdateQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
@@ -1631,6 +2079,27 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 	var totalDelta int64
 	ctx := context.Background()
 
+	// Merge events targeting the same PK within this batch
+	if !apl.migrationContext.SkipDMLMerge {
+		dmlEvents = apl.mergeDMLEvents(dmlEvents)
+	}
+
+	// Skip DML events for rows beyond the copy frontier (not yet copied).
+	// Only safe for single-chunk mode (copy-concurrency=1) and NOT in replica mode.
+	// In --test-on-replica / --migrate-on-replica, binlog events may be read from the
+	// replica's binlog before the corresponding transactions are visible to row-copy
+	// SELECT queries, causing skipped events whose data the copy never captures.
+	if atomic.LoadInt64(&apl.migrationContext.CopyConcurrency) <= 1 &&
+		!apl.migrationContext.SkipDMLFrontierFilter &&
+		!apl.migrationContext.TestOnReplica &&
+		!apl.migrationContext.MigrateOnReplica {
+		dmlEvents = apl.filterDMLEventsByFrontier(dmlEvents)
+	}
+
+	if len(dmlEvents) == 0 {
+		return nil
+	}
+
 	err := func() error {
 		conn, err := apl.db.Conn(ctx)
 		if err != nil {
@@ -1735,6 +2204,7 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 func (apl *Applier) Teardown() {
 	apl.migrationContext.Log.Debugf("Tearing down...")
 	apl.db.Close()
+	apl.copyDB.Close()
 	apl.singletonDB.Close()
 	atomic.StoreInt64(&apl.finishedMigrating, 1)
 }

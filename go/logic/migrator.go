@@ -11,10 +11,12 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"os"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
@@ -48,23 +50,6 @@ type lockProcessedStruct struct {
 	state  string
 	coords mysql.BinlogCoordinates
 }
-
-type applyEventStruct struct {
-	writeFunc *tableWriteFunc
-	dmlEvent  *binlog.BinlogDMLEvent
-	coords    mysql.BinlogCoordinates
-}
-
-func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
-	result := &applyEventStruct{writeFunc: writeFunc}
-	return result
-}
-
-func newApplyEventStructByDML(dmlEntry *binlog.BinlogEntry) *applyEventStruct {
-	result := &applyEventStruct{dmlEvent: dmlEntry.DmlEvent, coords: dmlEntry.Coordinates}
-	return result
-}
-
 type PrintStatusRule int
 
 const (
@@ -81,7 +66,6 @@ type Migrator struct {
 	parser           *sql.AlterTableParser
 	inspector        *Inspector
 	applier          *Applier
-	eventsStreamer   *EventsStreamer
 	server           *Server
 	throttler        *Throttler
 	hooksExecutor    base.Hooks
@@ -94,12 +78,15 @@ type Migrator struct {
 	lastLockProcessed          *lockProcessedStruct
 
 	rowCopyCompleteFlag int64
-	// copyRowsQueue should not be buffered; if buffered some non-damaging but
-	//  excessive work happens at the end of the iteration as new copy-jobs arrive before realizing the copy is complete
-	copyRowsQueue    chan tableWriteFunc
-	applyEventsQueue chan *applyEventStruct
+	// copyRowsQueue should not be buffered in single-copy mode; if buffered some
+	// non-damaging but excessive work happens at the end of the iteration as new
+	// copy-jobs arrive before realizing the copy is complete.
+	// With parallel copy (CopyConcurrency > 1), buffering is required so that
+	// iterateChunks can deposit work without blocking on the drain loop.
+	copyRowsQueue chan tableWriteFunc
 
 	finishedMigrating int64
+	trxCoordinator    *Coordinator
 }
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
@@ -107,12 +94,19 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 	if hooks == nil {
 		hooks = NewHooksExecutor(context)
 	}
+	// With parallel row-copy (CopyConcurrency > 1), buffer the copy queue so
+	// iterateChunks can deposit work without blocking on the drain loop.
+	// Always allocate max buffer since CopyConcurrency can change at runtime.
+	copyQueueBuffer := 0
+	if context.CopyConcurrency > 1 {
+		copyQueueBuffer = 32 // max concurrency, allows runtime changes
+	}
 	migrator := &Migrator{
 		appVersion:               appVersion,
 		hooksExecutor:            hooks,
 		migrationContext:         context,
 		parser:                   sql.NewAlterTableParser(),
-		ghostTableMigrated:       make(chan bool),
+		ghostTableMigrated:       make(chan bool, 1),
 		firstThrottlingCollected: make(chan bool, 3),
 		rowCopyComplete:          make(chan error),
 		// Buffered with capacity 1; the send uses overwrite-oldest semantics
@@ -120,8 +114,7 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		// and OOM when MaxRetries() is extremely large.
 		allEventsUpToLockProcessed: make(chan *lockProcessedStruct, 1),
 
-		copyRowsQueue:     make(chan tableWriteFunc),
-		applyEventsQueue:  make(chan *applyEventStruct, base.MaxEventsBatchSize),
+		copyRowsQueue:     make(chan tableWriteFunc, copyQueueBuffer),
 		finishedMigrating: 0,
 	}
 	return migrator
@@ -264,20 +257,20 @@ func (mgtr *Migrator) canStopStreaming() bool {
 }
 
 // onChangelogEvent is called when a binlog event operation on the changelog table is intercepted.
-func (mgtr *Migrator) onChangelogEvent(dmlEntry *binlog.BinlogEntry) (err error) {
+func (mgtr *Migrator) onChangelogEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
 	// Hey, I created the changelog table, I know the type of columns it has!
-	switch hint := dmlEntry.DmlEvent.NewColumnValues.StringColumn(2); hint {
+	switch hint := dmlEvent.NewColumnValues.StringColumn(2); hint {
 	case "state":
-		return mgtr.onChangelogStateEvent(dmlEntry)
+		return mgtr.onChangelogStateEvent(dmlEvent)
 	case "heartbeat":
-		return mgtr.onChangelogHeartbeatEvent(dmlEntry)
+		return mgtr.onChangelogHeartbeatEvent(dmlEvent)
 	default:
 		return nil
 	}
 }
 
-func (mgtr *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err error) {
-	changelogStateString := dmlEntry.DmlEvent.NewColumnValues.StringColumn(3)
+func (mgtr *Migrator) onChangelogStateEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+	changelogStateString := dmlEvent.NewColumnValues.StringColumn(3)
 	changelogState := ReadChangelogState(changelogStateString)
 	mgtr.migrationContext.Log.Infof("Intercepted changelog state %s", changelogState)
 	switch changelogState {
@@ -289,18 +282,16 @@ func (mgtr *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 	case AllEventsUpToLockProcessed:
 		lps := &lockProcessedStruct{
 			state:  changelogStateString,
-			coords: dmlEntry.Coordinates.Clone(),
+			coords: mgtr.trxCoordinator.binlogReader.GetCurrentBinlogCoordinates(),
 		}
-		var applyEventFunc tableWriteFunc = func() error {
-			// Non-blocking send with overwrite-oldest semantics: if the buffer is
-			// full (receiver timed out on a previous attempt), drain the stale
-			// message first so the current sentinel is always delivered. This
-			// prevents both goroutine leaks (the original PR #1637 issue) and OOM
-			// when MaxRetries() is very large.
+		// At this point we know all events up to lock have been read from the streamer,
+		// because the streamer works sequentially. So those events are either already handled,
+		// or are being processed by the coordinator.
+		// So as not to create a potential deadlock, we send this asynchronously.
+		go func() {
 			select {
 			case mgtr.allEventsUpToLockProcessed <- lps:
 			default:
-				// Buffer full — drain the stale value, then send the current one.
 				select {
 				case <-mgtr.allEventsUpToLockProcessed:
 				default:
@@ -308,20 +299,8 @@ func (mgtr *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 				select {
 				case mgtr.allEventsUpToLockProcessed <- lps:
 				default:
-					// Concurrent drain by another goroutine or receiver; the current
-					// value is no longer needed since a newer sentinel will follow.
 				}
 			}
-			return nil
-		}
-		// at this point we know all events up to lock have been read from the streamer,
-		// because the streamer works sequentially. So those events are either already handled,
-		// or have event functions in applyEventsQueue.
-		// So as not to create a potential deadlock, we write this func to applyEventsQueue
-		// asynchronously, understanding it doesn't really matter.
-		go func() {
-			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
-			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, newApplyEventStructByFunc(&applyEventFunc))
 		}()
 	default:
 		return fmt.Errorf("unknown changelog state: %+v", changelogState)
@@ -330,19 +309,18 @@ func (mgtr *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 	return nil
 }
 
-func (mgtr *Migrator) onChangelogHeartbeatEvent(dmlEntry *binlog.BinlogEntry) (err error) {
-	changelogHeartbeatString := dmlEntry.DmlEvent.NewColumnValues.StringColumn(3)
+func (mgtr *Migrator) onChangelogHeartbeatEvent(dmlEvent *binlog.BinlogDMLEvent) (err error) {
+	changelogHeartbeatString := dmlEvent.NewColumnValues.StringColumn(3)
 
 	heartbeatTime, err := time.Parse(time.RFC3339Nano, changelogHeartbeatString)
 	if err != nil {
 		return mgtr.migrationContext.Log.Errore(err)
-	} else {
-		mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
-		mgtr.applier.CurrentCoordinatesMutex.Lock()
-		mgtr.applier.CurrentCoordinates = dmlEntry.Coordinates
-		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-		return nil
 	}
+	mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
+	mgtr.applier.CurrentCoordinatesMutex.Lock()
+	mgtr.applier.CurrentCoordinates = mgtr.trxCoordinator.binlogReader.GetCurrentBinlogCoordinates()
+	mgtr.applier.CurrentCoordinatesMutex.Unlock()
+	return nil
 }
 
 // abort stores the error, cancels the context, and logs the abort.
@@ -356,7 +334,7 @@ func (mgtr *Migrator) abort(err error) {
 	mgtr.migrationContext.CancelContext()
 
 	// Log the error (but don't panic or exit)
-	mgtr.migrationContext.Log.Errorf("migration aborted: %v", err)
+	mgtr.migrationContext.Log.Errorf("Migration aborted: %v", err)
 }
 
 // listenOnPanicAbort listens for fatal errors and initiates graceful shutdown
@@ -378,7 +356,7 @@ func (mgtr *Migrator) validateAlterStatement() (err error) {
 		if !mgtr.migrationContext.ApproveRenamedColumns {
 			return fmt.Errorf("gh-ost believes the ALTER statement renames columns, as follows: %v; as precaution, you are asked to confirm gh-ost is correct, and provide with `--approve-renamed-columns`, and we're all happy. Or you can skip renamed columns via `--skip-renamed-columns`, in which case column data may be lost", mgtr.parser.GetNonTrivialRenames())
 		}
-		mgtr.migrationContext.Log.Infof("alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", mgtr.parser.GetNonTrivialRenames())
+		mgtr.migrationContext.Log.Infof("Alter statement has column(s) renamed. gh-ost finds the following renames: %v; --approve-renamed-columns is given and so migration proceeds.", mgtr.parser.GetNonTrivialRenames())
 	}
 	mgtr.migrationContext.DroppedColumnsMap = mgtr.parser.DroppedColumnsMap()
 	return nil
@@ -484,6 +462,9 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.initiateInspector(); err != nil {
 		return err
 	}
+
+	mgtr.trxCoordinator = NewCoordinator(mgtr.migrationContext, mgtr.applier, mgtr.throttler, mgtr.onChangelogEvent)
+
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
@@ -505,6 +486,9 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
+
+	mgtr.trxCoordinator.applier = mgtr.applier
+
 	if err := mgtr.createFlagFiles(); err != nil {
 		return err
 	}
@@ -530,10 +514,28 @@ func (mgtr *Migrator) Migrate() (err error) {
 		}
 	}
 
+	mgtr.migrationContext.Log.Infof("starting %d applier workers", mgtr.migrationContext.NumWorkers)
+	mgtr.trxCoordinator.InitializeWorkers(mgtr.migrationContext.NumWorkers)
+
 	initialLag, _ := mgtr.inspector.getReplicationLag()
 	if !mgtr.migrationContext.Resume {
 		mgtr.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
-		<-mgtr.ghostTableMigrated
+
+	waitForGhostTable:
+		for {
+			select {
+			case <-mgtr.ghostTableMigrated:
+				break waitForGhostTable
+			default:
+				dmlEvent, err := mgtr.trxCoordinator.ProcessEventsUntilNextChangelogEvent()
+				if err != nil {
+					return err
+				}
+
+				mgtr.onChangelogEvent(dmlEvent)
+			}
+		}
+
 		mgtr.migrationContext.Log.Debugf("ghost table migrated")
 	}
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
@@ -552,14 +554,14 @@ func (mgtr *Migrator) Migrate() (err error) {
 	// inspectOriginalAndGhostTables must be called before creating checkpoint table.
 	if mgtr.migrationContext.Checkpoint && !mgtr.migrationContext.Resume {
 		if err := mgtr.applier.CreateCheckpointTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create checkpoint table, see further error details")
+			mgtr.migrationContext.Log.Errorf("Unable to create checkpoint table, see further error details.")
 		}
 	}
 
 	if mgtr.migrationContext.Resume {
 		lastCheckpoint, err := mgtr.applier.ReadLastCheckpoint()
 		if err != nil {
-			return mgtr.migrationContext.Log.Errorf("no checkpoint found, unable to resume: %+v", err)
+			return mgtr.migrationContext.Log.Errorf("No checkpoint found, unable to resume: %+v", err)
 		}
 		mgtr.migrationContext.Log.Infof("Resuming from checkpoint coords=%+v range_min=%+v range_max=%+v iteration=%d",
 			lastCheckpoint.LastTrxCoords, lastCheckpoint.IterationRangeMin.String(), lastCheckpoint.IterationRangeMax.String(), lastCheckpoint.Iteration)
@@ -588,9 +590,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.countTableRows(); err != nil {
 		return err
 	}
-	if err := mgtr.addDMLEventsListener(); err != nil {
-		return err
-	}
+
 	if err := mgtr.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
@@ -624,6 +624,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 		return err
 	}
 	mgtr.printStatus(ForcePrintStatusRule)
+	mgtr.printWorkerStats()
 
 	if mgtr.migrationContext.IsCountingTableRows() {
 		mgtr.migrationContext.Log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
@@ -718,10 +719,10 @@ func (mgtr *Migrator) Revert() error {
 
 	lastCheckpoint, err := mgtr.applier.ReadLastCheckpoint()
 	if err != nil {
-		return mgtr.migrationContext.Log.Errorf("no checkpoint found, unable to revert: %+v", err)
+		return mgtr.migrationContext.Log.Errorf("No checkpoint found, unable to revert: %+v", err)
 	}
 	if !lastCheckpoint.IsCutover {
-		return mgtr.migrationContext.Log.Errorf("last checkpoint is not after cutover, unable to revert: coords=%+v time=%+v", lastCheckpoint.LastTrxCoords, lastCheckpoint.Timestamp)
+		return mgtr.migrationContext.Log.Errorf("Last checkpoint is not after cutover, unable to revert: coords=%+v time=%+v", lastCheckpoint.LastTrxCoords, lastCheckpoint.Timestamp)
 	}
 	mgtr.migrationContext.InitialStreamerCoords = lastCheckpoint.LastTrxCoords
 	mgtr.migrationContext.TotalRowsCopied = lastCheckpoint.RowsCopied
@@ -740,14 +741,11 @@ func (mgtr *Migrator) Revert() error {
 		return err
 	}
 	defer mgtr.server.RemoveSocketFile()
-	if err := mgtr.addDMLEventsListener(); err != nil {
-		return err
-	}
 
 	mgtr.initiateThrottler()
 	go mgtr.initiateStatus()
 	go func() {
-		if err := mgtr.executeDMLWriteFuncs(); err != nil {
+		if err := mgtr.executeWriteFuncs(); err != nil {
 			// Send error to PanicAbort to trigger abort
 			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
 		}
@@ -914,7 +912,7 @@ func (mgtr *Migrator) waitForEventsUpToLock() error {
 		select {
 		case <-timeout.C:
 			{
-				return mgtr.migrationContext.Log.Errorf("timeout while waiting for events up to lock")
+				return mgtr.migrationContext.Log.Errorf("Timeout while waiting for events up to lock")
 			}
 		case lockProcessed = <-mgtr.allEventsUpToLockProcessed:
 			{
@@ -967,7 +965,7 @@ func (mgtr *Migrator) cutOverTwoStep() (err error) {
 
 	lockAndRenameDuration := mgtr.migrationContext.RenameTablesEndTime.Sub(mgtr.migrationContext.LockTablesStartTime)
 	renameDuration := mgtr.migrationContext.RenameTablesEndTime.Sub(mgtr.migrationContext.RenameTablesStartTime)
-	mgtr.migrationContext.Log.Debugf("Lock & rename duration: %s (rename only: %s). During mgtr time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(mgtr.migrationContext.OriginalTableName))
+	mgtr.migrationContext.Log.Debugf("Lock & rename duration: %s (rename only: %s). During this time, queries on %s were locked or failing", lockAndRenameDuration, renameDuration, sql.EscapeName(mgtr.migrationContext.OriginalTableName))
 	return nil
 }
 
@@ -1067,16 +1065,19 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 
 	// ooh nice! We're actually truly and thankfully done
 	lockAndRenameDuration := mgtr.migrationContext.RenameTablesEndTime.Sub(mgtr.migrationContext.LockTablesStartTime)
-	mgtr.migrationContext.Log.Infof("Lock & rename duration: %s. During mgtr time, queries on %s were blocked", lockAndRenameDuration, sql.EscapeName(mgtr.migrationContext.OriginalTableName))
+	mgtr.migrationContext.Log.Infof("Lock & rename duration: %s. During this time, queries on %s were blocked", lockAndRenameDuration, sql.EscapeName(mgtr.migrationContext.OriginalTableName))
 	return nil
 }
 
 // initiateServer begins listening on unix socket/tcp for incoming interactive commands
 func (mgtr *Migrator) initiateServer() (err error) {
-	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
+	var printStatus printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
 		mgtr.printStatus(rule, writer)
 	}
-	mgtr.server = NewServer(mgtr.migrationContext, mgtr.hooksExecutor, f)
+	var printWorkers printWorkersFunc = func(writer io.Writer) {
+		mgtr.printWorkerStats(writer)
+	}
+	mgtr.server = NewServer(mgtr.migrationContext, mgtr.hooksExecutor, printStatus, printWorkers)
 	if err := mgtr.server.BindSocketFile(); err != nil {
 		return err
 	}
@@ -1354,6 +1355,29 @@ func (mgtr *Migrator) shouldPrintMigrationStatusHint(rule PrintStatusRule, elaps
 	return shouldPrint
 }
 
+// printWorkerStats prints cumulative stats from the trxCoordinator workers.
+func (mgtr *Migrator) printWorkerStats(writers ...io.Writer) {
+	writers = append(writers, os.Stdout)
+	mw := io.MultiWriter(writers...)
+
+	busyWorkers := mgtr.trxCoordinator.busyWorkers.Load()
+	totalWorkers := cap(mgtr.trxCoordinator.workerQueue)
+	fmt.Fprintf(mw, "# %d/%d workers are busy\n", busyWorkers, totalWorkers)
+
+	stats := mgtr.trxCoordinator.GetWorkerStats()
+	for id, stat := range stats {
+		fmt.Fprintf(mw,
+			"Worker %d; Waited: %s; Busy: %s; DML Applied: %d (%.2f/s), Trx Applied: %d (%.2f/s)\n",
+			id,
+			base.PrettifyDurationOutput(stat.waitTime),
+			base.PrettifyDurationOutput(stat.busyTime),
+			stat.dmlEventsApplied,
+			stat.dmlRate,
+			stat.executedJobs,
+			stat.trxRate)
+	}
+}
+
 // printStatus prints the progress status, and optionally additionally detailed
 // dump of configuration.
 // `rule` indicates the type of output expected.
@@ -1392,12 +1416,12 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 		return
 	}
 
-	currentBinlogCoordinates := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
+	currentBinlogCoordinates := mgtr.trxCoordinator.binlogReader.GetCurrentBinlogCoordinates()
 
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
-		len(mgtr.applyEventsQueue), cap(mgtr.applyEventsQueue),
+		len(mgtr.trxCoordinator.events), cap(mgtr.trxCoordinator.events),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(mgtr.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates.DisplayString(),
 		mgtr.migrationContext.GetCurrentLagDuration().Seconds(),
@@ -1428,22 +1452,15 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 // initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (mgtr *Migrator) initiateStreaming() error {
-	mgtr.eventsStreamer = NewEventsStreamer(mgtr.migrationContext)
-	if err := mgtr.eventsStreamer.InitDBConnections(); err != nil {
+	initialCoords, err := mgtr.inspector.readCurrentBinlogCoordinates()
+	if err != nil {
 		return err
 	}
-	mgtr.eventsStreamer.AddListener(
-		false,
-		mgtr.migrationContext.DatabaseName,
-		mgtr.migrationContext.GetChangelogTableName(),
-		func(dmlEntry *binlog.BinlogEntry) error {
-			return mgtr.onChangelogEvent(dmlEntry)
-		},
-	)
 
 	go func() {
-		mgtr.migrationContext.Log.Debugf("Beginning streaming")
-		err := mgtr.eventsStreamer.StreamEvents(mgtr.canStopStreaming)
+		mgtr.migrationContext.Log.Debugf("Beginning streaming at coordinates: %+v", initialCoords)
+		ctx := context.TODO()
+		err := mgtr.trxCoordinator.StartStreaming(ctx, initialCoords, mgtr.canStopStreaming)
 		if err != nil {
 			// Use helper to prevent deadlock if listenOnPanicAbort already exited
 			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
@@ -1458,26 +1475,10 @@ func (mgtr *Migrator) initiateStreaming() error {
 			if atomic.LoadInt64(&mgtr.finishedMigrating) > 0 {
 				return
 			}
-			mgtr.migrationContext.SetRecentBinlogCoordinates(mgtr.eventsStreamer.GetCurrentBinlogCoordinates())
+			mgtr.migrationContext.SetRecentBinlogCoordinates(mgtr.trxCoordinator.binlogReader.GetCurrentBinlogCoordinates())
 		}
 	}()
 	return nil
-}
-
-// addDMLEventsListener begins listening for binlog events on the original table,
-// and creates & enqueues a write task per such event.
-func (mgtr *Migrator) addDMLEventsListener() error {
-	err := mgtr.eventsStreamer.AddListener(
-		false,
-		mgtr.migrationContext.DatabaseName,
-		mgtr.migrationContext.OriginalTableName,
-		func(dmlEntry *binlog.BinlogEntry) error {
-			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
-			// This is critical because this callback blocks the event streamer
-			return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, newApplyEventStructByDML(dmlEntry))
-		},
-	)
-	return err
 }
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
@@ -1495,12 +1496,12 @@ func (mgtr *Migrator) initiateThrottler() {
 
 func (mgtr *Migrator) initiateApplier() error {
 	mgtr.applier = NewApplier(mgtr.migrationContext)
-	if err := mgtr.applier.InitDBConnections(); err != nil {
+	if err := mgtr.applier.InitDBConnections(mgtr.migrationContext.NumWorkers); err != nil {
 		return err
 	}
 	if mgtr.migrationContext.Revert {
 		if err := mgtr.applier.CreateChangelogTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			mgtr.migrationContext.Log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
 			return err
 		}
 	} else if !mgtr.migrationContext.Resume {
@@ -1508,15 +1509,15 @@ func (mgtr *Migrator) initiateApplier() error {
 			return err
 		}
 		if err := mgtr.applier.CreateChangelogTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			mgtr.migrationContext.Log.Errorf("Unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
 			return err
 		}
 		if err := mgtr.applier.CreateGhostTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+			mgtr.migrationContext.Log.Errorf("Unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
 			return err
 		}
 		if err := mgtr.applier.AlterGhost(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table, see further error details. Bailing out")
+			mgtr.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
 			return err
 		}
 
@@ -1524,7 +1525,7 @@ func (mgtr *Migrator) initiateApplier() error {
 			// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
 			// so we should copy AUTO_INCREMENT value onto our ghost table.
 			if err := mgtr.applier.AlterGhostAutoIncrement(); err != nil {
-				mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+				mgtr.migrationContext.Log.Errorf("Unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
 				return err
 			}
 		}
@@ -1535,13 +1536,13 @@ func (mgtr *Migrator) initiateApplier() error {
 
 	// ensure performance_schema.metadata_locks is available.
 	if err := mgtr.applier.StateMetadataLockInstrument(); err != nil {
-		mgtr.migrationContext.Log.Warning("unable to enable metadata lock instrument, see further error details")
+		mgtr.migrationContext.Log.Warning("Unable to enable metadata lock instrument, see further error details.")
 	}
 	if !mgtr.migrationContext.IsOpenMetadataLockInstruments {
 		if !mgtr.migrationContext.SkipMetadataLockCheck {
-			return mgtr.migrationContext.Log.Errorf("bailing out because metadata lock instrument not enabled. Use --skip-metadata-lock-check if you wish to proceed without. See https://github.com/github/gh-ost/pull/1536 for details")
+			return mgtr.migrationContext.Log.Errorf("Bailing out because metadata lock instrument not enabled. Use --skip-metadata-lock-check if you wish to proceed without. See https://github.com/github/gh-ost/pull/1536 for details.")
 		}
-		mgtr.migrationContext.Log.Warning("proceeding without metadata lock check. There is a small chance of data loss if another session accesses the ghost table during cut-over. See https://github.com/github/gh-ost/pull/1536 for details")
+		mgtr.migrationContext.Log.Warning("Proceeding without metadata lock check. There is a small chance of data loss if another session accesses the ghost table during cut-over. See https://github.com/github/gh-ost/pull/1536 for details.")
 	}
 
 	go mgtr.applier.InitiateHeartbeat()
@@ -1565,6 +1566,11 @@ func (mgtr *Migrator) iterateChunks() error {
 	}
 
 	var hasNoFurtherRangeFlag int64
+	copyConcurrency := int(atomic.LoadInt64(&mgtr.migrationContext.CopyConcurrency))
+	if copyConcurrency < 1 {
+		copyConcurrency = 1
+	}
+
 	// Iterate per chunk:
 	for {
 		if err := mgtr.checkAbort(); err != nil {
@@ -1576,65 +1582,138 @@ func (mgtr *Migrator) iterateChunks() error {
 			return nil
 		}
 		copyRowsFunc := func() error {
-			mgtr.migrationContext.SetNextIterationRangeMinValues()
-			// Copy task:
-			applyCopyRowsFunc := func() error {
-				if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
-					// Done.
-					// There's another such check down the line
-					return nil
+			if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
+				return nil
+			}
+
+			// Phase 1: Pre-compute up to N chunk ranges sequentially.
+			// Range allocation must be serial: each chunk's min = previous chunk's max.
+			chunks := make([]*CopyChunk, 0, copyConcurrency)
+			for i := 0; i < copyConcurrency; i++ {
+				if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
+					break
 				}
 
-				// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
+				mgtr.migrationContext.SetNextIterationRangeMinValues()
+				iteration := mgtr.migrationContext.GetIteration()
+				isFirstChunk := iteration == 0
+
 				hasFurtherRange, err := mgtr.applier.CalculateNextIterationRangeEndValues()
 				if err != nil {
-					return err // wrapping call will retry
+					return err
 				}
 				if !hasFurtherRange {
 					atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
-					return terminateRowIteration(nil)
-				}
-				if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
-					// No need for more writes.
-					// This is the de-facto place where we avoid writing in the event of completed cut-over.
-					// There could _still_ be a race condition, but that's as close as we can get.
-					// What about the race condition? Well, there's actually no data integrity issue.
-					// when rowCopyCompleteFlag==1 that means **guaranteed** all necessary rows have been copied.
-					// But some are still then collected at the binary log, and these are the ones we're trying to
-					// not apply here. If the race condition wins over us, then we just attempt to apply onto the
-					// _ghost_ table, which no longer exists. So, bothering error messages and all, but no damage.
-					return nil
-				}
-				_, rowsAffected, _, err := mgtr.applier.ApplyIterationInsertQuery()
-				if err != nil {
-					return err // wrapping call will retry
-				}
-
-				if mgtr.migrationContext.PanicOnWarnings {
-					if len(mgtr.migrationContext.MigrationLastInsertSQLWarnings) > 0 {
-						for _, warning := range mgtr.migrationContext.MigrationLastInsertSQLWarnings {
-							mgtr.migrationContext.Log.Infof("ApplyIterationInsertQuery has SQL warnings! %s", warning)
-						}
-						joinedWarnings := strings.Join(mgtr.migrationContext.MigrationLastInsertSQLWarnings, "; ")
-						return terminateRowIteration(fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings))
+					if len(chunks) == 0 {
+						return terminateRowIteration(nil)
 					}
+					break
 				}
 
-				atomic.AddInt64(&mgtr.migrationContext.TotalRowsCopied, rowsAffected)
+				// Capture immutable per-chunk state before advancing shared state
+				chunk := &CopyChunk{
+					Seq:               iteration,
+					RangeMinValues:    mgtr.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
+					RangeMaxValues:    mgtr.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
+					IncludeRangeStart: isFirstChunk,
+					Iteration:         iteration,
+				}
+				chunks = append(chunks, chunk)
 				atomic.AddInt64(&mgtr.migrationContext.Iteration, 1)
+			}
+
+			if len(chunks) == 0 {
 				return nil
 			}
-			if err := mgtr.retryBatchCopyWithHooks(applyCopyRowsFunc); err != nil {
-				return terminateRowIteration(err)
+
+			// Phase 2: Execute all chunks in parallel using dedicated copyDB pool.
+			// Non-overlapping PK ranges = no contention between parallel copies.
+			var copyErr error
+			var totalRowsAffected int64
+			copyStart := time.Now()
+
+			// Execute chunks using ApplyCopyChunk which uses the pre-captured
+			// IncludeRangeStart flag (correct even after Iteration is incremented).
+			applyCopyRowsFunc := func() error {
+				if len(chunks) == 1 {
+					// Single chunk: execute directly
+					rowsAffected, _, err := mgtr.applier.ApplyCopyChunk(chunks[0])
+					if err != nil {
+						return err
+					}
+					atomic.AddInt64(&totalRowsAffected, rowsAffected)
+					return nil
+				}
+				// Multiple chunks: execute in parallel on copyDB
+				var wg sync.WaitGroup
+				errCh := make(chan error, len(chunks))
+				for _, chunk := range chunks {
+					wg.Add(1)
+					go func(c *CopyChunk) {
+						defer wg.Done()
+						rowsAffected, _, err := mgtr.applier.ApplyCopyChunk(c)
+						if err != nil {
+							errCh <- err
+							return
+						}
+						atomic.AddInt64(&totalRowsAffected, rowsAffected)
+					}(chunk)
+				}
+				wg.Wait()
+				close(errCh)
+				for err := range errCh {
+					return err
+				}
+				return nil
+			}
+			copyErr = mgtr.retryBatchCopyWithHooks(applyCopyRowsFunc)
+
+			if copyErr != nil {
+				return terminateRowIteration(copyErr)
 			}
 
-			// record last successfully copied range
+			atomic.AddInt64(&mgtr.migrationContext.TotalRowsCopied, totalRowsAffected)
+
+			// Auto-tune chunk size: target ~100ms per chunk for optimal throughput.
+			// Only tune when copy-concurrency > 1 (parallel mode).
+			if copyConcurrency > 1 && len(chunks) > 0 && totalRowsAffected > 0 {
+				copyDuration := time.Since(copyStart)
+				perChunkMs := float64(copyDuration.Milliseconds()) / float64(len(chunks))
+				targetMs := float64(100)
+				currentChunkSize := atomic.LoadInt64(&mgtr.migrationContext.ChunkSize)
+
+				if perChunkMs > 0 {
+					ratio := targetMs / perChunkMs
+					// Clamp adjustment to avoid wild swings (0.75x - 1.5x per iteration)
+					if ratio < 0.75 {
+						ratio = 0.75
+					} else if ratio > 1.5 {
+						ratio = 1.5
+					}
+					newChunkSize := int64(float64(currentChunkSize) * ratio)
+					if newChunkSize < 100 {
+						newChunkSize = 100
+					} else if newChunkSize > 10000 {
+						newChunkSize = 10000
+					}
+					if newChunkSize != currentChunkSize {
+						mgtr.migrationContext.SetChunkSize(newChunkSize)
+					}
+				}
+			}
+
+			// Record last successfully copied range (the last chunk's range)
 			mgtr.applier.LastIterationRangeMutex.Lock()
 			if mgtr.migrationContext.MigrationIterationRangeMinValues != nil && mgtr.migrationContext.MigrationIterationRangeMaxValues != nil {
 				mgtr.applier.LastIterationRangeMinValues = mgtr.migrationContext.MigrationIterationRangeMinValues.Clone()
 				mgtr.applier.LastIterationRangeMaxValues = mgtr.migrationContext.MigrationIterationRangeMaxValues.Clone()
 			}
 			mgtr.applier.LastIterationRangeMutex.Unlock()
+
+			// Signal row copy complete when we've processed the final batch
+			if atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
+				return terminateRowIteration(nil)
+			}
 
 			return nil
 		}
@@ -1650,67 +1729,11 @@ func (mgtr *Migrator) iterateChunks() error {
 	}
 }
 
-func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
-	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
-		if eventStruct.writeFunc != nil {
-			if err := mgtr.retryOperation(*eventStruct.writeFunc); err != nil {
-				return mgtr.migrationContext.Log.Errore(err)
-			}
-		}
-		return nil
-	}
-	if eventStruct.dmlEvent == nil {
-		return handleNonDMLEventStruct(eventStruct)
-	}
-	if eventStruct.dmlEvent != nil {
-		dmlEvents := [](*binlog.BinlogDMLEvent){}
-		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
-		var nonDmlStructToApply *applyEventStruct
-
-		availableEvents := len(mgtr.applyEventsQueue)
-		batchSize := int(atomic.LoadInt64(&mgtr.migrationContext.DMLBatchSize))
-		if availableEvents > batchSize-1 {
-			// The "- 1" is because we already consumed one event: the original event that led to this function getting called.
-			// So, if DMLBatchSize==1 we wish to not process any further events
-			availableEvents = batchSize - 1
-		}
-		for i := 0; i < availableEvents; i++ {
-			additionalStruct := <-mgtr.applyEventsQueue
-			if additionalStruct.dmlEvent == nil {
-				// Not a DML. We don't group this, and we don't batch any further
-				nonDmlStructToApply = additionalStruct
-				break
-			}
-			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
-		}
-		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
-		var applyEventFunc tableWriteFunc = func() error {
-			return mgtr.applier.ApplyDMLEventQueries(dmlEvents)
-		}
-		if err := mgtr.retryOperation(applyEventFunc); err != nil {
-			return mgtr.migrationContext.Log.Errore(err)
-		}
-		// update applier coordinates
-		mgtr.applier.CurrentCoordinatesMutex.Lock()
-		mgtr.applier.CurrentCoordinates = eventStruct.coords
-		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-
-		if nonDmlStructToApply != nil {
-			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
-			// We need to handle it!
-			if err := handleNonDMLEventStruct(nonDmlStructToApply); err != nil {
-				return mgtr.migrationContext.Log.Errore(err)
-			}
-		}
-	}
-	return nil
-}
-
 // Checkpoint attempts to write a checkpoint of the Migrator's current state.
 // It gets the binlog coordinates of the last received trx and waits until the
 // applier reaches that trx. At that point it's safe to resume from these coordinates.
 func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
-	coords := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
+	coords := mgtr.trxCoordinator.binlogReader.GetCurrentBinlogCoordinates()
 	mgtr.applier.LastIterationRangeMutex.Lock()
 	if mgtr.applier.LastIterationRangeMaxValues == nil || mgtr.applier.LastIterationRangeMinValues == nil {
 		mgtr.applier.LastIterationRangeMutex.Unlock()
@@ -1810,6 +1833,13 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 		mgtr.migrationContext.Log.Debugf("Noop operation; not really executing write funcs")
 		return nil
 	}
+
+	// When copy-concurrency > 1, use time-bounded drain to prevent copy starvation.
+	// The drain budget adapts based on event queue depth:
+	//   - Deep backlog (>50% full): short drain (50ms) → more copy turns
+	//   - Moderate backlog: medium drain (100ms)
+	//   - Near-empty queue (<10% full): drain fully → no wasted time
+
 	for {
 		if err := mgtr.checkAbort(); err != nil {
 			return err
@@ -1820,66 +1850,109 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 
 		mgtr.throttler.throttle(nil)
 
-		// We give higher priority to event processing, then secondary priority to
-		// rowcopy
-		select {
-		case eventStruct := <-mgtr.applyEventsQueue:
-			{
-				if err := mgtr.onApplyEventStruct(eventStruct); err != nil {
-					return err
-				}
-			}
-		default:
-			{
-				select {
-				case copyRowsFunc := <-mgtr.copyRowsQueue:
-					{
-						copyRowsStartTime := time.Now()
-						// Retries are handled within the copyRowsFunc
-						if err := copyRowsFunc(); err != nil {
+		// Re-read each iteration so runtime changes take effect
+		useBoundedDrain := atomic.LoadInt64(&mgtr.migrationContext.CopyConcurrency) > 1
+
+		// We give higher priority to event processing.
+		if useBoundedDrain {
+			// Heartbeat lag throttle: when lag exceeds --copy-max-lag-millis, pause
+			// row-copy and drain aggressively until lag drops to half the threshold
+			// (hysteresis prevents oscillation).
+			copyMaxLag := time.Duration(atomic.LoadInt64(&mgtr.migrationContext.CopyMaxLagMillis)) * time.Millisecond
+			if copyMaxLag > 0 {
+				heartbeatLag := mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog()
+				if heartbeatLag > copyMaxLag && heartbeatLag < 1000*time.Second {
+					// Lag exceeded threshold — drain until lag recovers to half threshold
+					// (skip sentinel value before first heartbeat is received)
+					resumeAt := copyMaxLag / 2
+					for {
+						// Use bounded drain to avoid hanging under continuous write load.
+						// ProcessEventsUntilDrained() can block indefinitely when the
+						// binlog reader keeps adding events while workers are processing.
+						if err := mgtr.trxCoordinator.ProcessEventsWithBudget(500 * time.Millisecond); err != nil {
 							return mgtr.migrationContext.Log.Errore(err)
 						}
-						if niceRatio := mgtr.migrationContext.GetNiceRatio(); niceRatio > 0 {
-							copyRowsDuration := time.Since(copyRowsStartTime)
-							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
-							sleepTime := time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond
-							time.Sleep(sleepTime)
+						heartbeatLag = mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog()
+						if heartbeatLag <= resumeAt {
+							break
 						}
-					}
-				default:
-					{
-						// Hmmmmm... nothing in the queue; no events, but also no row copy.
-						// This is possible upon load. Let's just sleep it over.
-						mgtr.migrationContext.Log.Debugf("Getting nothing in the write queue. Sleeping...")
-						time.Sleep(time.Second)
+						if err := mgtr.checkAbort(); err != nil {
+							return err
+						}
+						if atomic.LoadInt64(&mgtr.finishedMigrating) > 0 {
+							return nil
+						}
 					}
 				}
 			}
-		}
-	}
-}
 
-func (mgtr *Migrator) executeDMLWriteFuncs() error {
-	if mgtr.migrationContext.Noop {
-		mgtr.migrationContext.Log.Debugf("Noop operation; not really executing DML write funcs")
-		return nil
-	}
-	for {
-		if atomic.LoadInt64(&mgtr.finishedMigrating) > 0 {
-			return nil
+			// Adaptive drain budget based on queue depth.
+			// Always use a bounded budget to ensure copy gets execution turns.
+			// The lag throttle handles backlog emergencies separately.
+			current, capacity := mgtr.trxCoordinator.EventQueueDepth()
+			fillRatio := float64(current) / float64(capacity)
+			var drainBudget time.Duration
+			switch {
+			case fillRatio > 0.5:
+				drainBudget = 50 * time.Millisecond // deep backlog: short drain, give copy more turns
+			default:
+				drainBudget = 100 * time.Millisecond // light backlog: longer drain to stay ahead
+			}
+			if err := mgtr.trxCoordinator.ProcessEventsWithBudget(drainBudget); err != nil {
+				return mgtr.migrationContext.Log.Errore(err)
+			}
+		} else {
+			if err := mgtr.trxCoordinator.ProcessEventsUntilDrained(); err != nil {
+				return mgtr.migrationContext.Log.Errore(err)
+			}
 		}
 
 		mgtr.throttler.throttle(nil)
 
-		select {
-		case eventStruct := <-mgtr.applyEventsQueue:
-			{
-				if err := mgtr.onApplyEventStruct(eventStruct); err != nil {
-					return err
+		// And secondary priority to rowcopy
+		if useBoundedDrain {
+			// With buffered copyRowsQueue, non-blocking receive reliably picks up
+			// tasks deposited by iterateChunks without timing issues.
+			select {
+			case copyRowsFunc := <-mgtr.copyRowsQueue:
+				copyRowsStartTime := time.Now()
+				if err := copyRowsFunc(); err != nil {
+					return mgtr.migrationContext.Log.Errore(err)
+				}
+				if niceRatio := mgtr.migrationContext.GetNiceRatio(); niceRatio > 0 {
+					copyRowsDuration := time.Since(copyRowsStartTime)
+					sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
+					sleepTime := time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond
+					time.Sleep(sleepTime)
+				}
+			default:
+				// No copy task available; short sleep to yield then drain more
+				time.Sleep(5 * time.Millisecond)
+			}
+		} else {
+			select {
+			case copyRowsFunc := <-mgtr.copyRowsQueue:
+				{
+					copyRowsStartTime := time.Now()
+					// Retries are handled within the copyRowsFunc
+					if err := copyRowsFunc(); err != nil {
+						return mgtr.migrationContext.Log.Errore(err)
+					}
+					if niceRatio := mgtr.migrationContext.GetNiceRatio(); niceRatio > 0 {
+						copyRowsDuration := time.Since(copyRowsStartTime)
+						sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
+						sleepTime := time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond
+						time.Sleep(sleepTime)
+					}
+				}
+			default:
+				{
+					// Hmmmmm... nothing in the queue; no events, but also no row copy.
+					// This is possible upon load. Let's just sleep it over.
+					mgtr.migrationContext.Log.Debugf("Getting nothing in the write queue. Sleeping...")
+					time.Sleep(time.Second)
 				}
 			}
-		case <-time.After(time.Second):
-			continue
 		}
 	}
 }
@@ -1901,10 +1974,6 @@ func (mgtr *Migrator) finalCleanup() error {
 			mgtr.migrationContext.Log.Errore(err)
 		}
 	}
-	if err := mgtr.eventsStreamer.Close(); err != nil {
-		mgtr.migrationContext.Log.Errore(err)
-	}
-
 	if err := mgtr.retryOperation(mgtr.applier.DropChangelogTable); err != nil {
 		return err
 	}
@@ -1935,6 +2004,16 @@ func (mgtr *Migrator) finalCleanup() error {
 func (mgtr *Migrator) teardown() {
 	atomic.StoreInt64(&mgtr.finishedMigrating, 1)
 
+	if mgtr.trxCoordinator != nil {
+		mgtr.migrationContext.Log.Infof("Tearing down coordinator")
+		mgtr.trxCoordinator.Teardown()
+	}
+
+	if mgtr.throttler != nil {
+		mgtr.migrationContext.Log.Infof("Tearing down throttler")
+		mgtr.throttler.Teardown()
+	}
+
 	if mgtr.inspector != nil {
 		mgtr.migrationContext.Log.Infof("Tearing down inspector")
 		mgtr.inspector.Teardown()
@@ -1943,15 +2022,5 @@ func (mgtr *Migrator) teardown() {
 	if mgtr.applier != nil {
 		mgtr.migrationContext.Log.Infof("Tearing down applier")
 		mgtr.applier.Teardown()
-	}
-
-	if mgtr.eventsStreamer != nil {
-		mgtr.migrationContext.Log.Infof("Tearing down streamer")
-		mgtr.eventsStreamer.Teardown()
-	}
-
-	if mgtr.throttler != nil {
-		mgtr.migrationContext.Log.Infof("Tearing down throttler")
-		mgtr.throttler.Teardown()
 	}
 }

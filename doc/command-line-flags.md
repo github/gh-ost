@@ -92,6 +92,30 @@ password=123456
 
 Defaults to `true`. See [`exact-rowcount`](#exact-rowcount)
 
+### copy-concurrency
+
+Number of concurrent row-copy goroutines. Default: `1` (original single-threaded behavior). Range: `1-32`.
+
+Higher values speed up row-copy under heavy write load by using parallel `INSERT...SELECT` operations on non-overlapping ranges. Each worker copies a different chunk concurrently, and a bounded drain budget ensures DML events are still processed between copy batches.
+
+When `--copy-concurrency` > 1, the [heartbeat lag throttle](#copy-max-lag-millis) is automatically active to prevent unbounded binlog lag growth.
+
+This value can be changed at runtime via [interactive commands](interactive-commands.md).
+
+Example: `--copy-concurrency=4` — uses 4 parallel copy workers.
+
+### copy-max-lag-millis
+
+Maximum allowed *internal* binlog processing lag (HeartbeatLag) in milliseconds before row-copy is paused. Default: `60000` (60 seconds). Set to `0` to disable.
+
+This is only active when `--copy-concurrency` > 1. When HeartbeatLag exceeds this threshold, row-copy pauses and gh-ost drains the binlog event queue exclusively until lag drops to half the threshold (hysteresis prevents oscillation).
+
+**Differs from [`--max-lag-millis`](#max-lag-millis):** `--max-lag-millis` measures *replica* replication lag and throttles the entire migration. `--copy-max-lag-millis` measures gh-ost's *own* binlog processing lag and only pauses row-copy while DML apply continues at full speed.
+
+This value can be changed at runtime via [interactive commands](interactive-commands.md).
+
+See [Throttle: Copy-specific lag throttle](throttle.md#copy-specific-lag-throttle---copy-max-lag-millis) for a detailed comparison.
+
 ### critical-load
 
 Comma delimited status-name=threshold, same format as [`--max-load`](#max-load).
@@ -200,6 +224,16 @@ See [`initially-drop-ghost-table`](#initially-drop-ghost-table)
 
 Default False. Should `gh-ost` forcibly delete an existing socket file. Be careful: this might drop the socket file of a running migration!
 
+### copy-max-lag-millis
+
+When using parallel row-copy (`--copy-concurrency` > 1), this flag sets the maximum allowed *internal* binlog processing lag (HeartbeatLag) before row-copy is paused. Unlike `--max-lag-millis` which measures replica lag and throttles the entire migration, `--copy-max-lag-millis` only pauses row-copy while DML event processing continues at full speed.
+
+Default: `60000` (60 seconds). Set to `0` to disable (maximum copy speed, unbounded lag).
+
+Row-copy resumes when HeartbeatLag drops to half the threshold (hysteresis prevents oscillation).
+
+See [Throttle: Copy-specific lag throttle](throttle.md#copy-specific-lag-throttle---copy-max-lag-millis) for a detailed comparison with `--max-lag-millis`.
+
 ### max-lag-millis
 
 On a replication topology, this is perhaps the most important migration throttling factor: the maximum lag allowed for migration to work. If lag exceeds this value, migration throttles.
@@ -251,6 +285,28 @@ Defaults to an auto-determined and advertised upon startup file. Defines Unix so
 ### skip-foreign-key-checks
 
 By default `gh-ost` verifies no foreign keys exist on the migrated table. On servers with large number of tables this check can take a long time. If you're absolutely certain no foreign keys exist (table does not reference other table nor is referenced by other tables) and wish to save the check time, provide with `--skip-foreign-key-checks`.
+
+### skip-dml-frontier-filter
+
+Disable the frontier-based DML skip optimization. Default: `false` (optimization is enabled).
+
+When enabled (default), gh-ost skips DML events targeting rows that have not yet been copied — since row-copy will capture the latest value when it reaches those rows. This reduces redundant DML apply work during the copy phase.
+
+**Safety constraints** — the frontier filter is automatically disabled in two situations regardless of this flag:
+
+1. **When `--copy-concurrency` > 1**: With parallel row-copy, multiple chunks are being copied concurrently. The frontier (last completed chunk boundary) is not a reliable boundary because in-flight chunks may not have committed yet. A DML event targeting a row in an in-flight chunk could be incorrectly skipped, causing data loss.
+
+2. **In replica modes** (`--test-on-replica`, `--migrate-on-replica`): In replica mode, gh-ost reads binlog events from the replica's relay log. These events may be ahead of the replica's SQL thread apply position — meaning row-copy `SELECT` queries may not yet see the data from the skipped events. This would cause silent data loss since neither the DML apply nor the row-copy would capture those changes.
+
+Use `--skip-dml-frontier-filter` for benchmarking or if you suspect the optimization is causing issues.
+
+### skip-dml-merge
+
+Disable DML event merging within batches. Default: `false` (merging is enabled).
+
+When enabled (default), gh-ost merges redundant DML events for the same row before applying them. For example, an INSERT followed by multiple UPDATEs to the same row becomes a single INSERT with the final values. Under high write load, this can reduce applied statements by ~36%.
+
+Use `--skip-dml-merge` for benchmarking or if you suspect merging is causing issues.
 
 ### skip-metadata-lock-check
 
@@ -333,3 +389,11 @@ Makes the _old_ table include a timestamp value. The _old_ table is what the ori
 ### tungsten
 
 See [`tungsten`](cheatsheet.md#tungsten) on the cheatsheet.
+
+### workers
+
+Number of concurrent workers for applying DML events. Default: `8`. Each worker uses one goroutine and its own database connection to apply binlog events in parallel.
+
+This controls the parallelism of the multithreaded replication (MTR) subsystem which processes binlog DML events. Higher values can improve DML throughput under heavy write load, but beyond 8-16 workers the gains diminish as contention on the ghost table increases.
+
+Example: `--workers=16` — uses 16 parallel DML apply workers.

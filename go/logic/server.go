@@ -32,6 +32,7 @@ var (
 )
 
 type printStatusFunc func(PrintStatusRule, io.Writer)
+type printWorkersFunc func(io.Writer)
 
 // Server listens for requests on a socket file or via TCP
 type Server struct {
@@ -40,14 +41,16 @@ type Server struct {
 	tcpListener      net.Listener
 	hooksExecutor    base.Hooks
 	printStatus      printStatusFunc
+	printWorkers     printWorkersFunc
 	isCPUProfiling   int64
 }
 
-func NewServer(migrationContext *base.MigrationContext, hooksExecutor base.Hooks, printStatus printStatusFunc) *Server {
+func NewServer(migrationContext *base.MigrationContext, hooksExecutor base.Hooks, printStatus printStatusFunc, printWorkers printWorkersFunc) *Server {
 	return &Server{
 		migrationContext: migrationContext,
 		hooksExecutor:    hooksExecutor,
 		printStatus:      printStatus,
+		printWorkers:     printWorkers,
 	}
 }
 
@@ -225,6 +228,8 @@ dml-batch-size=<newsize>             # Set a new dml-batch-size
 nice-ratio=<ratio>                   # Set a new nice-ratio, immediate sleep after each row-copy operation, float (examples: 0 is aggressive, 0.7 adds 70% runtime, 1.0 doubles runtime, 2.0 triples runtime, ...)
 critical-load=<load>                 # Set a new set of max-load thresholds
 max-lag-millis=<max-lag>             # Set a new replication lag threshold
+copy-concurrency=<N>                # Set copy concurrency (1-32). 1 = single-threaded (legacy)
+copy-max-lag-millis=<millis>        # Set heartbeat lag threshold for copy throttling (0 = disabled)
 replication-lag-query=<query>        # Set a new query that determines replication lag (no quotes)
 max-load=<load>                      # Set a new set of max-load thresholds
 throttle-query=<query>               # Set a new throttle-query (no quotes)
@@ -243,6 +248,9 @@ help                                 # This message
 		return ForcePrintStatusOnlyRule, nil
 	case "info", "status":
 		return ForcePrintStatusAndHintRule, nil
+	case "worker-stats":
+		srv.printWorkers(writer)
+		return NoPrintStatusRule, nil
 	case "cpu-profile":
 		cpuProfile, err := srv.runCPUProfile(arg)
 		if err == nil {
@@ -309,6 +317,36 @@ help                                 # This message
 				return NoPrintStatusRule, err
 			} else {
 				srv.migrationContext.SetMaxLagMillisecondsThrottleThreshold(int64(maxLagMillis))
+				return ForcePrintStatusAndHintRule, nil
+			}
+		}
+	case "copy-concurrency":
+		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%+v\n", atomic.LoadInt64(&srv.migrationContext.CopyConcurrency))
+				return NoPrintStatusRule, nil
+			}
+			if concurrency, err := strconv.Atoi(arg); err != nil {
+				return NoPrintStatusRule, err
+			} else if concurrency < 1 || concurrency > 32 {
+				return NoPrintStatusRule, fmt.Errorf("copy-concurrency must be between 1 and 32, got %d", concurrency)
+			} else {
+				atomic.StoreInt64(&srv.migrationContext.CopyConcurrency, int64(concurrency))
+				return ForcePrintStatusAndHintRule, nil
+			}
+		}
+	case "copy-max-lag-millis":
+		{
+			if argIsQuestion {
+				fmt.Fprintf(writer, "%+v\n", atomic.LoadInt64(&srv.migrationContext.CopyMaxLagMillis))
+				return NoPrintStatusRule, nil
+			}
+			if maxLag, err := strconv.Atoi(arg); err != nil {
+				return NoPrintStatusRule, err
+			} else if maxLag < 0 {
+				return NoPrintStatusRule, fmt.Errorf("copy-max-lag-millis must be >= 0, got %d", maxLag)
+			} else {
+				atomic.StoreInt64(&srv.migrationContext.CopyMaxLagMillis, int64(maxLag))
 				return ForcePrintStatusAndHintRule, nil
 			}
 		}
@@ -435,7 +473,7 @@ help                                 # This message
 				fmt.Fprintf(writer, "Unpostponed\n")
 				return ForcePrintStatusAndHintRule, nil
 			}
-			fmt.Fprintf(writer, "You may only invoke this when gh-ost is actively postponing migration. At this time it is not\n")
+			fmt.Fprintf(writer, "You may only invoke this when gh-ost is actively postponing migration. At this time it is not.\n")
 			return NoPrintStatusRule, nil
 		}
 	case "panic":
