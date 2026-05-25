@@ -636,7 +636,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.hooksExecutor.OnRowCopyComplete(); err != nil {
 		return err
 	}
-	mgtr.printStatus(ForcePrintStatusRule)
+	mgtr.reportStatus(ForcePrintStatusRule)
 
 	if mgtr.migrationContext.IsCountingTableRows() {
 		mgtr.migrationContext.Log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
@@ -766,7 +766,7 @@ func (mgtr *Migrator) Revert() error {
 		}
 	}()
 
-	mgtr.printStatus(ForcePrintStatusRule)
+	mgtr.reportStatus(ForcePrintStatusRule)
 	var retrier func(func() error, ...bool) error
 	if mgtr.migrationContext.CutOverExponentialBackoff {
 		retrier = mgtr.retryOperationWithExponentialBackoff
@@ -944,7 +944,7 @@ func (mgtr *Migrator) waitForEventsUpToLock() error {
 	waitForEventsUpToLockDuration := time.Since(waitForEventsUpToLockStartTime)
 
 	mgtr.migrationContext.Log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
-	mgtr.printStatus(ForcePrintStatusAndHintRule)
+	mgtr.reportStatus(ForcePrintStatusAndHintRule)
 
 	return nil
 }
@@ -1087,7 +1087,7 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 // initiateServer begins listening on unix socket/tcp for incoming interactive commands
 func (mgtr *Migrator) initiateServer() (err error) {
 	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
-		mgtr.printStatus(rule, writer)
+		mgtr.reportStatus(rule, writer)
 	}
 	mgtr.server = NewServer(mgtr.migrationContext, mgtr.hooksExecutor, f)
 	if err := mgtr.server.BindSocketFile(); err != nil {
@@ -1167,9 +1167,15 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 	return nil
 }
 
-// initiateStatus sets and activates the printStatus() ticker
+// reportStatus samples progress and optionally prints status output.
+func (mgtr *Migrator) reportStatus(rule PrintStatusRule, writers ...io.Writer) {
+	snap := mgtr.sampleMigrationProgress()
+	mgtr.printStatus(rule, snap, writers...)
+}
+
+// initiateStatus sets and activates the reportStatus() ticker.
 func (mgtr *Migrator) initiateStatus() {
-	mgtr.printStatus(ForcePrintStatusAndHintRule)
+	mgtr.reportStatus(ForcePrintStatusAndHintRule)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var previousCount int64
@@ -1177,7 +1183,7 @@ func (mgtr *Migrator) initiateStatus() {
 		if atomic.LoadInt64(&mgtr.finishedMigrating) > 0 {
 			return
 		}
-		go mgtr.printStatus(HeuristicPrintStatusRule)
+		go mgtr.reportStatus(HeuristicPrintStatusRule)
 		totalCopied := atomic.LoadInt64(&mgtr.migrationContext.TotalRowsCopied)
 		if previousCount > 0 {
 			copiedThisLoop := totalCopied - previousCount
@@ -1372,55 +1378,35 @@ func (mgtr *Migrator) shouldPrintMigrationStatusHint(rule PrintStatusRule, elaps
 // `rule` indicates the type of output expected.
 // By default the status is written to standard output, but other writers can
 // be used as well.
-func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
+func (mgtr *Migrator) printStatus(rule PrintStatusRule, snap migrationProgressSnapshot, writers ...io.Writer) {
 	if rule == NoPrintStatusRule {
 		return
 	}
 	writers = append(writers, os.Stdout)
 
-	elapsedTime := mgtr.migrationContext.ElapsedTime()
-	elapsedSeconds := int64(elapsedTime.Seconds())
-	totalRowsCopied := mgtr.migrationContext.GetTotalRowsCopied()
-	rowsEstimate := atomic.LoadInt64(&mgtr.migrationContext.RowsEstimate) + atomic.LoadInt64(&mgtr.migrationContext.RowsDeltaEstimate)
-	if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
-		// Done copying rows. The totalRowsCopied value is the de-facto number of rows,
-		// and there is no further need to keep updating the value.
-		rowsEstimate = totalRowsCopied
-	}
-
-	// we take the opportunity to update migration context with progressPct
-	progressPct := mgtr.getProgressPercent(rowsEstimate)
-	mgtr.migrationContext.SetProgressPct(progressPct)
-
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
-	if mgtr.shouldPrintMigrationStatusHint(rule, elapsedSeconds) {
+	if mgtr.shouldPrintMigrationStatusHint(rule, snap.elapsedSeconds) {
 		mgtr.printMigrationStatusHint(writers...)
 	}
 
-	// Get state + ETA
-	state, eta, etaDuration := mgtr.getMigrationStateAndETA(rowsEstimate)
-	mgtr.migrationContext.SetETADuration(etaDuration)
-
-	if !mgtr.shouldPrintStatus(rule, elapsedSeconds, etaDuration) {
+	if !mgtr.shouldPrintStatus(rule, snap.elapsedSeconds, snap.etaDuration) {
 		return
 	}
 
-	currentBinlogCoordinates := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
-
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
-		totalRowsCopied, rowsEstimate, progressPct,
-		atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
-		len(mgtr.applyEventsQueue), cap(mgtr.applyEventsQueue),
-		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(mgtr.migrationContext.ElapsedRowCopyTime()),
-		currentBinlogCoordinates.DisplayString(),
-		mgtr.migrationContext.GetCurrentLagDuration().Seconds(),
-		mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds(),
-		state,
-		eta,
+		snap.totalRowsCopied, snap.rowsEstimate, snap.progressPct,
+		snap.dmlApplied,
+		snap.applyEventsBacklog, snap.applyEventsCapacity,
+		base.PrettifyDurationOutput(snap.elapsedTime), base.PrettifyDurationOutput(snap.elapsedRowCopyTime),
+		snap.streamerBinlogPosition,
+		snap.replicationLagSeconds,
+		snap.heartbeatLagSeconds,
+		snap.state,
+		snap.eta,
 	)
 	mgtr.applier.WriteChangelog(
 		fmt.Sprintf("copy iteration %d at %d", mgtr.migrationContext.GetIteration(), time.Now().Unix()),
-		state,
+		snap.state,
 	)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
@@ -1434,7 +1420,7 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	mgtr.migrationContext.Log.Info(strings.Replace(status, "%", "%%", 1))
 
 	hooksStatusIntervalSec := mgtr.migrationContext.HooksStatusIntervalSec
-	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {
+	if hooksStatusIntervalSec > 0 && snap.elapsedSeconds%hooksStatusIntervalSec == 0 {
 		mgtr.hooksExecutor.OnStatus(status)
 	}
 }
