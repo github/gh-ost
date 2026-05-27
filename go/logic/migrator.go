@@ -525,9 +525,9 @@ func (mgtr *Migrator) Migrate() (err error) {
 
 	initialLag, _ := mgtr.inspector.getReplicationLag()
 	if !mgtr.migrationContext.Resume {
-		mgtr.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
+		mgtr.migrationContext.Log.Infof("Waiting for target table to be migrated. Current lag is %+v", initialLag)
 		<-mgtr.ghostTableMigrated
-		mgtr.migrationContext.Log.Debugf("ghost table migrated")
+		mgtr.migrationContext.Log.Debugf("target table migrated")
 	}
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
 	// When running on replica, this means the replica has those tables. When running
@@ -1275,11 +1275,11 @@ func (mgtr *Migrator) initiateStatus() {
 // migration, and as response to the "status" interactive command.
 func (mgtr *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
-	fmt.Fprintf(w, "# Migrating %s.%s; Ghost table is %s.%s\n",
+	fmt.Fprintf(w, "# Migrating %s.%s; Target table is %s.%s\n",
 		sql.EscapeName(mgtr.migrationContext.DatabaseName),
 		sql.EscapeName(mgtr.migrationContext.OriginalTableName),
-		sql.EscapeName(mgtr.migrationContext.DatabaseName),
-		sql.EscapeName(mgtr.migrationContext.GetGhostTableName()),
+		sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()),
+		sql.EscapeName(mgtr.migrationContext.GetTargetTableName()),
 	)
 	fmt.Fprintf(w, "# Migrating %+v; inspecting %+v; executing on %+v\n",
 		*mgtr.applier.connectionConfig.ImpliedKey,
@@ -1593,38 +1593,41 @@ func (mgtr *Migrator) initiateApplier() error {
 	if err := mgtr.applier.InitDBConnections(); err != nil {
 		return err
 	}
-	if mgtr.migrationContext.Revert {
-		if err := mgtr.applier.CreateChangelogTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
-			return err
-		}
-	} else if !mgtr.migrationContext.Resume {
-		if err := mgtr.applier.ValidateOrDropExistingTables(); err != nil {
-			return err
-		}
-		if err := mgtr.applier.CreateChangelogTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
-			return err
-		}
-		if err := mgtr.applier.CreateGhostTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
-			return err
-		}
-		if err := mgtr.applier.AlterGhost(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table, see further error details. Bailing out")
-			return err
-		}
 
-		if mgtr.migrationContext.OriginalTableAutoIncrement > 0 && !mgtr.parser.IsAutoIncrementDefined() {
-			// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
-			// so we should copy AUTO_INCREMENT value onto our ghost table.
-			if err := mgtr.applier.AlterGhostAutoIncrement(); err != nil {
-				mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+	if !mgtr.migrationContext.IsMoveTablesMode() {
+		if mgtr.migrationContext.Revert {
+			if err := mgtr.applier.CreateChangelogTable(); err != nil {
+				mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
 				return err
 			}
-		}
-		if _, err := mgtr.applier.WriteChangelogState(string(GhostTableMigrated)); err != nil {
-			return err
+		} else if !mgtr.migrationContext.Resume {
+			if err := mgtr.applier.ValidateOrDropExistingTables(); err != nil {
+				return err
+			}
+			if err := mgtr.applier.CreateChangelogTable(); err != nil {
+				mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+				return err
+			}
+			if err := mgtr.applier.CreateGhostTable(); err != nil {
+				mgtr.migrationContext.Log.Errorf("unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+				return err
+			}
+			if err := mgtr.applier.AlterGhost(); err != nil {
+				mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table, see further error details. Bailing out")
+				return err
+			}
+
+			if mgtr.migrationContext.OriginalTableAutoIncrement > 0 && !mgtr.parser.IsAutoIncrementDefined() {
+				// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
+				// so we should copy AUTO_INCREMENT value onto our ghost table.
+				if err := mgtr.applier.AlterGhostAutoIncrement(); err != nil {
+					mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+					return err
+				}
+			}
+			if _, err := mgtr.applier.WriteChangelogState(string(GhostTableMigrated)); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1639,7 +1642,9 @@ func (mgtr *Migrator) initiateApplier() error {
 		mgtr.migrationContext.Log.Warning("proceeding without metadata lock check. There is a small chance of data loss if another session accesses the ghost table during cut-over. See https://github.com/github/gh-ost/pull/1536 for details")
 	}
 
-	go mgtr.applier.InitiateHeartbeat()
+	if !mgtr.migrationContext.IsMoveTablesMode() {
+		go mgtr.applier.InitiateHeartbeat()
+	}
 	return nil
 }
 

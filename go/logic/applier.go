@@ -107,7 +107,7 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 // hence the optional table name prefix. Metacharacters in table/index names are escaped to avoid
 // regex syntax errors.
 func (apl *Applier) compileMigrationKeyWarningRegex() (*regexp.Regexp, error) {
-	escapedTable := regexp.QuoteMeta(apl.migrationContext.GetGhostTableName())
+	escapedTable := regexp.QuoteMeta(apl.migrationContext.GetTargetTableName())
 	escapedKey := regexp.QuoteMeta(apl.migrationContext.UniqueKey.NameInGhostTable)
 	migrationUniqueKeyPattern := fmt.Sprintf(`for key '(%s\.)?%s'`, escapedTable, escapedKey)
 	migrationKeyRegex, err := regexp.Compile(migrationUniqueKeyPattern)
@@ -162,13 +162,10 @@ func (apl *Applier) InitDBConnections() (err error) {
 	return nil
 }
 
+// NOTE(chriskirkland): this is totally done, thanks @danieljoos
 func (apl *Applier) prepareQueries() (err error) {
-	targetDatabaseName := apl.migrationContext.DatabaseName
-	targetTableName := apl.migrationContext.GetGhostTableName()
-	if apl.migrationContext.IsMoveTablesMode() {
-		targetDatabaseName = apl.migrationContext.MoveTables.TargetDatabase
-		targetTableName = apl.migrationContext.OriginalTableName
-	}
+	targetDatabaseName := apl.migrationContext.GetTargetDatabaseName()
+	targetTableName := apl.migrationContext.GetTargetTableName()
 
 	if apl.dmlDeleteQueryBuilder, err = sql.NewDMLDeleteQueryBuilder(
 		targetDatabaseName,
@@ -1230,7 +1227,7 @@ func (apl *Applier) SwapTablesQuickAndBumpy() error {
 		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
 		sql.EscapeName(apl.migrationContext.OriginalTableName),
 	)
-	apl.migrationContext.Log.Infof("Renaming ghost table")
+	apl.migrationContext.Log.Infof("Renaming target table")
 	if _, err := sqlutils.ExecNoPrepare(apl.db, query); err != nil {
 		return err
 	}

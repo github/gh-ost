@@ -395,6 +395,24 @@ func (mctx *MigrationContext) GetGhostTableName() string {
 	}
 }
 
+// GetTargetTableName generates the name of the target table, based on original table name and
+// the migration context (i.e. move-tables mode).
+func (mctx *MigrationContext) GetTargetTableName() string {
+	if mctx.IsMoveTablesMode() {
+		return mctx.OriginalTableName
+	}
+	return mctx.GetGhostTableName()
+}
+
+// GetTargetDatabaseName fetches the name of the target database, which defaults to the original
+// database name unless we're in move-tables mode.
+func (mctx *MigrationContext) GetTargetDatabaseName() string {
+	if mctx.IsMoveTablesMode() {
+		return mctx.DatabaseName
+	}
+	return mctx.MoveTables.TargetDatabase
+}
+
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (mctx *MigrationContext) GetOldTableName() string {
 	var tableName string
