@@ -432,14 +432,14 @@ type MoveTableCopySelectQueryBuilder struct {
 	argsCount         int
 }
 
-func NewMoveTableCopySelectQueryBuilder(sourceDatabaseName, sourceTableName string, sharedColumns *ColumnList, uniqueKey string, uniqueKeyColumns *ColumnList, includeRangeStartValues bool) (*MoveTableCopySelectQueryBuilder, error) {
+func NewMoveTableCopySelectQueryBuilder(sourceDatabaseName, sourceTableName string, columns *ColumnList, uniqueKey string, uniqueKeyColumns *ColumnList, includeRangeStartValues bool) (*MoveTableCopySelectQueryBuilder, error) {
 	sourceDatabaseName = EscapeName(sourceDatabaseName)
 	sourceTableName = EscapeName(sourceTableName)
-	sharedColumnsNames := sharedColumns.Names()
-	for i := range sharedColumnsNames {
-		sharedColumnsNames[i] = EscapeName(sharedColumnsNames[i])
+	columnNames := columns.Names()
+	for i := range columnNames {
+		columnNames[i] = EscapeName(columnNames[i])
 	}
-	sharedColumnsListing := strings.Join(sharedColumnsNames, ", ")
+	sharedColumnsListing := strings.Join(columnNames, ", ")
 	uniqueKey = EscapeName(uniqueKey)
 	var minRangeComparisonSign = GreaterThanComparisonSign
 	if includeRangeStartValues {
@@ -518,16 +518,16 @@ type MoveTableCopyInsertQueryBuilder struct {
 	valueListSize        int
 }
 
-func NewMoveTableCopyInsertQueryBuilder(targetDatabaseName, targetTableName string, sharedColumns *ColumnList) (*MoveTableCopyInsertQueryBuilder, error) {
+func NewMoveTableCopyInsertQueryBuilder(targetDatabaseName, targetTableName string, columns *ColumnList) (*MoveTableCopyInsertQueryBuilder, error) {
 	targetDatabaseName = EscapeName(targetDatabaseName)
 	targetTableName = EscapeName(targetTableName)
-	sharedColumnsNames := sharedColumns.Names()
-	for i := range sharedColumnsNames {
-		sharedColumnsNames[i] = EscapeName(sharedColumnsNames[i])
+	columnsNames := columns.Names()
+	for i := range columnsNames {
+		columnsNames[i] = EscapeName(columnsNames[i])
 	}
-	sharedColumnsListing := strings.Join(sharedColumnsNames, ", ")
-	valueListPlaceholder := "(" + strings.Join(buildColumnsPreparedValues(sharedColumns), ", ") + ")"
-	valueListSize := len(sharedColumnsNames)
+	sharedColumnsListing := strings.Join(columnsNames, ", ")
+	valueListPlaceholder := "(" + strings.Join(buildColumnsPreparedValues(columns), ", ") + ")"
+	valueListSize := len(columnsNames)
 	stmt := fmt.Sprintf(`
 		insert /* gh-ost %s.%s */ ignore
 		into

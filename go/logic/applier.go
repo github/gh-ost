@@ -93,6 +93,7 @@ type Applier struct {
 	migrationLockDone chan struct{}
 
 	moveTablesTargetDB                    *gosql.DB
+	moveTablesConnectionConfig            *mysql.ConnectionConfig
 	moveTablesCopySelectFirstQueryBuilder *sql.MoveTableCopySelectQueryBuilder
 	moveTablesCopySelectNextQueryBuilder  *sql.MoveTableCopySelectQueryBuilder
 	moveTablesCopyInsertQueryBuilder      *sql.MoveTableCopyInsertQueryBuilder
@@ -104,6 +105,8 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 		migrationContext:  migrationContext,
 		finishedMigrating: 0,
 		name:              "applier",
+
+		moveTablesConnectionConfig: migrationContext.MoveTables.ConnectionConfig,
 	}
 }
 
@@ -153,6 +156,15 @@ func (apl *Applier) InitDBConnections() (err error) {
 	}
 	if err := apl.readTableColumns(); err != nil {
 		return err
+	}
+	if apl.moveTablesConnectionConfig != nil {
+		moveTablesURI := apl.moveTablesConnectionConfig.GetDBUri(apl.migrationContext.MoveTables.TargetDatabase) + "&multiStatements=true"
+		if apl.moveTablesTargetDB, _, err = mysql.GetDB(apl.migrationContext.Uuid, moveTablesURI); err != nil {
+			return err
+		}
+		if _, err := base.ValidateConnection(apl.moveTablesTargetDB, apl.moveTablesConnectionConfig, apl.migrationContext, apl.name); err != nil {
+			return err
+		}
 	}
 	apl.migrationContext.Log.Infof("Applier initiated on %+v, version %+v", apl.connectionConfig.ImpliedKey, apl.migrationContext.ApplierMySQLVersion)
 	return nil
@@ -302,17 +314,24 @@ func (apl *Applier) releaseMigrationLock() {
 }
 
 func (apl *Applier) prepareQueries() (err error) {
+	targetDatabaseName := apl.migrationContext.DatabaseName
+	targetTableName := apl.migrationContext.GetGhostTableName()
+	if apl.migrationContext.IsMoveTablesMode() {
+		targetDatabaseName = apl.migrationContext.MoveTables.TargetDatabase
+		targetTableName = apl.migrationContext.OriginalTableName
+	}
+
 	if apl.dmlDeleteQueryBuilder, err = sql.NewDMLDeleteQueryBuilder(
-		apl.migrationContext.DatabaseName,
-		apl.migrationContext.GetGhostTableName(),
+		targetDatabaseName,
+		targetTableName,
 		apl.migrationContext.OriginalTableColumns,
 		&apl.migrationContext.UniqueKey.Columns,
 	); err != nil {
 		return err
 	}
 	if apl.dmlInsertQueryBuilder, err = sql.NewDMLInsertQueryBuilder(
-		apl.migrationContext.DatabaseName,
-		apl.migrationContext.GetGhostTableName(),
+		targetDatabaseName,
+		targetTableName,
 		apl.migrationContext.OriginalTableColumns,
 		apl.migrationContext.SharedColumns,
 		apl.migrationContext.MappedSharedColumns,
@@ -320,8 +339,8 @@ func (apl *Applier) prepareQueries() (err error) {
 		return err
 	}
 	if apl.dmlUpdateQueryBuilder, err = sql.NewDMLUpdateQueryBuilder(
-		apl.migrationContext.DatabaseName,
-		apl.migrationContext.GetGhostTableName(),
+		targetDatabaseName,
+		targetTableName,
 		apl.migrationContext.OriginalTableColumns,
 		apl.migrationContext.SharedColumns,
 		apl.migrationContext.MappedSharedColumns,
@@ -342,7 +361,7 @@ func (apl *Applier) prepareQueries() (err error) {
 		if apl.moveTablesCopySelectFirstQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
 			apl.migrationContext.DatabaseName,
 			apl.migrationContext.OriginalTableName,
-			apl.migrationContext.SharedColumns,
+			apl.migrationContext.OriginalTableColumns,
 			apl.migrationContext.UniqueKey.Name,
 			&apl.migrationContext.UniqueKey.Columns,
 			true, // <-- include start range values for first select query
@@ -352,7 +371,7 @@ func (apl *Applier) prepareQueries() (err error) {
 		if apl.moveTablesCopySelectNextQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
 			apl.migrationContext.DatabaseName,
 			apl.migrationContext.OriginalTableName,
-			apl.migrationContext.SharedColumns,
+			apl.migrationContext.OriginalTableColumns,
 			apl.migrationContext.UniqueKey.Name,
 			&apl.migrationContext.UniqueKey.Columns,
 			false,
@@ -360,9 +379,9 @@ func (apl *Applier) prepareQueries() (err error) {
 			return err
 		}
 		if apl.moveTablesCopyInsertQueryBuilder, err = sql.NewMoveTableCopyInsertQueryBuilder(
-			apl.migrationContext.MoveTables.TargetDatabase,
-			apl.migrationContext.OriginalTableName,
-			apl.migrationContext.SharedColumns,
+			targetDatabaseName,
+			targetTableName,
+			apl.migrationContext.OriginalTableColumns,
 		); err != nil {
 			return err
 		}
@@ -1932,7 +1951,11 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 	ctx := context.Background()
 
 	err := func() error {
-		conn, err := apl.db.Conn(ctx)
+		db := apl.db
+		if apl.migrationContext.IsMoveTablesMode() {
+			db = apl.moveTablesTargetDB
+		}
+		conn, err := db.Conn(ctx)
 		if err != nil {
 			return err
 		}
@@ -2037,6 +2060,9 @@ func (apl *Applier) Teardown() {
 	apl.releaseMigrationLock()
 	apl.db.Close()
 	apl.singletonDB.Close()
+	if apl.moveTablesTargetDB != nil {
+		apl.moveTablesTargetDB.Close()
+	}
 	atomic.StoreInt64(&apl.finishedMigrating, 1)
 }
 
