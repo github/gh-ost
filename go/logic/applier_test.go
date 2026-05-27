@@ -332,6 +332,8 @@ func (suite *ApplierTestSuite) TearDownTest() {
 	suite.Require().NoError(err)
 	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestGhostTableName())
 	suite.Require().NoError(err)
+	_, err = suite.otherDB.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestOtherTableName())
+	suite.Require().NoError(err)
 }
 
 func (suite *ApplierTestSuite) TestInitDBConnections() {
@@ -1561,6 +1563,72 @@ func (suite *ApplierTestSuite) TestMultipleDMLEventsInBatch() {
 	// Critically: id=2 (bob@example.com) is NOT present, proving event #3 was rolled back
 }
 
+func (suite *ApplierTestSuite) TestApplyDMLEventQueriesMoveTablesMode() {
+	ctx := context.Background()
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.otherDB.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestOtherTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "primary_key",
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{123456, 42}),
+		},
+	}
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().NoError(err)
+
+	// Check that the row was inserted into the ghost table via moveTablesTargetDB
+	rows, err := suite.otherDB.Query("SELECT * FROM " + getTestOtherTableName())
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var count, id, item_id int
+	for rows.Next() {
+		err = rows.Scan(&id, &item_id)
+		suite.Require().NoError(err)
+		count += 1
+	}
+	suite.Require().NoError(rows.Err())
+
+	suite.Require().Equal(1, count)
+	suite.Require().Equal(123456, id)
+	suite.Require().Equal(42, item_id)
+
+	suite.Require().Equal(int64(1), migrationContext.TotalDMLEventsApplied)
+	suite.Require().Equal(int64(0), migrationContext.RowsDeltaEstimate)
+}
+
 func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	ctx := context.Background()
 	var err error
@@ -1577,6 +1645,7 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 
 	migrationContext := newTestMigrationContext()
 	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
 	migrationContext.SetConnectionConfig("innodb")
 	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "name", "created_at"})
 	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "name", "created_at"})
@@ -1594,8 +1663,6 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 
 	err = applier.InitDBConnections()
 	suite.Require().NoError(err)
-
-	applier.moveTablesTargetDB = suite.otherDB
 
 	err = applier.CreateChangelogTable()
 	suite.Require().NoError(err)

@@ -273,12 +273,13 @@ type MigrationContext struct {
 
 	// move tables:
 	MoveTables struct {
-		TableNames     []string // List of table names to be moved.
-		TargetHost     string   // Target hostname for the move. This must be a primary/writable host.
-		TargetPort     int      // Target MySQL port for the move.
-		TargetUser     string   // Target username for the move. If not specified, it will default to the source user.
-		TargetPass     string   // Target password for the move. If not specified, it will default to the source password.
-		TargetDatabase string   // Target database name for the move. If not specified, it will default to the source database name.
+		TableNames       []string // List of table names to be moved.
+		TargetHost       string   // Target hostname for the move. This must be a primary/writable host.
+		TargetPort       int      // Target MySQL port for the move.
+		TargetUser       string   // Target username for the move. If not specified, it will default to the source user.
+		TargetPass       string   // Target password for the move. If not specified, it will default to the source password.
+		TargetDatabase   string   // Target database name for the move. If not specified, it will default to the source database name.
+		ConnectionConfig *mysql.ConnectionConfig
 	}
 
 	Log Logger
@@ -353,6 +354,9 @@ func (mctx *MigrationContext) SetConnectionConfig(storageEngine string) error {
 	}
 	mctx.InspectorConnectionConfig.TransactionIsolation = transactionIsolation
 	mctx.ApplierConnectionConfig.TransactionIsolation = transactionIsolation
+	if mctx.MoveTables.ConnectionConfig != nil {
+		mctx.MoveTables.ConnectionConfig.TransactionIsolation = transactionIsolation
+	}
 	return nil
 }
 
@@ -363,6 +367,9 @@ func (mctx *MigrationContext) SetConnectionCharset(charset string) {
 
 	mctx.InspectorConnectionConfig.Charset = charset
 	mctx.ApplierConnectionConfig.Charset = charset
+	if mctx.MoveTables.ConnectionConfig != nil {
+		mctx.MoveTables.ConnectionConfig.Charset = charset
+	}
 }
 
 func getSafeTableName(baseName string, suffix string) string {
