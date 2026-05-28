@@ -247,7 +247,7 @@ func (apl *Applier) keepMigrationLockAlive(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			_ = base.SendWithContext(apl.migrationContext.GetContext(), apl.migrationContext.PanicAbort,
+			_ = base.SendWithContext(ctx, apl.migrationContext.PanicAbort,
 				fmt.Errorf("migration lock %s connection lost: %w", apl.migrationLockName, err))
 			return
 		}
