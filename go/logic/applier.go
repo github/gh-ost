@@ -296,6 +296,18 @@ func (apl *Applier) releaseMigrationLock() {
 	apl.migrationLockConn = nil
 }
 
+// adoptDMLQueryBuildersFrom shares read-only DML query builders from the primary applier.
+// The primary applier must have called prepareQueries() before MTS workers start.
+func (apl *Applier) adoptDMLQueryBuildersFrom(source *Applier) error {
+	if source.dmlInsertQueryBuilder == nil {
+		return fmt.Errorf("primary applier DML query builders are not prepared")
+	}
+	apl.dmlDeleteQueryBuilder = source.dmlDeleteQueryBuilder
+	apl.dmlInsertQueryBuilder = source.dmlInsertQueryBuilder
+	apl.dmlUpdateQueryBuilder = source.dmlUpdateQueryBuilder
+	return nil
+}
+
 func (apl *Applier) prepareQueries() (err error) {
 	if apl.dmlDeleteQueryBuilder, err = sql.NewDMLDeleteQueryBuilder(
 		apl.migrationContext.DatabaseName,
@@ -460,6 +472,12 @@ func (apl *Applier) AttemptInstantDDL() error {
 		_, err := apl.db.Exec(query)
 		return err
 	}, apl.migrationContext.MaxRetries(), apl.migrationContext.Log)
+}
+
+// isDeadlockError checks whether the given error is a MySQL InnoDB deadlock (errno 1213).
+func isDeadlockError(err error) bool {
+	var mysqlErr *drivermysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1213
 }
 
 // retryOnLockWaitTimeout retries the given operation on MySQL lock wait timeout

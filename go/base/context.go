@@ -274,7 +274,26 @@ type MigrationContext struct {
 	SkipMetadataLockCheck             bool
 	IsOpenMetadataLockInstruments     bool
 
+	// MTS parallel apply configuration
+	NumWorkers                     int
+	BinlogHasLogicalTimestamps     bool
+	LogicalTimestampsDetected      chan struct{}
+	logicalTimestampsDetectOnce    sync.Once
+
 	Log Logger
+}
+
+// NotifyLogicalTimestampsDetection closes LogicalTimestampsDetected once so MTS
+// startup can proceed. found=true when binlog carries logical timestamps (MySQL 5.7+).
+func (mctx *MigrationContext) NotifyLogicalTimestampsDetection(found bool) {
+	mctx.logicalTimestampsDetectOnce.Do(func() {
+		if found {
+			mctx.BinlogHasLogicalTimestamps = true
+		}
+		if mctx.LogicalTimestampsDetected != nil {
+			close(mctx.LogicalTimestampsDetected)
+		}
+	})
 }
 
 type Logger interface {

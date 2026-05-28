@@ -50,9 +50,11 @@ type lockProcessedStruct struct {
 }
 
 type applyEventStruct struct {
-	writeFunc *tableWriteFunc
-	dmlEvent  *binlog.BinlogDMLEvent
-	coords    mysql.BinlogCoordinates
+	writeFunc     *tableWriteFunc
+	dmlEvent      *binlog.BinlogDMLEvent
+	coords        mysql.BinlogCoordinates
+	lastCommitted int64
+	sequenceNum   int64
 }
 
 func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
@@ -61,8 +63,20 @@ func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
 }
 
 func newApplyEventStructByDML(dmlEntry *binlog.BinlogEntry) *applyEventStruct {
-	result := &applyEventStruct{dmlEvent: dmlEntry.DmlEvent, coords: dmlEntry.Coordinates}
+	result := &applyEventStruct{
+		dmlEvent:      dmlEntry.DmlEvent,
+		coords:        dmlEntry.Coordinates,
+		lastCommitted: dmlEntry.LastCommitted,
+		sequenceNum:   dmlEntry.SequenceNumber,
+	}
 	return result
+}
+
+// mtsWorkerJob is a full transaction batch dispatched to one MTS worker.
+type mtsWorkerJob struct {
+	dmlEvents   []*binlog.BinlogDMLEvent
+	sequenceNum int64
+	coords      mysql.BinlogCoordinates
 }
 
 type PrintStatusRule int
@@ -100,6 +114,15 @@ type Migrator struct {
 	applyEventsQueue chan *applyEventStruct
 
 	finishedMigrating int64
+
+	// MTS parallel apply (LOGICAL_CLOCK mode)
+	numWorkers                int
+	mtsActive                 int64
+	workerQueues              []chan *mtsWorkerJob
+	commitBarrier             *commitBarrier
+	coordinatorQueue          chan *applyEventStruct
+	pendingCoordinatorEvent   *applyEventStruct
+	workerNextIdx             int
 }
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
@@ -124,7 +147,27 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		applyEventsQueue:  make(chan *applyEventStruct, base.MaxEventsBatchSize),
 		finishedMigrating: 0,
 	}
+
+	// MTS initialization
+	migrator.numWorkers = context.NumWorkers
+	if migrator.numWorkers > 1 {
+		migrator.coordinatorQueue = make(chan *applyEventStruct, base.MaxEventsBatchSize)
+		migrator.workerQueues = make([]chan *mtsWorkerJob, migrator.numWorkers)
+		for i := range migrator.workerQueues {
+			migrator.workerQueues[i] = make(chan *mtsWorkerJob, base.MaxEventsBatchSize)
+		}
+		migrator.commitBarrier = newCommitBarrier()
+	}
+
 	return migrator
+}
+
+// enqueueApplyEvent routes control-plane and DML apply tasks to the active consumer.
+func (mgtr *Migrator) enqueueApplyEvent(eventStruct *applyEventStruct) error {
+	if atomic.LoadInt64(&mgtr.mtsActive) > 0 {
+		return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.coordinatorQueue, eventStruct)
+	}
+	return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, eventStruct)
 }
 
 // sleepWhileTrue sleeps indefinitely until the given function returns 'false'
@@ -292,6 +335,9 @@ func (mgtr *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 			coords: dmlEntry.Coordinates.Clone(),
 		}
 		var applyEventFunc tableWriteFunc = func() error {
+			if atomic.LoadInt64(&mgtr.mtsActive) > 0 && mgtr.commitBarrier != nil {
+				mgtr.commitBarrier.waitForAllWorkers(mgtr.migrationContext.GetContext())
+			}
 			// Non-blocking send with overwrite-oldest semantics: if the buffer is
 			// full (receiver timed out on a previous attempt), drain the stale
 			// message first so the current sentinel is always delivered. This
@@ -316,12 +362,10 @@ func (mgtr *Migrator) onChangelogStateEvent(dmlEntry *binlog.BinlogEntry) (err e
 		}
 		// at this point we know all events up to lock have been read from the streamer,
 		// because the streamer works sequentially. So those events are either already handled,
-		// or have event functions in applyEventsQueue.
-		// So as not to create a potential deadlock, we write this func to applyEventsQueue
-		// asynchronously, understanding it doesn't really matter.
+		// or have event functions in the apply queue.
+		// So as not to create a potential deadlock, we enqueue this func asynchronously.
 		go func() {
-			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
-			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, newApplyEventStructByFunc(&applyEventFunc))
+			_ = mgtr.enqueueApplyEvent(newApplyEventStructByFunc(&applyEventFunc))
 		}()
 	default:
 		return fmt.Errorf("unknown changelog state: %+v", changelogState)
@@ -339,7 +383,7 @@ func (mgtr *Migrator) onChangelogHeartbeatEvent(dmlEntry *binlog.BinlogEntry) (e
 	}
 	mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
 
-	// Route the coords bump through applyEventsQueue so it is ordered after
+	// Route the coords bump through the apply queue so it is ordered after
 	// any DMLs the streamer enqueued before this heartbeat.
 	coords := dmlEntry.Coordinates
 	var writeFunc tableWriteFunc = func() error {
@@ -348,11 +392,7 @@ func (mgtr *Migrator) onChangelogHeartbeatEvent(dmlEntry *binlog.BinlogEntry) (e
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
 		return nil
 	}
-	if err := base.SendWithContext(
-		mgtr.migrationContext.GetContext(),
-		mgtr.applyEventsQueue,
-		newApplyEventStructByFunc(&writeFunc),
-	); err != nil {
+	if err := mgtr.enqueueApplyEvent(newApplyEventStructByFunc(&writeFunc)); err != nil {
 		return mgtr.migrationContext.Log.Errore(err)
 	}
 	return nil
@@ -614,9 +654,31 @@ func (mgtr *Migrator) Migrate() (err error) {
 		return err
 	}
 	go func() {
-		if err := mgtr.executeWriteFuncs(); err != nil {
-			// Send error to PanicAbort to trigger abort
-			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+		if mgtr.numWorkers > 1 {
+			// Wait for logical timestamps detection before starting MTS
+			if mgtr.migrationContext.LogicalTimestampsDetected != nil {
+				<-mgtr.migrationContext.LogicalTimestampsDetected
+			}
+			if !mgtr.migrationContext.BinlogHasLogicalTimestamps {
+				mgtr.migrationContext.Log.Infof("Multi-worker mode requires binlog logical timestamps (MySQL 5.7+). Falling back to single worker.")
+				if err := mgtr.executeWriteFuncs(); err != nil {
+					_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+				}
+				return
+			}
+			// MTS mode: workers handle DML in parallel; executeWriteFuncs() still
+			// runs row copy (copyRowsQueue) and drains pre-MTS backlog on applyEventsQueue.
+			if err := mgtr.startMTSWorkers(mgtr.migrationContext.GetContext()); err != nil {
+				_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+				return
+			}
+			if err := mgtr.executeWriteFuncs(); err != nil {
+				_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+			}
+		} else {
+			if err := mgtr.executeWriteFuncs(); err != nil {
+				_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+			}
 		}
 	}()
 	go mgtr.iterateChunks()
@@ -760,9 +822,29 @@ func (mgtr *Migrator) Revert() error {
 	mgtr.initiateThrottler()
 	go mgtr.initiateStatus()
 	go func() {
-		if err := mgtr.executeDMLWriteFuncs(); err != nil {
-			// Send error to PanicAbort to trigger abort
-			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+		if mgtr.numWorkers > 1 {
+			if mgtr.migrationContext.LogicalTimestampsDetected != nil {
+				<-mgtr.migrationContext.LogicalTimestampsDetected
+			}
+			if !mgtr.migrationContext.BinlogHasLogicalTimestamps {
+				mgtr.migrationContext.Log.Infof("Multi-worker mode requires binlog logical timestamps (MySQL 5.7+). Falling back to single worker.")
+				if err := mgtr.executeDMLWriteFuncs(); err != nil {
+					_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+				}
+				return
+			}
+			if err := mgtr.startMTSWorkers(mgtr.migrationContext.GetContext()); err != nil {
+				_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+				return
+			}
+			// executeDMLWriteFuncs still needed for non-DML control events
+			if err := mgtr.executeDMLWriteFuncs(); err != nil {
+				_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+			}
+		} else {
+			if err := mgtr.executeDMLWriteFuncs(); err != nil {
+				_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+			}
 		}
 	}()
 
@@ -1407,10 +1489,17 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
 
+	backlogLen := len(mgtr.applyEventsQueue)
+	backlogCap := cap(mgtr.applyEventsQueue)
+	if atomic.LoadInt64(&mgtr.mtsActive) > 0 && mgtr.coordinatorQueue != nil {
+		backlogLen = len(mgtr.coordinatorQueue)
+		backlogCap = cap(mgtr.coordinatorQueue)
+	}
+
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
-		len(mgtr.applyEventsQueue), cap(mgtr.applyEventsQueue),
+		backlogLen, backlogCap,
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(mgtr.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates.DisplayString(),
 		mgtr.migrationContext.GetCurrentLagDuration().Seconds(),
@@ -1485,9 +1574,9 @@ func (mgtr *Migrator) addDMLEventsListener() error {
 		mgtr.migrationContext.DatabaseName,
 		mgtr.migrationContext.OriginalTableName,
 		func(dmlEntry *binlog.BinlogEntry) error {
-			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
+			// Use helper to prevent deadlock if buffer fills and consumer exits
 			// This is critical because this callback blocks the event streamer
-			return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, newApplyEventStructByDML(dmlEntry))
+			return mgtr.enqueueApplyEvent(newApplyEventStructByDML(dmlEntry))
 		},
 	)
 	return err
@@ -1818,6 +1907,229 @@ func (mgtr *Migrator) checkpointLoop() {
 	}
 }
 
+// startMTSWorkers starts the MTS Coordinator and N Worker goroutines.
+// Corresponds to MySQL MTS: coordinator + worker threads.
+func (mgtr *Migrator) startMTSWorkers(ctx context.Context) error {
+	mgtr.migrationContext.Log.Infof("Starting MTS mode with %d workers", mgtr.numWorkers)
+	atomic.StoreInt64(&mgtr.mtsActive, 1)
+
+	// Start workers, each with its own Applier (independent DB connection).
+	// DML query builders are shared from the primary applier (immutable after prepareQueries).
+	for i := 0; i < mgtr.numWorkers; i++ {
+		workerApplier := NewApplier(mgtr.migrationContext)
+		if err := workerApplier.InitDBConnections(); err != nil {
+			return fmt.Errorf("MTS worker %d init failed: %w", i, err)
+		}
+		if err := workerApplier.adoptDMLQueryBuildersFrom(mgtr.applier); err != nil {
+			return fmt.Errorf("MTS worker %d: %w", i, err)
+		}
+		go mgtr.dmlWorker(ctx, i, workerApplier)
+	}
+
+	// Start coordinator
+	go mgtr.dmlCoordinator(ctx)
+
+	return nil
+}
+
+
+func (mgtr *Migrator) readCoordinatorEvent(ctx context.Context) (*applyEventStruct, bool) {
+	if mgtr.pendingCoordinatorEvent != nil {
+		eventStruct := mgtr.pendingCoordinatorEvent
+		mgtr.pendingCoordinatorEvent = nil
+		return eventStruct, true
+	}
+	select {
+	case <-ctx.Done():
+		return nil, false
+	case eventStruct := <-mgtr.coordinatorQueue:
+		return eventStruct, true
+	}
+}
+
+func (mgtr *Migrator) handleCoordinatorNonDML(eventStruct *applyEventStruct) error {
+	if eventStruct.writeFunc == nil {
+		return nil
+	}
+	return mgtr.retryOperation(*eventStruct.writeFunc)
+}
+
+// collectTransactionEvents groups consecutive binlog rows belonging to the same GTID transaction.
+func (mgtr *Migrator) collectTransactionEvents(ctx context.Context, first *applyEventStruct) ([]*applyEventStruct, bool) {
+	trxEvents := []*applyEventStruct{first}
+	seqNum := first.sequenceNum
+	lastCommitted := first.lastCommitted
+
+	for {
+		select {
+		case <-ctx.Done():
+			return trxEvents, false
+		case next := <-mgtr.coordinatorQueue:
+			if next.dmlEvent == nil {
+				if err := mgtr.handleCoordinatorNonDML(next); err != nil {
+					mgtr.migrationContext.PanicAbort <- err
+					return nil, false
+				}
+				continue
+			}
+			if next.sequenceNum == seqNum && next.lastCommitted == lastCommitted {
+				trxEvents = append(trxEvents, next)
+				continue
+			}
+			mgtr.pendingCoordinatorEvent = next
+		default:
+		}
+		break
+	}
+	return trxEvents, true
+}
+
+// dmlCoordinator reads DML events from coordinatorQueue, checks dependencies
+// using last_committed/sequence_number (LOGICAL_CLOCK), and dispatches to workers.
+//
+// Corresponds to MySQL: Mts_submode_logical_clock::schedule_next_event() + wait_for_last_committed_trx()
+func (mgtr *Migrator) dmlCoordinator(ctx context.Context) {
+	scheduleState := newMTSScheduleState()
+
+	for {
+		eventStruct, ok := mgtr.readCoordinatorEvent(ctx)
+		if !ok {
+			return
+		}
+		if eventStruct.dmlEvent == nil {
+			if err := mgtr.handleCoordinatorNonDML(eventStruct); err != nil {
+				mgtr.migrationContext.PanicAbort <- err
+				return
+			}
+			continue
+		}
+
+		trxEvents, ok := mgtr.collectTransactionEvents(ctx, eventStruct)
+		if !ok {
+			return
+		}
+		if len(trxEvents) == 0 {
+			continue
+		}
+
+		currentSeqNum := trxEvents[0].sequenceNum
+		currentLastCommitted := trxEvents[0].lastCommitted
+
+		isNewGroup, err := scheduleState.evaluateTransaction(currentSeqNum, currentLastCommitted)
+		if err != nil {
+			mgtr.migrationContext.PanicAbort <- err
+			return
+		}
+		if scheduleState.consumeEpochReset() {
+			mgtr.commitBarrier.waitForAllWorkers(ctx)
+			mgtr.commitBarrier = newCommitBarrier()
+		}
+		scheduleState.observeTransaction(currentSeqNum)
+
+		mgtr.throttler.throttle(nil)
+
+		dmlEvents := make([]*binlog.BinlogDMLEvent, 0, len(trxEvents))
+		for _, e := range trxEvents {
+			dmlEvents = append(dmlEvents, e.dmlEvent)
+		}
+		job := &mtsWorkerJob{
+			dmlEvents:   dmlEvents,
+			sequenceNum: currentSeqNum,
+			coords:      trxEvents[len(trxEvents)-1].coords,
+		}
+
+		var workerID int
+		if isNewGroup {
+			mgtr.commitBarrier.waitForAllWorkers(ctx)
+			workerID = 0
+		} else {
+			mgtr.commitBarrier.waitForDependency(ctx, currentLastCommitted, scheduleState.hasSeenSequence(currentLastCommitted))
+			workerID = mgtr.workerNextIdx % mgtr.numWorkers
+			mgtr.workerNextIdx++
+		}
+
+		mgtr.commitBarrier.addDelegatedJob()
+		select {
+		case mgtr.workerQueues[workerID] <- job:
+		case <-ctx.Done():
+			mgtr.commitBarrier.completeDelegatedJob()
+			return
+		}
+	}
+}
+
+// dmlWorker reads transaction jobs from its worker queue and applies them to the ghost table.
+// Each worker owns an independent Applier with its own DB connection.
+func (mgtr *Migrator) dmlWorker(ctx context.Context, workerID int, applier *Applier) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-mgtr.workerQueues[workerID]:
+			if job == nil || len(job.dmlEvents) == 0 {
+				continue
+			}
+			mgtr.applyMTSWorkerJob(workerID, applier, job)
+		}
+	}
+}
+
+// retryMTSApply retries a DML apply operation with fast retry on MySQL deadlocks.
+// Deadlocks (errno 1213) are expected under concurrent MTS workers and are resolved
+// immediately by InnoDB, so we retry without the normal 1-second sleep.
+func (mgtr *Migrator) retryMTSApply(operation func() error) error {
+	maxRetries := int(mgtr.migrationContext.MaxRetries())
+	for i := 0; i < maxRetries; i++ {
+		if abortErr := mgtr.checkAbort(); abortErr != nil {
+			return abortErr
+		}
+		err := operation()
+		if err == nil {
+			return nil
+		}
+		if isDeadlockError(err) {
+			continue
+		}
+		if strings.Contains(err.Error(), "warnings detected") {
+			return err
+		}
+		if i != 0 {
+			RetrySleepFn(1 * time.Second)
+		}
+	}
+	return fmt.Errorf("MTS apply exhausted %d retries", maxRetries)
+}
+
+// applyMTSWorkerJob applies one delegated transaction job and always releases the commit barrier.
+func (mgtr *Migrator) applyMTSWorkerJob(workerID int, applier *Applier, job *mtsWorkerJob) {
+	var applyErr error
+	defer func() {
+		if r := recover(); r != nil {
+			applyErr = fmt.Errorf("MTS worker %d panic: %v", workerID, r)
+		}
+		if applyErr != nil {
+			mgtr.commitBarrier.completeDelegatedJob()
+			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, applyErr)
+		}
+	}()
+
+	if err := mgtr.retryMTSApply(func() error {
+		return applier.ApplyDMLEventQueries(job.dmlEvents)
+	}); err != nil {
+		applyErr = err
+		return
+	}
+
+	mgtr.commitBarrier.commit(job.sequenceNum)
+	mgtr.commitBarrier.completeDelegatedJob()
+
+	mgtr.applier.CurrentCoordinatesMutex.Lock()
+	if mgtr.applier.CurrentCoordinates.SmallerThan(job.coords) {
+		mgtr.applier.CurrentCoordinates = job.coords
+	}
+	mgtr.applier.CurrentCoordinatesMutex.Unlock()
+}
+
 // executeWriteFuncs writes data via applier: both the rowcopy and the events backlog.
 // This is where the ghost table gets the data. The function fills the data single-threaded.
 // Both event backlog and rowcopy events are polled; the backlog events have precedence.
@@ -1841,6 +2153,7 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 		select {
 		case eventStruct := <-mgtr.applyEventsQueue:
 			{
+				// After mtsActive, new DML goes to coordinatorQueue; entries already here are pre-MTS backlog.
 				if err := mgtr.onApplyEventStruct(eventStruct); err != nil {
 					return err
 				}

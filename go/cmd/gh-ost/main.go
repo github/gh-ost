@@ -124,6 +124,7 @@ func main() {
 	exponentialBackoffMaxInterval := flag.Int64("exponential-backoff-max-interval", 64, "Maximum number of seconds to wait between attempts when performing various operations with exponential backoff.")
 	chunkSize := flag.Int64("chunk-size", 1000, "amount of rows to handle in each iteration (allowed range: 10-100,000)")
 	dmlBatchSize := flag.Int64("dml-batch-size", 10, "batch size for DML events to apply in a single transaction (range 1-1000)")
+	numWorkers := flag.Int("num-workers", 1, "number of parallel DML apply workers (MTS mode). Requires MySQL 5.7+ with binlog logical timestamps. Default: 1 (single-threaded, backward compatible)")
 	defaultRetries := flag.Int64("default-retries", 60, "Default number of retries for various operations before panicking")
 	flag.BoolVar(&migrationContext.PanicOnWarnings, "panic-on-warnings", false, "Panic when SQL warnings are encountered when copying a batch indicating data loss")
 	cutOverLockTimeoutSeconds := flag.Int64("cut-over-lock-timeout-seconds", 3, "Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout) or attempting instant DDL")
@@ -377,6 +378,14 @@ func main() {
 	migrationContext.SetChunkSize(*chunkSize)
 	migrationContext.SetDMLBatchSize(*dmlBatchSize)
 	migrationContext.SetMaxLagMillisecondsThrottleThreshold(*maxLagMillis)
+	if *numWorkers < 1 {
+		migrationContext.Log.Warningf("invalid --num-workers=%d; using 1", *numWorkers)
+		*numWorkers = 1
+	}
+	migrationContext.NumWorkers = *numWorkers
+	if migrationContext.NumWorkers > 1 {
+		migrationContext.LogicalTimestampsDetected = make(chan struct{})
+	}
 	migrationContext.SetThrottleQuery(*throttleQuery)
 	migrationContext.SetThrottleHTTP(*throttleHTTP)
 	migrationContext.SetIgnoreHTTPErrors(*ignoreHTTPErrors)
