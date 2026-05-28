@@ -1511,6 +1511,9 @@ func (mgtr *Migrator) initiateApplier() error {
 	if err := mgtr.applier.InitDBConnections(); err != nil {
 		return err
 	}
+	if err := mgtr.applier.AcquireMigrationLock(mgtr.migrationContext.GetContext()); err != nil {
+		return err
+	}
 	if mgtr.migrationContext.Revert {
 		if err := mgtr.applier.CreateChangelogTable(); err != nil {
 			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
