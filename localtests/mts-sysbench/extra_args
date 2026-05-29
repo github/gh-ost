@@ -1,1 +1,1 @@
---num-workers=4
+--gtid --num-workers=4
