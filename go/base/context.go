@@ -935,6 +935,12 @@ func (mctx *MigrationContext) AddThrottleControlReplicaKey(key mysql.InstanceKey
 	return nil
 }
 
+// TODO(chriskirkland): pick up from here:
+//
+// need to figure out how to populate the applier connection config from
+// the inspector connection config but using the "target" values from the CLI
+// args.
+
 // ApplyCredentials sorts out the credentials between the config file and the CLI flags
 func (mctx *MigrationContext) ApplyCredentials() {
 	//TODO(chriskirkland): make this work for move-tables
