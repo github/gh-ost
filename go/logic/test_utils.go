@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"fmt"
+	"os"
 	"path/filepath"
-	"runtime"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/mysql"
@@ -68,9 +68,7 @@ func newTestMigrationContext() *base.MigrationContext {
 	migrationContext.PanicOnWarnings = true
 	migrationContext.AllowedRunningOnMaster = true
 
-	//nolint:dogsled
-	_, filename, _, _ := runtime.Caller(0)
-	migrationContext.ServeSocketFile = filepath.Join(filepath.Dir(filename), "../../tmp/gh-ost.sock")
+	migrationContext.ServeSocketFile = filepath.Join(os.TempDir(), "gh-ost.sock")
 
 	return migrationContext
 }
