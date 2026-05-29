@@ -218,7 +218,8 @@ func main() {
 
 	migrationContext.SetConnectionCharset(*charset)
 
-	if migrationContext.AlterStatement == "" && !migrationContext.Revert {
+	fmt.Printf("move-tables = '%s'\n", *moveTables)
+	if migrationContext.AlterStatement == "" && !migrationContext.Revert && *moveTables == "" {
 		log.Fatal("--alter must be provided and statement must not be empty")
 	}
 	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
@@ -259,7 +260,7 @@ func main() {
 		migrationContext.Log.Fatale(err)
 	}
 
-	if migrationContext.OriginalTableName == "" {
+	if migrationContext.OriginalTableName == "" && *moveTables == "" {
 		if parser.HasExplicitTable() {
 			migrationContext.OriginalTableName = parser.GetExplicitTable()
 		} else {
