@@ -86,18 +86,20 @@ func (isp *Inspector) InitDBConnections() (err error) {
 }
 
 func (isp *Inspector) ValidateOriginalTable() (err error) {
+	isp.migrationContext.Log.Infof("Inspector validating original table")
 	if err := isp.validateTable(); err != nil {
 		return err
 	}
 	if err := isp.validateTableForeignKeys(isp.migrationContext.DiscardForeignKeys); err != nil {
-		return err
+		return fmt.Errorf("failed to validate table foreign keys: %w", err)
 	}
 	if err := isp.validateTableTriggers(); err != nil {
-		return err
+		return fmt.Errorf("failed to validate table triggers: %w", err)
 	}
 	if err := isp.estimateTableRowsViaExplain(); err != nil {
-		return err
+		return fmt.Errorf("failed to estimate table rows: %w", err)
 	}
+	isp.migrationContext.Log.Infof("Inspector validated original table")
 	return nil
 }
 
@@ -118,15 +120,23 @@ func (isp *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (column
 }
 
 func (isp *Inspector) InspectOriginalTable() (err error) {
-	isp.migrationContext.OriginalTableColumns, isp.migrationContext.OriginalTableVirtualColumns, isp.migrationContext.OriginalTableUniqueKeys, err = isp.InspectTableColumnsAndUniqueKeys(isp.migrationContext.OriginalTableName)
+	isp.migrationContext.OriginalTableColumns, isp.migrationContext.OriginalTableVirtualColumns, isp.migrationContext.OriginalTableUniqueKeys, err = isp.InspectTableColumnsAndUniqueKeys(isp.originalTableName())
 	if err != nil {
 		return err
 	}
-	isp.migrationContext.OriginalTableAutoIncrement, err = isp.getAutoIncrementValue(isp.migrationContext.OriginalTableName)
+	isp.migrationContext.OriginalTableAutoIncrement, err = isp.getAutoIncrementValue(isp.originalTableName())
 	if err != nil {
 		return err
 	}
+	isp.migrationContext.Log.Infof("Inspector inspected original table")
 	return nil
+}
+
+func (isp *Inspector) originalTableName() string {
+	if isp.migrationContext.IsMoveTablesMode() {
+		return isp.migrationContext.MoveTables.TableNames[0]
+	}
+	return isp.migrationContext.OriginalTableName
 }
 
 // inspectOriginalAndGhostTables compares original and ghost tables to see whether the migration
@@ -144,7 +154,7 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 	}
 	sharedUniqueKeys := isp.getSharedUniqueKeys(isp.migrationContext.OriginalTableUniqueKeys, isp.migrationContext.GhostTableUniqueKeys)
 	for i, sharedUniqueKey := range sharedUniqueKeys {
-		isp.applyColumnTypes(isp.migrationContext.DatabaseName, isp.migrationContext.OriginalTableName, &sharedUniqueKey.Columns)
+		isp.applyColumnTypes(isp.migrationContext.DatabaseName, isp.originalTableName(), &sharedUniqueKey.Columns)
 		uniqueKeyIsValid := true
 		for _, column := range sharedUniqueKey.Columns.Columns() {
 			switch column.Type {
@@ -186,7 +196,7 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 	// This additional step looks at which columns are unsigned. We could have merged this within
 	// the `getTableColumns()` function, but it's a later patch and introduces some complexity; I feel
 	// comfortable in doing this as a separate step.
-	isp.applyColumnTypes(isp.migrationContext.DatabaseName, isp.migrationContext.OriginalTableName, isp.migrationContext.OriginalTableColumns, isp.migrationContext.SharedColumns, &isp.migrationContext.UniqueKey.Columns)
+	isp.applyColumnTypes(isp.migrationContext.DatabaseName, isp.originalTableName(), isp.migrationContext.OriginalTableColumns, isp.migrationContext.SharedColumns, &isp.migrationContext.UniqueKey.Columns)
 	isp.applyColumnTypes(isp.migrationContext.DatabaseName, isp.migrationContext.GetGhostTableName(), isp.migrationContext.GhostTableColumns, isp.migrationContext.MappedSharedColumns)
 
 	for i := range isp.migrationContext.SharedColumns.Columns() {
@@ -471,7 +481,7 @@ func (isp *Inspector) validateLogSlaveUpdates() error {
 
 // validateTable makes sure the table we need to operate on actually exists
 func (isp *Inspector) validateTable() error {
-	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(isp.migrationContext.DatabaseName), isp.migrationContext.OriginalTableName)
+	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(isp.migrationContext.DatabaseName), isp.originalTableName())
 
 	tableFound := false
 	err := sqlutils.QueryRowsMap(isp.db, query, func(rowMap sqlutils.RowMap) error {
@@ -479,7 +489,7 @@ func (isp *Inspector) validateTable() error {
 		isp.migrationContext.RowsEstimate = rowMap.GetInt64("Rows")
 		isp.migrationContext.UsedRowsEstimateMethod = base.TableStatusRowsEstimate
 		if rowMap.GetString("Comment") == "VIEW" {
-			return fmt.Errorf("%s.%s is a VIEW, not a real table. Bailing out", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.migrationContext.OriginalTableName))
+			return fmt.Errorf("%s.%s is a VIEW, not a real table. Bailing out", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
 		}
 		tableFound = true
 
@@ -489,7 +499,7 @@ func (isp *Inspector) validateTable() error {
 		return err
 	}
 	if !tableFound {
-		return isp.migrationContext.Log.Errorf("cannot find table %s.%s!", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.migrationContext.OriginalTableName))
+		return isp.migrationContext.Log.Errorf("cannot find table %s.%s!", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
 	}
 	isp.migrationContext.Log.Infof("Table found. Engine=%s", isp.migrationContext.TableEngine)
 	isp.migrationContext.Log.Debugf("Estimated number of rows via STATUS: %d", isp.migrationContext.RowsEstimate)
@@ -523,26 +533,26 @@ func (isp *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error
 		return nil
 	},
 		isp.migrationContext.DatabaseName,
-		isp.migrationContext.OriginalTableName,
+		isp.originalTableName(),
 		isp.migrationContext.DatabaseName,
-		isp.migrationContext.OriginalTableName,
+		isp.originalTableName(),
 		isp.migrationContext.DatabaseName,
-		isp.migrationContext.OriginalTableName,
+		isp.originalTableName(),
 		isp.migrationContext.DatabaseName,
-		isp.migrationContext.OriginalTableName,
+		isp.originalTableName(),
 	)
 	if err != nil {
 		return err
 	}
 	if numParentForeignKeys > 0 {
-		return isp.migrationContext.Log.Errorf("found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.migrationContext.OriginalTableName))
+		return isp.migrationContext.Log.Errorf("found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
 	}
 	if numChildForeignKeys > 0 {
 		if allowChildForeignKeys {
 			isp.migrationContext.Log.Debugf("Foreign keys found and will be dropped, as per given --discard-foreign-keys flag")
 			return nil
 		}
-		return isp.migrationContext.Log.Errorf("found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.migrationContext.OriginalTableName))
+		return isp.migrationContext.Log.Errorf("found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
 	}
 	isp.migrationContext.Log.Debugf("Validated no foreign keys exist on table")
 	return nil
@@ -564,15 +574,15 @@ func (isp *Inspector) validateTableTriggers() error {
 		return nil
 	},
 		isp.migrationContext.DatabaseName,
-		isp.migrationContext.OriginalTableName,
+		isp.originalTableName(),
 	)
 	if err != nil {
 		return err
 	}
 	if numTriggers > 0 {
 		if isp.migrationContext.IncludeTriggers {
-			isp.migrationContext.Log.Infof("Found %d triggers on %s.%s.", numTriggers, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.migrationContext.OriginalTableName))
-			isp.migrationContext.Triggers, err = mysql.GetTriggers(isp.db, isp.migrationContext.DatabaseName, isp.migrationContext.OriginalTableName)
+			isp.migrationContext.Log.Infof("Found %d triggers on %s.%s.", numTriggers, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
+			isp.migrationContext.Triggers, err = mysql.GetTriggers(isp.db, isp.migrationContext.DatabaseName, isp.originalTableName())
 			if err != nil {
 				return err
 			}
@@ -584,7 +594,7 @@ func (isp *Inspector) validateTableTriggers() error {
 			}
 			return nil
 		}
-		return isp.migrationContext.Log.Errorf("found triggers on %s.%s. Tables with triggers are supported only when using \"include-triggers\" flag. Bailing out", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.migrationContext.OriginalTableName))
+		return isp.migrationContext.Log.Errorf("found triggers on %s.%s. Tables with triggers are supported only when using \"include-triggers\" flag. Bailing out", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
 	}
 	isp.migrationContext.Log.Debugf("Validated no triggers exist on table")
 	return nil
@@ -637,7 +647,7 @@ func (isp *Inspector) validateGhostTriggersLength() error {
 
 // estimateTableRowsViaExplain estimates number of rows on original table
 func (isp *Inspector) estimateTableRowsViaExplain() error {
-	query := fmt.Sprintf(`explain select /* gh-ost */ * from %s.%s where 1=1`, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.migrationContext.OriginalTableName))
+	query := fmt.Sprintf(`explain select /* gh-ost */ * from %s.%s where 1=1`, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
 
 	outputFound := false
 	err := sqlutils.QueryRowsMap(isp.db, query, func(rowMap sqlutils.RowMap) error {
@@ -651,7 +661,7 @@ func (isp *Inspector) estimateTableRowsViaExplain() error {
 		return err
 	}
 	if !outputFound {
-		return isp.migrationContext.Log.Errorf("cannot run EXPLAIN on %s.%s!", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.migrationContext.OriginalTableName))
+		return isp.migrationContext.Log.Errorf("cannot run EXPLAIN on %s.%s!", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
 	}
 	isp.migrationContext.Log.Infof("Estimated number of rows via EXPLAIN: %d", isp.migrationContext.RowsEstimate)
 	return nil
@@ -675,7 +685,7 @@ func (isp *Inspector) CountTableRows(ctx context.Context) error {
 		return err
 	}
 
-	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.migrationContext.OriginalTableName))
+	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
 	var rowsEstimate int64
 	if err := conn.QueryRowContext(ctx, query).Scan(&rowsEstimate); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

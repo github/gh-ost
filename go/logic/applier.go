@@ -383,17 +383,23 @@ func retryOnLockWaitTimeout(operation func() error, maxRetries int64, logger bas
 	return err
 }
 
-// CreateGhostTable creates the ghost table on the applier host
-func (apl *Applier) CreateGhostTable() error {
+// createTargetTable creates the table on the applier host to which the applier will
+// apply changes.
+func (apl *Applier) createTargetTable(targetTableName string) error {
+	targetDatabase := apl.migrationContext.DatabaseName
+	if apl.migrationContext.IsMoveTablesMode() {
+		targetDatabase = apl.migrationContext.MoveTables.TargetDatabase
+	}
+
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s like %s.%s`,
-		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
+		sql.EscapeName(targetDatabase),
+		sql.EscapeName(targetTableName),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.OriginalTableName),
 	)
-	apl.migrationContext.Log.Infof("Creating ghost table %s.%s",
-		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
+	apl.migrationContext.Log.Infof("Creating target table %s.%s",
+		sql.EscapeName(targetDatabase),
+		sql.EscapeName(targetTableName),
 	)
 
 	err := func() error {
@@ -412,7 +418,7 @@ func (apl *Applier) CreateGhostTable() error {
 		if _, err := tx.Exec(query); err != nil {
 			return err
 		}
-		apl.migrationContext.Log.Infof("Ghost table created")
+		apl.migrationContext.Log.Infof("Target table created")
 		if err := tx.Commit(); err != nil {
 			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
 			// there's no need to commit; but let's do this the legit way anyway.
@@ -422,6 +428,19 @@ func (apl *Applier) CreateGhostTable() error {
 	}()
 
 	return err
+}
+
+// CreateGhostTable creates the ghost table on the applier host
+func (apl *Applier) CreateGhostTable() error {
+	return apl.createTargetTable(apl.migrationContext.GetGhostTableName())
+}
+
+// CreateTargetTable creates the ghost table on the applier host
+func (apl *Applier) CreateTargetTable() error {
+	if !apl.migrationContext.IsMoveTablesMode() {
+		return errors.New("CreateTargetTable is only available in MoveTables mode")
+	}
+	return apl.createTargetTable(apl.migrationContext.MoveTables.TableNames[0])
 }
 
 // AlterGhost applies `alter` statement on ghost table

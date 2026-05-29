@@ -399,7 +399,7 @@ func (mctx *MigrationContext) GetGhostTableName() string {
 // the migration context (i.e. move-tables mode).
 func (mctx *MigrationContext) GetTargetTableName() string {
 	if mctx.IsMoveTablesMode() {
-		return mctx.OriginalTableName
+		return mctx.MoveTables.TableNames[0]
 	}
 	return mctx.GetGhostTableName()
 }
@@ -937,6 +937,7 @@ func (mctx *MigrationContext) AddThrottleControlReplicaKey(key mysql.InstanceKey
 
 // ApplyCredentials sorts out the credentials between the config file and the CLI flags
 func (mctx *MigrationContext) ApplyCredentials() {
+	//TODO(chriskirkland): make this work for move-tables
 	mctx.configMutex.Lock()
 	defer mctx.configMutex.Unlock()
 
@@ -947,6 +948,7 @@ func (mctx *MigrationContext) ApplyCredentials() {
 		// Override
 		mctx.InspectorConnectionConfig.User = mctx.CliUser
 	}
+	// NOTE(chriskirkland): THIS!!!!!
 	if mctx.config.Client.Password != "" {
 		mctx.InspectorConnectionConfig.Password = mctx.config.Client.Password
 	}
@@ -957,6 +959,7 @@ func (mctx *MigrationContext) ApplyCredentials() {
 }
 
 func (mctx *MigrationContext) SetupTLS() error {
+	//TODO(chriskirkland): make this work for move-tables
 	if mctx.UseTLS {
 		return mctx.InspectorConnectionConfig.UseTLS(mctx.TLSCACertificate, mctx.TLSCertificate, mctx.TLSKey, mctx.TLSAllowInsecure)
 	}

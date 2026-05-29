@@ -475,7 +475,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	defer mgtr.teardown()
 
 	if err := mgtr.initiateInspector(); err != nil {
-		return err
+		return fmt.Errorf("failed to initiate inspector: %w", err)
 	}
 	if err := mgtr.checkAbort(); err != nil {
 		return err
@@ -1196,10 +1196,10 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 		return err
 	}
 	if err := mgtr.inspector.ValidateOriginalTable(); err != nil {
-		return err
+		return fmt.Errorf("failed to validate original table: %w", err)
 	}
 	if err := mgtr.inspector.InspectOriginalTable(); err != nil {
-		return err
+		return fmt.Errorf("failed to inspect original table: %w", err)
 	}
 	// So far so good, table is accessible and valid.
 	// Let's get master connection config
@@ -1245,6 +1245,7 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 	if err := mgtr.inspector.validateLogSlaveUpdates(); err != nil {
 		return err
 	}
+	mgtr.migrationContext.Log.Infof("Inspector validated and initialized")
 
 	return nil
 }
@@ -1594,7 +1595,13 @@ func (mgtr *Migrator) initiateApplier() error {
 		return err
 	}
 
-	if !mgtr.migrationContext.IsMoveTablesMode() {
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		//TODO(chriskirkland): drop the target table if it exists?
+		if err := mgtr.applier.CreateTargetTable(); err != nil {
+			mgtr.migrationContext.Log.Errorf("unable to create target table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+			return err
+		}
+	} else {
 		if mgtr.migrationContext.Revert {
 			if err := mgtr.applier.CreateChangelogTable(); err != nil {
 				mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
