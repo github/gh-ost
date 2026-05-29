@@ -181,14 +181,14 @@ func TestApplyMTSWorkerJob_ReleasesBarrierOnError(t *testing.T) {
 	mgtr := NewMigrator(mctx, "test")
 	mgtr.numWorkers = 2
 	mgtr.commitBarrier = newCommitBarrier()
-	mgtr.commitBarrier.addDelegatedJob()
+	mgtr.commitBarrier.addDelegatedJob(0)
 
 	job := &mtsWorkerJob{
 		dmlEvents: []*binlog.BinlogDMLEvent{{DML: binlog.InsertDML}},
 	}
 	// Applier without DB connection or query builders: apply fails, barrier must release.
 	mgtr.applyMTSWorkerJob(0, NewApplier(mctx), job)
-	require.Equal(t, int64(0), mgtr.commitBarrier.delegatedJobs.Load())
+	require.Equal(t, int64(0), mgtr.commitBarrier.delegatedJobCount())
 	require.Error(t, <-mctx.PanicAbort)
 }
 
@@ -223,20 +223,41 @@ func TestRetryMTSApply_RetriesImmediatelyOnDeadlock(t *testing.T) {
 	require.Less(t, elapsed, 500*time.Millisecond, "deadlock retries should be fast")
 }
 
-func TestRetryMTSApply_SleepsOnNonDeadlock(t *testing.T) {
+func TestRetryMTSApply_RetriesOnLockWaitTimeout(t *testing.T) {
+	mctx := base.NewMigrationContext()
+	mctx.PanicAbort = make(chan error, 1)
+	mgtr := NewMigrator(mctx, "test")
+
+	lockWaitErr := &drivermysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}
+	attempts := 0
+	err := mgtr.retryMTSApply(func() error {
+		attempts++
+		if attempts < 3 {
+			return lockWaitErr
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, attempts)
+}
+
+func TestRetryMTSApply_PropagatesNonRetryableImmediately(t *testing.T) {
 	mctx := base.NewMigrationContext()
 	mctx.SetDefaultNumRetries(3)
 	mctx.PanicAbort = make(chan error, 1)
 	mgtr := NewMigrator(mctx, "test")
 
-	otherErr := errors.New("connection reset")
+	// A non-retryable error (not a deadlock / lock-wait timeout) must be
+	// returned immediately and unchanged, so the coordinator aborts the
+	// migration rather than silently dropping the transaction.
+	fatalErr := &drivermysql.MySQLError{Number: 1146, Message: "Table doesn't exist"}
 	attempts := 0
 	err := mgtr.retryMTSApply(func() error {
 		attempts++
-		return otherErr
+		return fatalErr
 	})
-	require.Error(t, err)
-	require.Equal(t, 3, attempts)
+	require.ErrorIs(t, err, fatalErr)
+	require.Equal(t, 1, attempts)
 }
 
 func TestCoordinateUpdateMonotonic(t *testing.T) {
@@ -254,7 +275,7 @@ func TestCoordinateUpdateMonotonic(t *testing.T) {
 		coords:      &mysql.FileBinlogCoordinates{LogFile: "binlog.000001", LogPos: 100},
 	}
 	mgtr.commitBarrier = newCommitBarrier()
-	mgtr.commitBarrier.addDelegatedJob()
+	mgtr.commitBarrier.addDelegatedJob(job.sequenceNum)
 
 	// applyMTSWorkerJob will fail (no DB), but the deferred handler runs first.
 	// Test coordinate update logic directly instead.

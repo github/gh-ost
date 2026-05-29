@@ -480,6 +480,20 @@ func isDeadlockError(err error) bool {
 	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1213
 }
 
+// isRetryableApplyError reports whether a failed DML apply is a transient
+// concurrency error that should be retried. Under concurrent MTS workers both
+// InnoDB deadlocks (1213) and lock-wait timeouts (1205) are expected: gap locks
+// on the ghost table's secondary indexes cause contention between parallel
+// REPLACE INTO / DELETE FROM statements. Both are resolved by retrying the whole
+// transaction, mirroring MySQL's slave_transaction_retries behaviour.
+func isRetryableApplyError(err error) bool {
+	var mysqlErr *drivermysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	return mysqlErr.Number == 1213 || mysqlErr.Number == 1205
+}
+
 // retryOnLockWaitTimeout retries the given operation on MySQL lock wait timeout
 // (errno 1205). Non-timeout errors return immediately. This is used for instant
 // DDL attempts where the operation may be blocked by a long-running transaction.
@@ -1678,12 +1692,16 @@ func (apl *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBu
 	case binlog.UpdateDML:
 		{
 			if _, isModified := apl.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
-				results := make([]*dmlBuildResult, 0, 2)
-				dmlEvent.DML = binlog.DeleteDML
-				results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
-				dmlEvent.DML = binlog.InsertDML
-				results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
-				return results
+				// A unique-key-modifying UPDATE is split into DELETE + INSERT.
+				// We must NOT mutate dmlEvent.DML here: the same event may be
+				// re-applied (e.g. MTS deadlock retry), and a mutated DML would
+				// be rebuilt as the wrong statement, corrupting the ghost table.
+				deleteQuery, deleteArgs, deleteErr := apl.dmlDeleteQueryBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
+				insertQuery, insertArgs, insertErr := apl.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
+				return []*dmlBuildResult{
+					newDmlBuildResult(deleteQuery, deleteArgs, -1, deleteErr),
+					newDmlBuildResult(insertQuery, insertArgs, 1, insertErr),
+				}
 			}
 			query, updateArgs, err := apl.dmlUpdateQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args := sqlutils.Args()

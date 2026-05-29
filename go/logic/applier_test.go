@@ -185,6 +185,47 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 		require.Equal(t, 123456, res[0].args[2])
 		require.Equal(t, 42, res[0].args[3])
 	})
+
+	t.Run("update modifying unique key does not mutate event and is retry-safe", func(t *testing.T) {
+		// A UPDATE that changes the unique key splits into DELETE + INSERT.
+		// The event must NOT be mutated, so a re-apply (e.g. MTS deadlock retry)
+		// produces the identical DELETE + INSERT pair rather than a bare INSERT.
+		whereValues := sql.ToColumnValues([]interface{}{123456, 42})
+		newValues := sql.ToColumnValues([]interface{}{123456, 99})
+		binlogEvent := &binlog.BinlogDMLEvent{
+			DatabaseName:      "test",
+			DML:               binlog.UpdateDML,
+			NewColumnValues:   newValues,
+			WhereColumnValues: whereValues,
+		}
+
+		first := applier.buildDMLEventQuery(binlogEvent)
+		require.Len(t, first, 2)
+		require.NoError(t, first[0].err)
+		require.NoError(t, first[1].err)
+		require.Equal(t, int64(-1), first[0].rowsDelta)
+		require.Equal(t, int64(1), first[1].rowsDelta)
+		require.Contains(t, first[0].query, "delete")
+		require.Contains(t, first[1].query, "insert")
+
+		// Event type is untouched after building the query.
+		require.Equal(t, binlog.UpdateDML, binlogEvent.DML)
+
+		// Re-applying the same event (retry) yields the same DELETE + INSERT.
+		second := applier.buildDMLEventQuery(binlogEvent)
+		require.Len(t, second, 2)
+		require.Equal(t, first[0].query, second[0].query)
+		require.Equal(t, first[1].query, second[1].query)
+		require.Equal(t, binlog.UpdateDML, binlogEvent.DML)
+	})
+}
+
+func TestIsRetryableApplyError(t *testing.T) {
+	require.True(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 1213, Message: "Deadlock found"}))
+	require.True(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}))
+	require.False(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 1146, Message: "Table doesn't exist"}))
+	require.False(t, isRetryableApplyError(errors.New("generic error")))
+	require.False(t, isRetryableApplyError(nil))
 }
 
 func TestApplierInstantDDL(t *testing.T) {

@@ -14,26 +14,12 @@ type mtsScheduleState struct {
 	lastSeqNum    int64
 	firstEvent    bool
 	epochReset    bool
-	seenSequence  map[int64]struct{} // sequence numbers observed on this table's binlog stream
 }
 
 func newMTSScheduleState() *mtsScheduleState {
 	return &mtsScheduleState{
-		firstEvent:   true,
-		seenSequence: make(map[int64]struct{}),
+		firstEvent: true,
 	}
-}
-
-func (s *mtsScheduleState) observeTransaction(sequenceNum int64) {
-	if sequenceNum == 0 {
-		return
-	}
-	s.seenSequence[sequenceNum] = struct{}{}
-}
-
-func (s *mtsScheduleState) hasSeenSequence(sequenceNum int64) bool {
-	_, ok := s.seenSequence[sequenceNum]
-	return ok
 }
 
 func (s *mtsScheduleState) consumeEpochReset() bool {
@@ -48,7 +34,6 @@ func (s *mtsScheduleState) resetEpoch() {
 	s.lastTrxSeqNum = 0
 	s.lastSeqNum = 0
 	s.firstEvent = true
-	s.seenSequence = make(map[int64]struct{})
 	s.epochReset = true
 }
 

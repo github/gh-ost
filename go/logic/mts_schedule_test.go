@@ -66,22 +66,13 @@ func TestMTSSchedule_SequenceLeqLastCommittedErrors(t *testing.T) {
 	require.Contains(t, err.Error(), "inconsistent timestamps")
 }
 
-func TestMTSSchedule_ObserveAndHasSeenSequence(t *testing.T) {
-	s := newMTSScheduleState()
-	s.observeTransaction(7)
-	require.True(t, s.hasSeenSequence(7))
-	require.False(t, s.hasSeenSequence(8))
-}
-
 func TestMTSSchedule_SequenceResetStartsNewEpoch(t *testing.T) {
 	s := newMTSScheduleState()
 	_, err := s.evaluateTransaction(534998, 534997)
 	require.NoError(t, err)
-	s.observeTransaction(534998)
 
 	isNew, err := s.evaluateTransaction(1, 0)
 	require.NoError(t, err)
 	require.True(t, isNew)
 	require.True(t, s.consumeEpochReset())
-	require.False(t, s.hasSeenSequence(534998))
 }

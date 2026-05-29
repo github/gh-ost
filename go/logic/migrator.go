@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -2022,9 +2023,8 @@ func (mgtr *Migrator) dmlCoordinator(ctx context.Context) {
 		}
 		if scheduleState.consumeEpochReset() {
 			mgtr.commitBarrier.waitForAllWorkers(ctx)
-			mgtr.commitBarrier = newCommitBarrier()
+			mgtr.commitBarrier.reset()
 		}
-		scheduleState.observeTransaction(currentSeqNum)
 
 		mgtr.throttler.throttle(nil)
 
@@ -2043,15 +2043,16 @@ func (mgtr *Migrator) dmlCoordinator(ctx context.Context) {
 			mgtr.commitBarrier.waitForAllWorkers(ctx)
 			workerID = 0
 		} else {
-			mgtr.commitBarrier.waitForDependency(ctx, currentLastCommitted, scheduleState.hasSeenSequence(currentLastCommitted))
+			mgtr.commitBarrier.waitForDependency(ctx, currentLastCommitted)
 			workerID = mgtr.workerNextIdx % mgtr.numWorkers
 			mgtr.workerNextIdx++
 		}
 
-		mgtr.commitBarrier.addDelegatedJob()
+		mgtr.commitBarrier.addDelegatedJob(job.sequenceNum)
 		select {
 		case mgtr.workerQueues[workerID] <- job:
 		case <-ctx.Done():
+			mgtr.commitBarrier.commit(job.sequenceNum)
 			mgtr.commitBarrier.completeDelegatedJob()
 			return
 		}
@@ -2074,12 +2075,20 @@ func (mgtr *Migrator) dmlWorker(ctx context.Context, workerID int, applier *Appl
 	}
 }
 
-// retryMTSApply retries a DML apply operation with fast retry on MySQL deadlocks.
-// Deadlocks (errno 1213) are expected under concurrent MTS workers and are resolved
-// immediately by InnoDB, so we retry without the normal 1-second sleep.
+// mtsApplyMaxRetries bounds retries of a single transaction on transient
+// concurrency errors, matching MySQL's default slave_transaction_retries (10)
+// generous headroom for contention between parallel workers on the ghost table.
+const mtsApplyMaxRetries = 100
+
+// retryMTSApply retries a DML apply operation on transient concurrency errors.
+// Deadlocks (1213) and lock-wait timeouts (1205) are expected under concurrent
+// MTS workers and are resolved by re-running the whole transaction. Non-retryable
+// errors (bad query, warnings, etc.) are returned immediately and propagated to
+// the coordinator so the migration aborts rather than silently dropping a
+// transaction and corrupting dependency tracking.
 func (mgtr *Migrator) retryMTSApply(operation func() error) error {
-	maxRetries := int(mgtr.migrationContext.MaxRetries())
-	for i := 0; i < maxRetries; i++ {
+	var lastErr error
+	for i := 0; i < mtsApplyMaxRetries; i++ {
 		if abortErr := mgtr.checkAbort(); abortErr != nil {
 			return abortErr
 		}
@@ -2087,17 +2096,15 @@ func (mgtr *Migrator) retryMTSApply(operation func() error) error {
 		if err == nil {
 			return nil
 		}
-		if isDeadlockError(err) {
-			continue
-		}
-		if strings.Contains(err.Error(), "warnings detected") {
+		if !isRetryableApplyError(err) {
 			return err
 		}
-		if i != 0 {
-			RetrySleepFn(1 * time.Second)
-		}
+		lastErr = err
+		// Jittered backoff (0-5ms) avoids a thundering herd of workers
+		// retrying the same contended rows in lockstep.
+		RetrySleepFn(time.Duration(rand.Int63n(int64(5 * time.Millisecond))))
 	}
-	return fmt.Errorf("MTS apply exhausted %d retries", maxRetries)
+	return fmt.Errorf("MTS apply exhausted %d retries on transient error: %w", mtsApplyMaxRetries, lastErr)
 }
 
 // applyMTSWorkerJob applies one delegated transaction job and always releases the commit barrier.
@@ -2108,6 +2115,7 @@ func (mgtr *Migrator) applyMTSWorkerJob(workerID int, applier *Applier, job *mts
 			applyErr = fmt.Errorf("MTS worker %d panic: %v", workerID, r)
 		}
 		if applyErr != nil {
+			mgtr.commitBarrier.commit(job.sequenceNum)
 			mgtr.commitBarrier.completeDelegatedJob()
 			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, applyErr)
 		}
