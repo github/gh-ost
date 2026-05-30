@@ -275,10 +275,10 @@ type MigrationContext struct {
 	IsOpenMetadataLockInstruments     bool
 
 	// MTS parallel apply configuration
-	NumWorkers                     int
-	BinlogHasLogicalTimestamps     bool
-	LogicalTimestampsDetected      chan struct{}
-	logicalTimestampsDetectOnce    sync.Once
+	NumWorkers                  int
+	BinlogHasLogicalTimestamps  bool
+	LogicalTimestampsDetected   chan struct{}
+	logicalTimestampsDetectOnce sync.Once
 
 	Log Logger
 }

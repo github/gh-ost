@@ -117,13 +117,13 @@ type Migrator struct {
 	finishedMigrating int64
 
 	// MTS parallel apply (LOGICAL_CLOCK mode)
-	numWorkers                int
-	mtsActive                 int64
-	workerQueues              []chan *mtsWorkerJob
-	commitBarrier             *commitBarrier
-	coordinatorQueue          chan *applyEventStruct
-	pendingCoordinatorEvent   *applyEventStruct
-	workerNextIdx             int
+	numWorkers              int
+	mtsActive               int64
+	workerQueues            []chan *mtsWorkerJob
+	commitBarrier           *commitBarrier
+	coordinatorQueue        chan *applyEventStruct
+	pendingCoordinatorEvent *applyEventStruct
+	workerNextIdx           int
 }
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
@@ -1932,7 +1932,6 @@ func (mgtr *Migrator) startMTSWorkers(ctx context.Context) error {
 
 	return nil
 }
-
 
 func (mgtr *Migrator) readCoordinatorEvent(ctx context.Context) (*applyEventStruct, bool) {
 	if mgtr.pendingCoordinatorEvent != nil {
