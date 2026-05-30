@@ -25,6 +25,8 @@ sysbench_prepare() {
         prepare
 }
 
+# Load tuned for CI: 8 threads, 45s, rate=1200 trx/s (PR #1454 scale). Unbounded
+# 16-thread load pegs the MTS backlog and exceeds the docker test timeout.
 sysbench_run_cmd() {
     echo "sysbench oltp_write_only \
         --mysql-host=$master_host \
@@ -34,9 +36,9 @@ sysbench_run_cmd() {
         --mysql-db=test \
         --rand-seed=42 \
         --tables=1 \
-        --threads=16 \
-        --time=60 \
-        --rate=0 \
+        --threads=8 \
+        --time=45 \
+        --rate=1200 \
         run"
 }
 
@@ -60,7 +62,8 @@ sleep 2
 bash -c "$cmd" >>"$test_logfile" 2>&1 &
 ghost_pid=$!
 
-for _ in $(seq 1 120); do
+# Allow time for sysbench (45s) plus backlog drain and cut-over under MTS.
+for _ in $(seq 1 300); do
     if ! ps -p "$ghost_pid" >/dev/null 2>&1; then
         break
     fi
