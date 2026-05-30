@@ -205,11 +205,22 @@ func (mgtr *Migrator) retryBatchCopyWithHooks(operation func() error, notFatalHi
 // retryOperation attempts up to `count` attempts at running given function,
 // exiting as soon as it returns with non-error.
 func (mgtr *Migrator) retryOperation(operation func() error, notFatalHint ...bool) (err error) {
+	return mgtr.retryOperationCtx(mgtr.migrationContext.GetContext(), operation, notFatalHint...)
+}
+
+// retryOperationCtx is like retryOperation but uses the caller's context for
+// cancellation checks and PanicAbort delivery (required by MTS goroutines).
+func (mgtr *Migrator) retryOperationCtx(ctx context.Context, operation func() error, notFatalHint ...bool) (err error) {
 	maxRetries := int(mgtr.migrationContext.MaxRetries())
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
 			// sleep after previous iteration
 			RetrySleepFn(1 * time.Second)
+		}
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
 		// Check for abort/context cancellation before each retry
 		if abortErr := mgtr.checkAbort(); abortErr != nil {
@@ -222,7 +233,7 @@ func (mgtr *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 		// Check if this is an unrecoverable error (data consistency issues won't resolve on retry)
 		if strings.Contains(err.Error(), "warnings detected") {
 			if len(notFatalHint) == 0 {
-				_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+				_ = base.SendWithContext(ctx, mgtr.migrationContext.PanicAbort, err)
 			}
 			return err
 		}
@@ -230,7 +241,7 @@ func (mgtr *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	}
 	if len(notFatalHint) == 0 {
 		// Use helper to prevent deadlock if listenOnPanicAbort already exited
-		_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+		_ = base.SendWithContext(ctx, mgtr.migrationContext.PanicAbort, err)
 	}
 	return err
 }
@@ -1791,7 +1802,7 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		}
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 		var applyEventFunc tableWriteFunc = func() error {
-			return mgtr.applier.ApplyDMLEventQueries(dmlEvents)
+			return mgtr.applier.ApplyDMLEventQueries(mgtr.migrationContext.GetContext(), dmlEvents)
 		}
 		if err := mgtr.retryOperation(applyEventFunc); err != nil {
 			return mgtr.migrationContext.Log.Errore(err)
@@ -1947,11 +1958,11 @@ func (mgtr *Migrator) readCoordinatorEvent(ctx context.Context) (*applyEventStru
 	}
 }
 
-func (mgtr *Migrator) handleCoordinatorNonDML(eventStruct *applyEventStruct) error {
+func (mgtr *Migrator) handleCoordinatorNonDML(ctx context.Context, eventStruct *applyEventStruct) error {
 	if eventStruct.writeFunc == nil {
 		return nil
 	}
-	return mgtr.retryOperation(*eventStruct.writeFunc)
+	return mgtr.retryOperationCtx(ctx, *eventStruct.writeFunc)
 }
 
 // collectTransactionEvents groups consecutive binlog rows belonging to the same GTID transaction.
@@ -1966,7 +1977,7 @@ func (mgtr *Migrator) collectTransactionEvents(ctx context.Context, first *apply
 			return trxEvents, false
 		case next := <-mgtr.coordinatorQueue:
 			if next.dmlEvent == nil {
-				if err := mgtr.handleCoordinatorNonDML(next); err != nil {
+				if err := mgtr.handleCoordinatorNonDML(ctx, next); err != nil {
 					mgtr.migrationContext.PanicAbort <- err
 					return nil, false
 				}
@@ -1997,7 +2008,7 @@ func (mgtr *Migrator) dmlCoordinator(ctx context.Context) {
 			return
 		}
 		if eventStruct.dmlEvent == nil {
-			if err := mgtr.handleCoordinatorNonDML(eventStruct); err != nil {
+			if err := mgtr.handleCoordinatorNonDML(ctx, eventStruct); err != nil {
 				mgtr.migrationContext.PanicAbort <- err
 				return
 			}
@@ -2069,7 +2080,7 @@ func (mgtr *Migrator) dmlWorker(ctx context.Context, workerID int, applier *Appl
 			if job == nil || len(job.dmlEvents) == 0 {
 				continue
 			}
-			mgtr.applyMTSWorkerJob(workerID, applier, job)
+			mgtr.applyMTSWorkerJob(ctx, workerID, applier, job)
 		}
 	}
 }
@@ -2085,9 +2096,12 @@ const mtsApplyMaxRetries = 100
 // errors (bad query, warnings, etc.) are returned immediately and propagated to
 // the coordinator so the migration aborts rather than silently dropping a
 // transaction and corrupting dependency tracking.
-func (mgtr *Migrator) retryMTSApply(operation func() error) error {
+func (mgtr *Migrator) retryMTSApply(ctx context.Context, operation func() error) error {
 	var lastErr error
 	for i := 0; i < mtsApplyMaxRetries; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if abortErr := mgtr.checkAbort(); abortErr != nil {
 			return abortErr
 		}
@@ -2107,7 +2121,7 @@ func (mgtr *Migrator) retryMTSApply(operation func() error) error {
 }
 
 // applyMTSWorkerJob applies one delegated transaction job and always releases the commit barrier.
-func (mgtr *Migrator) applyMTSWorkerJob(workerID int, applier *Applier, job *mtsWorkerJob) {
+func (mgtr *Migrator) applyMTSWorkerJob(ctx context.Context, workerID int, applier *Applier, job *mtsWorkerJob) {
 	var applyErr error
 	defer func() {
 		if r := recover(); r != nil {
@@ -2120,8 +2134,8 @@ func (mgtr *Migrator) applyMTSWorkerJob(workerID int, applier *Applier, job *mts
 		}
 	}()
 
-	if err := mgtr.retryMTSApply(func() error {
-		return applier.ApplyDMLEventQueries(job.dmlEvents)
+	if err := mgtr.retryMTSApply(ctx, func() error {
+		return applier.ApplyDMLEventQueries(ctx, job.dmlEvents)
 	}); err != nil {
 		applyErr = err
 		return

@@ -1814,9 +1814,11 @@ func (apl *Applier) executeBatchWithWarningChecking(ctx context.Context, tx *gos
 }
 
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
-func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
+func (apl *Applier) ApplyDMLEventQueries(ctx context.Context, dmlEvents [](*binlog.BinlogDMLEvent)) error {
 	var totalDelta int64
-	ctx := context.Background()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	err := func() error {
 		conn, err := apl.db.Conn(ctx)

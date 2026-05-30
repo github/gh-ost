@@ -187,7 +187,7 @@ func TestApplyMTSWorkerJob_ReleasesBarrierOnError(t *testing.T) {
 		dmlEvents: []*binlog.BinlogDMLEvent{{DML: binlog.InsertDML}},
 	}
 	// Applier without DB connection or query builders: apply fails, barrier must release.
-	mgtr.applyMTSWorkerJob(0, NewApplier(mctx), job)
+	mgtr.applyMTSWorkerJob(context.Background(), 0, NewApplier(mctx), job)
 	require.Equal(t, int64(0), mgtr.commitBarrier.delegatedJobCount())
 	require.Error(t, <-mctx.PanicAbort)
 }
@@ -207,7 +207,7 @@ func TestRetryMTSApply_RetriesImmediatelyOnDeadlock(t *testing.T) {
 	deadlockErr := &drivermysql.MySQLError{Number: 1213, Message: "Deadlock found when trying to get lock"}
 	attempts := 0
 	start := time.Now()
-	err := mgtr.retryMTSApply(func() error {
+	err := mgtr.retryMTSApply(context.Background(), func() error {
 		attempts++
 		if attempts < 3 {
 			return deadlockErr
@@ -230,7 +230,7 @@ func TestRetryMTSApply_RetriesOnLockWaitTimeout(t *testing.T) {
 
 	lockWaitErr := &drivermysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}
 	attempts := 0
-	err := mgtr.retryMTSApply(func() error {
+	err := mgtr.retryMTSApply(context.Background(), func() error {
 		attempts++
 		if attempts < 3 {
 			return lockWaitErr
@@ -252,7 +252,7 @@ func TestRetryMTSApply_PropagatesNonRetryableImmediately(t *testing.T) {
 	// migration rather than silently dropping the transaction.
 	fatalErr := &drivermysql.MySQLError{Number: 1146, Message: "Table doesn't exist"}
 	attempts := 0
-	err := mgtr.retryMTSApply(func() error {
+	err := mgtr.retryMTSApply(context.Background(), func() error {
 		attempts++
 		return fatalErr
 	})
