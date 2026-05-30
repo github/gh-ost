@@ -10,8 +10,8 @@ fi
 
 table_name="sbtest1"
 ghost_table_name="_${table_name}_gho"
-# gh-ost renames original to _del when --ok-to-drop-table is false (default)
-old_table_name="_${table_name}_del"
+# --test-on-replica (from test.sh) cut-over then swap-reverts: migrated data stays on
+# _gho, original name sbtest1 is restored. Compare like standard localtests, not _del.
 
 sysbench_prepare() {
     sysbench oltp_write_only \
@@ -87,6 +87,13 @@ if [ "$execution_result" -ne 0 ]; then
     exit 1
 fi
 
+if ! grep -q "Done migrating" "$test_logfile"; then
+    echo
+    echo "ERROR mts-sysbench: migration did not complete"
+    tail -n 80 "$test_logfile"
+    exit 1
+fi
+
 if ! grep -q "Starting MTS mode with 4 workers" "$test_logfile"; then
     echo
     echo "ERROR mts-sysbench: expected MTS mode in log (need --gtid and MySQL 5.7+ logical timestamps)"
@@ -104,33 +111,34 @@ else
 fi
 
 # --- Triple verification: row count + CHECKSUM TABLE + md5sum ---
+# Replica after --test-on-replica: compare original table vs ghost table (see test.sh).
 
 # 1. Row count
-old_count=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test \
-    -Nse "SELECT COUNT(*) FROM ${old_table_name}" 2>/dev/null || echo "MISSING")
-new_count=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test \
+orig_count=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test \
     -Nse "SELECT COUNT(*) FROM ${table_name}" 2>/dev/null || echo "MISSING")
+ghost_count=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test \
+    -Nse "SELECT COUNT(*) FROM ${ghost_table_name}" 2>/dev/null || echo "MISSING")
 
-if [ "$old_count" = "MISSING" ] || [ "$new_count" = "MISSING" ]; then
-    echo "ERROR mts-sysbench: table missing _del=${old_count} new=${new_count}"
+if [ "$orig_count" = "MISSING" ] || [ "$ghost_count" = "MISSING" ]; then
+    echo "ERROR mts-sysbench: table missing orig=${orig_count} ghost=${ghost_count}"
     exit 1
 fi
-if [ "$old_count" != "$new_count" ]; then
-    echo "ERROR mts-sysbench: row count mismatch _del=${old_count} new=${new_count}"
+if [ "$orig_count" != "$ghost_count" ]; then
+    echo "ERROR mts-sysbench: row count mismatch orig=${orig_count} ghost=${ghost_count}"
     exit 1
 fi
-echo "  [verify] row count match: ${old_count}"
+echo "  [verify] row count match: ${orig_count}"
 
 # 2. CHECKSUM TABLE
-old_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test \
-    -Nse "CHECKSUM TABLE ${old_table_name}" 2>/dev/null | awk '{print $2}')
-new_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test \
-    -Nse "CHECKSUM TABLE ${table_name}" 2>/dev/null | awk '{print $2}')
-if [ "$old_checksum" != "$new_checksum" ]; then
-    echo "ERROR mts-sysbench: CHECKSUM TABLE mismatch _del=${old_checksum} new=${new_checksum}"
+orig_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test \
+    -Nse "CHECKSUM TABLE ${table_name}" 2>/dev/null | awk '{print $NF}')
+ghost_checksum=$(gh-ost-test-mysql-replica --default-character-set=utf8mb4 test \
+    -Nse "CHECKSUM TABLE ${ghost_table_name}" 2>/dev/null | awk '{print $NF}')
+if [ "$orig_checksum" != "$ghost_checksum" ]; then
+    echo "ERROR mts-sysbench: CHECKSUM TABLE mismatch orig=${orig_checksum} ghost=${ghost_checksum}"
     exit 1
 fi
-echo "  [verify] CHECKSUM TABLE match: ${old_checksum}"
+echo "  [verify] CHECKSUM TABLE match: ${orig_checksum}"
 
 # 3. md5sum sorted content
 orig_columns="id,k,c,pad"
@@ -138,9 +146,9 @@ ghost_columns="$orig_columns"
 order_by="order by id"
 
 gh-ost-test-mysql-replica --default-character-set=utf8mb4 test \
-    -e "select ${orig_columns} from ${old_table_name} ${order_by}" -ss >"$orig_content_output_file"
+    -e "select ${orig_columns} from ${table_name} ${order_by}" -ss >"$orig_content_output_file"
 gh-ost-test-mysql-replica --default-character-set=utf8mb4 test \
-    -e "select ${ghost_columns} from ${table_name} ${order_by}" -ss >"$ghost_content_output_file"
+    -e "select ${ghost_columns} from ${ghost_table_name} ${order_by}" -ss >"$ghost_content_output_file"
 
 orig_checksum=$(md5sum <"$orig_content_output_file")
 ghost_checksum=$(md5sum <"$ghost_content_output_file")
