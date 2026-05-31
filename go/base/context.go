@@ -954,7 +954,6 @@ func (mctx *MigrationContext) ApplyCredentials() {
 		// Override
 		mctx.InspectorConnectionConfig.User = mctx.CliUser
 	}
-	// NOTE(chriskirkland): THIS!!!!!
 	if mctx.config.Client.Password != "" {
 		mctx.InspectorConnectionConfig.Password = mctx.config.Client.Password
 	}
@@ -962,10 +961,23 @@ func (mctx *MigrationContext) ApplyCredentials() {
 		// Override
 		mctx.InspectorConnectionConfig.Password = mctx.CliPassword
 	}
+
+	if mctx.IsMoveTablesMode() {
+		// apply credentials for the applier from target CLI args
+		if mctx.MoveTables.ConnectionConfig == nil {
+			mctx.MoveTables.ConnectionConfig = &mysql.ConnectionConfig{}
+		}
+		mctx.MoveTables.ConnectionConfig.User = mctx.MoveTables.TargetUser
+		mctx.MoveTables.ConnectionConfig.Password = mctx.MoveTables.TargetPass
+		mctx.MoveTables.ConnectionConfig.Key = mysql.InstanceKey{
+			Hostname: mctx.MoveTables.TargetHost,
+			Port:     mctx.MoveTables.TargetPort,
+		}
+	}
 }
 
 func (mctx *MigrationContext) SetupTLS() error {
-	//TODO(chriskirkland): make this work for move-tables
+	//TODO(chriskirkland): make this work for move-tables?
 	if mctx.UseTLS {
 		return mctx.InspectorConnectionConfig.UseTLS(mctx.TLSCACertificate, mctx.TLSCertificate, mctx.TLSKey, mctx.TLSAllowInsecure)
 	}

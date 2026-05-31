@@ -1203,7 +1203,10 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 	}
 	// So far so good, table is accessible and valid.
 	// Let's get master connection config
-	if mgtr.migrationContext.AssumeMasterHostname == "" {
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.MoveTables.ConnectionConfig
+
+	} else if mgtr.migrationContext.AssumeMasterHostname == "" {
 		// No forced master host; detect master
 		if mgtr.migrationContext.ApplierConnectionConfig, err = mgtr.inspector.getMasterConnectionConfig(); err != nil {
 			return err
@@ -1235,7 +1238,9 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 		mgtr.migrationContext.Log.Infof("--test-on-replica or --migrate-on-replica given. Will not execute on master %+v but rather on replica %+v itself",
 			*mgtr.migrationContext.ApplierConnectionConfig.ImpliedKey, *mgtr.migrationContext.InspectorConnectionConfig.ImpliedKey,
 		)
-		mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.InspectorConnectionConfig.Duplicate()
+		if !mgtr.migrationContext.IsMoveTablesMode() {
+			mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.InspectorConnectionConfig.Duplicate()
+		}
 		if mgtr.migrationContext.GetThrottleControlReplicaKeys().Len() == 0 {
 			mgtr.migrationContext.AddThrottleControlReplicaKey(mgtr.migrationContext.InspectorConnectionConfig.Key)
 		}
@@ -1597,7 +1602,18 @@ func (mgtr *Migrator) initiateApplier() error {
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
 		//TODO(chriskirkland): drop the target table if it exists?
-		if err := mgtr.applier.CreateTargetTable(); err != nil {
+
+		mgtr.migrationContext.Log.Infof("Fetching create table statement for `%s.%s`",
+			mgtr.migrationContext.DatabaseName,
+			mgtr.migrationContext.MoveTables.TableNames[0],
+		)
+		createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.MoveTables.TableNames[0])
+		if err != nil {
+			return fmt.Errorf("failed to fetch create table statement: %v", err)
+		}
+		mgtr.migrationContext.Log.Infof("Create table statement: %s", createTableStatement)
+
+		if err := mgtr.applier.CreateTargetTable(createTableStatement); err != nil {
 			mgtr.migrationContext.Log.Errorf("unable to create target table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
 			return err
 		}
