@@ -722,7 +722,7 @@ func (apl *Applier) createTriggers(tableName string) error {
 // CreateTriggers creates the original triggers on applier host
 func (apl *Applier) CreateTriggersOnGhost() error {
 	err := apl.createTriggers(apl.migrationContext.GetGhostTableName())
-	return err
+	return fmt.Errorf("error creating triggers on ghost table: %v", err)
 }
 
 // DropChangelogTable drops the changelog table on the applier host
@@ -742,7 +742,10 @@ func (apl *Applier) DropOldTable() error {
 
 // DropGhostTable drops the ghost table on the applier host
 func (apl *Applier) DropGhostTable() error {
-	return apl.dropTable(apl.migrationContext.GetGhostTableName())
+	if err := apl.dropTable(apl.migrationContext.GetGhostTableName()); err != nil {
+		return fmt.Errorf("error dropping ghost table: %v", err)
+	}
+	return nil
 }
 
 // WriteChangelog writes a value to the changelog table.
@@ -978,12 +981,17 @@ Detail description of the lost data in mysql two-phase commit issue by @Fanduzi:
 	will not be run. When the changelog writes successfully, the ReadMigrationRangeValues will read the
 	newly inserted data, thus Avoiding data loss due to the above problem.
 */
-func (apl *Applier) ReadMigrationRangeValues() error {
+func (apl *Applier) ReadMigrationRangeValues(db *gosql.DB) error {
 	if _, err := apl.WriteChangelogState(string(ReadMigrationRangeValues)); err != nil {
 		return err
 	}
 
-	tx, err := apl.db.Begin()
+	if db == nil {
+		// default to reading from applier database
+		db = apl.db
+	}
+
+	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
@@ -1003,7 +1011,7 @@ func (apl *Applier) ReadMigrationRangeValues() error {
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and thus done with copying row chunks)
-func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
+func (apl *Applier) CalculateNextIterationRangeEndValues(db *gosql.DB) (hasFurtherRange bool, err error) {
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
@@ -1023,7 +1031,12 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 			return hasFurtherRange, err
 		}
 
-		rows, err := apl.db.Query(query, explodedArgs...)
+		if db == nil {
+			// default to applier database if not provided
+			db = apl.db
+		}
+
+		rows, err := db.Query(query, explodedArgs...)
 		if err != nil {
 			return hasFurtherRange, err
 		}
@@ -1145,7 +1158,7 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 
 // ApplyIterationMoveTableCopyQueries issues a SELECT query on the original table and an INSERT query on the target table,
 // copying a chunk of rows. It is used when `--move-table` is specified, instead of ApplyIterationInsertQuery.
-func (apl *Applier) ApplyIterationMoveTableCopyQueries() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&apl.migrationContext.ChunkSize)
 
@@ -1164,7 +1177,7 @@ func (apl *Applier) ApplyIterationMoveTableCopyQueries() (chunkSize int64, rowsA
 		if err != nil {
 			return nil, err
 		}
-		sqlRows, err := apl.db.Query(query, explodedArgs...)
+		sqlRows, err := sourceDB.Query(query, explodedArgs...)
 		if err != nil {
 			return nil, err
 		}
@@ -1292,6 +1305,7 @@ func (apl *Applier) UnlockTables() error {
 // - rename ghost table to original
 // There is a point in time in between where the table does not exist.
 func (apl *Applier) SwapTablesQuickAndBumpy() error {
+	// TODO(chriskirkland): audit usage in move-tables
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.originalTableName()),
@@ -1320,6 +1334,7 @@ func (apl *Applier) SwapTablesQuickAndBumpy() error {
 // RenameTablesRollback renames back both table: original back to ghost,
 // _old back to original. This is used by `--test-on-replica`
 func (apl *Applier) RenameTablesRollback() (renameError error) {
+	// TODO(chriskirkland): audit usage in move-tables
 	// Restoring tables to original names.
 	// We prefer the single, atomic operation:
 	query := fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s, %s.%s to %s.%s`,
@@ -1672,6 +1687,7 @@ func (apl *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked
 
 // AtomicCutoverRename
 func (apl *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed chan<- error) error {
+	// TODO(chriskirkland): audit usage in move-tables
 	tx, err := apl.db.Begin()
 	if err != nil {
 		return err

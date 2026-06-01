@@ -584,7 +584,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.addDMLEventsListener(); err != nil {
 		return err
 	}
-	if err := mgtr.applier.ReadMigrationRangeValues(); err != nil {
+	if err := mgtr.applier.ReadMigrationRangeValues(nil); err != nil {
 		return err
 	}
 
@@ -776,6 +776,10 @@ func (mgtr *Migrator) MoveTables() (err error) {
 		sql.EscapeName(mgtr.migrationContext.MoveTables.TargetDatabase), mgtr.migrationContext.MoveTables.TargetHost)
 	mgtr.migrationContext.StartTime = time.Now()
 
+	if mgtr.migrationContext.OriginalTableName == "" {
+		mgtr.migrationContext.OriginalTableName = mgtr.migrationContext.MoveTables.TableNames[0]
+	}
+
 	// Ensure context is cancelled on exit (cleanup)
 	defer mgtr.migrationContext.CancelContext()
 
@@ -833,7 +837,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	// are identical,s owe just need to grab any valid UNIQUE key constraint.
 	mgtr.migrationContext.UniqueKey = mgtr.inspector.selectUniqueKey(mgtr.migrationContext.OriginalTableUniqueKeys)
 
-	if err := mgtr.applier.ReadMigrationRangeValues(); err != nil {
+	if err := mgtr.applier.ReadMigrationRangeValues(mgtr.inspector.db); err != nil {
 		return err
 	}
 
@@ -1603,6 +1607,12 @@ func (mgtr *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (mgtr *Migrator) initiateThrottler() {
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		// TODO(chriskirkland): throttle against the target cluster
+		mgtr.migrationContext.Log.Info("Skipping throttling in move tables mode")
+		return
+	}
+
 	mgtr.throttler = NewThrottler(mgtr.migrationContext, mgtr.applier, mgtr.inspector, mgtr.appVersion)
 
 	go mgtr.throttler.initiateThrottlerCollection(mgtr.firstThrottlingCollected)
@@ -1729,7 +1739,7 @@ func (mgtr *Migrator) iterateChunks() error {
 				}
 
 				// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
-				hasFurtherRange, err := mgtr.applier.CalculateNextIterationRangeEndValues()
+				hasFurtherRange, err := mgtr.applier.CalculateNextIterationRangeEndValues(mgtr.inspector.db)
 				if err != nil {
 					return err // wrapping call will retry
 				}
@@ -1750,13 +1760,14 @@ func (mgtr *Migrator) iterateChunks() error {
 				}
 				var rowsAffected int64
 				if mgtr.migrationContext.IsMoveTablesMode() {
-					_, rowsAffected, _, err = mgtr.applier.ApplyIterationMoveTableCopyQueries()
+					_, rowsAffected, _, err = mgtr.applier.ApplyIterationMoveTableCopyQueries(mgtr.inspector.db)
 				} else {
 					_, rowsAffected, _, err = mgtr.applier.ApplyIterationInsertQuery()
 				}
 				if err != nil {
-					return err // wrapping call will retry
+					return fmt.Errorf("ApplyIterationInsertQuery failed: %w", err) // wrapping call will retry
 				}
+				mgtr.migrationContext.Log.Infof("ApplyIterationInsertQuery affected %d rows", rowsAffected)
 
 				if mgtr.migrationContext.PanicOnWarnings {
 					if len(mgtr.migrationContext.MigrationLastInsertSQLWarnings) > 0 {
@@ -1973,6 +1984,7 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 		select {
 		case eventStruct := <-mgtr.applyEventsQueue:
 			{
+				mgtr.migrationContext.Log.Info("[execWriteFuncs] Processing apply event struct")
 				if err := mgtr.onApplyEventStruct(eventStruct); err != nil {
 					return err
 				}
@@ -1982,6 +1994,7 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 				select {
 				case copyRowsFunc := <-mgtr.copyRowsQueue:
 					{
+						mgtr.migrationContext.Log.Info("[execWriteFuncs] Processing row copy function")
 						copyRowsStartTime := time.Now()
 						// Retries are handled within the copyRowsFunc
 						if err := copyRowsFunc(); err != nil {
@@ -2045,8 +2058,8 @@ func (mgtr *Migrator) finalCleanup() error {
 		if createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.GetGhostTableName()); err == nil {
 			mgtr.migrationContext.Log.Infof("New table structure follows")
 			fmt.Println(createTableStatement)
-		} else {
-			mgtr.migrationContext.Log.Errore(err)
+		} else if !mgtr.migrationContext.IsMoveTablesMode() {
+			mgtr.migrationContext.Log.Errore(fmt.Errorf("error showing create table: %v", err))
 		}
 	}
 	if err := mgtr.eventsStreamer.Close(); err != nil {
