@@ -803,6 +803,9 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.initiateApplier(); err != nil {
 		return err
 	}
+	if err := mgtr.initiateStreaming(); err != nil {
+		return err
+	}
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
@@ -823,6 +826,13 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.addDMLEventsListener(); err != nil {
 		return err
 	}
+
+	// TODO(chriskirkland): move this into a well-named function
+	// populate the unique key for the migration.  in single-cluster modes where we may be ALTERing the table, we need
+	// to validate the migration has a valid unique key to use here... but in move-tables, the source and target tables
+	// are identical,s owe just need to grab any valid UNIQUE key constraint.
+	mgtr.migrationContext.UniqueKey = mgtr.inspector.selectUniqueKey(mgtr.migrationContext.OriginalTableUniqueKeys)
+
 	if err := mgtr.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
@@ -1533,14 +1543,19 @@ func (mgtr *Migrator) initiateStreaming() error {
 	if err := mgtr.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
-	mgtr.eventsStreamer.AddListener(
-		false,
-		mgtr.migrationContext.DatabaseName,
-		mgtr.migrationContext.GetChangelogTableName(),
-		func(dmlEntry *binlog.BinlogEntry) error {
-			return mgtr.onChangelogEvent(dmlEntry)
-		},
-	)
+
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		mgtr.migrationContext.Log.Info("Skipping stream of the changelog table")
+	} else {
+		mgtr.eventsStreamer.AddListener(
+			false,
+			mgtr.migrationContext.DatabaseName,
+			mgtr.migrationContext.GetChangelogTableName(),
+			func(dmlEntry *binlog.BinlogEntry) error {
+				return mgtr.onChangelogEvent(dmlEntry)
+			},
+		)
+	}
 
 	go func() {
 		mgtr.migrationContext.Log.Debugf("Beginning streaming")
@@ -1568,10 +1583,15 @@ func (mgtr *Migrator) initiateStreaming() error {
 // addDMLEventsListener begins listening for binlog events on the original table,
 // and creates & enqueues a write task per such event.
 func (mgtr *Migrator) addDMLEventsListener() error {
+	originalTableName := mgtr.migrationContext.OriginalTableName
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		originalTableName = mgtr.migrationContext.MoveTables.TableNames[0]
+	}
+
 	err := mgtr.eventsStreamer.AddListener(
 		false,
 		mgtr.migrationContext.DatabaseName,
-		mgtr.migrationContext.OriginalTableName,
+		originalTableName,
 		func(dmlEntry *binlog.BinlogEntry) error {
 			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
 			// This is critical because this callback blocks the event streamer
@@ -2031,6 +2051,11 @@ func (mgtr *Migrator) finalCleanup() error {
 	}
 	if err := mgtr.eventsStreamer.Close(); err != nil {
 		mgtr.migrationContext.Log.Errore(err)
+	}
+
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		// all done
+		return nil
 	}
 
 	if err := mgtr.retryOperation(mgtr.applier.DropChangelogTable); err != nil {

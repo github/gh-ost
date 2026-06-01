@@ -748,6 +748,11 @@ func (apl *Applier) DropGhostTable() error {
 // WriteChangelog writes a value to the changelog table.
 // It returns the hint as given, for convenience
 func (apl *Applier) WriteChangelog(hint, value string) (string, error) {
+	// TODO(chriskirkland): move this bypass higher
+	if apl.migrationContext.IsMoveTablesMode() {
+		return "", nil
+	}
+
 	explicitId := 0
 	switch hint {
 	case "heartbeat":
@@ -908,11 +913,11 @@ func (apl *Applier) ExecuteThrottleQuery() (int64, error) {
 
 // readMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (apl *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
-	apl.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
 	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(apl.migrationContext.DatabaseName, apl.originalTableName(), uniqueKey)
 	if err != nil {
 		return err
 	}
+	apl.migrationContext.Log.Infof("Reading migration range according to key: %s (%s)", uniqueKey.Name, query)
 
 	rows, err := tx.Query(query)
 	if err != nil {

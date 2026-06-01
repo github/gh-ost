@@ -153,30 +153,7 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 		return err
 	}
 	sharedUniqueKeys := isp.getSharedUniqueKeys(isp.migrationContext.OriginalTableUniqueKeys, isp.migrationContext.GhostTableUniqueKeys)
-	for i, sharedUniqueKey := range sharedUniqueKeys {
-		isp.applyColumnTypes(isp.migrationContext.DatabaseName, isp.originalTableName(), &sharedUniqueKey.Columns)
-		uniqueKeyIsValid := true
-		for _, column := range sharedUniqueKey.Columns.Columns() {
-			switch column.Type {
-			case sql.FloatColumnType:
-				{
-					isp.migrationContext.Log.Warningf("Will not use %+v as shared key due to FLOAT data type", sharedUniqueKey.Name)
-					uniqueKeyIsValid = false
-				}
-			case sql.JSONColumnType:
-				{
-					// Noteworthy that at this time MySQL does not allow JSON indexing anyhow, but this code
-					// will remain in place to potentially handle the future case where JSON is supported in indexes.
-					isp.migrationContext.Log.Warningf("Will not use %+v as shared key due to JSON data type", sharedUniqueKey.Name)
-					uniqueKeyIsValid = false
-				}
-			}
-		}
-		if uniqueKeyIsValid {
-			isp.migrationContext.UniqueKey = sharedUniqueKeys[i]
-			break
-		}
-	}
+	isp.migrationContext.UniqueKey = isp.selectUniqueKey(sharedUniqueKeys)
 	if isp.migrationContext.UniqueKey == nil {
 		return fmt.Errorf("no shared unique key can be found after ALTER! Bailing out")
 	}
@@ -224,6 +201,33 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 		}
 	}
 
+	return nil
+}
+
+func (isp *Inspector) selectUniqueKey(candidateKeys []*sql.UniqueKey) *sql.UniqueKey {
+	for i, candidateKey := range candidateKeys {
+		isp.applyColumnTypes(isp.migrationContext.DatabaseName, isp.originalTableName(), &candidateKey.Columns)
+		uniqueKeyIsValid := true
+		for _, column := range candidateKey.Columns.Columns() {
+			switch column.Type {
+			case sql.FloatColumnType:
+				{
+					isp.migrationContext.Log.Warningf("Will not use %+v as unique key due to FLOAT data type", candidateKey.Name)
+					uniqueKeyIsValid = false
+				}
+			case sql.JSONColumnType:
+				{
+					// Noteworthy that at this time MySQL does not allow JSON indexing anyhow, but this code
+					// will remain in place to potentially handle the future case where JSON is supported in indexes.
+					isp.migrationContext.Log.Warningf("Will not use %+v as unique key due to JSON data type", candidateKey.Name)
+					uniqueKeyIsValid = false
+				}
+			}
+		}
+		if uniqueKeyIsValid {
+			return candidateKeys[i]
+		}
+	}
 	return nil
 }
 

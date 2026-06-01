@@ -65,6 +65,8 @@ func (es *EventsStreamer) AddListener(
 	es.listenersMutex.Lock()
 	defer es.listenersMutex.Unlock()
 
+	es.migrationContext.Log.Infof("Adding listener for %s.%s", databaseName, tableName)
+
 	if databaseName == "" {
 		return fmt.Errorf("empty database name in AddListener")
 	}
