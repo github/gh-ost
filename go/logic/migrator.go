@@ -769,6 +769,15 @@ func (mgtr *Migrator) Revert() error {
 	return nil
 }
 
+/* TODO(chriskirkland): work left to do:
+*	- validate that migrating binlog events after migration is in-flight work
+* 	- validate migration waits for cutover flag (^ related)
+*   - DROP target table if it exists on the cluster pre-migration
+*
+*   - Cleanup lots of debug/info logging
+*   - lots and lots of refactoring, state isolation, dependency injection, etc. :)
+ */
+
 func (mgtr *Migrator) MoveTables() (err error) {
 	mgtr.migrationContext.Log.Infof("Moving tables %v from %s to %s (%s)",
 		mgtr.migrationContext.MoveTables.TableNames,
