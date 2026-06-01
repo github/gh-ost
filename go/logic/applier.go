@@ -212,6 +212,7 @@ func (apl *Applier) prepareQueries() (err error) {
 		}
 	}
 	if apl.migrationContext.IsMoveTablesMode() {
+		apl.migrationContext.Log.Debugf("Building CopySelect queries for move-tables")
 		if apl.moveTablesCopySelectFirstQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
 			apl.migrationContext.DatabaseName,
 			apl.originalTableName(),
@@ -1165,6 +1166,10 @@ func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chun
 	// First, select data from the source database:
 	rows, err := func() ([]*sql.ColumnValues, error) {
 		var qb *sql.MoveTableCopySelectQueryBuilder
+		apl.migrationContext.Log.Debugf("Building SELECT query for move-tables; first: %v; rest: %v",
+			apl.moveTablesCopySelectFirstQueryBuilder,
+			apl.moveTablesCopySelectNextQueryBuilder)
+
 		if apl.migrationContext.GetIteration() == 0 {
 			qb = apl.moveTablesCopySelectFirstQueryBuilder
 		} else {

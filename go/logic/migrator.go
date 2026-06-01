@@ -814,6 +814,21 @@ func (mgtr *Migrator) MoveTables() (err error) {
 		return err
 	}
 
+	// TODO(chriskirkland): move this into a well-named function
+	// populate the unique key for the migration.  in single-cluster modes where we may be ALTERing the table, we need
+	// to validate the migration has a valid unique key to use here... but in move-tables, the source and target tables
+	// are identical,s owe just need to grab any valid UNIQUE key constraint.
+	mgtr.migrationContext.UniqueKey = mgtr.inspector.selectUniqueKey(mgtr.migrationContext.OriginalTableUniqueKeys)
+
+	// columns are identical on the source and target tables
+	mgtr.migrationContext.SharedColumns = mgtr.migrationContext.OriginalTableColumns
+	mgtr.migrationContext.MappedSharedColumns = mgtr.migrationContext.OriginalTableColumns
+
+	// this function assumes that the unique key constraint has been set.
+	if err := mgtr.applier.prepareQueries(); err != nil {
+		return err
+	}
+
 	// Validation complete! Run on-validated hook.
 	if err := mgtr.hooksExecutor.OnValidated(); err != nil {
 		return err
@@ -830,12 +845,6 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.addDMLEventsListener(); err != nil {
 		return err
 	}
-
-	// TODO(chriskirkland): move this into a well-named function
-	// populate the unique key for the migration.  in single-cluster modes where we may be ALTERing the table, we need
-	// to validate the migration has a valid unique key to use here... but in move-tables, the source and target tables
-	// are identical,s owe just need to grab any valid UNIQUE key constraint.
-	mgtr.migrationContext.UniqueKey = mgtr.inspector.selectUniqueKey(mgtr.migrationContext.OriginalTableUniqueKeys)
 
 	if err := mgtr.applier.ReadMigrationRangeValues(mgtr.inspector.db); err != nil {
 		return err
@@ -1977,7 +1986,11 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 			return nil
 		}
 
-		mgtr.throttler.throttle(nil)
+		if !mgtr.migrationContext.IsMoveTablesMode() {
+			// disable throttling in move-tables mode for now
+			// https://github.com/github/database-infrastructure/issues/8212
+			mgtr.throttler.throttle(nil)
+		}
 
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
