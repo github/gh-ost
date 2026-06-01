@@ -336,13 +336,26 @@ func (mgtr *Migrator) onChangelogHeartbeatEvent(dmlEntry *binlog.BinlogEntry) (e
 	heartbeatTime, err := time.Parse(time.RFC3339Nano, changelogHeartbeatString)
 	if err != nil {
 		return mgtr.migrationContext.Log.Errore(err)
-	} else {
-		mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
+	}
+	mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
+
+	// Route the coords bump through applyEventsQueue so it is ordered after
+	// any DMLs the streamer enqueued before this heartbeat.
+	coords := dmlEntry.Coordinates
+	var writeFunc tableWriteFunc = func() error {
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
-		mgtr.applier.CurrentCoordinates = dmlEntry.Coordinates
+		mgtr.applier.CurrentCoordinates = coords
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
 		return nil
 	}
+	if err := base.SendWithContext(
+		mgtr.migrationContext.GetContext(),
+		mgtr.applyEventsQueue,
+		newApplyEventStructByFunc(&writeFunc),
+	); err != nil {
+		return mgtr.migrationContext.Log.Errore(err)
+	}
+	return nil
 }
 
 // abort stores the error, cancels the context, and logs the abort.
@@ -1496,6 +1509,9 @@ func (mgtr *Migrator) initiateThrottler() {
 func (mgtr *Migrator) initiateApplier() error {
 	mgtr.applier = NewApplier(mgtr.migrationContext)
 	if err := mgtr.applier.InitDBConnections(); err != nil {
+		return err
+	}
+	if err := mgtr.applier.AcquireMigrationLock(mgtr.migrationContext.GetContext()); err != nil {
 		return err
 	}
 	if mgtr.migrationContext.Revert {

@@ -6,7 +6,9 @@
 package logic
 
 import (
+	"crypto/sha1"
 	gosql "database/sql"
+	"encoding/hex"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -83,6 +85,12 @@ type Applier struct {
 	dmlInsertQueryBuilder        *sql.DMLInsertQueryBuilder
 	dmlUpdateQueryBuilder        *sql.DMLUpdateQueryBuilder
 	checkpointInsertQueryBuilder *sql.CheckpointInsertQueryBuilder
+
+	migrationLockConn *gosql.Conn
+	migrationLockDB   *gosql.DB
+	migrationLockName string
+	migrationLockStop chan struct{}
+	migrationLockDone chan struct{}
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -143,6 +151,149 @@ func (apl *Applier) InitDBConnections() (err error) {
 	}
 	apl.migrationContext.Log.Infof("Applier initiated on %+v, version %+v", apl.connectionConfig.ImpliedKey, apl.migrationContext.ApplierMySQLVersion)
 	return nil
+}
+
+// buildMigrationLockName returns a deterministic MySQL user-level lock name
+// for the given database and table, hashed if longer than MySQL's 64-char limit.
+func buildMigrationLockName(db, table string) string {
+	name := fmt.Sprintf("gh-ost::%s.%s", db, table)
+	if len(name) <= 64 {
+		return name
+	}
+	sum := sha1.Sum([]byte(name))
+	return "gh-ost::" + hex.EncodeToString(sum[:])
+}
+
+// AcquireMigrationLock takes a user-level lock on a pinned connection,
+// preventing two gh-ost processes from migrating the same table concurrently
+// on the same MySQL server.
+func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
+	lockName := buildMigrationLockName(apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName)
+
+	// Use a dedicated *sql.DB so the pinned connection does not consume a
+	// slot in apl.db's small pool (mysql.MaxDBPoolConnections).
+	lockURI := apl.connectionConfig.GetDBUri(apl.migrationContext.DatabaseName)
+	lockDB, err := gosql.Open("mysql", lockURI)
+	if err != nil {
+		return fmt.Errorf("failed to open migration lock DB: %w", err)
+	}
+	lockDB.SetMaxOpenConns(1)
+	lockDB.SetMaxIdleConns(1)
+
+	conn, err := lockDB.Conn(ctx)
+	if err != nil {
+		lockDB.Close()
+		return fmt.Errorf("failed to obtain pinned connection for migration lock: %w", err)
+	}
+
+	var lockResult gosql.NullInt64
+	if err := conn.QueryRowContext(ctx, `select /* gh-ost */ get_lock(?, 0)`, lockName).Scan(&lockResult); err != nil {
+		conn.Close()
+		lockDB.Close()
+		return fmt.Errorf("failed to execute GET_LOCK for migration lock %s: %w", lockName, err)
+	}
+
+	if !lockResult.Valid {
+		conn.Close()
+		lockDB.Close()
+		return fmt.Errorf("GET_LOCK returned NULL while acquiring migration lock %s", lockName)
+	}
+
+	if lockResult.Int64 != 1 {
+		var holderID gosql.NullInt64
+		_ = conn.QueryRowContext(ctx, `select /* gh-ost */ is_used_lock(?)`, lockName).Scan(&holderID)
+		conn.Close()
+		lockDB.Close()
+		if holderID.Valid {
+			return fmt.Errorf("another gh-ost process is already migrating `%s`.`%s`: migration lock %s held by connection id %d",
+				apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName, lockName, holderID.Int64)
+		}
+		return fmt.Errorf("another gh-ost process is already migrating `%s`.`%s`: migration lock %s is held",
+			apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName, lockName)
+	}
+
+	apl.migrationLockConn = conn
+	apl.migrationLockDB = lockDB
+	apl.migrationLockName = lockName
+	apl.migrationLockStop = make(chan struct{})
+	apl.migrationLockDone = make(chan struct{})
+	go apl.keepMigrationLockAlive(ctx)
+	apl.migrationContext.Log.Infof("Acquired migration lock %s", lockName)
+	return nil
+}
+
+// keepMigrationLockAlive pings the pinned migration-lock connection. If the
+// ping fails the lock is considered lost and the migration is aborted via
+// PanicAbort.
+func (apl *Applier) keepMigrationLockAlive(ctx context.Context) {
+	defer close(apl.migrationLockDone)
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-apl.migrationLockStop:
+			return
+		case <-ticker.C:
+		}
+		if err := apl.pingMigrationLockConn(ctx); err != nil {
+			// Shutdown may have started mid-ping; don't abort if so.
+			select {
+			case <-apl.migrationLockStop:
+				return
+			default:
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			_ = base.SendWithContext(ctx, apl.migrationContext.PanicAbort,
+				fmt.Errorf("migration lock %s connection lost: %w", apl.migrationLockName, err))
+			return
+		}
+	}
+}
+
+// pingMigrationLockConn pings the pinned connection with a bounded timeout
+// and propagates migrationLockStop as an early cancel so a teardown can
+// interrupt a stuck ping.
+func (apl *Applier) pingMigrationLockConn(parent context.Context) error {
+	pingCtx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-apl.migrationLockStop:
+			cancel()
+		case <-done:
+		}
+	}()
+	return apl.migrationLockConn.PingContext(pingCtx)
+}
+
+// releaseMigrationLock stops the keepalive goroutine, releases the user-level
+// lock and closes the dedicated lock DB. Safe to call when no lock is held.
+func (apl *Applier) releaseMigrationLock() {
+	if apl.migrationLockConn == nil {
+		return
+	}
+	// Stop keepalive before touching the pinned connection.
+	close(apl.migrationLockStop)
+	<-apl.migrationLockDone
+	releaseCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := apl.migrationLockConn.ExecContext(releaseCtx, `select /* gh-ost */ release_lock(?)`, apl.migrationLockName); err != nil {
+		apl.migrationContext.Log.Warningf("failed to release migration lock %s: %v", apl.migrationLockName, err)
+	}
+	if err := apl.migrationLockConn.Close(); err != nil {
+		apl.migrationContext.Log.Warningf("failed to close migration lock connection: %v", err)
+	}
+	if apl.migrationLockDB != nil {
+		apl.migrationLockDB.Close()
+		apl.migrationLockDB = nil
+	}
+	apl.migrationLockConn = nil
 }
 
 func (apl *Applier) prepareQueries() (err error) {
@@ -1734,6 +1885,7 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 
 func (apl *Applier) Teardown() {
 	apl.migrationContext.Log.Debugf("Tearing down...")
+	apl.releaseMigrationLock()
 	apl.db.Close()
 	apl.singletonDB.Close()
 	atomic.StoreInt64(&apl.finishedMigrating, 1)
