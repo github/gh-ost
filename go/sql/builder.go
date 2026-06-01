@@ -335,6 +335,9 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 }
 
 func sameFirstColumnValue(rangeStartArgs, rangeEndArgs []interface{}) bool {
+	if len(rangeStartArgs) == 0 || len(rangeEndArgs) == 0 {
+		return false
+	}
 	return fmt.Sprintf("%v", rangeStartArgs[0]) == fmt.Sprintf("%v", rangeEndArgs[0])
 }
 
@@ -621,6 +624,9 @@ func buildUniqueKeyRangeEndTwoColumnViaOffset(
 	hint string,
 ) (result string, explodedArgs []interface{}, err error) {
 	m := newTwoColumnRangeMeta(uniqueKeyColumns)
+	if len(rangeStartArgs) != 2 || len(rangeEndArgs) != 2 {
+		return "", nil, fmt.Errorf("expected 2 range args in buildUniqueKeyRangeEndTwoColumnViaOffset, got %d start and %d end", len(rangeStartArgs), len(rangeEndArgs))
+	}
 	col2StartOp := string(startRangeComparisonSign)
 	selectClause := m.col1Name + ", " + m.col2Name
 	fromClause := databaseName + "." + tableName
@@ -684,6 +690,9 @@ func buildUniqueKeyRangeEndTwoColumnViaTemptable(
 	hint string,
 ) (result string, explodedArgs []interface{}, err error) {
 	m := newTwoColumnRangeMeta(uniqueKeyColumns)
+	if len(rangeStartArgs) != 2 || len(rangeEndArgs) != 2 {
+		return "", nil, fmt.Errorf("expected 2 range args in buildUniqueKeyRangeEndTwoColumnViaTemptable, got %d start and %d end", len(rangeStartArgs), len(rangeEndArgs))
+	}
 	col2StartOp := string(startRangeComparisonSign)
 	selectClause := m.col1Name + ", " + m.col2Name
 	fromClause := databaseName + "." + tableName
