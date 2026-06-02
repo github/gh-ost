@@ -2130,7 +2130,7 @@ func (mgtr *Migrator) applyMTSWorkerJob(ctx context.Context, workerID int, appli
 		if applyErr != nil {
 			mgtr.commitBarrier.commit(job.sequenceNum)
 			mgtr.commitBarrier.completeDelegatedJob()
-			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, applyErr)
+			_ = base.SendWithContext(ctx, mgtr.migrationContext.PanicAbort, applyErr)
 		}
 	}()
 

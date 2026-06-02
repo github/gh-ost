@@ -481,17 +481,22 @@ func isDeadlockError(err error) bool {
 }
 
 // isRetryableApplyError reports whether a failed DML apply is a transient
-// concurrency error that should be retried. Under concurrent MTS workers both
-// InnoDB deadlocks (1213) and lock-wait timeouts (1205) are expected: gap locks
-// on the ghost table's secondary indexes cause contention between parallel
-// REPLACE INTO / DELETE FROM statements. Both are resolved by retrying the whole
-// transaction, mirroring MySQL's slave_transaction_retries behaviour.
+// concurrency error that should be retried. Under concurrent MTS workers the
+// following errors are expected: InnoDB deadlocks (1213), lock-wait timeouts
+// (1205), and NOWAIT lock failures (3572). Gap locks on the ghost table's
+// secondary indexes cause contention between parallel statements. All are
+// resolved by retrying the whole transaction, mirroring MySQL's
+// slave_transaction_retries behaviour.
 func isRetryableApplyError(err error) bool {
 	var mysqlErr *drivermysql.MySQLError
 	if !errors.As(err, &mysqlErr) {
 		return false
 	}
-	return mysqlErr.Number == 1213 || mysqlErr.Number == 1205
+	switch mysqlErr.Number {
+	case 1205, 1213, 3572:
+		return true
+	}
+	return false
 }
 
 // retryOnLockWaitTimeout retries the given operation on MySQL lock wait timeout
@@ -1816,9 +1821,6 @@ func (apl *Applier) executeBatchWithWarningChecking(ctx context.Context, tx *gos
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
 func (apl *Applier) ApplyDMLEventQueries(ctx context.Context, dmlEvents [](*binlog.BinlogDMLEvent)) error {
 	var totalDelta int64
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	err := func() error {
 		conn, err := apl.db.Conn(ctx)
