@@ -317,3 +317,46 @@ func TestRecordCutOverMetricsNilSafe(t *testing.T) {
 	RecordCutOverAttempt(nil, CutOverOutcomeSuccess)
 	RecordCutOverTotal(nil, time.Second, nil)
 }
+
+type histogramSpy struct {
+	names  []string
+	values []float64
+	tags   [][]string
+}
+
+func (h *histogramSpy) Gauge(_ string, _ float64, _ ...string) {}
+
+func (h *histogramSpy) Count(_ string, _ int64, _ ...string) {}
+
+func (h *histogramSpy) Histogram(name string, value float64, tags ...string) {
+	h.names = append(h.names, name)
+	h.values = append(h.values, value)
+	h.tags = append(h.tags, tags)
+}
+
+func TestRecordQueryDuration(t *testing.T) {
+	spy := &histogramSpy{}
+
+	RecordQueryDuration(spy, "source", "row_count", 1500*time.Millisecond, nil)
+	RecordQueryDuration(spy, "target", "binlog_apply", 2*time.Second, errors.New("boom"))
+
+	if len(spy.names) != 2 {
+		t.Fatalf("got %d histograms, want 2", len(spy.names))
+	}
+	if spy.names[0] != "query.duration_milliseconds" || spy.values[0] != 1500 {
+		t.Fatalf("got %s=%v, want query.duration_milliseconds=1500", spy.names[0], spy.values[0])
+	}
+	if !slices.Equal(spy.tags[0], []string{"side:source", "kind:row_count", "outcome:ok"}) {
+		t.Fatalf("got tags %#v", spy.tags[0])
+	}
+	if spy.values[1] != 2000 || !slices.Equal(spy.tags[1], []string{"side:target", "kind:binlog_apply", "outcome:error"}) {
+		t.Fatalf("got second metric value=%v tags=%#v", spy.values[1], spy.tags[1])
+	}
+}
+
+func TestRecordQueryDurationNilSafe(t *testing.T) {
+	RecordQueryDuration(nil, "source", "row_count", time.Second, nil)
+	RecordQueryDuration(&histogramSpy{}, "", "row_count", time.Second, nil)
+	RecordQueryDuration(&histogramSpy{}, "source", "", time.Second, nil)
+	RecordQueryDuration(&histogramSpy{}, "source", "row_count", -time.Second, nil)
+}
