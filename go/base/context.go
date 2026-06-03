@@ -273,13 +273,14 @@ type MigrationContext struct {
 
 	// move tables:
 	MoveTables struct {
-		TableNames       []string // List of table names to be moved.
-		TargetHost       string   // Target hostname for the move. This must be a primary/writable host.
-		TargetPort       int      // Target MySQL port for the move.
-		TargetUser       string   // Target username for the move. If not specified, it will default to the source user.
-		TargetPass       string   // Target password for the move. If not specified, it will default to the source password.
-		TargetDatabase   string   // Target database name for the move. If not specified, it will default to the source database name.
-		ConnectionConfig *mysql.ConnectionConfig
+		TableNames         []string // List of table names to be moved.
+		TargetHost         string   // Target hostname for the move. This must be a primary/writable host.
+		TargetPort         int      // Target MySQL port for the move.
+		TargetUser         string   // Target username for the move. If not specified, it will default to the source user.
+		TargetPass         string   // Target password for the move. If not specified, it will default to the source password.
+		TargetDatabase     string   // Target database name for the move. If not specified, it will default to the source database name.
+		TmpCutoverFilename string   // TEMPORARY: Filename to use as a 'cutover-can-continue' signal. This is only for local testing.
+		ConnectionConfig   *mysql.ConnectionConfig
 	}
 
 	Log Logger

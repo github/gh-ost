@@ -174,6 +174,7 @@ func main() {
 	flag.StringVar(&migrationContext.MoveTables.TargetUser, "target-user", "", "Target MySQL username for --move-tables mode. If not provided, uses the same user as the source connection")
 	flag.StringVar(&migrationContext.MoveTables.TargetPass, "target-password", "", "Target MySQL password for --move-tables mode. If not provided, uses the same password as the source connection")
 	flag.StringVar(&migrationContext.MoveTables.TargetDatabase, "target-database", "", "Target MySQL database name for --move-tables mode. If not provided, uses the same database name as the source connection")
+	flag.StringVar(&migrationContext.MoveTables.TmpCutoverFilename, "target-cutover-filename", "", "TEMPORARY: Filename to use as a 'cutover-can-continue' signal. This is only for local testing.")
 
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Parse()
