@@ -24,7 +24,7 @@ function build {
   echo "Building ${osname}-${GOARCH} binary"
   export GOOS
   export GOARCH
-  CGO_ENABLED=0 go build -ldflags "$ldflags" -o $buildpath/$target go/cmd/gh-ost/main.go
+  CGO_ENABLED="${CGO_ENABLED:-0}" go build -ldflags "$ldflags" -o "$buildpath/$target" go/cmd/gh-ost/main.go
 
   if [ $? -ne 0 ]; then
       echo "Build failed for ${osname} ${GOARCH}."
