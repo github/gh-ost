@@ -105,7 +105,7 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		ghostTableMigrated:         make(chan bool),
 		firstThrottlingCollected:   make(chan bool, 3),
 		rowCopyComplete:            make(chan error),
-		allEventsUpToLockProcessed: make(chan string),
+		allEventsUpToLockProcessed: make(chan string, 1),
 
 		copyRowsQueue:          make(chan tableWriteFunc),
 		applyEventsQueue:       make(chan *applyEventStruct, base.MaxEventsBatchSize),
@@ -582,6 +582,13 @@ func (this *Migrator) cutOver() (err error) {
 // Inject the "AllEventsUpToLockProcessed" state hint, wait for it to appear in the binary logs,
 // make sure the queue is drained.
 func (this *Migrator) waitForEventsUpToLock() (err error) {
+	// Drain any stale signal from a previous timed-out attempt, so it doesn't
+	// block executeWriteFuncs or get misinterpreted on this attempt.
+	select {
+	case <-this.allEventsUpToLockProcessed:
+	default:
+	}
+
 	timeout := time.NewTimer(time.Second * time.Duration(this.migrationContext.CutOverLockTimeoutSeconds))
 
 	this.migrationContext.MarkPointOfInterest()
