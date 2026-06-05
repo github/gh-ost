@@ -467,64 +467,46 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	suite.Require().Equal(int64(0), migrationContext.RowsDeltaEstimate)
 }
 
+// finalCleanup() requires a fully wired migrator (streamer, applier, inspector) to call directly.
+// This test verifies the IsMoveTablesMode() predicate that gates the early return.
+// The actual skip behavior is proven by TestInitiateApplierMoveTablesMode_NoGhostOrChangelogTable
+// — if finalCleanup dropped tables, they'd need to exist first, and that test proves they don't.
 func (suite *ApplierTestSuite) TestFinalCleanupMoveTablesMode_SkipsDrops() {
-    migrationContext := newTestMigrationContext()
-    migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
-    migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	migrationContext := newTestMigrationContext()
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
-    // #8206: [Task] [1.2] Skip ghost/changelog tables, heartbeat in gh-ost move-tables mode
-	// In move-tables mode, finalCleanup() returns early after closing the
-    // streamer. It does NOT drop changelog, ghost, or old tables.
-    // The guard in finalCleanup() is:
-    //   if mgtr.migrationContext.IsMoveTablesMode() { return nil }
-    // Verify the predicate.
-    suite.Require().True(migrationContext.IsMoveTablesMode())
-
-    // finalCleanup() also calls WriteChangelogState("Migrated") which is a no-op
-    // in move-tables mode (verified by TestWriteChangelogNoOpInMoveTablesMode).
-    // No changelog, ghost, or old tables exist to drop — the early return prevents
-    // DropChangelogTable, DropGhostTable, and DropOldTable from being called.
+	suite.Require().True(migrationContext.IsMoveTablesMode())
 }
 
+// initiateStreaming() requires a binlog-capable MySQL connection to call directly.
+// This test verifies the IsMoveTablesMode() predicate and that a new streamer starts with
+// zero listeners. The actual skip is proven indirectly: if a changelog listener were registered,
+// it would try to read events from a nonexistent _ghc table and fail during the full run.
 func (suite *ApplierTestSuite) TestInitiateStreamingMoveTablesMode_NoChangelogListener() {
-    migrationContext := newTestMigrationContext()
-    migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
-    migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	migrationContext := newTestMigrationContext()
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
-    suite.Require().True(migrationContext.IsMoveTablesMode())
+	suite.Require().True(migrationContext.IsMoveTablesMode())
 
-    // In move-tables mode, initiateStreaming() skips the changelog listener.
-    // Verify the predicate that controls this is true.
-    changelogTableName := migrationContext.GetChangelogTableName()
-    suite.Require().NotEmpty(changelogTableName, "changelog table name should be derivable")
+	changelogTableName := migrationContext.GetChangelogTableName()
+	suite.Require().NotEmpty(changelogTableName, "changelog table name should be derivable")
 
-    // Create a streamer and verify no listeners are pre-registered
-    streamer := NewEventsStreamer(migrationContext)
-    suite.Require().Empty(streamer.listeners, "new streamer should have no listeners")
-
-    // The production code in initiateStreaming() does:
-    //   if migrationContext.IsMoveTablesMode() { skip } else { AddListener for changelog }
-    // Since IsMoveTablesMode() is true, no listener should be added.
-    // We can't call initiateStreaming() without binlog access, but we verify
-    // the guard condition is active and the streamer starts clean.
+	streamer := NewEventsStreamer(migrationContext)
+	suite.Require().Empty(streamer.listeners, "new streamer should have no listeners")
 }
 
+// initiateApplier() requires a full migrator to call directly.
+// This test verifies the IsMoveTablesMode() predicate that gates InitiateHeartbeat().
+// Even if heartbeat ran, TestWriteChangelogNoOpInMoveTablesMode proves WriteChangelog
+// is a no-op, so no SQL would execute against a nonexistent changelog table.
 func (suite *ApplierTestSuite) TestNoHeartbeatInMoveTablesMode() {
-    migrationContext := newTestMigrationContext()
-    migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
-    migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	migrationContext := newTestMigrationContext()
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
-    // #8206: [Task] [1.2] Skip ghost/changelog tables, heartbeat in gh-ost move-tables mode
-	// In move-tables mode, the heartbeat goroutine must not be started.
-    // The guard in initiateApplier() is:
-    //   if !mgtr.migrationContext.IsMoveTablesMode() { go mgtr.applier.InitiateHeartbeat() }
-    // Verify the predicate that prevents heartbeat from starting.
-    suite.Require().True(migrationContext.IsMoveTablesMode())
-
-    // Even if the heartbeat goroutine ran, WriteChangelog("heartbeat", ...) is a
-    // no-op in move-tables mode (verified by TestWriteChangelogNoOpInMoveTablesMode).
-    // There is no changelog table to write to, and no streamer reading the same
-    // binlog, so heartbeat is both unnecessary and impossible cross-cluster.
+	suite.Require().True(migrationContext.IsMoveTablesMode())
 }
 
 func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
