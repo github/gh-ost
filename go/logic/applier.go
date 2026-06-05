@@ -753,6 +753,9 @@ func (apl *Applier) DropGhostTable() error {
 // It returns the hint as given, for convenience
 func (apl *Applier) WriteChangelog(hint, value string) (string, error) {
 	// TODO(chriskirkland): move this bypass higher
+	// In move-tables mode, there is no changelog table (§1.2). All changelog
+	// writes are no-ops. This is a single chokepoint rather than per-caller
+	// guards to prevent drift when new callers are added.
 	if apl.migrationContext.IsMoveTablesMode() {
 		return "", nil
 	}
