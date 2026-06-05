@@ -888,32 +888,6 @@ func (mgtr *Migrator) MoveTables() (err error) {
 
 	//TODO: cutover here
 
-	// temporarily use a file on disk to indicate cutover
-	if mgtr.migrationContext.MoveTables.TmpCutoverFilename != "" {
-		mgtr.migrationContext.Log.Infof("Waiting for cutover signal (%s)...", mgtr.migrationContext.MoveTables.TmpCutoverFilename)
-
-		timeout := time.After(60 * time.Second)
-	LOOP:
-		for {
-			select {
-			case <-timeout:
-				mgtr.migrationContext.Log.Errorf("Timeout reached waiting for cutover signal (%s)", mgtr.migrationContext.MoveTables.TmpCutoverFilename)
-			default:
-				// check if cutover file name exists
-				if _, err := os.Stat(mgtr.migrationContext.MoveTables.TmpCutoverFilename); err != nil {
-					continue
-				}
-				mgtr.migrationContext.Log.Infof("Cutover signal received (%s)", mgtr.migrationContext.MoveTables.TmpCutoverFilename)
-
-				if err := mgtr.simulateMoveTablesCutover(); err != nil {
-					return fmt.Errorf("simulated cutover failed: %w", err)
-				}
-				mgtr.migrationContext.Log.Info("Simulated cutover complete 🎉")
-				break LOOP
-			}
-		}
-	}
-
 	if err := mgtr.finalCleanup(); err != nil {
 		return nil
 	}
@@ -1843,7 +1817,7 @@ func (mgtr *Migrator) iterateChunks() error {
 				if err != nil {
 					return fmt.Errorf("ApplyIterationInsertQuery failed: %w", err) // wrapping call will retry
 				}
-				mgtr.migrationContext.Log.Infof("ApplyIterationInsertQuery affected %d rows", rowsAffected)
+				mgtr.migrationContext.Log.Debugf("ApplyIterationInsertQuery affected %d rows", rowsAffected)
 
 				if mgtr.migrationContext.PanicOnWarnings {
 					if len(mgtr.migrationContext.MigrationLastInsertSQLWarnings) > 0 {
@@ -2064,7 +2038,7 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 		select {
 		case eventStruct := <-mgtr.applyEventsQueue:
 			{
-				mgtr.migrationContext.Log.Info("[execWriteFuncs] Processing apply event struct")
+				mgtr.migrationContext.Log.Debugf("[execWriteFuncs] Processing apply event struct")
 				if err := mgtr.onApplyEventStruct(eventStruct); err != nil {
 					return err
 				}
@@ -2074,7 +2048,7 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 				select {
 				case copyRowsFunc := <-mgtr.copyRowsQueue:
 					{
-						mgtr.migrationContext.Log.Info("[execWriteFuncs] Processing row copy function")
+						mgtr.migrationContext.Log.Debugf("[execWriteFuncs] Processing row copy function")
 						copyRowsStartTime := time.Now()
 						// Retries are handled within the copyRowsFunc
 						if err := copyRowsFunc(); err != nil {

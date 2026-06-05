@@ -333,6 +333,7 @@ func (suite *ApplierTestSuite) TearDownTest() {
 	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestGhostTableName())
 	suite.Require().NoError(err)
 	_, err = suite.otherDB.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestOtherTableName())
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`_%s_ghc`", testMysqlDatabase, testMysqlTableName))
 	suite.Require().NoError(err)
 }
 
