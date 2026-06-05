@@ -2080,7 +2080,7 @@ func (mgtr *Migrator) finalCleanup() error {
 			mgtr.migrationContext.Log.Infof("New table structure follows")
 			fmt.Println(createTableStatement)
 		} else if !mgtr.migrationContext.IsMoveTablesMode() {
-			mgtr.migrationContext.Log.Errore(fmt.Errorf("error showing create table: %v", err))
+			mgtr.migrationContext.Log.Errore(fmt.Errorf("error showing create table: %w", err))
 		}
 	}
 	if err := mgtr.eventsStreamer.Close(); err != nil {
