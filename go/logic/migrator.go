@@ -1407,9 +1407,10 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Ignored: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
+		atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsIgnored),
 		len(mgtr.applyEventsQueue), cap(mgtr.applyEventsQueue),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(mgtr.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates.DisplayString(),
@@ -1701,6 +1702,9 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		}
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 		var applyEventFunc tableWriteFunc = func() error {
+			if mgtr.migrationContext.IsMergeDMLEvents && mgtr.migrationContext.UniqueKey != nil && mgtr.migrationContext.UniqueKey.IsMemoryComparable && !mgtr.migrationContext.UniqueKey.HasNullable && len(mgtr.migrationContext.OriginalTableUniqueKeys) <= 1 {
+				return mgtr.applier.ApplyDMLEventQueriesMerged(dmlEvents)
+			}
 			return mgtr.applier.ApplyDMLEventQueries(dmlEvents)
 		}
 		if err := mgtr.retryOperation(applyEventFunc); err != nil {

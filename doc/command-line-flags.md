@@ -158,6 +158,21 @@ While the ongoing estimated number of rows is still heuristic, it's almost exact
 
 Without this parameter, migration is a _noop_: testing table creation and validity of migration, but not touching data.
 
+### is-merge-dml-event
+
+When enabled, batched binlog DML events are merged in memory before applying them to the ghost table. Only effective when the migration unique key uses numeric column types (`int`, `bigint`, `decimal`, `float`, etc.).
+
+**Batching:** All DML events in a batch are grouped by type — inserts and updates become a single multi-row `REPLACE INTO`, deletes become a single `DELETE WHERE (pk) IN (...)`.
+
+**Deduplication:** Repeated changes to the same unique key within a batch collapse to the final state (last writer wins).
+
+**Range filtering:** When a binlog event's unique key value is beyond `MigrationIterationRangeMaxValues` but within `MigrationRangeMaxValues`, the event is skipped — that data will be synced by the row-copy chunk. Events beyond `MigrationRangeMaxValues` or below `MigrationIterationRangeMaxValues` are applied normally.
+
+Automatically disabled when:
+- The chosen unique key contains non-numeric columns (TEXT, BLOB, JSON, etc.)
+- The chosen unique key has nullable columns (NULL breaks comparison and dedup semantics)
+- The table has multiple unique indexes (REPLACE semantics are unsafe with secondary unique constraints)
+
 ### force-named-cut-over
 
 If given, a `cut-over` command must name the migrated table, or else ignored.

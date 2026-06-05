@@ -40,18 +40,24 @@ const (
 var ErrNoCheckpointFound = errors.New("no checkpoint found in _ghk table")
 
 type dmlBuildResult struct {
-	query     string
-	args      []interface{}
-	rowsDelta int64
-	err       error
+	dml              binlog.EventDML
+	query            string
+	args             []interface{}
+	uniqueKeyValues  []interface{}
+	sharedColumnArgs []interface{}
+	rowsDelta        int64
+	err              error
 }
 
-func newDmlBuildResult(query string, args []interface{}, rowsDelta int64, err error) *dmlBuildResult {
+func newDmlBuildResult(dml binlog.EventDML, query string, args []interface{}, uniqueKeyValues []interface{}, rowsDelta int64, sharedColumnArgs []interface{}, err error) *dmlBuildResult {
 	return &dmlBuildResult{
-		query:     query,
-		args:      args,
-		rowsDelta: rowsDelta,
-		err:       err,
+		dml:              dml,
+		query:            query,
+		args:             args,
+		uniqueKeyValues:  uniqueKeyValues,
+		sharedColumnArgs: sharedColumnArgs,
+		rowsDelta:        rowsDelta,
+		err:              err,
 	}
 }
 
@@ -1643,37 +1649,258 @@ func (apl *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEve
 	return "", false
 }
 
+func (apl *Applier) extractUniqueKeyArgs(args []interface{}) []interface{} {
+	uniqueKeyArgs := make([]interface{}, 0, apl.migrationContext.UniqueKey.Columns.Len())
+	for _, column := range apl.migrationContext.UniqueKey.Columns.Columns() {
+		tableOrdinal := apl.migrationContext.OriginalTableColumns.Ordinals[column.Name]
+		arg := column.ConvertArg(args[tableOrdinal])
+		uniqueKeyArgs = append(uniqueKeyArgs, arg)
+	}
+	return uniqueKeyArgs
+}
+
+func (apl *Applier) extractSharedColumnArgs(args []interface{}) []interface{} {
+	sharedArgs := make([]interface{}, 0, apl.migrationContext.SharedColumns.Len())
+	for _, column := range apl.migrationContext.SharedColumns.Columns() {
+		tableOrdinal := apl.migrationContext.OriginalTableColumns.Ordinals[column.Name]
+		arg := column.ConvertArg(args[tableOrdinal])
+		sharedArgs = append(sharedArgs, arg)
+	}
+	return sharedArgs
+}
+
 // buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
 // event entry on the original table.
 func (apl *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBuildResult {
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
-		{
-			query, uniqueKeyArgs, err := apl.dmlDeleteQueryBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
-			return []*dmlBuildResult{newDmlBuildResult(query, uniqueKeyArgs, -1, err)}
-		}
+		query, uniqueKeyArgs, err := apl.dmlDeleteQueryBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
+		return []*dmlBuildResult{newDmlBuildResult(binlog.DeleteDML, query, uniqueKeyArgs, uniqueKeyArgs, -1, nil, err)}
 	case binlog.InsertDML:
-		{
-			query, sharedArgs, err := apl.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
-			return []*dmlBuildResult{newDmlBuildResult(query, sharedArgs, 1, err)}
-		}
+		query, sharedArgs, err := apl.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
+		uniqueKeyArgs := apl.extractUniqueKeyArgs(dmlEvent.NewColumnValues.AbstractValues())
+		return []*dmlBuildResult{newDmlBuildResult(binlog.InsertDML, query, sharedArgs, uniqueKeyArgs, 1, sharedArgs, err)}
 	case binlog.UpdateDML:
-		{
-			if _, isModified := apl.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
-				results := make([]*dmlBuildResult, 0, 2)
-				dmlEvent.DML = binlog.DeleteDML
-				results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
-				dmlEvent.DML = binlog.InsertDML
-				results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
-				return results
-			}
-			query, updateArgs, err := apl.dmlUpdateQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
-			args := sqlutils.Args()
-			args = append(args, updateArgs...)
-			return []*dmlBuildResult{newDmlBuildResult(query, args, 0, err)}
+		if _, isModified := apl.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
+			results := make([]*dmlBuildResult, 0, 2)
+			originalDML := dmlEvent.DML
+			dmlEvent.DML = binlog.DeleteDML
+			results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
+			dmlEvent.DML = binlog.InsertDML
+			results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
+			dmlEvent.DML = originalDML
+			return results
 		}
+		query, updateArgs, err := apl.dmlUpdateQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+		sharedArgs := apl.extractSharedColumnArgs(dmlEvent.NewColumnValues.AbstractValues())
+		uniqueKeyArgs := apl.extractUniqueKeyArgs(dmlEvent.WhereColumnValues.AbstractValues())
+		args := sqlutils.Args()
+		args = append(args, updateArgs...)
+		return []*dmlBuildResult{newDmlBuildResult(binlog.UpdateDML, query, args, uniqueKeyArgs, 0, sharedArgs, err)}
 	}
 	return []*dmlBuildResult{newDmlBuildResultError(fmt.Errorf("unknown dml event type: %+v", dmlEvent.DML))}
+}
+
+func (apl *Applier) generateBatchedDeleteQuery(uniqueKeyValuesList [][]string) string {
+	if len(uniqueKeyValuesList) == 0 {
+		return ""
+	}
+
+	databaseName := sql.EscapeName(apl.migrationContext.DatabaseName)
+	tableName := sql.EscapeName(apl.migrationContext.GetGhostTableName())
+	uniqueKeyColumnNames := apl.migrationContext.UniqueKey.Columns.Names()
+	for i := range uniqueKeyColumnNames {
+		uniqueKeyColumnNames[i] = sql.EscapeName(uniqueKeyColumnNames[i])
+	}
+
+	valueClauses := make([]string, 0, len(uniqueKeyValuesList))
+	for _, uniqueKeyValues := range uniqueKeyValuesList {
+		if len(uniqueKeyValues) == 0 {
+			continue
+		}
+		if len(uniqueKeyColumnNames) == 1 {
+			valueClauses = append(valueClauses, uniqueKeyValues[0])
+			continue
+		}
+		valueClauses = append(valueClauses, fmt.Sprintf("(%s)", strings.Join(uniqueKeyValues, ", ")))
+	}
+	if len(valueClauses) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf(`delete /* gh-ost %s.%s */ from %s.%s where (%s) in (%s)`,
+		databaseName, tableName,
+		databaseName, tableName,
+		strings.Join(uniqueKeyColumnNames, ", "),
+		strings.Join(valueClauses, ", "),
+	)
+}
+
+func (apl *Applier) generateBatchedReplaceQuery(sharedColumnArgsList [][]interface{}) (string, []interface{}) {
+	if len(sharedColumnArgsList) == 0 {
+		return "", nil
+	}
+
+	databaseName := sql.EscapeName(apl.migrationContext.DatabaseName)
+	tableName := sql.EscapeName(apl.migrationContext.GetGhostTableName())
+	mappedSharedColumnNames := apl.migrationContext.MappedSharedColumns.Names()
+	for i := range mappedSharedColumnNames {
+		mappedSharedColumnNames[i] = sql.EscapeName(mappedSharedColumnNames[i])
+	}
+	preparedValues := sql.BuildColumnsPreparedValues(apl.migrationContext.MappedSharedColumns)
+	colCount := len(preparedValues)
+	singleRowClause := "(" + strings.Join(preparedValues, ", ") + ")"
+
+	valuesClauses := make([]string, 0, len(sharedColumnArgsList))
+	allArgs := make([]interface{}, 0, len(sharedColumnArgsList)*colCount)
+	for _, rowArgs := range sharedColumnArgsList {
+		valuesClauses = append(valuesClauses, singleRowClause)
+		allArgs = append(allArgs, rowArgs...)
+	}
+
+	query := fmt.Sprintf(`replace /* gh-ost %s.%s */ into %s.%s (%s) values %s`,
+		databaseName, tableName,
+		databaseName, tableName,
+		strings.Join(mappedSharedColumnNames, ", "),
+		strings.Join(valuesClauses, ", "),
+	)
+	return query, allArgs
+}
+
+func (apl *Applier) isIgnoreOverMaxChunkRangeEvent(uniqueKeyArgs []interface{}) (bool, error) {
+	if apl.migrationContext.MigrationRangeMaxValues == nil {
+		return false, nil
+	}
+	for order, uniqueKeyCol := range apl.migrationContext.UniqueKey.Columns.Columns() {
+		if uniqueKeyCol.CompareValueFunc == nil {
+			return false, nil
+		}
+		cmp, err := uniqueKeyCol.CompareValueFunc(uniqueKeyArgs[order], apl.migrationContext.MigrationRangeMaxValues.StringColumn(order))
+		if err != nil {
+			return false, err
+		}
+		if cmp > 0 {
+			return true, nil
+		}
+		if cmp < 0 {
+			return false, nil
+		}
+	}
+	if apl.migrationContext.MigrationIterationRangeMaxValues == nil {
+		return false, nil
+	}
+	for order, uniqueKeyCol := range apl.migrationContext.UniqueKey.Columns.Columns() {
+		if uniqueKeyCol.CompareValueFunc == nil {
+			return false, nil
+		}
+		cmp, err := uniqueKeyCol.CompareValueFunc(uniqueKeyArgs[order], apl.migrationContext.MigrationIterationRangeMaxValues.StringColumn(order))
+		if err != nil {
+			return false, err
+		}
+		if cmp > 0 {
+			return true, nil
+		}
+		if cmp < 0 {
+			return false, nil
+		}
+	}
+	return false, nil
+}
+
+//nolint:unparam // ignored count kept for API symmetry with buildDMLEventQueriesMerged
+func (apl *Applier) buildDMLEventQueriesAll(dmlEvents [](*binlog.BinlogDMLEvent)) ([]*dmlBuildResult, int64, int64, error) {
+	buildResults := make([]*dmlBuildResult, 0, len(dmlEvents))
+
+	for _, dmlEvent := range dmlEvents {
+		for _, buildResult := range apl.buildDMLEventQuery(dmlEvent) {
+			if buildResult.err != nil {
+				return nil, 0, 0, buildResult.err
+			}
+			buildResults = append(buildResults, buildResult)
+		}
+	}
+
+	return buildResults, int64(len(dmlEvents)), 0, nil
+}
+
+func (apl *Applier) buildDMLEventQueriesMerged(dmlEvents [](*binlog.BinlogDMLEvent)) ([]*dmlBuildResult, int64, int64, error) {
+	type mergedEntry struct {
+		result             *dmlBuildResult
+		formattedKeyValues []string
+	}
+
+	dmlMap := make(map[string]*mergedEntry)
+	const keySeparator = "#gho#"
+	var appliedEvents int64
+	var ignoredEvents int64
+
+	for _, dmlEvent := range dmlEvents {
+		results := apl.buildDMLEventQuery(dmlEvent)
+		ignored := false
+		for _, buildResult := range results {
+			if buildResult.err != nil {
+				return nil, 0, 0, buildResult.err
+			}
+			if skip, err := apl.isIgnoreOverMaxChunkRangeEvent(buildResult.uniqueKeyValues); err != nil {
+				return nil, 0, 0, err
+			} else if skip {
+				ignored = true
+				break
+			}
+		}
+		if ignored {
+			ignoredEvents++
+			continue
+		}
+		appliedEvents++
+		for _, buildResult := range results {
+			formattedValues, err := apl.migrationContext.UniqueKey.FormatValues(buildResult.uniqueKeyValues)
+			if err != nil {
+				return nil, 0, 0, err
+			}
+			mapKey := strings.Join(formattedValues, keySeparator)
+			if existing, ok := dmlMap[mapKey]; ok && existing != nil && existing.result != nil && existing.result.dml == binlog.InsertDML && buildResult.dml == binlog.DeleteDML {
+				// Row was INSERT'd then DELETE'd in this batch. If row-copy already
+				// copied this row to ghost, the ghost has a stale copy. Emit DELETE
+				// to ensure ghost converges to the correct state.
+				dmlMap[mapKey] = &mergedEntry{result: buildResult, formattedKeyValues: formattedValues}
+				continue
+			}
+			dmlMap[mapKey] = &mergedEntry{result: buildResult, formattedKeyValues: formattedValues}
+		}
+	}
+
+	deleteValuesList := make([][]string, 0)
+	insertArgsList := make([][]interface{}, 0)
+	updateArgsList := make([][]interface{}, 0)
+	for _, entry := range dmlMap {
+		if entry == nil || entry.result == nil {
+			continue
+		}
+		switch entry.result.dml {
+		case binlog.DeleteDML:
+			deleteValuesList = append(deleteValuesList, entry.formattedKeyValues)
+		case binlog.InsertDML:
+			insertArgsList = append(insertArgsList, entry.result.sharedColumnArgs)
+		case binlog.UpdateDML:
+			updateArgsList = append(updateArgsList, entry.result.sharedColumnArgs)
+		default:
+			return nil, 0, 0, fmt.Errorf("unsupported dml event %s", entry.result.dml)
+		}
+	}
+
+	buildResults := make([]*dmlBuildResult, 0, 3)
+	if query := apl.generateBatchedDeleteQuery(deleteValuesList); query != "" {
+		buildResults = append(buildResults, newDmlBuildResult(binlog.DeleteDML, query, nil, nil, -1, nil, nil))
+	}
+	if query, args := apl.generateBatchedReplaceQuery(insertArgsList); query != "" {
+		buildResults = append(buildResults, newDmlBuildResult(binlog.InsertDML, query, args, nil, 1, nil, nil))
+	}
+	if query, args := apl.generateBatchedReplaceQuery(updateArgsList); query != "" {
+		buildResults = append(buildResults, newDmlBuildResult(binlog.UpdateDML, query, args, nil, 0, nil, nil))
+	}
+
+	return buildResults, appliedEvents, ignoredEvents, nil
 }
 
 // executeBatchWithWarningChecking executes a batch of DML statements with SHOW WARNINGS
@@ -1777,9 +2004,10 @@ func (apl *Applier) executeBatchWithWarningChecking(ctx context.Context, tx *gos
 	return totalDelta, nil
 }
 
-// ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
-func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
+func (apl *Applier) applyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent), merged bool) error {
 	var totalDelta int64
+	var appliedEvents int64
+	var ignoredEvents int64
 	ctx := context.Background()
 
 	err := func() error {
@@ -1804,16 +2032,25 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 			return err
 		}
 
-		buildResults := make([]*dmlBuildResult, 0, len(dmlEvents))
-		nArgs := 0
-		for _, dmlEvent := range dmlEvents {
-			for _, buildResult := range apl.buildDMLEventQuery(dmlEvent) {
-				if buildResult.err != nil {
-					return rollback(buildResult.err)
-				}
-				nArgs += len(buildResult.args)
-				buildResults = append(buildResults, buildResult)
+		var buildResults []*dmlBuildResult
+		if merged {
+			buildResults, appliedEvents, ignoredEvents, err = apl.buildDMLEventQueriesMerged(dmlEvents)
+		} else {
+			buildResults, appliedEvents, ignoredEvents, err = apl.buildDMLEventQueriesAll(dmlEvents)
+		}
+		if err != nil {
+			return rollback(err)
+		}
+		if len(buildResults) == 0 {
+			if err := tx.Commit(); err != nil {
+				return err
 			}
+			return nil
+		}
+
+		nArgs := 0
+		for _, buildResult := range buildResults {
+			nArgs += len(buildResult.args)
 		}
 
 		// When PanicOnWarnings is enabled, we need to check warnings after each statement
@@ -1836,7 +2073,9 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 				for _, buildResult := range buildResults {
 					for _, arg := range buildResult.args {
 						nv := driver.NamedValue{Value: driver.Value(arg)}
-						nvc.CheckNamedValue(&nv)
+						if err := nvc.CheckNamedValue(&nv); err != nil {
+							return err
+						}
 						multiArgs = append(multiArgs, nv)
 					}
 
@@ -1846,14 +2085,10 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 
 				res, err := ex.ExecContext(ctx, multiQueryBuilder.String(), multiArgs)
 				if err != nil {
-					err = fmt.Errorf("%w; query=%s; args=%+v", err, multiQueryBuilder.String(), multiArgs)
-					return err
+					return fmt.Errorf("%w; query=%s; args=%+v", err, multiQueryBuilder.String(), multiArgs)
 				}
 
 				mysqlRes := res.(drivermysql.Result)
-
-				// each DML is either a single insert (delta +1), update (delta +0) or delete (delta -1).
-				// multiplying by the rows actually affected (either 0 or 1) will give an accurate row delta for this DML event
 				for i, rowsAffected := range mysqlRes.AllRowsAffected() {
 					totalDelta += buildResults[i].rowsDelta * rowsAffected
 				}
@@ -1874,13 +2109,22 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 	if err != nil {
 		return apl.migrationContext.Log.Errore(err)
 	}
-	// no error
-	atomic.AddInt64(&apl.migrationContext.TotalDMLEventsApplied, int64(len(dmlEvents)))
+	atomic.AddInt64(&apl.migrationContext.TotalDMLEventsApplied, appliedEvents)
+	atomic.AddInt64(&apl.migrationContext.TotalDMLEventsIgnored, ignoredEvents)
 	if apl.migrationContext.CountTableRows {
 		atomic.AddInt64(&apl.migrationContext.RowsDeltaEstimate, totalDelta)
 	}
-	apl.migrationContext.Log.Debugf("ApplyDMLEventQueries() applied %d events in one transaction", len(dmlEvents))
+	apl.migrationContext.Log.Debugf("ApplyDMLEventQueries() applied %d events in one transaction", appliedEvents)
 	return nil
+}
+
+// ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
+func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
+	return apl.applyDMLEventQueries(dmlEvents, false)
+}
+
+func (apl *Applier) ApplyDMLEventQueriesMerged(dmlEvents [](*binlog.BinlogDMLEvent)) error {
+	return apl.applyDMLEventQueries(dmlEvents, true)
 }
 
 func (apl *Applier) Teardown() {

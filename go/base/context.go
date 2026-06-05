@@ -212,7 +212,9 @@ type MigrationContext struct {
 	controlReplicasLagResult               mysql.ReplicationLagResult
 	TotalRowsCopied                        int64
 	TotalDMLEventsApplied                  int64
+	TotalDMLEventsIgnored                  int64
 	DMLBatchSize                           int64
+	IsMergeDMLEvents                       bool
 	isThrottled                            bool
 	throttleReason                         string
 	throttleReasonHint                     ThrottleReasonHint

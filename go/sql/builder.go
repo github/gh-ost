@@ -48,7 +48,9 @@ func TruncateColumnName(name string, limit int) string {
 	return truncatedName
 }
 
-func buildColumnsPreparedValues(columns *ColumnList) []string {
+// BuildColumnsPreparedValues returns a slice of prepared-statement placeholder tokens,
+// one per column, using each column's type-specific conversion function.
+func BuildColumnsPreparedValues(columns *ColumnList) []string {
 	values := make([]string, columns.Len())
 	for i, column := range columns.Columns() {
 		var token string
@@ -127,7 +129,7 @@ func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns 
 	if uniqueKeyColumns.Len() == 0 {
 		return nil, fmt.Errorf("got 0 columns in BuildSetCheckpointInsertQuery")
 	}
-	values := buildColumnsPreparedValues(uniqueKeyColumns)
+	values := BuildColumnsPreparedValues(uniqueKeyColumns)
 	minUniqueColNames := []string{}
 	maxUniqueColNames := []string{}
 	for _, name := range uniqueKeyColumns.Names() {
@@ -256,7 +258,7 @@ func BuildRangeComparison(columns []string, values []string, args []interface{},
 }
 
 func BuildRangePreparedComparison(columns *ColumnList, args []interface{}, comparisonSign ValueComparisonSign) (result string, explodedArgs []interface{}, err error) {
-	values := buildColumnsPreparedValues(columns)
+	values := BuildColumnsPreparedValues(columns)
 	return BuildRangeComparison(columns.Names(), values, args, comparisonSign)
 }
 
@@ -420,8 +422,8 @@ func buildRangeInsertQueryTwoColumn(
 }
 
 func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, noWait bool) (result string, explodedArgs []interface{}, err error) {
-	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
-	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
+	rangeStartValues := BuildColumnsPreparedValues(uniqueKeyColumns)
+	rangeEndValues := BuildColumnsPreparedValues(uniqueKeyColumns)
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, noWait)
 }
 
@@ -869,7 +871,7 @@ func NewDMLInsertQueryBuilder(databaseName, tableName string, tableColumns, shar
 	for i := range mappedSharedColumnNames {
 		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
 	}
-	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
+	preparedValues := BuildColumnsPreparedValues(mappedSharedColumns)
 
 	stmt := fmt.Sprintf(`
 		insert /* gh-ost %s.%s */ ignore

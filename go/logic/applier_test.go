@@ -1625,3 +1625,373 @@ func TestApplier(t *testing.T) {
 	}
 	suite.Run(t, new(ApplierTestSuite))
 }
+
+func TestApplierGenerateBatchedReplaceQuery(t *testing.T) {
+	columns := sql.NewColumnList([]string{"id", "name", "value"})
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.DatabaseName = "test"
+	migrationContext.OriginalTableName = "test"
+	migrationContext.OriginalTableColumns = columns
+	migrationContext.SharedColumns = columns
+	migrationContext.MappedSharedColumns = columns
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    t.Name(),
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+
+	t.Run("empty", func(t *testing.T) {
+		query, args := applier.generateBatchedReplaceQuery(nil)
+		require.Empty(t, query)
+		require.Nil(t, args)
+	})
+
+	t.Run("single row", func(t *testing.T) {
+		query, args := applier.generateBatchedReplaceQuery([][]interface{}{{1, "hello", 42}})
+		require.Contains(t, query, "replace")
+		require.Contains(t, query, "`test`.`_test_gho`")
+		require.Contains(t, query, "(?, ?, ?)")
+		require.Len(t, args, 3)
+		require.Equal(t, 1, args[0])
+		require.Equal(t, "hello", args[1])
+		require.Equal(t, 42, args[2])
+	})
+
+	t.Run("multiple rows", func(t *testing.T) {
+		query, args := applier.generateBatchedReplaceQuery([][]interface{}{
+			{1, "a", 10},
+			{2, "b", 20},
+			{3, "c", 30},
+		})
+		require.Contains(t, query, "replace")
+		require.Contains(t, query, "(?, ?, ?), (?, ?, ?), (?, ?, ?)")
+		require.Len(t, args, 9)
+	})
+}
+
+func TestApplierGenerateBatchedDeleteQuery(t *testing.T) {
+	columns := sql.NewColumnList([]string{"id", "name"})
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.DatabaseName = "test"
+	migrationContext.OriginalTableName = "test"
+	migrationContext.OriginalTableColumns = columns
+	migrationContext.SharedColumns = columns
+	migrationContext.MappedSharedColumns = columns
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    t.Name(),
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+
+	applier := NewApplier(migrationContext)
+
+	t.Run("empty", func(t *testing.T) {
+		query := applier.generateBatchedDeleteQuery(nil)
+		require.Empty(t, query)
+	})
+
+	t.Run("single key single value", func(t *testing.T) {
+		query := applier.generateBatchedDeleteQuery([][]string{{"123"}})
+		require.Contains(t, query, "delete")
+		require.Contains(t, query, "`test`.`_test_gho`")
+		require.Contains(t, query, "(`id`) in (123)")
+	})
+
+	t.Run("single key multiple values", func(t *testing.T) {
+		query := applier.generateBatchedDeleteQuery([][]string{{"1"}, {"2"}, {"3"}})
+		require.Contains(t, query, "(`id`) in (1, 2, 3)")
+	})
+
+	t.Run("composite key", func(t *testing.T) {
+		migrationContext.UniqueKey = &sql.UniqueKey{
+			Name:    t.Name(),
+			Columns: *sql.NewColumnList([]string{"id", "tenant_id"}),
+		}
+		query := applier.generateBatchedDeleteQuery([][]string{{"1", "10"}, {"2", "20"}})
+		require.Contains(t, query, "(`id`, `tenant_id`) in ((1, 10), (2, 20))")
+	})
+}
+
+func TestApplierIsIgnoreOverMaxChunkRangeEvent(t *testing.T) {
+	columns := sql.NewColumnList([]string{"id", "name"})
+	columns.GetColumn("id").CompareValueFunc = func(a interface{}, b interface{}) (int, error) {
+		// Simple int comparison for testing
+		ai := a.(int)
+		bi, _ := fmt.Sscanf(fmt.Sprintf("%v", b), "%d", new(int))
+		_ = bi
+		var bval int
+		fmt.Sscanf(fmt.Sprintf("%v", b), "%d", &bval)
+		if ai > bval {
+			return 1, nil
+		}
+		if ai < bval {
+			return -1, nil
+		}
+		return 0, nil
+	}
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.DatabaseName = "test"
+	migrationContext.OriginalTableName = "test"
+	migrationContext.OriginalTableColumns = columns
+	migrationContext.SharedColumns = columns
+	migrationContext.MappedSharedColumns = columns
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    t.Name(),
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+	migrationContext.UniqueKey.Columns.GetColumn("id").CompareValueFunc = columns.GetColumn("id").CompareValueFunc
+
+	applier := NewApplier(migrationContext)
+
+	t.Run("nil range max - never ignore", func(t *testing.T) {
+		migrationContext.MigrationRangeMaxValues = nil
+		ignore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{999})
+		require.NoError(t, err)
+		require.False(t, ignore)
+	})
+
+	t.Run("within range - not ignored", func(t *testing.T) {
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{100})
+		ignore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{50})
+		require.NoError(t, err)
+		require.False(t, ignore)
+	})
+
+	t.Run("beyond range - ignored", func(t *testing.T) {
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{100})
+		migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{100})
+		ignore, err := applier.isIgnoreOverMaxChunkRangeEvent([]interface{}{200})
+		require.NoError(t, err)
+		require.True(t, ignore)
+	})
+}
+
+func TestApplierBuildDMLEventQueriesMerged(t *testing.T) {
+	columns := sql.NewColumnList([]string{"id", "name"})
+	// Set up FormatValueFunc for numeric key
+	columns.GetColumn("id").FormatValueFunc = func(arg interface{}) (string, error) {
+		return fmt.Sprintf("%v", arg), nil
+	}
+	columns.GetColumn("id").CompareValueFunc = compareIntegralValues
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.DatabaseName = "test"
+	migrationContext.OriginalTableName = "test"
+	migrationContext.OriginalTableColumns = columns
+	migrationContext.SharedColumns = columns
+	migrationContext.MappedSharedColumns = columns
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:               t.Name(),
+		Columns:            *sql.NewColumnList([]string{"id"}),
+		IsMemoryComparable: true,
+	}
+	migrationContext.UniqueKey.Columns.GetColumn("id").FormatValueFunc = columns.GetColumn("id").FormatValueFunc
+	migrationContext.UniqueKey.Columns.GetColumn("id").CompareValueFunc = columns.GetColumn("id").CompareValueFunc
+
+	applier := NewApplier(migrationContext)
+	applier.prepareQueries()
+
+	t.Run("INSERT then DELETE same key emits DELETE", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			{DatabaseName: "test", DML: binlog.InsertDML, NewColumnValues: sql.ToColumnValues([]interface{}{1, "alice"})},
+			{DatabaseName: "test", DML: binlog.DeleteDML, WhereColumnValues: sql.ToColumnValues([]interface{}{1, "alice"})},
+		}
+		results, applied, ignored, err := applier.buildDMLEventQueriesMerged(events)
+		require.NoError(t, err)
+		require.Equal(t, int64(2), applied)
+		require.Equal(t, int64(0), ignored)
+		// Should emit a batched DELETE, not cancel
+		require.Len(t, results, 1)
+		require.Equal(t, binlog.DeleteDML, results[0].dml)
+	})
+
+	t.Run("DELETE then INSERT same key emits REPLACE", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			{DatabaseName: "test", DML: binlog.DeleteDML, WhereColumnValues: sql.ToColumnValues([]interface{}{1, "alice"})},
+			{DatabaseName: "test", DML: binlog.InsertDML, NewColumnValues: sql.ToColumnValues([]interface{}{1, "bob"})},
+		}
+		results, applied, ignored, err := applier.buildDMLEventQueriesMerged(events)
+		require.NoError(t, err)
+		require.Equal(t, int64(2), applied)
+		require.Equal(t, int64(0), ignored)
+		// Last write wins: INSERT overwrites DELETE → REPLACE
+		require.Len(t, results, 1)
+		require.Equal(t, binlog.InsertDML, results[0].dml)
+	})
+
+	t.Run("multiple UPDATEs same key emits last only", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			{DatabaseName: "test", DML: binlog.UpdateDML, NewColumnValues: sql.ToColumnValues([]interface{}{1, "v1"}), WhereColumnValues: sql.ToColumnValues([]interface{}{1, "v0"})},
+			{DatabaseName: "test", DML: binlog.UpdateDML, NewColumnValues: sql.ToColumnValues([]interface{}{1, "v2"}), WhereColumnValues: sql.ToColumnValues([]interface{}{1, "v1"})},
+			{DatabaseName: "test", DML: binlog.UpdateDML, NewColumnValues: sql.ToColumnValues([]interface{}{1, "v3"}), WhereColumnValues: sql.ToColumnValues([]interface{}{1, "v2"})},
+		}
+		results, applied, _, err := applier.buildDMLEventQueriesMerged(events)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), applied)
+		// Only one REPLACE query with last values
+		require.Len(t, results, 1)
+		require.Equal(t, binlog.UpdateDML, results[0].dml)
+	})
+
+	t.Run("UPDATE then DELETE same key emits DELETE", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			{DatabaseName: "test", DML: binlog.UpdateDML, NewColumnValues: sql.ToColumnValues([]interface{}{1, "v1"}), WhereColumnValues: sql.ToColumnValues([]interface{}{1, "v0"})},
+			{DatabaseName: "test", DML: binlog.DeleteDML, WhereColumnValues: sql.ToColumnValues([]interface{}{1, "v1"})},
+		}
+		results, applied, _, err := applier.buildDMLEventQueriesMerged(events)
+		require.NoError(t, err)
+		require.Equal(t, int64(2), applied)
+		require.Len(t, results, 1)
+		require.Equal(t, binlog.DeleteDML, results[0].dml)
+	})
+
+	t.Run("mixed keys deduplicate independently", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			{DatabaseName: "test", DML: binlog.InsertDML, NewColumnValues: sql.ToColumnValues([]interface{}{1, "alice"})},
+			{DatabaseName: "test", DML: binlog.InsertDML, NewColumnValues: sql.ToColumnValues([]interface{}{2, "bob"})},
+			{DatabaseName: "test", DML: binlog.DeleteDML, WhereColumnValues: sql.ToColumnValues([]interface{}{1, "alice"})},
+		}
+		results, applied, _, err := applier.buildDMLEventQueriesMerged(events)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), applied)
+		// Key 1: INSERT→DELETE = DELETE; Key 2: INSERT = REPLACE
+		// Should have both a DELETE batch and a REPLACE batch
+		hasDel, hasIns := false, false
+		for _, r := range results {
+			if r.dml == binlog.DeleteDML {
+				hasDel = true
+			}
+			if r.dml == binlog.InsertDML {
+				hasIns = true
+			}
+		}
+		require.True(t, hasDel, "expected a DELETE result for key 1")
+		require.True(t, hasIns, "expected an INSERT/REPLACE result for key 2")
+	})
+
+	t.Run("DELETE INSERT DELETE same key emits DELETE", func(t *testing.T) {
+		events := []*binlog.BinlogDMLEvent{
+			{DatabaseName: "test", DML: binlog.DeleteDML, WhereColumnValues: sql.ToColumnValues([]interface{}{1, "a"})},
+			{DatabaseName: "test", DML: binlog.InsertDML, NewColumnValues: sql.ToColumnValues([]interface{}{1, "b"})},
+			{DatabaseName: "test", DML: binlog.DeleteDML, WhereColumnValues: sql.ToColumnValues([]interface{}{1, "b"})},
+		}
+		results, applied, _, err := applier.buildDMLEventQueriesMerged(events)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), applied)
+		require.Len(t, results, 1)
+		require.Equal(t, binlog.DeleteDML, results[0].dml)
+	})
+
+	t.Run("ignored events beyond range", func(t *testing.T) {
+		migrationContext.MigrationRangeMaxValues = sql.ToColumnValues([]interface{}{10})
+		migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{10})
+		defer func() {
+			migrationContext.MigrationRangeMaxValues = nil
+			migrationContext.MigrationIterationRangeMaxValues = nil
+		}()
+
+		events := []*binlog.BinlogDMLEvent{
+			{DatabaseName: "test", DML: binlog.InsertDML, NewColumnValues: sql.ToColumnValues([]interface{}{5, "ok"})},
+			{DatabaseName: "test", DML: binlog.InsertDML, NewColumnValues: sql.ToColumnValues([]interface{}{99, "beyond"})},
+		}
+		results, applied, ignored, err := applier.buildDMLEventQueriesMerged(events)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), applied)
+		require.Equal(t, int64(1), ignored)
+		require.Len(t, results, 1)
+		require.Equal(t, binlog.InsertDML, results[0].dml)
+	})
+
+	t.Run("empty events returns empty results", func(t *testing.T) {
+		results, applied, ignored, err := applier.buildDMLEventQueriesMerged([]*binlog.BinlogDMLEvent{})
+		require.NoError(t, err)
+		require.Equal(t, int64(0), applied)
+		require.Equal(t, int64(0), ignored)
+		require.Empty(t, results)
+	})
+}
+
+func TestInspectIsIntegerColumnType(t *testing.T) {
+	tests := []struct {
+		colType  string
+		expected bool
+	}{
+		{"int", true},
+		{"integer", true},
+		{"bigint", true},
+		{"tinyint", true},
+		{"smallint", true},
+		{"mediumint", true},
+		{"int(11)", true},
+		{"bigint unsigned", true},
+		{"tinyint(1)", true},
+		{"point", false},
+		{"multipoint", false},
+		{"varchar(255)", false},
+		{"text", false},
+		{"decimal(10,2)", false},
+		{"float", false},
+		{"timestamp", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.colType, func(t *testing.T) {
+			require.Equal(t, tt.expected, isIntegerColumnType(tt.colType), "isIntegerColumnType(%q)", tt.colType)
+		})
+	}
+}
+
+func TestInspectIsDecimalColumnType(t *testing.T) {
+	tests := []struct {
+		colType  string
+		expected bool
+	}{
+		{"decimal(10,2)", true},
+		{"numeric(5,3)", true},
+		{"float", true},
+		{"double", true},
+		{"float(7,4)", true},
+		{"int", false},
+		{"bigint", false},
+		{"varchar(255)", false},
+		{"point", false},
+		{"timestamp", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.colType, func(t *testing.T) {
+			require.Equal(t, tt.expected, isDecimalColumnType(tt.colType), "isDecimalColumnType(%q)", tt.colType)
+		})
+	}
+}
+
+func TestFormatNumericValue(t *testing.T) {
+	tests := []struct {
+		name    string
+		arg     interface{}
+		want    string
+		wantErr bool
+	}{
+		{"int", int(42), "42", false},
+		{"int64", int64(-999), "-999", false},
+		{"uint64 large", uint64(18446744073709551615), "18446744073709551615", false},
+		{"float64", float64(3.14), "3.14", false},
+		{"numeric string", "12345", "12345", false},
+		{"decimal string", "99.99", "99.99", false},
+		{"non-numeric string", "hello", "", true},
+		{"sql injection string", "1 OR 1=1", "", true},
+		{"nil", nil, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := formatNumericValue(tt.arg)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
