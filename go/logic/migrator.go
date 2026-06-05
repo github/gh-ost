@@ -904,38 +904,6 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	return nil
 }
 
-// TODO(chriskirkland): replace this with a _real_ cutover implementation
-func (mgtr *Migrator) simulateMoveTablesCutover() (err error) {
-	if !mgtr.migrationContext.IsMoveTablesMode() {
-		return errors.New("not in MoveTables mode")
-	}
-
-	// manually hack the `mysql-source-primary` connection config based on test bed settings
-	// this is just for demo purposes... I'm sorry.
-	primaryConnectionConfig := mgtr.inspector.connectionConfig.Duplicate()
-	primaryConnectionConfig.Key.Port = 3307
-
-	primaryURI := primaryConnectionConfig.GetDBUri(mgtr.migrationContext.DatabaseName)
-	primaryDB, _, err := mysql.GetDB(mgtr.migrationContext.Uuid, primaryURI)
-	if err != nil {
-		return fmt.Errorf("failed to connect to primary of source cluster: %w", err)
-	}
-
-	// rename the original table in the source cluster to prevent further reads/writes; mimics the "full cutover" as describe in
-	// https://github.com/github/gh-ost-tablemove-poc/blob/9dc6df75c4c88ff473906a497836c7518f5614ec/design/coop_cutover.md
-
-	database := mgtr.migrationContext.DatabaseName
-	oldTable := mgtr.migrationContext.MoveTables.TableNames[0]
-	delTable := fmt.Sprintf("_%s_del", oldTable)
-	query := fmt.Sprintf("RENAME TABLE %s.%s TO %s.%s", sql.EscapeName(database), sql.EscapeName(oldTable), sql.EscapeName(database), sql.EscapeName(delTable))
-	if _, err := primaryDB.Exec(query); err != nil {
-		return fmt.Errorf("failed to rename table: %w", err)
-	}
-	mgtr.migrationContext.Log.Infof("[SIMULATED CUTOVER] Table %s renamed to %s._%s_del", oldTable, database, oldTable)
-
-	return nil
-}
-
 // ExecOnFailureHook executes the onFailure hook, and this method is provided as the only external
 // hook access point
 func (mgtr *Migrator) ExecOnFailureHook() (err error) {
@@ -1269,7 +1237,6 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 	// Let's get master connection config
 	if mgtr.migrationContext.IsMoveTablesMode() {
 		mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.MoveTables.ConnectionConfig
-
 	} else if mgtr.migrationContext.AssumeMasterHostname == "" {
 		// No forced master host; detect master
 		if mgtr.migrationContext.ApplierConnectionConfig, err = mgtr.inspector.getMasterConnectionConfig(); err != nil {
@@ -1689,7 +1656,7 @@ func (mgtr *Migrator) initiateApplier() error {
 		)
 		createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.MoveTables.TableNames[0])
 		if err != nil {
-			return fmt.Errorf("failed to fetch create table statement: %v", err)
+			return fmt.Errorf("failed to fetch create table statement: %w", err)
 		}
 		mgtr.migrationContext.Log.Infof("Create table statement: %s", createTableStatement)
 

@@ -723,7 +723,7 @@ func (apl *Applier) createTriggers(tableName string) error {
 // CreateTriggers creates the original triggers on applier host
 func (apl *Applier) CreateTriggersOnGhost() error {
 	err := apl.createTriggers(apl.migrationContext.GetGhostTableName())
-	return fmt.Errorf("error creating triggers on ghost table: %v", err)
+	return fmt.Errorf("error creating triggers on ghost table: %w", err)
 }
 
 // DropChangelogTable drops the changelog table on the applier host
@@ -744,7 +744,7 @@ func (apl *Applier) DropOldTable() error {
 // DropGhostTable drops the ghost table on the applier host
 func (apl *Applier) DropGhostTable() error {
 	if err := apl.dropTable(apl.migrationContext.GetGhostTableName()); err != nil {
-		return fmt.Errorf("error dropping ghost table: %v", err)
+		return fmt.Errorf("error dropping ghost table: %w", err)
 	}
 	return nil
 }
@@ -1198,6 +1198,9 @@ func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chun
 				return nil, err
 			}
 			chunkRows = append(chunkRows, row)
+		}
+		if err := sqlRows.Err(); err != nil {
+			return nil, err
 		}
 		return chunkRows, nil
 	}()
