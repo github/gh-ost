@@ -750,9 +750,8 @@ func (apl *Applier) DropGhostTable() error {
 }
 
 // WriteChangelog writes a value to the changelog table.
-// It returns the hint as given, for convenience
+// It returns the hint (or an empty string in move-tables mode), for convenience
 func (apl *Applier) WriteChangelog(hint, value string) (string, error) {
-	// TODO(chriskirkland): move this bypass higher
 	// In move-tables mode, there is no changelog table (§1.2). All changelog
 	// writes are no-ops. This is a single chokepoint rather than per-caller
 	// guards to prevent drift when new callers are added.

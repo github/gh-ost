@@ -467,10 +467,10 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	suite.Require().Equal(int64(0), migrationContext.RowsDeltaEstimate)
 }
 
-// finalCleanup() requires a fully wired migrator (streamer, applier, inspector) to call directly.
+// finalCleanup() requires a fully wired migrator to call directly.
 // This test verifies the IsMoveTablesMode() predicate that gates the early return.
-// The actual skip behavior is proven by TestInitiateApplierMoveTablesMode_NoGhostOrChangelogTable
-// — if finalCleanup dropped tables, they'd need to exist first, and that test proves they don't.
+// Full behavioral coverage relies on the suite: no ghost/changelog tables are
+// created (Test #1), and WriteChangelog is a no-op (Test #2).
 func (suite *ApplierTestSuite) TestFinalCleanupMoveTablesMode_SkipsDrops() {
 	migrationContext := newTestMigrationContext()
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
@@ -480,9 +480,10 @@ func (suite *ApplierTestSuite) TestFinalCleanupMoveTablesMode_SkipsDrops() {
 }
 
 // initiateStreaming() requires a binlog-capable MySQL connection to call directly.
-// This test verifies the IsMoveTablesMode() predicate and that a new streamer starts with
-// zero listeners. The actual skip is proven indirectly: if a changelog listener were registered,
-// it would try to read events from a nonexistent _ghc table and fail during the full run.
+// This test verifies IsMoveTablesMode() and that GetChangelogTableName() returns
+// a derivable name. A new streamer always starts with zero listeners; the real
+// proof that no changelog listener is registered comes from the full run not
+// failing on a nonexistent _ghc table.
 func (suite *ApplierTestSuite) TestInitiateStreamingMoveTablesMode_NoChangelogListener() {
 	migrationContext := newTestMigrationContext()
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
@@ -501,6 +502,10 @@ func (suite *ApplierTestSuite) TestInitiateStreamingMoveTablesMode_NoChangelogLi
 // This test verifies the IsMoveTablesMode() predicate that gates InitiateHeartbeat().
 // Even if heartbeat ran, TestWriteChangelogNoOpInMoveTablesMode proves WriteChangelog
 // is a no-op, so no SQL would execute against a nonexistent changelog table.
+//
+// A stronger test would instrument InitiateHeartbeat() (e.g., via a callback or
+// channel) to assert the goroutine is never started. That requires test-infrastructure
+// changes to the Applier and is beyond #8206's scope.
 func (suite *ApplierTestSuite) TestNoHeartbeatInMoveTablesMode() {
 	migrationContext := newTestMigrationContext()
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
@@ -631,7 +636,7 @@ func (suite *ApplierTestSuite) TestWriteChangelogNoOpInMoveTablesMode() {
 	err = applier.InitDBConnections()
 	suite.Require().NoError(err)
 
-	// #82066 [Task] [1.2] Skip ghost/changelog tables, heartbeat in gh-ost move-tables mode
+	// #8206 [Task] [1.2] Skip ghost/changelog tables, heartbeat in gh-ost move-tables mode
 	// WriteChangelog should be a no-op in move-tables mode.
 	// No changelog table exists, so if it tried to execute, it would fail.
 	hint, err := applier.WriteChangelog("heartbeat", "2026-06-05T00:00:00Z")
