@@ -333,6 +333,7 @@ func (suite *ApplierTestSuite) TearDownTest() {
 	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestGhostTableName())
 	suite.Require().NoError(err)
 	_, err = suite.otherDB.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestOtherTableName())
+	suite.Require().NoError(err)
 	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`_%s_ghc`", testMysqlDatabase, testMysqlTableName))
 	suite.Require().NoError(err)
 }
@@ -1808,7 +1809,7 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
 
-	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(nil)
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(suite.db)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(3), rowsAffected)
 	suite.Require().Equal(int64(1000), chunkSize)

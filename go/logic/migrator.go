@@ -525,9 +525,9 @@ func (mgtr *Migrator) Migrate() (err error) {
 
 	initialLag, _ := mgtr.inspector.getReplicationLag()
 	if !mgtr.migrationContext.Resume {
-		mgtr.migrationContext.Log.Infof("Waiting for target table to be migrated. Current lag is %+v", initialLag)
+		mgtr.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
 		<-mgtr.ghostTableMigrated
-		mgtr.migrationContext.Log.Debugf("target table migrated")
+		mgtr.migrationContext.Log.Debugf("ghost table migrated")
 	}
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
 	// When running on replica, this means the replica has those tables. When running
