@@ -360,3 +360,70 @@ func TestRecordQueryDurationNilSafe(t *testing.T) {
 	RecordQueryDuration(&histogramSpy{}, "source", "", time.Second, nil)
 	RecordQueryDuration(&histogramSpy{}, "source", "row_count", -time.Second, nil)
 }
+
+type sleepSpy struct {
+	histogramNames  []string
+	histogramValues []float64
+	histogramTags   [][]string
+	countNames      []string
+	countValues     []int64
+	countTags       [][]string
+}
+
+func (s *sleepSpy) Gauge(_ string, _ float64, _ ...string) {}
+
+func (s *sleepSpy) Histogram(name string, value float64, tags ...string) {
+	s.histogramNames = append(s.histogramNames, name)
+	s.histogramValues = append(s.histogramValues, value)
+	s.histogramTags = append(s.histogramTags, tags)
+}
+
+func (s *sleepSpy) Count(name string, value int64, tags ...string) {
+	s.countNames = append(s.countNames, name)
+	s.countValues = append(s.countValues, value)
+	s.countTags = append(s.countTags, tags)
+}
+
+func TestRecordSleep(t *testing.T) {
+	spy := &sleepSpy{}
+
+	RecordSleep(spy, "retry_backoff", 2*time.Second)
+
+	if len(spy.histogramNames) != 1 {
+		t.Fatalf("got %d histograms, want 1", len(spy.histogramNames))
+	}
+	if spy.histogramNames[0] != "sleep.duration_milliseconds" || spy.histogramValues[0] != 2000 {
+		t.Fatalf("got histogram %s=%v, want sleep.duration_milliseconds=2000", spy.histogramNames[0], spy.histogramValues[0])
+	}
+	if !slices.Equal(spy.histogramTags[0], []string{"stage:retry_backoff"}) {
+		t.Fatalf("got histogram tags %#v", spy.histogramTags[0])
+	}
+	if len(spy.countNames) != 1 {
+		t.Fatalf("got %d counts, want 1", len(spy.countNames))
+	}
+	if spy.countNames[0] != "sleep.total_milliseconds" || spy.countValues[0] != 2000 {
+		t.Fatalf("got count %s=%v, want sleep.total_milliseconds=2000", spy.countNames[0], spy.countValues[0])
+	}
+	if !slices.Equal(spy.countTags[0], []string{"stage:retry_backoff"}) {
+		t.Fatalf("got count tags %#v", spy.countTags[0])
+	}
+}
+
+func TestRecordSleepSubSecond(t *testing.T) {
+	spy := &sleepSpy{}
+
+	RecordSleep(spy, "replica_wait", 500*time.Millisecond)
+
+	if spy.histogramNames[0] != "sleep.duration_milliseconds" || spy.histogramValues[0] != 500 {
+		t.Fatalf("got histogram %s=%v, want sleep.duration_milliseconds=500", spy.histogramNames[0], spy.histogramValues[0])
+	}
+	if spy.countNames[0] != "sleep.total_milliseconds" || spy.countValues[0] != 500 {
+		t.Fatalf("got count %s=%v, want sleep.total_milliseconds=500", spy.countNames[0], spy.countValues[0])
+	}
+}
+
+func TestRecordSleepNilSafe(t *testing.T) {
+	RecordSleep(nil, "retry_backoff", time.Second)
+	RecordSleep(&sleepSpy{}, "", time.Second)
+	RecordSleep(&sleepSpy{}, "retry_backoff", -time.Second)
+}

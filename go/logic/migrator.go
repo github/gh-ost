@@ -130,7 +130,7 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 
 // sleepWhileTrue sleeps indefinitely until the given function returns 'false'
 // (or fails with error)
-func (mgtr *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
+func (mgtr *Migrator) sleepWhileTrue(stage string, operation func() (bool, error)) error {
 	for {
 		// Check for abort before continuing
 		if err := mgtr.checkAbort(); err != nil {
@@ -143,6 +143,7 @@ func (mgtr *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 		if !shouldSleep {
 			return nil
 		}
+		metrics.RecordSleep(mgtr.migrationContext.Metrics, stage, time.Second)
 		time.Sleep(time.Second)
 	}
 }
@@ -166,7 +167,9 @@ func (mgtr *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
 			// sleep after previous iteration
-			RetrySleepFn(1 * time.Second)
+			sleepDuration := 1 * time.Second
+			metrics.RecordSleep(mgtr.migrationContext.Metrics, "retry_backoff", sleepDuration)
+			RetrySleepFn(sleepDuration)
 		}
 		// Check for abort/context cancellation before each retry
 		if abortErr := mgtr.checkAbort(); abortErr != nil {
@@ -207,7 +210,9 @@ func (mgtr *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 		)
 
 		if i != 0 {
-			RetrySleepFn(time.Duration(interval) * time.Second)
+			sleepDuration := time.Duration(interval) * time.Second
+			metrics.RecordSleep(mgtr.migrationContext.Metrics, "retry_backoff", sleepDuration)
+			RetrySleepFn(sleepDuration)
 		}
 		// Check for abort/context cancellation before each retry
 		if abortErr := mgtr.checkAbort(); abortErr != nil {
@@ -864,6 +869,7 @@ func (mgtr *Migrator) cutOver() (err error) {
 	mgtr.migrationContext.MarkPointOfInterest()
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone")
 	if err := mgtr.sleepWhileTrue(
+		"cut_over_postpone",
 		func() (bool, error) {
 			heartbeatLag := mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog()
 			maxLagMillisecondsThrottle := time.Duration(atomic.LoadInt64(&mgtr.migrationContext.MaxLagMillisecondsThrottleThreshold)) * time.Millisecond
@@ -1807,7 +1813,9 @@ func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 			return chk, err
 		}
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-		time.Sleep(500 * time.Millisecond)
+		sleepDuration := 500 * time.Millisecond
+		metrics.RecordSleep(mgtr.migrationContext.Metrics, "replica_wait", sleepDuration)
+		time.Sleep(sleepDuration)
 	}
 }
 
@@ -1912,7 +1920,12 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 							copyRowsDuration := time.Since(copyRowsStartTime)
 							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
 							sleepTime := time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond
-							time.Sleep(sleepTime)
+							if sleepTime > 0 {
+								if sleepTime >= time.Millisecond {
+									metrics.RecordSleep(mgtr.migrationContext.Metrics, "chunk_throttle", sleepTime)
+								}
+								time.Sleep(sleepTime)
+							}
 						}
 					}
 				default:
