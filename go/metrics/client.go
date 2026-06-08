@@ -21,6 +21,14 @@ type Client struct {
 	sd *statsd.Client
 }
 
+// Emitter is the unified metrics abstraction implemented by *Client. Helpers in
+// the metrics package take an Emitter so tests can supply spies without UDP.
+type Emitter interface {
+	Gauge(name string, value float64, tags ...string)
+	Count(name string, value int64, tags ...string)
+	Histogram(name string, value float64, tags ...string)
+}
+
 // NewClient connects to addr for StatsD. If addr is empty, returns Noop and nil error.
 // namespace is typically "gh_ost." (metrics are named namespace + short name, e.g. gh_ost.startup).
 // tags are global tags applied to every metric (repeatable --statsd-tags).
@@ -58,6 +66,13 @@ func (c *Client) Count(name string, value int64, tags ...string) {
 		return
 	}
 	_ = c.sd.Count(name, value, tags, 1.0)
+}
+
+func (c *Client) Histogram(name string, value float64, tags ...string) {
+	if c.sd == nil {
+		return
+	}
+	_ = c.sd.Histogram(name, value, tags, 1.0)
 }
 
 // Close flushes buffered metrics; safe for Noop.

@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2026 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -15,11 +15,19 @@ import (
 type gaugeSpy struct {
 	names  []string
 	values []float64
+	tags   [][]string
 }
 
-func (g *gaugeSpy) Gauge(name string, value float64, _ ...string) {
+func (g *gaugeSpy) Gauge(name string, value float64, tags ...string) {
 	g.names = append(g.names, name)
 	g.values = append(g.values, value)
+	g.tags = append(g.tags, append([]string(nil), tags...))
+}
+
+func (g *gaugeSpy) Count(name string, value int64, tags ...string) {
+}
+
+func (g *gaugeSpy) Histogram(name string, value float64, tags ...string) {
 }
 
 func TestEmitGoRuntimeGauges(t *testing.T) {
@@ -60,7 +68,7 @@ func TestEmitGoRuntimeGauges_nilSafe(t *testing.T) {
 
 func TestStartGoRuntimeReporter_stopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &Client{} // sd nil — should not start
+	c := &Client{} // sd nil, so the reporter should not start.
 	StartGoRuntimeReporter(ctx, c, time.Millisecond)
 	cancel()
 	time.Sleep(20 * time.Millisecond)

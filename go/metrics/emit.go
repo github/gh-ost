@@ -1,5 +1,5 @@
 /*
-   Copyright 2022 GitHub Inc.
+   Copyright 2026 GitHub Inc.
 	 See https://github.com/github/gh-ost/blob/master/LICENSE
 */
 
@@ -11,14 +11,9 @@ import (
 	"time"
 )
 
-// MemStatsGaugeEmitter is implemented by *Client; used for tests without UDP.
-type MemStatsGaugeEmitter interface {
-	Gauge(name string, value float64, tags ...string)
-}
-
 // EmitGoRuntimeGauges emits gh_ost.go_runtime.* gauges (namespace is applied by the client).
 // m and numGoroutine are typically from runtime.ReadMemStats and runtime.NumGoroutine.
-func EmitGoRuntimeGauges(emit MemStatsGaugeEmitter, m *runtime.MemStats, numGoroutine int) {
+func EmitGoRuntimeGauges(emit Emitter, m *runtime.MemStats, numGoroutine int) {
 	if emit == nil || m == nil {
 		return
 	}
