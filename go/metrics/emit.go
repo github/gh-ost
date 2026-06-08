@@ -129,3 +129,45 @@ func EmitThrottleInterval(emit Emitter, duration time.Duration, reason string) {
 	emit.Histogram("throttle.duration_milliseconds", float64(duration.Milliseconds()), tags...)
 	emit.Count("throttle.events_total", 1, tags...)
 }
+
+const (
+	CutOverOutcomeSuccess = "success"
+	CutOverOutcomeRetry   = "retry"
+	CutOverOutcomeAbort   = "abort"
+
+	CutOverPhaseMagicLock         = "magic_lock"
+	CutOverPhaseOriginalTableLock = "original_table_lock"
+	CutOverPhaseMagicRename       = "magic_rename"
+	CutOverPhaseUnlock            = "unlock"
+)
+
+// RecordCutOverPhase emits gh_ost.cut_over.phase_duration_milliseconds.
+func RecordCutOverPhase(emit Emitter, phase string, duration time.Duration, err error) {
+	if emit == nil || phase == "" || duration < 0 {
+		return
+	}
+	emit.Histogram("cut_over.phase_duration_milliseconds", float64(duration.Milliseconds()), "phase:"+phase, "outcome:"+cutOverOutcomeFromError(err))
+}
+
+// RecordCutOverAttempt emits gh_ost.cut_over.attempts_total.
+func RecordCutOverAttempt(emit Emitter, outcome string) {
+	if emit == nil || outcome == "" {
+		return
+	}
+	emit.Count("cut_over.attempts_total", 1, "outcome:"+outcome)
+}
+
+// RecordCutOverTotal emits gh_ost.cut_over.total_duration_milliseconds for terminal cut-over outcomes.
+func RecordCutOverTotal(emit Emitter, duration time.Duration, err error) {
+	if emit == nil || duration < 0 {
+		return
+	}
+	emit.Histogram("cut_over.total_duration_milliseconds", float64(duration.Milliseconds()), "outcome:"+cutOverOutcomeFromError(err))
+}
+
+func cutOverOutcomeFromError(err error) string {
+	if err != nil {
+		return CutOverOutcomeAbort
+	}
+	return CutOverOutcomeSuccess
+}

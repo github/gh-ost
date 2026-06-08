@@ -29,6 +29,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/testcontainers/testcontainers-go"
@@ -419,8 +420,81 @@ func (s *progressGaugeSpy) Gauge(name string, value float64, tags ...string) {
 	s.tags = append(s.tags, append([]string(nil), tags...))
 }
 
-func (s *progressGaugeSpy) Count(_ string, _ int64, _ ...string)     {}
+func (s *progressGaugeSpy) Count(_ string, _ int64, _ ...string)       {}
 func (s *progressGaugeSpy) Histogram(_ string, _ float64, _ ...string) {}
+
+type cutOverMetricsSpy struct {
+	countNames     []string
+	countTags      [][]string
+	histogramNames []string
+	histogramTags  [][]string
+}
+
+func (s *cutOverMetricsSpy) Gauge(_ string, _ float64, _ ...string) {}
+
+func (s *cutOverMetricsSpy) Count(name string, _ int64, tags ...string) {
+	s.countNames = append(s.countNames, name)
+	s.countTags = append(s.countTags, append([]string(nil), tags...))
+}
+
+func (s *cutOverMetricsSpy) Histogram(name string, _ float64, tags ...string) {
+	s.histogramNames = append(s.histogramNames, name)
+	s.histogramTags = append(s.histogramTags, append([]string(nil), tags...))
+}
+
+func TestCutOverOperationWithMetricsRetryThenSuccess(t *testing.T) {
+	spy := &cutOverMetricsSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	migrator := NewMigrator(ctx, "test")
+
+	attempts := 0
+	retrier := func(operation func() error, _ ...bool) error {
+		for {
+			err := operation()
+			if err == nil {
+				return nil
+			}
+			if attempts >= 2 {
+				return err
+			}
+		}
+	}
+	operation := func() error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("transient cutover failure")
+		}
+		return nil
+	}
+
+	require.NoError(t, migrator.cutOverOperationWithMetrics(retrier, operation))
+	assert.Equal(t, []string{"cut_over.attempts_total", "cut_over.attempts_total"}, spy.countNames)
+	assert.Equal(t, [][]string{{"outcome:" + metrics.CutOverOutcomeRetry}, {"outcome:" + metrics.CutOverOutcomeSuccess}}, spy.countTags)
+	assert.Equal(t, []string{"cut_over.total_duration_milliseconds"}, spy.histogramNames)
+	assert.Equal(t, [][]string{{"outcome:" + metrics.CutOverOutcomeSuccess}}, spy.histogramTags)
+}
+
+func TestCutOverOperationWithMetricsAbort(t *testing.T) {
+	spy := &cutOverMetricsSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	migrator := NewMigrator(ctx, "test")
+	cutOverErr := errors.New("cutover failed")
+
+	retrier := func(operation func() error, _ ...bool) error {
+		return operation()
+	}
+	operation := func() error {
+		return cutOverErr
+	}
+
+	require.ErrorIs(t, migrator.cutOverOperationWithMetrics(retrier, operation), cutOverErr)
+	assert.Equal(t, []string{"cut_over.attempts_total", "cut_over.attempts_total"}, spy.countNames)
+	assert.Equal(t, [][]string{{"outcome:" + metrics.CutOverOutcomeRetry}, {"outcome:" + metrics.CutOverOutcomeAbort}}, spy.countTags)
+	assert.Equal(t, []string{"cut_over.total_duration_milliseconds"}, spy.histogramNames)
+	assert.Equal(t, [][]string{{"outcome:" + metrics.CutOverOutcomeAbort}}, spy.histogramTags)
+}
 
 func TestReportStatusEmitsProgressGaugesEveryTick(t *testing.T) {
 	spy := &progressGaugeSpy{}

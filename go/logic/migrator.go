@@ -652,7 +652,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	} else {
 		retrier = mgtr.retryOperation
 	}
-	if err := retrier(mgtr.cutOver); err != nil {
+	if err := mgtr.cutOverWithMetrics(retrier); err != nil {
 		return err
 	}
 	atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
@@ -777,7 +777,7 @@ func (mgtr *Migrator) Revert() error {
 	if err := mgtr.hooksExecutor.OnBeforeCutOver(); err != nil {
 		return err
 	}
-	if err := retrier(mgtr.cutOver); err != nil {
+	if err := mgtr.cutOverWithMetrics(retrier); err != nil {
 		return err
 	}
 	atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
@@ -795,6 +795,28 @@ func (mgtr *Migrator) Revert() error {
 // hook access point
 func (mgtr *Migrator) ExecOnFailureHook() (err error) {
 	return mgtr.hooksExecutor.OnFailure()
+}
+
+func (mgtr *Migrator) cutOverWithMetrics(retrier func(func() error, ...bool) error) error {
+	return mgtr.cutOverOperationWithMetrics(retrier, mgtr.cutOver)
+}
+
+func (mgtr *Migrator) cutOverOperationWithMetrics(retrier func(func() error, ...bool) error, operation func() error) error {
+	cutOverStartTime := time.Now()
+	err := retrier(func() error {
+		err := operation()
+		if err != nil {
+			metrics.RecordCutOverAttempt(mgtr.migrationContext.Metrics, metrics.CutOverOutcomeRetry)
+			return err
+		}
+		metrics.RecordCutOverAttempt(mgtr.migrationContext.Metrics, metrics.CutOverOutcomeSuccess)
+		return nil
+	})
+	if err != nil {
+		metrics.RecordCutOverAttempt(mgtr.migrationContext.Metrics, metrics.CutOverOutcomeAbort)
+	}
+	metrics.RecordCutOverTotal(mgtr.migrationContext.Metrics, time.Since(cutOverStartTime), err)
+	return err
 }
 
 func (mgtr *Migrator) handleCutOverResult(cutOverError error) (err error) {
@@ -959,9 +981,12 @@ func (mgtr *Migrator) cutOverTwoStep() (err error) {
 	defer atomic.StoreInt64(&mgtr.migrationContext.InCutOverCriticalSectionFlag, 0)
 	atomic.StoreInt64(&mgtr.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
+	phaseStartTime := time.Now()
 	if err := mgtr.retryOperation(mgtr.applier.LockOriginalTable); err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseOriginalTableLock, time.Since(phaseStartTime), err)
 		return err
 	}
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseOriginalTableLock, time.Since(phaseStartTime), nil)
 
 	if err := mgtr.retryOperation(mgtr.waitForEventsUpToLock); err != nil {
 		return err
@@ -972,12 +997,19 @@ func (mgtr *Migrator) cutOverTwoStep() (err error) {
 			return err
 		}
 	}
+	phaseStartTime = time.Now()
 	if err := mgtr.retryOperation(mgtr.applier.SwapTablesQuickAndBumpy); err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), err)
 		return err
 	}
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), nil)
+
+	phaseStartTime = time.Now()
 	if err := mgtr.retryOperation(mgtr.applier.UnlockTables); err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseUnlock, time.Since(phaseStartTime), err)
 		return err
 	}
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseUnlock, time.Since(phaseStartTime), nil)
 
 	lockAndRenameDuration := mgtr.migrationContext.RenameTablesEndTime.Sub(mgtr.migrationContext.LockTablesStartTime)
 	renameDuration := mgtr.migrationContext.RenameTablesEndTime.Sub(mgtr.migrationContext.RenameTablesStartTime)
@@ -1001,14 +1033,17 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	var renameLockSessionId int64
+	phaseStartTime := time.Now()
 	go func() {
 		if err := mgtr.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, &renameLockSessionId); err != nil {
 			mgtr.migrationContext.Log.Errore(err)
 		}
 	}()
 	if err := <-tableLocked; err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicLock, time.Since(phaseStartTime), err)
 		return mgtr.migrationContext.Log.Errore(err)
 	}
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicLock, time.Since(phaseStartTime), nil)
 	lockOriginalSessionId := <-lockOriginalSessionIdChan
 	mgtr.migrationContext.Log.Infof("Session locking original & magic tables is %+v", lockOriginalSessionId)
 	// At this point we know the original table is locked.
@@ -1026,7 +1061,8 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 
 	// Step 2
 	// We now attempt an atomic RENAME on original & ghost tables, and expect it to block.
-	mgtr.migrationContext.RenameTablesStartTime = time.Now()
+	phaseStartTime = time.Now()
+	mgtr.migrationContext.RenameTablesStartTime = phaseStartTime
 
 	var tableRenameKnownToHaveFailed int64
 	renameSessionIdChan := make(chan int64, 2)
@@ -1051,6 +1087,7 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 	}
 	// Wait for the RENAME to appear in PROCESSLIST
 	if err := mgtr.retryOperation(waitForRename, true); err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), err)
 		// Abort! Release the lock
 		okToUnlockTable <- true
 		return err
@@ -1059,6 +1096,7 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 		mgtr.migrationContext.Log.Infof("Found atomic RENAME to be blocking, as expected. Double checking the lock is still in place (though I don't strictly have to)")
 	}
 	if err := mgtr.applier.ExpectUsedLock(lockOriginalSessionId); err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), err)
 		// Abort operation. Just make sure to drop the magic table.
 		return mgtr.migrationContext.Log.Errore(err)
 	}
@@ -1068,16 +1106,21 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 	// we know it is safe to proceed to release the lock
 
 	renameLockSessionId = renameSessionId
+	unlockStartTime := time.Now()
 	okToUnlockTable <- true
 	// BAM! magic table dropped, original table lock is released
 	// -> RENAME released -> queries on original are unblocked.
 	if err := <-tableUnlocked; err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseUnlock, time.Since(unlockStartTime), err)
 		return mgtr.migrationContext.Log.Errore(err)
 	}
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseUnlock, time.Since(unlockStartTime), nil)
 	if err := <-tablesRenamed; err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), err)
 		return mgtr.migrationContext.Log.Errore(err)
 	}
 	mgtr.migrationContext.RenameTablesEndTime = time.Now()
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, mgtr.migrationContext.RenameTablesEndTime.Sub(phaseStartTime), nil)
 
 	// ooh nice! We're actually truly and thankfully done
 	lockAndRenameDuration := mgtr.migrationContext.RenameTablesEndTime.Sub(mgtr.migrationContext.LockTablesStartTime)
