@@ -1181,6 +1181,13 @@ func (mgtr *Migrator) emitProgressMetrics(snap migrationProgressSnapshot) {
 		snap.applyEventsBacklog,
 		snap.applyEventsCapacity,
 	)
+	isThrottled, _, _ := mgtr.migrationContext.IsThrottled()
+	metrics.EmitLagGauges(
+		mgtr.migrationContext.Metrics,
+		snap.replicationLagSeconds,
+		snap.heartbeatLagSeconds,
+		isThrottled,
+	)
 }
 
 // reportStatus samples progress, emits metrics, and optionally prints status output.
