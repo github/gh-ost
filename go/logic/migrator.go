@@ -18,6 +18,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 )
@@ -1167,9 +1168,20 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 	return nil
 }
 
-// reportStatus samples progress and optionally prints status output.
+// emitProgressMetrics emits StatsD gauges from a progress snapshot.
+func (mgtr *Migrator) emitProgressMetrics(snap migrationProgressSnapshot) {
+	metrics.EmitProgressGauges(
+		mgtr.migrationContext.Metrics,
+		snap.totalRowsCopied,
+		snap.rowsEstimate,
+		snap.dmlApplied,
+	)
+}
+
+// reportStatus samples progress, emits metrics, and optionally prints status output.
 func (mgtr *Migrator) reportStatus(rule PrintStatusRule, writers ...io.Writer) {
 	snap := mgtr.sampleMigrationProgress()
+	mgtr.emitProgressMetrics(snap)
 	mgtr.printStatus(rule, snap, writers...)
 }
 

@@ -11,6 +11,17 @@ import (
 	"time"
 )
 
+// EmitProgressGauges emits row-copy and DML progress gauges (namespace is applied by the client):
+// gh_ost.row_copy.rows_copied, gh_ost.row_copy.rows_estimate, gh_ost.dml.events_applied.
+func EmitProgressGauges(emit Emitter, rowsCopied, rowsEstimate, dmlEventsApplied int64) {
+	if emit == nil {
+		return
+	}
+	emit.Gauge("row_copy.rows_copied", float64(rowsCopied))
+	emit.Gauge("row_copy.rows_estimate", float64(rowsEstimate))
+	emit.Gauge("dml.events_applied", float64(dmlEventsApplied))
+}
+
 // EmitGoRuntimeGauges emits gh_ost.go_runtime.* gauges (namespace is applied by the client).
 // m and numGoroutine are typically from runtime.ReadMemStats and runtime.NumGoroutine.
 func EmitGoRuntimeGauges(emit Emitter, m *runtime.MemStats, numGoroutine int) {

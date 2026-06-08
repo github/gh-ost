@@ -30,6 +30,31 @@ func (g *gaugeSpy) Count(name string, value int64, tags ...string) {
 func (g *gaugeSpy) Histogram(name string, value float64, tags ...string) {
 }
 
+func TestEmitProgressGauges(t *testing.T) {
+	spy := &gaugeSpy{}
+	EmitProgressGauges(spy, 1000, 5000, 42)
+
+	wantNames := []string{
+		"row_copy.rows_copied",
+		"row_copy.rows_estimate",
+		"dml.events_applied",
+	}
+	wantVals := []float64{1000, 5000, 42}
+
+	if len(spy.names) != len(wantNames) {
+		t.Fatalf("got %d gauges, want %d", len(spy.names), len(wantNames))
+	}
+	for i := range wantNames {
+		if spy.names[i] != wantNames[i] || spy.values[i] != wantVals[i] {
+			t.Fatalf("[%d] got %s=%v want %s=%v", i, spy.names[i], spy.values[i], wantNames[i], wantVals[i])
+		}
+	}
+}
+
+func TestEmitProgressGauges_nilSafe(t *testing.T) {
+	EmitProgressGauges(nil, 1, 2, 3)
+}
+
 func TestEmitGoRuntimeGauges(t *testing.T) {
 	spy := &gaugeSpy{}
 	m := &runtime.MemStats{

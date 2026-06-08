@@ -407,6 +407,81 @@ func TestMigratorGetMigrationStateAndETA(t *testing.T) {
 	}
 }
 
+type progressGaugeSpy struct {
+	names  []string
+	values []float64
+}
+
+func (s *progressGaugeSpy) Gauge(name string, value float64, _ ...string) {
+	s.names = append(s.names, name)
+	s.values = append(s.values, value)
+}
+
+func (s *progressGaugeSpy) Count(_ string, _ int64, _ ...string)     {}
+func (s *progressGaugeSpy) Histogram(_ string, _ float64, _ ...string) {}
+
+func TestReportStatusEmitsProgressGaugesEveryTick(t *testing.T) {
+	spy := &progressGaugeSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	atomic.StoreInt64(&ctx.TotalRowsCopied, 1000)
+	atomic.StoreInt64(&ctx.RowsEstimate, 5000)
+	atomic.StoreInt64(&ctx.TotalDMLEventsApplied, 42)
+
+	migrator := NewMigrator(ctx, "test")
+	migrator.reportStatus(NoPrintStatusRule, io.Discard)
+	require.Len(t, spy.names, 3)
+	assert.Equal(t, []string{
+		"row_copy.rows_copied",
+		"row_copy.rows_estimate",
+		"dml.events_applied",
+	}, spy.names)
+	assert.Equal(t, []float64{1000, 5000, 42}, spy.values)
+	assert.InDelta(t, 20.0, ctx.GetProgressPct(), 0.01)
+
+	spy.names = nil
+	spy.values = nil
+	atomic.StoreInt64(&ctx.TotalDMLEventsApplied, 100)
+	migrator.reportStatus(NoPrintStatusRule, io.Discard)
+	require.Len(t, spy.names, 3)
+	assert.Equal(t, []float64{1000, 5000, 100}, spy.values)
+}
+
+func TestReportStatusEmitsGaugesWhenRowCopyComplete(t *testing.T) {
+	spy := &progressGaugeSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	atomic.StoreInt64(&ctx.TotalRowsCopied, 5000)
+	atomic.StoreInt64(&ctx.RowsEstimate, 10000)
+
+	migrator := NewMigrator(ctx, "test")
+	atomic.StoreInt64(&migrator.rowCopyCompleteFlag, 1)
+	migrator.reportStatus(NoPrintStatusRule, io.Discard)
+
+	require.Len(t, spy.names, 3)
+	assert.Equal(t, float64(5000), spy.values[0])
+	assert.Equal(t, float64(5000), spy.values[1], "rows_estimate tracks rows_copied when row copy is complete")
+}
+
+func TestReportStatusEmitsGaugesWhenPrintSuppressed(t *testing.T) {
+	spy := &progressGaugeSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	ctx.StartTime = time.Now().Add(-99 * time.Second)
+	atomic.StoreInt64(&ctx.TotalRowsCopied, 1000)
+	atomic.StoreInt64(&ctx.RowsEstimate, 5000)
+	atomic.StoreInt64(&ctx.EtaRowsPerSecond, 1)
+
+	migrator := NewMigrator(ctx, "test")
+	snap := migrator.migrationProgressSnapshot()
+	_, _, etaDuration := migrator.getMigrationStateAndETA(snap.rowsEstimate)
+	require.False(t, migrator.shouldPrintStatus(HeuristicPrintStatusRule, snap.elapsedSeconds, etaDuration))
+
+	migrator.reportStatus(HeuristicPrintStatusRule, io.Discard)
+	require.Len(t, spy.names, 3)
+	assert.Equal(t, []float64{1000, 5000, 0}, spy.values)
+}
+
 func TestMigratorShouldPrintStatus(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
 	migrator := NewMigrator(migrationContext, "1.2.3")
