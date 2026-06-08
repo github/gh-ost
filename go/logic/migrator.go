@@ -214,8 +214,17 @@ func (mgtr *Migrator) retryOperationCtx(ctx context.Context, operation func() er
 	maxRetries := int(mgtr.migrationContext.MaxRetries())
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
-			// sleep after previous iteration
-			RetrySleepFn(1 * time.Second)
+			// Use exponential backoff for transient concurrency errors (deadlocks,
+			// lock-wait timeouts, NOWAIT lock failures) that are expected to resolve
+			// as contending transactions commit. Other errors use a fixed 1-second
+			// sleep to preserve the existing behaviour.
+			sleepDuration := 1 * time.Second
+			if isRetryableApplyError(err) {
+				// 1s, 2s, 4s, 8s... capped at 64s.
+				backoff := math.Min(math.Exp2(float64(i-1)), 64)
+				sleepDuration = time.Duration(backoff) * time.Second
+			}
+			RetrySleepFn(sleepDuration)
 		}
 		if ctx != nil {
 			if err := ctx.Err(); err != nil {

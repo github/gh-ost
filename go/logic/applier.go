@@ -1106,6 +1106,13 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 	return hasFurtherRange, nil
 }
 
+// rowCopyMaxTransientRetries bounds internal retries of the chunk-INSERT query on
+// transient lock errors (NOWAIT 3572, lock-wait timeout 1205, deadlock 1213).
+// Under heavy concurrent write load the SELECT ... FOR SHARE NOWAIT clause can
+// fail immediately; retrying with short backoff avoids exhausting the outer
+// retryOperation budget (which defaults to only 3 attempts).
+const rowCopyMaxTransientRetries = 20
+
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
 // data actually gets copied from original table.
 func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
@@ -1131,61 +1138,23 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 		return chunkSize, rowsAffected, duration, err
 	}
 
-	sqlResult, err := func() (gosql.Result, error) {
-		tx, err := apl.db.Begin()
-		if err != nil {
-			return nil, err
+	var sqlResult gosql.Result
+	for attempt := 0; attempt < rowCopyMaxTransientRetries; attempt++ {
+		sqlResult, err = apl.executeChunkInsertTx(query, explodedArgs)
+		if err == nil {
+			break
 		}
-		defer tx.Rollback()
-
-		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, apl.migrationContext.ApplierTimeZone)
-		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, apl.generateSqlModeQuery())
-
-		if _, err := tx.Exec(sessionQuery); err != nil {
-			return nil, err
+		if !isRetryableApplyError(err) {
+			return chunkSize, rowsAffected, duration, err
 		}
-		result, err := tx.Exec(query, explodedArgs...)
-		if err != nil {
-			return nil, err
+		if attempt == rowCopyMaxTransientRetries-1 {
+			// Exhausted internal retries; propagate to outer retryOperation.
+			break
 		}
-
-		if apl.migrationContext.PanicOnWarnings {
-			rows, err := tx.Query("SHOW WARNINGS")
-			if err != nil {
-				return nil, err
-			}
-			defer rows.Close()
-			if err = rows.Err(); err != nil {
-				return nil, err
-			}
-
-			// Compile regex once before loop to avoid performance penalty and handle errors properly
-			migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
-			if err != nil {
-				return nil, err
-			}
-
-			var sqlWarnings []string
-			for rows.Next() {
-				var level, message string
-				var code int
-				if err := rows.Scan(&level, &code, &message); err != nil {
-					apl.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
-					continue
-				}
-				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
-					continue
-				}
-				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
-			}
-			apl.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
-		}
-
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
-		return result, nil
-	}()
+		apl.migrationContext.Log.Infof("Retrying row-copy after transient lock error (attempt %d/%d): %v",
+			attempt+2, rowCopyMaxTransientRetries, err)
+		RetrySleepFn(time.Duration(100+attempt*50) * time.Millisecond)
+	}
 
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
@@ -1199,6 +1168,63 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 		apl.migrationContext.GetIteration(),
 		chunkSize)
 	return chunkSize, rowsAffected, duration, nil
+}
+
+// executeChunkInsertTx runs a single chunk-INSERT transaction (Begin/Exec/Commit).
+func (apl *Applier) executeChunkInsertTx(query string, explodedArgs []interface{}) (gosql.Result, error) {
+	tx, err := apl.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, apl.migrationContext.ApplierTimeZone)
+	sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, apl.generateSqlModeQuery())
+
+	if _, err := tx.Exec(sessionQuery); err != nil {
+		return nil, err
+	}
+	result, err := tx.Exec(query, explodedArgs...)
+	if err != nil {
+		return nil, err
+	}
+
+	if apl.migrationContext.PanicOnWarnings {
+		rows, err := tx.Query("SHOW WARNINGS")
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		if err = rows.Err(); err != nil {
+			return nil, err
+		}
+
+		// Compile regex once before loop to avoid performance penalty and handle errors properly
+		migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
+		if err != nil {
+			return nil, err
+		}
+
+		var sqlWarnings []string
+		for rows.Next() {
+			var level, message string
+			var code int
+			if err := rows.Scan(&level, &code, &message); err != nil {
+				apl.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+				continue
+			}
+			if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
+				continue
+			}
+			sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+		}
+		apl.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // LockOriginalTable places a write lock on the original table

@@ -223,9 +223,14 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 func TestIsRetryableApplyError(t *testing.T) {
 	require.True(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 1213, Message: "Deadlock found"}))
 	require.True(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}))
+	require.True(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 3572, Message: "Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set."}))
 	require.False(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 1146, Message: "Table doesn't exist"}))
 	require.False(t, isRetryableApplyError(errors.New("generic error")))
 	require.False(t, isRetryableApplyError(nil))
+}
+
+func TestRowCopyMaxTransientRetries(t *testing.T) {
+	require.Equal(t, 20, rowCopyMaxTransientRetries, "rowCopyMaxTransientRetries should be 20")
 }
 
 func TestApplierInstantDDL(t *testing.T) {
