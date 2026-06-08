@@ -182,3 +182,77 @@ func TestStartGoRuntimeReporter_stopsOnCancel(t *testing.T) {
 	cancel()
 	time.Sleep(20 * time.Millisecond)
 }
+
+type throttleSpy struct {
+	gaugeNames      []string
+	gaugeValues     []float64
+	histogramNames  []string
+	histogramValues []float64
+	countNames      []string
+	countValues     []int64
+	tags            [][]string
+}
+
+func (s *throttleSpy) Gauge(name string, value float64, tags ...string) {
+	s.gaugeNames = append(s.gaugeNames, name)
+	s.gaugeValues = append(s.gaugeValues, value)
+	s.tags = append(s.tags, append([]string(nil), tags...))
+}
+
+func (s *throttleSpy) Count(name string, value int64, tags ...string) {
+	s.countNames = append(s.countNames, name)
+	s.countValues = append(s.countValues, value)
+	s.tags = append(s.tags, append([]string(nil), tags...))
+}
+
+func (s *throttleSpy) Histogram(name string, value float64, tags ...string) {
+	s.histogramNames = append(s.histogramNames, name)
+	s.histogramValues = append(s.histogramValues, value)
+	s.tags = append(s.tags, append([]string(nil), tags...))
+}
+
+func TestEmitThrottleActiveGauge(t *testing.T) {
+	spy := &throttleSpy{}
+
+	EmitThrottleActiveGauge(spy, true)
+	EmitThrottleActiveGauge(spy, false)
+
+	if len(spy.gaugeNames) != 2 {
+		t.Fatalf("got %d gauges, want 2", len(spy.gaugeNames))
+	}
+	if spy.gaugeNames[0] != "throttle.active" || spy.gaugeValues[0] != 1 {
+		t.Fatalf("got %s=%v, want throttle.active=1", spy.gaugeNames[0], spy.gaugeValues[0])
+	}
+	if spy.gaugeNames[1] != "throttle.active" || spy.gaugeValues[1] != 0 {
+		t.Fatalf("got %s=%v, want throttle.active=0", spy.gaugeNames[1], spy.gaugeValues[1])
+	}
+}
+
+func TestEmitThrottleInterval(t *testing.T) {
+	spy := &throttleSpy{}
+
+	EmitThrottleInterval(spy, 1500*time.Millisecond, "commanded by user")
+
+	if len(spy.histogramNames) != 1 {
+		t.Fatalf("got %d histograms, want 1", len(spy.histogramNames))
+	}
+	if spy.histogramNames[0] != "throttle.duration_milliseconds" || spy.histogramValues[0] != 1500 {
+		t.Fatalf("got %s=%v, want throttle.duration_milliseconds=1500", spy.histogramNames[0], spy.histogramValues[0])
+	}
+	if len(spy.countNames) != 1 {
+		t.Fatalf("got %d counts, want 1", len(spy.countNames))
+	}
+	if spy.countNames[0] != "throttle.events_total" || spy.countValues[0] != 1 {
+		t.Fatalf("got %s=%v, want throttle.events_total=1", spy.countNames[0], spy.countValues[0])
+	}
+	if len(spy.tags) != 2 || len(spy.tags[0]) != 1 || spy.tags[0][0] != "reason:commanded by user" ||
+		len(spy.tags[1]) != 1 || spy.tags[1][0] != "reason:commanded by user" {
+		t.Fatalf("got tags %v, want [reason:commanded by user]", spy.tags)
+	}
+}
+
+func TestEmitThrottleIntervalNilSafe(t *testing.T) {
+	EmitThrottleActiveGauge(nil, true)
+	EmitThrottleInterval(nil, time.Second, "test")
+	EmitThrottleInterval(&gaugeSpy{}, time.Second, "test")
+}

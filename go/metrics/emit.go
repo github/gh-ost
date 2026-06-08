@@ -106,3 +106,26 @@ func StartGoRuntimeReporter(ctx context.Context, client *Client, interval time.D
 		}
 	}()
 }
+
+// EmitThrottleActiveGauge emits whether throttling is currently active.
+func EmitThrottleActiveGauge(emit Emitter, active bool) {
+	if emit == nil {
+		return
+	}
+	if active {
+		emit.Gauge("throttle.active", 1)
+		return
+	}
+	emit.Gauge("throttle.active", 0)
+}
+
+// EmitThrottleInterval emits one event and one duration sample for a completed
+// throttled interval.
+func EmitThrottleInterval(emit Emitter, duration time.Duration, reason string) {
+	if emit == nil {
+		return
+	}
+	tags := []string{fmt.Sprintf("reason:%s", reason)}
+	emit.Histogram("throttle.duration_milliseconds", float64(duration.Milliseconds()), tags...)
+	emit.Count("throttle.events_total", 1, tags...)
+}
