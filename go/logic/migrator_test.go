@@ -430,21 +430,46 @@ func TestReportStatusEmitsProgressGaugesEveryTick(t *testing.T) {
 
 	migrator := NewMigrator(ctx, "test")
 	migrator.reportStatus(NoPrintStatusRule, io.Discard)
-	require.Len(t, spy.names, 3)
+	require.Len(t, spy.names, 6)
 	assert.Equal(t, []string{
 		"row_copy.rows_copied",
 		"row_copy.rows_estimate",
 		"dml.events_applied",
+		"binlog.backlog_size",
+		"binlog.backlog_capacity",
+		"binlog.backlog_utilization",
 	}, spy.names)
-	assert.Equal(t, []float64{1000, 5000, 42}, spy.values)
+	assert.Equal(t, []float64{1000, 5000, 42, 0, float64(cap(migrator.applyEventsQueue)), 0}, spy.values)
 	assert.InDelta(t, 20.0, ctx.GetProgressPct(), 0.01)
 
 	spy.names = nil
 	spy.values = nil
 	atomic.StoreInt64(&ctx.TotalDMLEventsApplied, 100)
 	migrator.reportStatus(NoPrintStatusRule, io.Discard)
-	require.Len(t, spy.names, 3)
-	assert.Equal(t, []float64{1000, 5000, 100}, spy.values)
+	require.Len(t, spy.names, 6)
+	assert.Equal(t, []float64{1000, 5000, 100, 0, float64(cap(migrator.applyEventsQueue)), 0}, spy.values)
+}
+
+func TestReportStatusEmitsBinlogBacklogGauges(t *testing.T) {
+	spy := &progressGaugeSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+
+	migrator := NewMigrator(ctx, "test")
+	migrator.applyEventsQueue <- newApplyEventStructByDML(&binlog.BinlogEntry{
+		DmlEvent: &binlog.BinlogDMLEvent{DML: binlog.InsertDML},
+	})
+	migrator.applyEventsQueue <- newApplyEventStructByDML(&binlog.BinlogEntry{
+		DmlEvent: &binlog.BinlogDMLEvent{DML: binlog.InsertDML},
+	})
+
+	migrator.reportStatus(NoPrintStatusRule, io.Discard)
+
+	capacity := float64(cap(migrator.applyEventsQueue))
+	require.Len(t, spy.names, 6)
+	assert.Equal(t, float64(2), spy.values[3])
+	assert.Equal(t, capacity, spy.values[4])
+	assert.InDelta(t, 2/capacity, spy.values[5], 1e-9)
 }
 
 func TestReportStatusEmitsGaugesWhenRowCopyComplete(t *testing.T) {
@@ -458,7 +483,7 @@ func TestReportStatusEmitsGaugesWhenRowCopyComplete(t *testing.T) {
 	atomic.StoreInt64(&migrator.rowCopyCompleteFlag, 1)
 	migrator.reportStatus(NoPrintStatusRule, io.Discard)
 
-	require.Len(t, spy.names, 3)
+	require.Len(t, spy.names, 6)
 	assert.Equal(t, float64(5000), spy.values[0])
 	assert.Equal(t, float64(5000), spy.values[1], "rows_estimate tracks rows_copied when row copy is complete")
 }
@@ -478,8 +503,8 @@ func TestReportStatusEmitsGaugesWhenPrintSuppressed(t *testing.T) {
 	require.False(t, migrator.shouldPrintStatus(HeuristicPrintStatusRule, snap.elapsedSeconds, etaDuration))
 
 	migrator.reportStatus(HeuristicPrintStatusRule, io.Discard)
-	require.Len(t, spy.names, 3)
-	assert.Equal(t, []float64{1000, 5000, 0}, spy.values)
+	require.Len(t, spy.names, 6)
+	assert.Equal(t, []float64{1000, 5000, 0, 0, float64(cap(migrator.applyEventsQueue)), 0}, spy.values)
 }
 
 func TestMigratorShouldPrintStatus(t *testing.T) {

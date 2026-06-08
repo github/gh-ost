@@ -1176,6 +1176,11 @@ func (mgtr *Migrator) emitProgressMetrics(snap migrationProgressSnapshot) {
 		snap.rowsEstimate,
 		snap.dmlApplied,
 	)
+	metrics.EmitBinlogBacklogGauges(
+		mgtr.migrationContext.Metrics,
+		snap.applyEventsBacklog,
+		snap.applyEventsCapacity,
+	)
 }
 
 // reportStatus samples progress, emits metrics, and optionally prints status output.
