@@ -886,7 +886,9 @@ func (mgtr *Migrator) MoveTables() (err error) {
 		return err
 	}
 
-	//TODO: cutover here
+	if err := mgtr.moveTablesCutOver(); err != nil {
+		return err
+	}
 
 	if err := mgtr.finalCleanup(); err != nil {
 		return nil
@@ -901,6 +903,83 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
+	return nil
+}
+
+// moveTablesCutOver orchestrates the cooperative cutover protocol for move-tables
+// mode. It implements the T0-T6 transitions described in
+// docs/learning/design-refs/coop_cutover.md §1.3.
+//
+// NOT the standard cutOver() path: every internal call from cutOver() (throttle,
+// atomicCutOver, waitForEventsUpToLock, heartbeat-lag) was built on a
+// single-server assumption that no longer holds when the applier writes target
+// and the streamer reads source. Each is replaced or dropped here.
+//
+// This commit (1 of 3) lays out the protocol as labeled comment blocks only.
+// The protocol logic (RENAME, GTID capture, drain poll, flag set, hooks) lands
+// in commit 2. Tests land in commit 3.
+func (mgtr *Migrator) moveTablesCutOver() (err error) {
+	if mgtr.migrationContext.Noop {
+		mgtr.migrationContext.Log.Debugf("Noop operation; not really moving tables")
+		return nil
+	}
+
+	// ----- Postpone gate (precedes T0) -----
+	// Reuses sleepWhileTrue with a predicate that KEEPS the postpone-flag-file
+	// branch from standard cutOver() (migrator.go:965-984) and DROPS the
+	// heartbeat-lag branch (lines 958-964). The heartbeat-lag check is dropped
+	// because move-tables mode disables _ghc writes (#8206), so
+	// TimeSinceLastHeartbeatOnChangelog() returns ~58 years (time.Since(zero))
+	// and would deadlock the gate forever.
+	// TODO(#8209 commit 2): implement postpone gate (flag-file + unpostpone
+	// socket command, with OnBeginPostponed firing once).
+
+	// ----- T0: on-before-cut-over hook -----
+	// Fires gh-ost-on-before-cut-over* via mgtr.hooksExecutor.OnBeforeCutOver().
+	// Non-zero hook exit aborts cutover BEFORE any source DDL.
+	// TODO(#8209 commit 2): implement T0 hook call with error propagation.
+
+	// ----- T1: RENAME source table -----
+	// Connection: mgtr.inspector.db (privileged source connection per
+	// move_table_mode.md §1.5; same connection as T2 so the RENAME's own GTID
+	// is visible in @@gtid_executed when T2 reads it).
+	// Exec: sqlutils.ExecNoPrepare with no retry — RENAME is not idempotent;
+	// a partial success leaves the table already renamed and a retry would
+	// fail. On error: return wrapped err; operator re-runs the whole hook.
+	// SQL shape: RENAME TABLE `<source_db>`.`<table>` TO `<source_db>`.`_<table>_del`
+	// TODO(#8209 commit 2): implement RENAME via inspector.db.
+
+	// ----- T2: capture @@gtid_executed -----
+	// Same connection as T1. Parse the result into a *mysql.GTIDBinlogCoordinates
+	// (the drain GTID — a closed superset of every committed source write to
+	// the migrated table, per coop_cutover.md §3.2 steps 1-3).
+	// TODO(#8209 commit 2): implement GTID capture on the inspector connection.
+
+	// ----- T3: drain poll -----
+	// Loop ~100ms ticks (per move_table_mode.md §1.5) until
+	// applier.CurrentCoordinates contains the drain GTID, comparing via
+	// GTIDBinlogCoordinates.SmallerThan (go/mysql/binlog_gtid.go). Reads of
+	// CurrentCoordinates MUST hold CurrentCoordinatesMutex (applier.go:75).
+	// Timeout after CutOverLockTimeoutSeconds; on timeout return an error
+	// naming the drain.
+	// TODO(#8209 commit 2): implement drain poll with mutex-protected reads.
+
+	// ----- T4: set CutOverCompleteFlag -----
+	// atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1).
+	// MUST be set BEFORE T5 so the streamer's StreamEvents(canStopStreaming)
+	// loop can wind down in parallel with the (potentially slow) on-success
+	// hook. Forgetting this flag has no visible failure mode at the call site
+	// — the run silently hangs after cutover.
+	// TODO(#8209 commit 2): implement T4 flag set.
+
+	// ----- T5: fire on-success hook -----
+	// mgtr.hooksExecutor.OnSuccess(false). Hook unlocks user_rw@target via
+	// db-user-management and flips the write_cutover? feature flag.
+	// Standard env vars only — GH_OST_DRAIN_GTID + GH_OST_TARGET_* are #8211
+	// (1.7), not this PR.
+	// TODO(#8209 commit 2): implement T5 hook call with error propagation.
+
+	// ----- T6: return nil -----
 	return nil
 }
 
