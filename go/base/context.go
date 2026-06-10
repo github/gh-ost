@@ -19,6 +19,7 @@ import (
 
 	uuid "github.com/google/uuid"
 
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/openark/golib/log"
@@ -237,6 +238,8 @@ type MigrationContext struct {
 	AbortError error
 	abortMutex *sync.Mutex
 
+	Metrics *metrics.Client
+
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
 	OriginalTableVirtualColumns      *sql.ColumnList
@@ -273,14 +276,14 @@ type MigrationContext struct {
 
 	// move tables:
 	MoveTables struct {
-		TableNames         []string // List of table names to be moved.
-		TargetHost         string   // Target hostname for the move. This must be a primary/writable host.
-		TargetPort         int      // Target MySQL port for the move.
-		TargetUser         string   // Target username for the move. If not specified, it will default to the source user.
-		TargetPass         string   // Target password for the move. If not specified, it will default to the source password.
-		TargetDatabase     string   // Target database name for the move. If not specified, it will default to the source database name.
+		TableNames       []string // List of table names to be moved.
+		TargetHost       string   // Target hostname for the move. This must be a primary/writable host.
+		TargetPort       int      // Target MySQL port for the move.
+		TargetUser       string   // Target username for the move. If not specified, it will default to the source user.
+		TargetPass       string   // Target password for the move. If not specified, it will default to the source password.
+		TargetDatabase   string   // Target database name for the move. If not specified, it will default to the source database name.
 		TmpCutoverFilename string   // TEMPORARY: Filename to use as a 'cutover-can-continue' signal. This is only for local testing.
-		ConnectionConfig   *mysql.ConnectionConfig
+		ConnectionConfig *mysql.ConnectionConfig
 	}
 
 	Log Logger

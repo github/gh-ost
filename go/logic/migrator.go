@@ -234,10 +234,16 @@ func (mgtr *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 // consumeRowCopyComplete blocks on the rowCopyComplete channel once, and then
 // consumes and drops any further incoming events that may be left hanging.
 func (mgtr *Migrator) consumeRowCopyComplete() {
-	if err := <-mgtr.rowCopyComplete; err != nil {
-		// Abort synchronously to ensure checkAbort() sees the error immediately
-		mgtr.abort(err)
-		// Don't mark row copy as complete if there was an error
+	select {
+	case err := <-mgtr.rowCopyComplete:
+		if err != nil {
+			// Abort synchronously to ensure checkAbort() sees the error immediately
+			mgtr.abort(err)
+			// Don't mark row copy as complete if there was an error
+			return
+		}
+	case <-mgtr.migrationContext.GetContext().Done():
+		// Abort cancelled the context
 		return
 	}
 	atomic.StoreInt64(&mgtr.rowCopyCompleteFlag, 1)
@@ -330,13 +336,26 @@ func (mgtr *Migrator) onChangelogHeartbeatEvent(dmlEntry *binlog.BinlogEntry) (e
 	heartbeatTime, err := time.Parse(time.RFC3339Nano, changelogHeartbeatString)
 	if err != nil {
 		return mgtr.migrationContext.Log.Errore(err)
-	} else {
-		mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
+	}
+	mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(heartbeatTime)
+
+	// Route the coords bump through applyEventsQueue so it is ordered after
+	// any DMLs the streamer enqueued before this heartbeat.
+	coords := dmlEntry.Coordinates
+	var writeFunc tableWriteFunc = func() error {
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
-		mgtr.applier.CurrentCoordinates = dmlEntry.Coordinates
+		mgtr.applier.CurrentCoordinates = coords
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
 		return nil
 	}
+	if err := base.SendWithContext(
+		mgtr.migrationContext.GetContext(),
+		mgtr.applyEventsQueue,
+		newApplyEventStructByFunc(&writeFunc),
+	); err != nil {
+		return mgtr.migrationContext.Log.Errore(err)
+	}
+	return nil
 }
 
 // abort stores the error, cancels the context, and logs the abort.
@@ -450,6 +469,7 @@ func (mgtr *Migrator) checkAbort() error {
 func (mgtr *Migrator) Migrate() (err error) {
 	mgtr.migrationContext.Log.Infof("Migrating %s.%s", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))
 	mgtr.migrationContext.StartTime = time.Now()
+	mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(mgtr.migrationContext.StartTime)
 
 	// Ensure context is cancelled on exit (cleanup)
 	defer mgtr.migrationContext.CancelContext()
@@ -667,6 +687,7 @@ func (mgtr *Migrator) Revert() error {
 		sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName),
 		sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OldTableName))
 	mgtr.migrationContext.StartTime = time.Now()
+	mgtr.migrationContext.SetLastHeartbeatOnChangelogTime(mgtr.migrationContext.StartTime)
 
 	// Ensure context is cancelled on exit (cleanup)
 	defer mgtr.migrationContext.CancelContext()
@@ -854,8 +875,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.addDMLEventsListener(); err != nil {
 		return err
 	}
-
-	if err := mgtr.applier.ReadMigrationRangeValues(mgtr.inspector.db); err != nil {
+	if err := mgtr.applier.ReadMigrationRangeValues(); err != nil {
 		return err
 	}
 
@@ -1705,6 +1725,30 @@ func (mgtr *Migrator) initiateApplier() error {
 	if err := mgtr.applier.InitDBConnections(); err != nil {
 		return err
 	}
+	if err := mgtr.applier.AcquireMigrationLock(mgtr.migrationContext.GetContext()); err != nil {
+		return err
+	}
+	if mgtr.migrationContext.Revert {
+		if err := mgtr.applier.CreateChangelogTable(); err != nil {
+			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			return err
+		}
+	} else if !mgtr.migrationContext.Resume {
+		if err := mgtr.applier.ValidateOrDropExistingTables(); err != nil {
+			return err
+		}
+		if err := mgtr.applier.CreateChangelogTable(); err != nil {
+			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+			return err
+		}
+		if err := mgtr.applier.CreateGhostTable(); err != nil {
+			mgtr.migrationContext.Log.Errorf("unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+			return err
+		}
+		if err := mgtr.applier.AlterGhost(); err != nil {
+			mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table, see further error details. Bailing out")
+			return err
+		}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
 		//TODO(chriskirkland): drop the target table if it exists?
@@ -1836,9 +1880,12 @@ func (mgtr *Migrator) iterateChunks() error {
 				}
 				var rowsAffected int64
 				if mgtr.migrationContext.IsMoveTablesMode() {
-					_, rowsAffected, _, err = mgtr.applier.ApplyIterationMoveTableCopyQueries(mgtr.inspector.db)
+					_, rowsAffected, _, err = mgtr.applier.ApplyIterationMoveTableCopyQueries()
 				} else {
 					_, rowsAffected, _, err = mgtr.applier.ApplyIterationInsertQuery()
+				}
+				if err != nil {
+					return err // wrapping call will retry
 				}
 				if err != nil {
 					return fmt.Errorf("ApplyIterationInsertQuery failed: %w", err) // wrapping call will retry
