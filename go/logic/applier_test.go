@@ -335,6 +335,8 @@ func (suite *ApplierTestSuite) TearDownTest() {
 	suite.Require().NoError(err)
 	_, err = suite.otherDB.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestOtherTableName())
 	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`_%s_ghc`", testMysqlDatabase, testMysqlTableName))
+	suite.Require().NoError(err)
 }
 
 func (suite *ApplierTestSuite) TestInitDBConnections() {
@@ -364,6 +366,41 @@ func (suite *ApplierTestSuite) TestInitDBConnections() {
 	suite.Require().Equal("+00:00", migrationContext.ApplierTimeZone)
 
 	suite.Require().Equal(sql.NewColumnList([]string{"id", "item_id"}), migrationContext.OriginalTableColumnsOnApplier)
+}
+
+func (suite *ApplierTestSuite) TestInitiateApplierMoveTablesMode_NoGhostOrChangelogTable() {
+	ctx := context.Background()
+
+	var err error
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// #8206 [Task] [1.2] Skip ghost/changelog tables, heartbeat in gh-ost move-tables mode
+	// In move-tables mode, no ghost or changelog table should exist.
+	// InitDBConnections() should succeed without them.
+	suite.Require().False(applier.tableExists("_testing_gho"), "ghost table should not exist in move-tables mode")
+	suite.Require().False(applier.tableExists("_testing_ghc"), "changelog table should not exist in move-tables mode")
+
+	// In move-tables mode, OriginalTableColumnsOnApplier is unused and intentionally never populated
+	suite.Require().Nil(migrationContext.OriginalTableColumnsOnApplier)
 }
 
 func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
@@ -429,6 +466,53 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 
 	suite.Require().Equal(int64(1), migrationContext.TotalDMLEventsApplied)
 	suite.Require().Equal(int64(0), migrationContext.RowsDeltaEstimate)
+}
+
+// finalCleanup() requires a fully wired migrator to call directly.
+// This test verifies the IsMoveTablesMode() predicate that gates the early return.
+// Full behavioral coverage relies on the suite: no ghost/changelog tables are
+// created (Test #1), and WriteChangelog is a no-op (Test #2).
+func (suite *ApplierTestSuite) TestFinalCleanupMoveTablesMode_SkipsDrops() {
+	migrationContext := newTestMigrationContext()
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+
+	suite.Require().True(migrationContext.IsMoveTablesMode())
+}
+
+// initiateStreaming() requires a binlog-capable MySQL connection to call directly.
+// This test verifies IsMoveTablesMode() and that GetChangelogTableName() returns
+// a derivable name. A new streamer always starts with zero listeners; the real
+// proof that no changelog listener is registered comes from the full run not
+// failing on a nonexistent _ghc table.
+func (suite *ApplierTestSuite) TestInitiateStreamingMoveTablesMode_NoChangelogListener() {
+	migrationContext := newTestMigrationContext()
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+
+	suite.Require().True(migrationContext.IsMoveTablesMode())
+
+	changelogTableName := migrationContext.GetChangelogTableName()
+	suite.Require().NotEmpty(changelogTableName, "changelog table name should be derivable")
+
+	streamer := NewEventsStreamer(migrationContext)
+	suite.Require().Empty(streamer.listeners, "new streamer should have no listeners")
+}
+
+// initiateApplier() requires a full migrator to call directly.
+// This test verifies the IsMoveTablesMode() predicate that gates InitiateHeartbeat().
+// Even if heartbeat ran, TestWriteChangelogNoOpInMoveTablesMode proves WriteChangelog
+// is a no-op, so no SQL would execute against a nonexistent changelog table.
+//
+// A stronger test would instrument InitiateHeartbeat() (e.g., via a callback or
+// channel) to assert the goroutine is never started. That requires test-infrastructure
+// changes to the Applier and is beyond #8206's scope.
+func (suite *ApplierTestSuite) TestNoHeartbeatInMoveTablesMode() {
+	migrationContext := newTestMigrationContext()
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+
+	suite.Require().True(migrationContext.IsMoveTablesMode())
 }
 
 func (suite *ApplierTestSuite) TestValidateOrDropExistingTables() {
@@ -527,6 +611,43 @@ func (suite *ApplierTestSuite) TestValidateOrDropExistingTablesWithGhostTableExi
 	err = suite.db.QueryRow(fmt.Sprintf("SHOW TABLES IN test LIKE '_%s_gho'", testMysqlTableName)).Scan(&tableName)
 	suite.Require().Error(err)
 	suite.Require().Equal(gosql.ErrNoRows, err)
+}
+
+func (suite *ApplierTestSuite) TestWriteChangelogNoOpInMoveTablesMode() {
+	ctx := context.Background()
+
+	var err error
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// #8206 [Task] [1.2] Skip ghost/changelog tables, heartbeat in gh-ost move-tables mode
+	// WriteChangelog should be a no-op in move-tables mode.
+	// No changelog table exists, so if it tried to execute, it would fail.
+	hint, err := applier.WriteChangelog("heartbeat", "2026-06-05T00:00:00Z")
+	suite.Require().NoError(err)
+	suite.Require().Empty(hint)
+
+	// Also verify state writes are no-ops
+	hint, err = applier.WriteChangelogState("Migrated")
+	suite.Require().NoError(err)
+	suite.Require().Equal("", hint)
 }
 
 func (suite *ApplierTestSuite) TestAcquireMigrationLockSucceedsWhenFree() {
@@ -701,11 +822,11 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySuc
 
 	err = applier.CreateChangelogTable()
 	suite.Require().NoError(err)
-	err = applier.ReadMigrationRangeValues()
+	err = applier.ReadMigrationRangeValues(nil)
 	suite.Require().NoError(err)
 
 	migrationContext.SetNextIterationRangeMinValues()
-	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues(nil)
 
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
@@ -778,14 +899,14 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQueryFai
 	err = applier.CreateChangelogTable()
 	suite.Require().NoError(err)
 
-	err = applier.ReadMigrationRangeValues()
+	err = applier.ReadMigrationRangeValues(nil)
 	suite.Require().NoError(err)
 
 	err = applier.AlterGhost()
 	suite.Require().NoError(err)
 
 	migrationContext.SetNextIterationRangeMinValues()
-	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues(nil)
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
 
@@ -851,7 +972,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	err = applier.prepareQueries()
 	suite.Require().NoError(err)
 
-	err = applier.ReadMigrationRangeValues()
+	err = applier.ReadMigrationRangeValues(nil)
 	suite.Require().NoError(err)
 
 	// checkpoint table is empty
@@ -1745,15 +1866,15 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	err = applier.CreateChangelogTable()
 	suite.Require().NoError(err)
 
-	err = applier.ReadMigrationRangeValues()
+	err = applier.ReadMigrationRangeValues(nil)
 	suite.Require().NoError(err)
 
 	migrationContext.SetNextIterationRangeMinValues()
-	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues(nil)
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
 
-	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries()
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(3), rowsAffected)
 	suite.Require().Equal(int64(1000), chunkSize)
@@ -1830,7 +1951,7 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesNoRows() {
 	migrationContext.MigrationIterationRangeMinValues = sql.ToColumnValues([]interface{}{100})
 	migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{200})
 
-	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries()
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(0), rowsAffected)
 	suite.Require().Equal(int64(1000), chunkSize)

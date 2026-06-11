@@ -495,7 +495,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	defer mgtr.teardown()
 
 	if err := mgtr.initiateInspector(); err != nil {
-		return err
+		return fmt.Errorf("failed to initiate inspector: %w", err)
 	}
 	if err := mgtr.checkAbort(); err != nil {
 		return err
@@ -604,7 +604,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.addDMLEventsListener(); err != nil {
 		return err
 	}
-	if err := mgtr.applier.ReadMigrationRangeValues(); err != nil {
+	if err := mgtr.applier.ReadMigrationRangeValues(nil); err != nil {
 		return err
 	}
 
@@ -790,12 +790,26 @@ func (mgtr *Migrator) Revert() error {
 	return nil
 }
 
+// prepareMoveTablesCopyState initializes state for row copy in move-tables mode.
+// for move-tables functionality, the source and target tables are identical so we just need to grab any valid UNIQUE key constraint.
+func (mgtr *Migrator) prepareMoveTablesCopyState() {
+	mgtr.migrationContext.UniqueKey = mgtr.inspector.selectUniqueKey(mgtr.migrationContext.OriginalTableUniqueKeys)
+
+	// In move-tables mode source and target schemas match, so shared columns are identical.
+	mgtr.migrationContext.SharedColumns = mgtr.migrationContext.OriginalTableColumns
+	mgtr.migrationContext.MappedSharedColumns = mgtr.migrationContext.OriginalTableColumns
+}
+
 func (mgtr *Migrator) MoveTables() (err error) {
 	mgtr.migrationContext.Log.Infof("Moving tables %v from %s to %s (%s)",
 		mgtr.migrationContext.MoveTables.TableNames,
 		sql.EscapeName(mgtr.migrationContext.DatabaseName),
-		sql.EscapeName(mgtr.migrationContext.MoveTables.TargetDatabase), mgtr.migrationContext.MoveTables.TargetHost)
+		sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()), mgtr.migrationContext.MoveTables.TargetHost)
 	mgtr.migrationContext.StartTime = time.Now()
+
+	if mgtr.migrationContext.OriginalTableName == "" {
+		mgtr.migrationContext.OriginalTableName = mgtr.migrationContext.MoveTables.TableNames[0]
+	}
 
 	// Ensure context is cancelled on exit (cleanup)
 	defer mgtr.migrationContext.CancelContext()
@@ -824,7 +838,17 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.initiateApplier(); err != nil {
 		return err
 	}
+	if err := mgtr.initiateStreaming(); err != nil {
+		return err
+	}
 	if err := mgtr.checkAbort(); err != nil {
+		return err
+	}
+
+	mgtr.prepareMoveTablesCopyState()
+
+	// this function assumes that the unique key constraint has been set.
+	if err := mgtr.applier.prepareQueries(); err != nil {
 		return err
 	}
 
@@ -844,7 +868,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.addDMLEventsListener(); err != nil {
 		return err
 	}
-	if err := mgtr.applier.ReadMigrationRangeValues(); err != nil {
+	if err := mgtr.applier.ReadMigrationRangeValues(mgtr.inspector.db); err != nil {
 		return err
 	}
 
@@ -885,7 +909,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	}
 	mgtr.migrationContext.Log.Infof("Done moving tables %v from %s to %s (%s)",
 		mgtr.migrationContext.MoveTables.TableNames, sql.EscapeName(mgtr.migrationContext.DatabaseName),
-		sql.EscapeName(mgtr.migrationContext.MoveTables.TargetDatabase), mgtr.migrationContext.MoveTables.TargetHost)
+		sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()), mgtr.migrationContext.MoveTables.TargetHost)
 	// Final check for abort before declaring success
 	if err := mgtr.checkAbort(); err != nil {
 		return err
@@ -1217,14 +1241,16 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 		return err
 	}
 	if err := mgtr.inspector.ValidateOriginalTable(); err != nil {
-		return err
+		return fmt.Errorf("failed to validate original table: %w", err)
 	}
 	if err := mgtr.inspector.InspectOriginalTable(); err != nil {
-		return err
+		return fmt.Errorf("failed to inspect original table: %w", err)
 	}
 	// So far so good, table is accessible and valid.
 	// Let's get master connection config
-	if mgtr.migrationContext.AssumeMasterHostname == "" {
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.MoveTables.ConnectionConfig
+	} else if mgtr.migrationContext.AssumeMasterHostname == "" {
 		// No forced master host; detect master
 		if mgtr.migrationContext.ApplierConnectionConfig, err = mgtr.inspector.getMasterConnectionConfig(); err != nil {
 			return err
@@ -1256,7 +1282,9 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 		mgtr.migrationContext.Log.Infof("--test-on-replica or --migrate-on-replica given. Will not execute on master %+v but rather on replica %+v itself",
 			*mgtr.migrationContext.ApplierConnectionConfig.ImpliedKey, *mgtr.migrationContext.InspectorConnectionConfig.ImpliedKey,
 		)
-		mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.InspectorConnectionConfig.Duplicate()
+		if !mgtr.migrationContext.IsMoveTablesMode() {
+			mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.InspectorConnectionConfig.Duplicate()
+		}
 		if mgtr.migrationContext.GetThrottleControlReplicaKeys().Len() == 0 {
 			mgtr.migrationContext.AddThrottleControlReplicaKey(mgtr.migrationContext.InspectorConnectionConfig.Key)
 		}
@@ -1296,11 +1324,11 @@ func (mgtr *Migrator) initiateStatus() {
 // migration, and as response to the "status" interactive command.
 func (mgtr *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
-	fmt.Fprintf(w, "# Migrating %s.%s; Ghost table is %s.%s\n",
+	fmt.Fprintf(w, "# Migrating %s.%s; Target table is %s.%s\n",
 		sql.EscapeName(mgtr.migrationContext.DatabaseName),
 		sql.EscapeName(mgtr.migrationContext.OriginalTableName),
-		sql.EscapeName(mgtr.migrationContext.DatabaseName),
-		sql.EscapeName(mgtr.migrationContext.GetGhostTableName()),
+		sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()),
+		sql.EscapeName(mgtr.migrationContext.GetTargetTableName()),
 	)
 	fmt.Fprintf(w, "# Migrating %+v; inspecting %+v; executing on %+v\n",
 		*mgtr.applier.connectionConfig.ImpliedKey,
@@ -1548,14 +1576,19 @@ func (mgtr *Migrator) initiateStreaming() error {
 	if err := mgtr.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
-	mgtr.eventsStreamer.AddListener(
-		false,
-		mgtr.migrationContext.DatabaseName,
-		mgtr.migrationContext.GetChangelogTableName(),
-		func(dmlEntry *binlog.BinlogEntry) error {
-			return mgtr.onChangelogEvent(dmlEntry)
-		},
-	)
+
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		mgtr.migrationContext.Log.Info("Skipping stream of the changelog table")
+	} else {
+		mgtr.eventsStreamer.AddListener(
+			false,
+			mgtr.migrationContext.DatabaseName,
+			mgtr.migrationContext.GetChangelogTableName(),
+			func(dmlEntry *binlog.BinlogEntry) error {
+				return mgtr.onChangelogEvent(dmlEntry)
+			},
+		)
+	}
 
 	go func() {
 		mgtr.migrationContext.Log.Debugf("Beginning streaming")
@@ -1583,10 +1616,15 @@ func (mgtr *Migrator) initiateStreaming() error {
 // addDMLEventsListener begins listening for binlog events on the original table,
 // and creates & enqueues a write task per such event.
 func (mgtr *Migrator) addDMLEventsListener() error {
+	originalTableName := mgtr.migrationContext.OriginalTableName
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		originalTableName = mgtr.migrationContext.MoveTables.TableNames[0]
+	}
+
 	err := mgtr.eventsStreamer.AddListener(
 		false,
 		mgtr.migrationContext.DatabaseName,
-		mgtr.migrationContext.OriginalTableName,
+		originalTableName,
 		func(dmlEntry *binlog.BinlogEntry) error {
 			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
 			// This is critical because this callback blocks the event streamer
@@ -1598,6 +1636,12 @@ func (mgtr *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (mgtr *Migrator) initiateThrottler() {
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		// TODO(chriskirkland): throttle against the target cluster
+		mgtr.migrationContext.Log.Info("Skipping throttling in move tables mode")
+		return
+	}
+
 	mgtr.throttler = NewThrottler(mgtr.migrationContext, mgtr.applier, mgtr.inspector, mgtr.appVersion)
 
 	go mgtr.throttler.initiateThrottlerCollection(mgtr.firstThrottlingCollected)
@@ -1617,38 +1661,50 @@ func (mgtr *Migrator) initiateApplier() error {
 	if err := mgtr.applier.AcquireMigrationLock(mgtr.migrationContext.GetContext()); err != nil {
 		return err
 	}
-	if mgtr.migrationContext.Revert {
-		if err := mgtr.applier.CreateChangelogTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
-			return err
-		}
-	} else if !mgtr.migrationContext.Resume {
-		if err := mgtr.applier.ValidateOrDropExistingTables(); err != nil {
-			return err
-		}
-		if err := mgtr.applier.CreateChangelogTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
-			return err
-		}
-		if err := mgtr.applier.CreateGhostTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
-			return err
-		}
-		if err := mgtr.applier.AlterGhost(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table, see further error details. Bailing out")
-			return err
-		}
 
-		if mgtr.migrationContext.OriginalTableAutoIncrement > 0 && !mgtr.parser.IsAutoIncrementDefined() {
-			// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
-			// so we should copy AUTO_INCREMENT value onto our ghost table.
-			if err := mgtr.applier.AlterGhostAutoIncrement(); err != nil {
-				mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.MoveTables.TableNames[0])
+		if err != nil {
+			return fmt.Errorf("failed to fetch create table statement: %w", err)
+		}
+		if err := mgtr.applier.CreateTargetTable(createTableStatement); err != nil {
+			mgtr.migrationContext.Log.Errorf("unable to create target table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+			return err
+		}
+	} else {
+		if mgtr.migrationContext.Revert {
+			if err := mgtr.applier.CreateChangelogTable(); err != nil {
+				mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
 				return err
 			}
-		}
-		if _, err := mgtr.applier.WriteChangelogState(string(GhostTableMigrated)); err != nil {
-			return err
+		} else if !mgtr.migrationContext.Resume {
+			if err := mgtr.applier.ValidateOrDropExistingTables(); err != nil {
+				return err
+			}
+			if err := mgtr.applier.CreateChangelogTable(); err != nil {
+				mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
+				return err
+			}
+			if err := mgtr.applier.CreateGhostTable(); err != nil {
+				mgtr.migrationContext.Log.Errorf("unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+				return err
+			}
+			if err := mgtr.applier.AlterGhost(); err != nil {
+				mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table, see further error details. Bailing out")
+				return err
+			}
+
+			if mgtr.migrationContext.OriginalTableAutoIncrement > 0 && !mgtr.parser.IsAutoIncrementDefined() {
+				// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
+				// so we should copy AUTO_INCREMENT value onto our ghost table.
+				if err := mgtr.applier.AlterGhostAutoIncrement(); err != nil {
+					mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table AUTO_INCREMENT value, see further error details. Bailing out")
+					return err
+				}
+			}
+			if _, err := mgtr.applier.WriteChangelogState(string(GhostTableMigrated)); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1663,7 +1719,9 @@ func (mgtr *Migrator) initiateApplier() error {
 		mgtr.migrationContext.Log.Warning("proceeding without metadata lock check. There is a small chance of data loss if another session accesses the ghost table during cut-over. See https://github.com/github/gh-ost/pull/1536 for details")
 	}
 
-	go mgtr.applier.InitiateHeartbeat()
+	if !mgtr.migrationContext.IsMoveTablesMode() {
+		go mgtr.applier.InitiateHeartbeat()
+	}
 	return nil
 }
 
@@ -1705,7 +1763,13 @@ func (mgtr *Migrator) iterateChunks() error {
 				}
 
 				// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
-				hasFurtherRange, err := mgtr.applier.CalculateNextIterationRangeEndValues()
+				var hasFurtherRange bool
+				var err error
+				if mgtr.migrationContext.IsMoveTablesMode() {
+					hasFurtherRange, err = mgtr.applier.CalculateNextIterationRangeEndValues(mgtr.inspector.db)
+				} else {
+					hasFurtherRange, err = mgtr.applier.CalculateNextIterationRangeEndValues(nil)
+				}
 				if err != nil {
 					return err // wrapping call will retry
 				}
@@ -1726,13 +1790,14 @@ func (mgtr *Migrator) iterateChunks() error {
 				}
 				var rowsAffected int64
 				if mgtr.migrationContext.IsMoveTablesMode() {
-					_, rowsAffected, _, err = mgtr.applier.ApplyIterationMoveTableCopyQueries()
+					_, rowsAffected, _, err = mgtr.applier.ApplyIterationMoveTableCopyQueries(mgtr.inspector.db)
 				} else {
 					_, rowsAffected, _, err = mgtr.applier.ApplyIterationInsertQuery()
 				}
 				if err != nil {
 					return err // wrapping call will retry
 				}
+				mgtr.migrationContext.Log.Debugf("ApplyIterationInsertQuery affected %d rows", rowsAffected)
 
 				if mgtr.migrationContext.PanicOnWarnings {
 					if len(mgtr.migrationContext.MigrationLastInsertSQLWarnings) > 0 {
@@ -1942,7 +2007,11 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 			return nil
 		}
 
-		mgtr.throttler.throttle(nil)
+		if !mgtr.migrationContext.IsMoveTablesMode() {
+			// disable throttling in move-tables mode for now
+			// https://github.com/github/database-infrastructure/issues/8212
+			mgtr.throttler.throttle(nil)
+		}
 
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
@@ -2021,12 +2090,19 @@ func (mgtr *Migrator) finalCleanup() error {
 		if createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.GetGhostTableName()); err == nil {
 			mgtr.migrationContext.Log.Infof("New table structure follows")
 			fmt.Println(createTableStatement)
-		} else {
-			mgtr.migrationContext.Log.Errore(err)
+		} else if !mgtr.migrationContext.IsMoveTablesMode() {
+			mgtr.migrationContext.Log.Errore(fmt.Errorf("error showing create table: %w", err))
 		}
 	}
 	if err := mgtr.eventsStreamer.Close(); err != nil {
 		mgtr.migrationContext.Log.Errore(err)
+	}
+
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		// for move-tables mode, we're done at this point
+		// TODO(zacharysierakowski): when we add the checkpoint table in for 1.6, make sure we cleanup
+		// the checkpoint table here first before returning (looks like that's a few lines below changelog table cleanup)
+		return nil
 	}
 
 	if err := mgtr.retryOperation(mgtr.applier.DropChangelogTable); err != nil {

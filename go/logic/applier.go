@@ -115,7 +115,7 @@ func NewApplier(migrationContext *base.MigrationContext) *Applier {
 // hence the optional table name prefix. Metacharacters in table/index names are escaped to avoid
 // regex syntax errors.
 func (apl *Applier) compileMigrationKeyWarningRegex() (*regexp.Regexp, error) {
-	escapedTable := regexp.QuoteMeta(apl.migrationContext.GetGhostTableName())
+	escapedTable := regexp.QuoteMeta(apl.migrationContext.GetTargetTableName())
 	escapedKey := regexp.QuoteMeta(apl.migrationContext.UniqueKey.NameInGhostTable)
 	migrationUniqueKeyPattern := fmt.Sprintf(`for key '(%s\.)?%s'`, escapedTable, escapedKey)
 	migrationKeyRegex, err := regexp.Compile(migrationUniqueKeyPattern)
@@ -126,7 +126,7 @@ func (apl *Applier) compileMigrationKeyWarningRegex() (*regexp.Regexp, error) {
 }
 
 func (apl *Applier) InitDBConnections() (err error) {
-	applierUri := apl.connectionConfig.GetDBUri(apl.migrationContext.DatabaseName)
+	applierUri := apl.connectionConfig.GetDBUri(apl.migrationContext.GetTargetDatabaseName())
 	uriWithMulti := fmt.Sprintf("%s&multiStatements=true", applierUri)
 	if apl.db, _, err = mysql.GetDB(apl.migrationContext.Uuid, uriWithMulti); err != nil {
 		return err
@@ -154,11 +154,23 @@ func (apl *Applier) InitDBConnections() (err error) {
 			apl.connectionConfig.ImpliedKey = impliedKey
 		}
 	}
-	if err := apl.readTableColumns(); err != nil {
-		return err
+	if !apl.migrationContext.IsMoveTablesMode() {
+		// read target table columns from applier
+		if err := apl.readTableColumns(); err != nil {
+			return err
+		}
 	}
 	if apl.moveTablesConnectionConfig != nil {
-		moveTablesURI := apl.moveTablesConnectionConfig.GetDBUri(apl.migrationContext.MoveTables.TargetDatabase) + "&multiStatements=true"
+		moveTablesURI := apl.moveTablesConnectionConfig.GetDBUri(apl.migrationContext.GetTargetDatabaseName()) + "&multiStatements=true"
+		if apl.moveTablesTargetDB, _, err = mysql.GetDB(apl.migrationContext.Uuid, moveTablesURI); err != nil {
+			return err
+		}
+		if _, err := base.ValidateConnection(apl.moveTablesTargetDB, apl.moveTablesConnectionConfig, apl.migrationContext, apl.name); err != nil {
+			return err
+		}
+	}
+	if apl.moveTablesConnectionConfig != nil {
+		moveTablesURI := apl.moveTablesConnectionConfig.GetDBUri(apl.migrationContext.GetTargetDatabaseName()) + "&multiStatements=true"
 		if apl.moveTablesTargetDB, _, err = mysql.GetDB(apl.migrationContext.Uuid, moveTablesURI); err != nil {
 			return err
 		}
@@ -185,7 +197,7 @@ func buildMigrationLockName(db, table string) string {
 // preventing two gh-ost processes from migrating the same table concurrently
 // on the same MySQL server.
 func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
-	lockName := buildMigrationLockName(apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName)
+	lockName := buildMigrationLockName(apl.migrationContext.DatabaseName, apl.originalTableName())
 
 	// Use a dedicated *sql.DB so the pinned connection does not consume a
 	// slot in apl.db's small pool (mysql.MaxDBPoolConnections).
@@ -223,10 +235,10 @@ func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
 		lockDB.Close()
 		if holderID.Valid {
 			return fmt.Errorf("another gh-ost process is already migrating `%s`.`%s`: migration lock %s held by connection id %d",
-				apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName, lockName, holderID.Int64)
+				apl.migrationContext.DatabaseName, apl.originalTableName(), lockName, holderID.Int64)
 		}
 		return fmt.Errorf("another gh-ost process is already migrating `%s`.`%s`: migration lock %s is held",
-			apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName, lockName)
+			apl.migrationContext.DatabaseName, apl.originalTableName(), lockName)
 	}
 
 	apl.migrationLockConn = conn
@@ -314,12 +326,8 @@ func (apl *Applier) releaseMigrationLock() {
 }
 
 func (apl *Applier) prepareQueries() (err error) {
-	targetDatabaseName := apl.migrationContext.DatabaseName
-	targetTableName := apl.migrationContext.GetGhostTableName()
-	if apl.migrationContext.IsMoveTablesMode() {
-		targetDatabaseName = apl.migrationContext.MoveTables.TargetDatabase
-		targetTableName = apl.migrationContext.OriginalTableName
-	}
+	targetDatabaseName := apl.migrationContext.GetTargetDatabaseName()
+	targetTableName := apl.migrationContext.GetTargetTableName()
 
 	if apl.dmlDeleteQueryBuilder, err = sql.NewDMLDeleteQueryBuilder(
 		targetDatabaseName,
@@ -360,7 +368,7 @@ func (apl *Applier) prepareQueries() (err error) {
 	if apl.migrationContext.IsMoveTablesMode() {
 		if apl.moveTablesCopySelectFirstQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
 			apl.migrationContext.DatabaseName,
-			apl.migrationContext.OriginalTableName,
+			apl.originalTableName(),
 			apl.migrationContext.OriginalTableColumns,
 			apl.migrationContext.UniqueKey.Name,
 			&apl.migrationContext.UniqueKey.Columns,
@@ -370,7 +378,7 @@ func (apl *Applier) prepareQueries() (err error) {
 		}
 		if apl.moveTablesCopySelectNextQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
 			apl.migrationContext.DatabaseName,
-			apl.migrationContext.OriginalTableName,
+			apl.originalTableName(),
 			apl.migrationContext.OriginalTableColumns,
 			apl.migrationContext.UniqueKey.Name,
 			&apl.migrationContext.UniqueKey.Columns,
@@ -425,7 +433,7 @@ func (apl *Applier) generateSqlModeQuery() string {
 func (apl *Applier) generateInstantDDLQuery() string {
 	return fmt.Sprintf(`ALTER /* gh-ost */ TABLE %s.%s %s, ALGORITHM=INSTANT`,
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 		apl.migrationContext.AlterStatementOptions,
 	)
 }
@@ -433,7 +441,7 @@ func (apl *Applier) generateInstantDDLQuery() string {
 // readTableColumns reads table columns on applier
 func (apl *Applier) readTableColumns() (err error) {
 	apl.migrationContext.Log.Infof("Examining table structure on applier")
-	apl.migrationContext.OriginalTableColumnsOnApplier, _, err = mysql.GetTableColumns(apl.db, apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName)
+	apl.migrationContext.OriginalTableColumnsOnApplier, _, err = mysql.GetTableColumns(apl.db, apl.migrationContext.DatabaseName, apl.originalTableName())
 	if err != nil {
 		return err
 	}
@@ -454,6 +462,13 @@ func (apl *Applier) showTableStatus(tableName string) (rowMap sqlutils.RowMap) {
 func (apl *Applier) tableExists(tableName string) (tableFound bool) {
 	m := apl.showTableStatus(tableName)
 	return (m != nil)
+}
+
+func (apl *Applier) originalTableName() string {
+	if apl.migrationContext.IsMoveTablesMode() {
+		return apl.migrationContext.MoveTables.TableNames[0]
+	}
+	return apl.migrationContext.OriginalTableName
 }
 
 // ValidateOrDropExistingTables verifies ghost and changelog tables do not exist,
@@ -537,17 +552,19 @@ func retryOnLockWaitTimeout(operation func() error, maxRetries int64, logger bas
 	return err
 }
 
-// CreateGhostTable creates the ghost table on the applier host
-func (apl *Applier) CreateGhostTable() error {
+// createTargetTable creates the table on the applier host to which the applier will
+// apply changes.
+func (apl *Applier) createTargetTable(targetTableName string) error {
+	targetDatabase := apl.migrationContext.GetTargetDatabaseName()
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s like %s.%s`,
+		sql.EscapeName(targetDatabase),
+		sql.EscapeName(targetTableName),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
-		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 	)
-	apl.migrationContext.Log.Infof("Creating ghost table %s.%s",
-		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
+	apl.migrationContext.Log.Infof("Creating target table %s.%s",
+		sql.EscapeName(targetDatabase),
+		sql.EscapeName(targetTableName),
 	)
 
 	err := func() error {
@@ -566,7 +583,7 @@ func (apl *Applier) CreateGhostTable() error {
 		if _, err := tx.Exec(query); err != nil {
 			return err
 		}
-		apl.migrationContext.Log.Infof("Ghost table created")
+		apl.migrationContext.Log.Infof("Target table created")
 		if err := tx.Commit(); err != nil {
 			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
 			// there's no need to commit; but let's do this the legit way anyway.
@@ -576,6 +593,59 @@ func (apl *Applier) CreateGhostTable() error {
 	}()
 
 	return err
+}
+
+// createTargetTableFromStatement creates the table on the applier host to which the applier will
+// apply changes.
+func (apl *Applier) createTargetTableFromStatement(targetTableName, createStatement string) error {
+	targetDatabase := apl.migrationContext.GetTargetDatabaseName()
+	apl.migrationContext.Log.Infof("Creating target table %s.%s",
+		sql.EscapeName(targetDatabase),
+		sql.EscapeName(targetTableName),
+	)
+
+	err := func() error {
+		tx, err := apl.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, apl.migrationContext.ApplierTimeZone)
+		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, apl.generateSqlModeQuery())
+
+		if _, err := tx.Exec(sessionQuery); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(createStatement); err != nil {
+			return err
+		}
+		apl.migrationContext.Log.Infof("Target table created")
+		if err := tx.Commit(); err != nil {
+			// Neither SET SESSION nor ALTER are really transactional, so strictly speaking
+			// there's no need to commit; but let's do this the legit way anyway.
+			return err
+		}
+		return nil
+	}()
+
+	return err
+}
+
+// CreateGhostTable creates the ghost table on the applier host
+func (apl *Applier) CreateGhostTable() error {
+	if apl.migrationContext.IsMoveTablesMode() {
+		return errors.New("CreateGhostTable is not available in MoveTables mode")
+	}
+	return apl.createTargetTable(apl.migrationContext.GetGhostTableName())
+}
+
+// CreateTargetTable creates the target table on the target host (for move-tables)
+func (apl *Applier) CreateTargetTable(createStatement string) error {
+	if !apl.migrationContext.IsMoveTablesMode() {
+		return errors.New("CreateTargetTable is only available in MoveTables mode")
+	}
+	return apl.createTargetTableFromStatement(apl.originalTableName(), createStatement)
 }
 
 // AlterGhost applies `alter` statement on ghost table
@@ -784,7 +854,7 @@ func (apl *Applier) createTriggers(tableName string) error {
 				sql.EscapeName(tableName),
 				trigger.Statement,
 			)
-			apl.migrationContext.Log.Infof("Createing trigger %s on %s.%s",
+			apl.migrationContext.Log.Infof("Creating trigger %s on %s.%s",
 				sql.EscapeName(triggerName),
 				sql.EscapeName(apl.migrationContext.DatabaseName),
 				sql.EscapeName(tableName),
@@ -800,8 +870,10 @@ func (apl *Applier) createTriggers(tableName string) error {
 
 // CreateTriggers creates the original triggers on applier host
 func (apl *Applier) CreateTriggersOnGhost() error {
-	err := apl.createTriggers(apl.migrationContext.GetGhostTableName())
-	return err
+	if err := apl.createTriggers(apl.migrationContext.GetGhostTableName()); err != nil {
+		return fmt.Errorf("error creating triggers on ghost table: %w", err)
+	}
+	return nil
 }
 
 // DropChangelogTable drops the changelog table on the applier host
@@ -821,12 +893,22 @@ func (apl *Applier) DropOldTable() error {
 
 // DropGhostTable drops the ghost table on the applier host
 func (apl *Applier) DropGhostTable() error {
-	return apl.dropTable(apl.migrationContext.GetGhostTableName())
+	if err := apl.dropTable(apl.migrationContext.GetGhostTableName()); err != nil {
+		return fmt.Errorf("error dropping ghost table: %w", err)
+	}
+	return nil
 }
 
 // WriteChangelog writes a value to the changelog table.
-// It returns the hint as given, for convenience
+// It returns the hint (or an empty string in move-tables mode), for convenience
 func (apl *Applier) WriteChangelog(hint, value string) (string, error) {
+	// In move-tables mode, there is no changelog table (§1.2). All changelog
+	// writes are no-ops. This is a single chokepoint rather than per-caller
+	// guards to prevent drift when new callers are added.
+	if apl.migrationContext.IsMoveTablesMode() {
+		return "", nil
+	}
+
 	explicitId := 0
 	switch hint {
 	case "heartbeat":
@@ -919,6 +1001,11 @@ func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
 // Apl is done asynchronously
 func (apl *Applier) InitiateHeartbeat() {
+	// In move-tables mode, there is no heartbeat table (§1.2).
+	if apl.migrationContext.IsMoveTablesMode() {
+		return
+	}
+
 	var numSuccessiveFailures int64
 	injectHeartbeat := func() error {
 		if atomic.LoadInt64(&apl.migrationContext.HibernateUntil) > 0 {
@@ -987,8 +1074,7 @@ func (apl *Applier) ExecuteThrottleQuery() (int64, error) {
 
 // readMigrationMinValues returns the minimum values to be iterated on rowcopy
 func (apl *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
-	apl.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName, uniqueKey)
+	query, err := sql.BuildUniqueKeyMinValuesPreparedQuery(apl.migrationContext.DatabaseName, apl.originalTableName(), uniqueKey)
 	if err != nil {
 		return err
 	}
@@ -1013,7 +1099,7 @@ func (apl *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKe
 // readMigrationMaxValues returns the maximum values to be iterated on rowcopy
 func (apl *Applier) readMigrationMaxValues(tx *gosql.Tx, uniqueKey *sql.UniqueKey) error {
 	apl.migrationContext.Log.Debugf("Reading migration range according to key: %s", uniqueKey.Name)
-	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName, uniqueKey)
+	query, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(apl.migrationContext.DatabaseName, apl.originalTableName(), uniqueKey)
 	if err != nil {
 		return err
 	}
@@ -1052,12 +1138,17 @@ Detail description of the lost data in mysql two-phase commit issue by @Fanduzi:
 	will not be run. When the changelog writes successfully, the ReadMigrationRangeValues will read the
 	newly inserted data, thus Avoiding data loss due to the above problem.
 */
-func (apl *Applier) ReadMigrationRangeValues() error {
+func (apl *Applier) ReadMigrationRangeValues(db *gosql.DB) error {
 	if _, err := apl.WriteChangelogState(string(ReadMigrationRangeValues)); err != nil {
 		return err
 	}
 
-	tx, err := apl.db.Begin()
+	if db == nil {
+		// default to reading from applier database
+		db = apl.db
+	}
+
+	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
@@ -1077,7 +1168,7 @@ func (apl *Applier) ReadMigrationRangeValues() error {
 // which will be used for copying the next chunk of rows. Ir returns "false" if there is
 // no further chunk to work through, i.e. we're past the last chunk and are done with
 // iterating the range (and thus done with copying row chunks)
-func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
+func (apl *Applier) CalculateNextIterationRangeEndValues(db *gosql.DB) (hasFurtherRange bool, err error) {
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
@@ -1085,7 +1176,7 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 		}
 		query, explodedArgs, err := buildFunc(
 			apl.migrationContext.DatabaseName,
-			apl.migrationContext.OriginalTableName,
+			apl.originalTableName(),
 			&apl.migrationContext.UniqueKey.Columns,
 			apl.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 			apl.migrationContext.MigrationRangeMaxValues.AbstractValues(),
@@ -1097,7 +1188,12 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 			return hasFurtherRange, err
 		}
 
-		rows, err := apl.db.Query(query, explodedArgs...)
+		if db == nil {
+			// default to applier database if not provided
+			db = apl.db
+		}
+
+		rows, err := db.Query(query, explodedArgs...)
 		if err != nil {
 			return hasFurtherRange, err
 		}
@@ -1130,7 +1226,7 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 
 	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
 		apl.migrationContext.DatabaseName,
-		apl.migrationContext.OriginalTableName,
+		apl.originalTableName(),
 		apl.migrationContext.GetGhostTableName(),
 		apl.migrationContext.SharedColumns.Names(),
 		apl.migrationContext.MappedSharedColumns.Names(),
@@ -1219,13 +1315,20 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 
 // ApplyIterationMoveTableCopyQueries issues a SELECT query on the original table and an INSERT query on the target table,
 // copying a chunk of rows. It is used when `--move-tables` is specified, instead of ApplyIterationInsertQuery.
-func (apl *Applier) ApplyIterationMoveTableCopyQueries() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&apl.migrationContext.ChunkSize)
+	if sourceDB == nil {
+		return chunkSize, rowsAffected, duration, errors.New("source DB is required for move-tables copy")
+	}
 
 	// First, select data from the source database:
 	rows, err := func() ([]*sql.ColumnValues, error) {
 		var qb *sql.MoveTableCopySelectQueryBuilder
+		apl.migrationContext.Log.Debugf("Building SELECT query for move-tables; first: %v; rest: %v",
+			apl.moveTablesCopySelectFirstQueryBuilder,
+			apl.moveTablesCopySelectNextQueryBuilder)
+
 		if apl.migrationContext.GetIteration() == 0 {
 			qb = apl.moveTablesCopySelectFirstQueryBuilder
 		} else {
@@ -1238,7 +1341,7 @@ func (apl *Applier) ApplyIterationMoveTableCopyQueries() (chunkSize int64, rowsA
 		if err != nil {
 			return nil, err
 		}
-		sqlRows, err := apl.db.Query(query, explodedArgs...)
+		sqlRows, err := sourceDB.Query(query, explodedArgs...)
 		if err != nil {
 			return nil, err
 		}
@@ -1345,11 +1448,11 @@ func (apl *Applier) ApplyIterationMoveTableCopyQueries() (chunkSize int64, rowsA
 func (apl *Applier) LockOriginalTable() error {
 	query := fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write`,
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 	)
 	apl.migrationContext.Log.Infof("Locking %s.%s",
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 	)
 	apl.migrationContext.LockTablesStartTime = time.Now()
 	if _, err := sqlutils.ExecNoPrepare(apl.singletonDB, query); err != nil {
@@ -1377,7 +1480,7 @@ func (apl *Applier) UnlockTables() error {
 func (apl *Applier) SwapTablesQuickAndBumpy() error {
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 		sql.EscapeName(apl.migrationContext.GetOldTableName()),
 	)
 	apl.migrationContext.Log.Infof("Renaming original table")
@@ -1388,9 +1491,9 @@ func (apl *Applier) SwapTablesQuickAndBumpy() error {
 	query = fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 	)
-	apl.migrationContext.Log.Infof("Renaming ghost table")
+	apl.migrationContext.Log.Infof("Renaming target table")
 	if _, err := sqlutils.ExecNoPrepare(apl.db, query); err != nil {
 		return err
 	}
@@ -1407,13 +1510,13 @@ func (apl *Applier) RenameTablesRollback() (renameError error) {
 	// We prefer the single, atomic operation:
 	query := fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s, %s.%s to %s.%s`,
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.GetOldTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 	)
 	apl.migrationContext.Log.Infof("Renaming back both tables")
 	if _, err := sqlutils.ExecNoPrepare(apl.db, query); err == nil {
@@ -1422,7 +1525,7 @@ func (apl *Applier) RenameTablesRollback() (renameError error) {
 	// But, if for some reason the above was impossible to do, we rename one by one.
 	query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s`,
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
 	)
@@ -1434,7 +1537,7 @@ func (apl *Applier) RenameTablesRollback() (renameError error) {
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.GetOldTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 	)
 	apl.migrationContext.Log.Infof("Renaming back to original table")
 	if _, err := sqlutils.ExecNoPrepare(apl.db, query); err != nil {
@@ -1683,13 +1786,13 @@ func (apl *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked
 
 	query = fmt.Sprintf(`lock /* gh-ost */ tables %s.%s write, %s.%s write`,
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.GetOldTableName()),
 	)
 	apl.migrationContext.Log.Infof("Locking %s.%s, %s.%s",
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.GetOldTableName()),
 	)
@@ -1739,7 +1842,7 @@ func (apl *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked
 	// Tables still locked
 	apl.migrationContext.Log.Infof("Releasing lock from %s.%s, %s.%s",
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.GetOldTableName()),
 	)
@@ -1778,13 +1881,13 @@ func (apl *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed 
 
 	query = fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s, %s.%s to %s.%s`,
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.GetOldTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 	)
 	apl.migrationContext.Log.Infof("Issuing and expecting this to block: %s", query)
 	if _, err := tx.Exec(query); err != nil {
@@ -2088,12 +2191,12 @@ func (apl *Applier) ExpectMetadataLock(sessionId int64) error {
 	err := sqlutils.QueryRowsMap(apl.db, query, func(m sqlutils.RowMap) error {
 		found = true
 		return nil
-	}, apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName, sessionId)
+	}, apl.migrationContext.DatabaseName, apl.originalTableName(), sessionId)
 	if err != nil {
 		return err
 	}
 	if !found {
-		err = fmt.Errorf("cannot find PENDING metadata lock on original table: `%s`.`%s`", apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName)
+		err = fmt.Errorf("cannot find PENDING metadata lock on original table: `%s`.`%s`", apl.migrationContext.DatabaseName, apl.originalTableName())
 		return apl.migrationContext.Log.Errore(err)
 	}
 	return nil

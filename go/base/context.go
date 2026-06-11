@@ -398,6 +398,24 @@ func (mctx *MigrationContext) GetGhostTableName() string {
 	}
 }
 
+// GetTargetTableName generates the name of the target table, based on original table name and
+// the migration context (i.e. move-tables mode).
+func (mctx *MigrationContext) GetTargetTableName() string {
+	if mctx.IsMoveTablesMode() {
+		return mctx.MoveTables.TableNames[0]
+	}
+	return mctx.GetGhostTableName()
+}
+
+// GetTargetDatabaseName fetches the name of the target database, which defaults to the original
+// database name unless we're in move-tables mode.
+func (mctx *MigrationContext) GetTargetDatabaseName() string {
+	if mctx.IsMoveTablesMode() {
+		return mctx.MoveTables.TargetDatabase
+	}
+	return mctx.DatabaseName
+}
+
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (mctx *MigrationContext) GetOldTableName() string {
 	var tableName string
@@ -939,11 +957,27 @@ func (mctx *MigrationContext) ApplyCredentials() {
 		// Override
 		mctx.InspectorConnectionConfig.Password = mctx.CliPassword
 	}
+
+	if mctx.IsMoveTablesMode() {
+		// Derive the applier config from the inspector config, but point it at
+		// the target host and override credentials from the target CLI args.
+		mctx.MoveTables.ConnectionConfig = mctx.InspectorConnectionConfig.DuplicateCredentials(mysql.InstanceKey{
+			Hostname: mctx.MoveTables.TargetHost,
+			Port:     mctx.MoveTables.TargetPort,
+		})
+		mctx.MoveTables.ConnectionConfig.User = mctx.MoveTables.TargetUser
+		mctx.MoveTables.ConnectionConfig.Password = mctx.MoveTables.TargetPass
+	}
 }
 
 func (mctx *MigrationContext) SetupTLS() error {
 	if mctx.UseTLS {
-		return mctx.InspectorConnectionConfig.UseTLS(mctx.TLSCACertificate, mctx.TLSCertificate, mctx.TLSKey, mctx.TLSAllowInsecure)
+		if err := mctx.InspectorConnectionConfig.UseTLS(mctx.TLSCACertificate, mctx.TLSCertificate, mctx.TLSKey, mctx.TLSAllowInsecure); err != nil {
+			return err
+		}
+		if mctx.IsMoveTablesMode() && mctx.MoveTables.ConnectionConfig != nil {
+			return mctx.MoveTables.ConnectionConfig.UseTLS(mctx.TLSCACertificate, mctx.TLSCertificate, mctx.TLSKey, mctx.TLSAllowInsecure)
+		}
 	}
 	return nil
 }
