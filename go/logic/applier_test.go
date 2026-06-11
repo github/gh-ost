@@ -1873,7 +1873,7 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
 
-	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries()
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(3), rowsAffected)
 	suite.Require().Equal(int64(1000), chunkSize)

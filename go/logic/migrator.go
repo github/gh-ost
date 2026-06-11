@@ -1800,7 +1800,7 @@ func (mgtr *Migrator) iterateChunks() error {
 				}
 				var rowsAffected int64
 				if mgtr.migrationContext.IsMoveTablesMode() {
-					_, rowsAffected, _, err = mgtr.applier.ApplyIterationMoveTableCopyQueries()
+					_, rowsAffected, _, err = mgtr.applier.ApplyIterationMoveTableCopyQueries(mgtr.inspector.db)
 				} else {
 					_, rowsAffected, _, err = mgtr.applier.ApplyIterationInsertQuery()
 				}
