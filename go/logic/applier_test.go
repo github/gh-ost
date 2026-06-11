@@ -1951,7 +1951,7 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesNoRows() {
 	migrationContext.MigrationIterationRangeMinValues = sql.ToColumnValues([]interface{}{100})
 	migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{200})
 
-	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries()
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(0), rowsAffected)
 	suite.Require().Equal(int64(1000), chunkSize)
