@@ -20,6 +20,7 @@ import (
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
 	"github.com/github/gh-ost/go/metrics"
+	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/log"
@@ -234,12 +235,6 @@ func main() {
 		migrationContext.Log.SetLevel(log.ERROR)
 	}
 
-	if err := migrationContext.SetConnectionConfig(*storageEngine); err != nil {
-		migrationContext.Log.Fatale(err)
-	}
-
-	migrationContext.SetConnectionCharset(*charset)
-
 	if migrationContext.AlterStatement == "" && !migrationContext.Revert && *moveTables == "" {
 		log.Fatal("--alter must be provided and statement must not be empty, or --revert must be used, or --move-tables must be used")
 	}
@@ -380,6 +375,7 @@ func main() {
 			// For now, we only support moving a single table at a time.
 			log.Fatal("--move-tables currently supports only a single table")
 		}
+
 		if migrationContext.MoveTables.TargetUser == "" {
 			migrationContext.MoveTables.TargetUser = migrationContext.CliUser
 		}
@@ -389,7 +385,14 @@ func main() {
 		if migrationContext.MoveTables.TargetDatabase == "" {
 			migrationContext.MoveTables.TargetDatabase = migrationContext.DatabaseName
 		}
+		migrationContext.MoveTables.ConnectionConfig = mysql.NewConnectionConfig()
 	}
+
+	if err := migrationContext.SetConnectionConfig(*storageEngine); err != nil {
+		migrationContext.Log.Fatale(err)
+	}
+
+	migrationContext.SetConnectionCharset(*charset)
 
 	switch *cutOver {
 	case "atomic", "default", "":
