@@ -1076,7 +1076,6 @@ func (apl *Applier) readMigrationMinValues(tx *gosql.Tx, uniqueKey *sql.UniqueKe
 	if err != nil {
 		return err
 	}
-	apl.migrationContext.Log.Infof("Reading migration range according to key: %s (%s)", uniqueKey.Name, query)
 
 	rows, err := tx.Query(query)
 	if err != nil {
