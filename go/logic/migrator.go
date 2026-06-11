@@ -1797,9 +1797,6 @@ func (mgtr *Migrator) iterateChunks() error {
 				if err != nil {
 					return err // wrapping call will retry
 				}
-				if err != nil {
-					return fmt.Errorf("ApplyIterationInsertQuery failed: %w", err) // wrapping call will retry
-				}
 				mgtr.migrationContext.Log.Debugf("ApplyIterationInsertQuery affected %d rows", rowsAffected)
 
 				if mgtr.migrationContext.PanicOnWarnings {
