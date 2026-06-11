@@ -634,6 +634,9 @@ func (apl *Applier) createTargetTableFromStatement(targetTableName, createStatem
 
 // CreateGhostTable creates the ghost table on the applier host
 func (apl *Applier) CreateGhostTable() error {
+	if apl.migrationContext.IsMoveTablesMode() {
+		return errors.New("CreateGhostTable is not available in MoveTables mode")
+	}
 	return apl.createTargetTable(apl.migrationContext.GetGhostTableName())
 }
 
