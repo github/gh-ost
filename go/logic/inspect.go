@@ -98,7 +98,6 @@ func (isp *Inspector) ValidateOriginalTable() (err error) {
 	if err := isp.estimateTableRowsViaExplain(); err != nil {
 		return fmt.Errorf("failed to estimate table rows: %w", err)
 	}
-	isp.migrationContext.Log.Infof("Inspector validated original table")
 	return nil
 }
 
@@ -127,7 +126,6 @@ func (isp *Inspector) InspectOriginalTable() (err error) {
 	if err != nil {
 		return err
 	}
-	isp.migrationContext.Log.Infof("Inspector inspected original table")
 	return nil
 }
 
