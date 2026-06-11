@@ -216,6 +216,62 @@ func TestReadConfigFile(t *testing.T) {
 	}
 }
 
+func TestApplyCredentialsMoveTablesDerivesConnectionConfig(t *testing.T) {
+	ctx := NewMigrationContext()
+	ctx.MoveTables.TableNames = []string{"some_table"}
+	ctx.MoveTables.TargetHost = "target-host"
+	ctx.MoveTables.TargetPort = 3307
+	ctx.MoveTables.TargetUser = "target-user"
+	ctx.MoveTables.TargetPass = "target-pass"
+
+	ctx.InspectorConnectionConfig.Key.Hostname = "source-host"
+	ctx.InspectorConnectionConfig.Key.Port = 3306
+	ctx.InspectorConnectionConfig.User = "source-user"
+	ctx.InspectorConnectionConfig.Password = "source-pass"
+	ctx.InspectorConnectionConfig.Timeout = 12.5
+	ctx.InspectorConnectionConfig.TransactionIsolation = "REPEATABLE-READ"
+	ctx.InspectorConnectionConfig.Charset = "utf8mb4"
+
+	ctx.ApplyCredentials()
+
+	got := ctx.MoveTables.ConnectionConfig
+	require.NotNil(t, got)
+	require.Equal(t, "target-host", got.Key.Hostname)
+	require.Equal(t, 3307, got.Key.Port)
+	require.Equal(t, "target-user", got.User)
+	require.Equal(t, "target-pass", got.Password)
+	require.Equal(t, 12.5, got.Timeout)
+	require.Equal(t, "REPEATABLE-READ", got.TransactionIsolation)
+	require.Equal(t, "utf8mb4", got.Charset)
+	require.NotNil(t, got.ImpliedKey)
+	require.Equal(t, "target-host", got.ImpliedKey.Hostname)
+	require.Equal(t, 3307, got.ImpliedKey.Port)
+}
+
+func TestSetupTLSAppliesToMoveTablesConfig(t *testing.T) {
+	ctx := NewMigrationContext()
+	ctx.UseTLS = true
+	ctx.TLSAllowInsecure = true
+	ctx.MoveTables.TableNames = []string{"some_table"}
+	ctx.MoveTables.TargetHost = "target-host"
+	ctx.MoveTables.TargetPort = 3307
+	ctx.MoveTables.TargetUser = "target-user"
+	ctx.MoveTables.TargetPass = "target-pass"
+
+	ctx.InspectorConnectionConfig.Key.Hostname = "source-host"
+	ctx.InspectorConnectionConfig.Key.Port = 3306
+	ctx.InspectorConnectionConfig.User = "source-user"
+	ctx.InspectorConnectionConfig.Password = "source-pass"
+
+	ctx.ApplyCredentials()
+	require.NoError(t, ctx.SetupTLS())
+
+	require.NotNil(t, ctx.InspectorConnectionConfig.TLSConfig())
+	require.NotNil(t, ctx.MoveTables.ConnectionConfig.TLSConfig())
+	require.Equal(t, "source-host", ctx.InspectorConnectionConfig.TLSConfig().ServerName)
+	require.Equal(t, "target-host", ctx.MoveTables.ConnectionConfig.TLSConfig().ServerName)
+}
+
 func TestSetAbortError_StoresFirstError(t *testing.T) {
 	ctx := NewMigrationContext()
 

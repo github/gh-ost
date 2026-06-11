@@ -932,7 +932,7 @@ func (suite *MigratorTestSuite) TestCopierIntPK() {
 	suite.Require().NoError(migrator.initiateApplier())
 	defer migrator.applier.Teardown()
 	suite.Require().NoError(migrator.applier.prepareQueries())
-	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues())
+	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues(nil))
 
 	go migrator.iterateChunks()
 	go func() {
@@ -1004,7 +1004,7 @@ func (suite *MigratorTestSuite) TestCopierCompositePK() {
 	suite.Require().NoError(migrator.initiateApplier())
 	defer migrator.applier.Teardown()
 	suite.Require().NoError(migrator.applier.prepareQueries())
-	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues())
+	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues(nil))
 
 	go migrator.iterateChunks()
 	go func() {
