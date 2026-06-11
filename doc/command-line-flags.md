@@ -83,7 +83,7 @@ It is not reliable to parse the `ALTER` statement to determine if it is instant 
 
 ### check-flag
 
-Checks whether one or more flags exist in the current `gh-ost` binary. This is useful for cross-version scripting. Exits with `0` when all additionally provided flags exist, non-zero otherwise. Flags that require a value must be given a dummy value.
+Checks whether one or more flags exist in the current `gh-ost` binary. This is useful for cross-version scripting. Exits with `0` when all flags specified alongside `--check-flag` exist, non-zero otherwise. Flags that require a value must be given a dummy value.
 
 Example: `gh-ost --check-flag --cut-over-lock-timeout-seconds 1 --nice-ratio 0`
 
@@ -136,7 +136,7 @@ This is somewhat similar to a Nagios `n`-times test, where `n` in our case is al
 
 ### cut-over
 
-Optional. Default is `atomic`. Accepted values are `atomic`, `default`, and `two-step`. See more discussion in [`cut-over`](cut-over.md)
+Optional. Default is `atomic`. Accepted values are `atomic`, `default`, and `two-step`; `default` is a legacy alias for `atomic`. `atomic` performs an atomic table swap where pending connections briefly block and either all see the old table or all see the new table. `two-step` uses a non-atomic rename sequence where the original table is renamed away before the ghost table takes its place, leaving a brief interval where the table does not exist. See more discussion in [`cut-over`](cut-over.md)
 
 ### cut-over-exponential-backoff
 
@@ -304,7 +304,7 @@ Typically `gh-ost` is used to migrate tables on a master. If you wish to only pe
 
 ### mysql-timeout
 
-Connect, read, and write timeout for MySQL connections. The default `0` uses the driver's default behavior.
+Connect, read, and write timeout for MySQL connections, in seconds. The value is applied to the MySQL driver's `timeout`, `readTimeout`, and `writeTimeout` DSN parameters. It is configured on the initial inspector connection and is copied to related gh-ost MySQL connections, including the applier/master connection and throttle-control replica checks. The default `0` uses the driver's default behavior.
 
 ### nice-ratio
 
