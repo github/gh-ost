@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -187,7 +188,7 @@ func main() {
 	flag.StringVar(&migrationContext.ForceTmpTableName, "force-table-names", "", "table name prefix to be used on the temporary tables")
 
 	// move tables flags
-	moveTables := flag.String("move-tables", "", "Comma delimited list of tables to move. e.g. 'table1,table2,table3'. This is a special mode that allows you to move tables between database clusters. This mode is mutually exclusive with --alter, --table, --test-on-replica, --migrate-on-replica, --execute-on-replica, and --revert.")
+	moveTables := flag.String("move-tables", "", "Comma delimited list of tables to move. e.g. 'table1,table2,table3'. This is a special mode that allows you to move tables between database clusters. This mode is mutually exclusive with --alter, --table, --test-on-replica, --migrate-on-replica and --revert.")
 	flag.StringVar(&migrationContext.MoveTables.TargetHost, "target-host", "", "Target MySQL hostname for --move-tables mode. Must be specified if --move-tables is specified.")
 	flag.IntVar(&migrationContext.MoveTables.TargetPort, "target-port", 3306, "Target MySQL port for --move-tables mode. Defaults to 3306.")
 	flag.StringVar(&migrationContext.MoveTables.TargetUser, "target-user", "", "Target MySQL username for --move-tables mode. If not provided, uses the same user as the source connection")
@@ -238,8 +239,8 @@ func main() {
 
 	migrationContext.SetConnectionCharset(*charset)
 
-	if migrationContext.AlterStatement == "" && !migrationContext.Revert {
-		log.Fatal("--alter must be provided and statement must not be empty")
+	if migrationContext.AlterStatement == "" && !migrationContext.Revert && *moveTables == "" {
+		log.Fatal("--alter must be provided and statement must not be empty, or --revert must be used, or --move-tables must be used")
 	}
 	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
 	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
@@ -279,7 +280,7 @@ func main() {
 		migrationContext.Log.Fatale(err)
 	}
 
-	if migrationContext.OriginalTableName == "" {
+	if migrationContext.OriginalTableName == "" && *moveTables == "" {
 		if parser.HasExplicitTable() {
 			migrationContext.OriginalTableName = parser.GetExplicitTable()
 		} else {
@@ -369,10 +370,23 @@ func main() {
 			log.Fatal("--target-host must be specified when using --move-tables")
 		}
 		migrationContext.MoveTables.TableNames = strings.Split(*moveTables, ",")
+		for i := range migrationContext.MoveTables.TableNames {
+			migrationContext.MoveTables.TableNames[i] = strings.TrimSpace(migrationContext.MoveTables.TableNames[i])
+		}
+		migrationContext.MoveTables.TableNames = slices.DeleteFunc(migrationContext.MoveTables.TableNames, func(s string) bool { return s == "" })
 		if len(migrationContext.MoveTables.TableNames) > 1 {
 			// Future version will support moving multiple tables at the same time.
 			// For now, we only support moving a single table at a time.
 			log.Fatal("--move-tables currently supports only a single table")
+		}
+		if migrationContext.MoveTables.TargetUser == "" {
+			migrationContext.MoveTables.TargetUser = migrationContext.CliUser
+		}
+		if migrationContext.MoveTables.TargetPass == "" {
+			migrationContext.MoveTables.TargetPass = migrationContext.CliPassword
+		}
+		if migrationContext.MoveTables.TargetDatabase == "" {
+			migrationContext.MoveTables.TargetDatabase = migrationContext.DatabaseName
 		}
 	}
 
