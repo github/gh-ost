@@ -301,7 +301,7 @@ func (suite *ApplierTestSuite) SetupSuite() {
 	suite.Require().NoError(err)
 
 	// Second database & connection for move-tables tests:
-	_, _ = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", testMysqlDatabaseOther))
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", testMysqlDatabaseOther))
 	otherConf := drivermysql.NewConfig()
 	otherConf.DBName = testMysqlDatabaseOther
 	otherConf.User = testMysqlUser
@@ -647,6 +647,83 @@ func (suite *ApplierTestSuite) TestWriteChangelogNoOpInMoveTablesMode() {
 	hint, err = applier.WriteChangelogState("Migrated")
 	suite.Require().NoError(err)
 	suite.Require().Equal("", hint)
+}
+
+func (suite *ApplierTestSuite) TestAcquireMigrationLockSucceedsWhenFree() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	suite.Require().NoError(applier.InitDBConnections())
+	suite.Require().NoError(applier.AcquireMigrationLock(ctx))
+	suite.Require().NotNil(applier.migrationLockConn)
+	suite.Require().Equal(buildMigrationLockName(testMysqlDatabase, testMysqlTableName), applier.migrationLockName)
+}
+
+func (suite *ApplierTestSuite) TestAcquireMigrationLockFailsWhenHeld() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContextA := newTestMigrationContext()
+	migrationContextA.ApplierConnectionConfig = connectionConfig
+	migrationContextA.SetConnectionConfig("innodb")
+
+	applierA := NewApplier(migrationContextA)
+	defer applierA.Teardown()
+	suite.Require().NoError(applierA.InitDBConnections())
+	suite.Require().NoError(applierA.AcquireMigrationLock(ctx))
+
+	connectionConfigB, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContextB := newTestMigrationContext()
+	migrationContextB.ApplierConnectionConfig = connectionConfigB
+	migrationContextB.SetConnectionConfig("innodb")
+
+	applierB := NewApplier(migrationContextB)
+	defer applierB.Teardown()
+	suite.Require().NoError(applierB.InitDBConnections())
+
+	err = applierB.AcquireMigrationLock(ctx)
+	suite.Require().Error(err)
+	suite.Require().Contains(err.Error(), "already migrating")
+	suite.Require().Nil(applierB.migrationLockConn)
+}
+
+func TestBuildMigrationLockName(t *testing.T) {
+	t.Run("short name is returned verbatim", func(t *testing.T) {
+		name := buildMigrationLockName("mydb", "mytable")
+		require.Equal(t, "gh-ost::mydb.mytable", name)
+		require.LessOrEqual(t, len(name), 64)
+	})
+
+	t.Run("long name is hashed and within MySQL limit", func(t *testing.T) {
+		longDB := strings.Repeat("d", 40)
+		longTable := strings.Repeat("t", 40)
+		name := buildMigrationLockName(longDB, longTable)
+		require.LessOrEqual(t, len(name), 64)
+		require.True(t, strings.HasPrefix(name, "gh-ost::"))
+		// deterministic
+		require.Equal(t, name, buildMigrationLockName(longDB, longTable))
+		// distinct inputs produce distinct hashes
+		require.NotEqual(t, name, buildMigrationLockName(longDB, longTable+"x"))
+	})
 }
 
 func (suite *ApplierTestSuite) TestCreateGhostTable() {
@@ -1796,7 +1873,7 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
 
-	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(suite.db)
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries()
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(3), rowsAffected)
 	suite.Require().Equal(int64(1000), chunkSize)
