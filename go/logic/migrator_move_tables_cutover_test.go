@@ -12,14 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/mysql"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-
 	"github.com/testcontainers/testcontainers-go"
 	testmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
-
-	"github.com/github/gh-ost/go/base"
-	"github.com/github/gh-ost/go/mysql"
 )
 
 // -----------------------------------------------------------------------------
@@ -318,6 +317,47 @@ func (s *MoveTablesCutOverSuite) TestDrainTimeoutPropagates() {
 	}
 	s.Require().Equal([]string{"fake:OnBeforeCutOver"}, calls,
 		"post-state: only T0 fires before the drain loop")
+}
+
+// TestDrainWaitsForQueuedDML ensures T3 does not declare success just because
+// applier.CurrentCoordinates already contains the drain GTID while there is
+// still source-table DML queued for application.
+func (s *MoveTablesCutOverSuite) TestDrainWaitsForQueuedDML() {
+	ctx := context.Background()
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestTableName()))
+	s.Require().NoError(err)
+
+	origTimeout, origPoll := moveTablesCutOverDrainTimeout, moveTablesCutOverDrainPollInterval
+	moveTablesCutOverDrainTimeout = 200 * time.Millisecond
+	moveTablesCutOverDrainPollInterval = 50 * time.Millisecond
+	s.T().Cleanup(func() {
+		moveTablesCutOverDrainTimeout = origTimeout
+		moveTablesCutOverDrainPollInterval = origPoll
+	})
+
+	var calls []string
+	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
+	m, mc := s.buildMigrator(fakeHooks, s.containingDrainGTID())
+	m.applyEventsQueue <- newApplyEventStructByDML(&binlog.BinlogEntry{
+		DmlEvent: &binlog.BinlogDMLEvent{
+			DatabaseName: testMysqlDatabase,
+			TableName:    testMysqlTableName,
+			DML:          binlog.InsertDML,
+		},
+		Coordinates: s.containingDrainGTID(),
+	})
+
+	s.Require().Equal(int64(0), atomic.LoadInt64(&mc.CutOverCompleteFlag), "pre-state: flag must be 0")
+	err = m.moveTablesCutOver()
+	s.Require().Error(err)
+	s.Require().Contains(err.Error(), "drain poll timed out")
+	s.Require().Equal(int64(0), atomic.LoadInt64(&mc.CutOverCompleteFlag),
+		"post-state: queued DML must keep T3 from reaching T4")
+	for _, c := range calls {
+		s.Require().NotEqual("fake:OnSuccess", c, "OnSuccess must not fire while backlog remains")
+	}
+	s.Require().Equal([]string{"fake:OnBeforeCutOver"}, calls,
+		"post-state: only T0 fires before the drain loop times out")
 }
 
 func TestMoveTablesCutOver(t *testing.T) {
