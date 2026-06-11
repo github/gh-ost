@@ -49,15 +49,17 @@ type BinlogDMLEvent struct {
 	DatabaseName      string
 	TableName         string
 	DML               EventDML
+	Timestamp         uint32
 	WhereColumnValues *sql.ColumnValues
 	NewColumnValues   *sql.ColumnValues
 }
 
-func NewBinlogDMLEvent(databaseName, tableName string, dml EventDML) *BinlogDMLEvent {
+func NewBinlogDMLEvent(databaseName, tableName string, dml EventDML, timestamp uint32) *BinlogDMLEvent {
 	event := &BinlogDMLEvent{
 		DatabaseName: databaseName,
 		TableName:    tableName,
 		DML:          dml,
+		Timestamp:    timestamp,
 	}
 	return event
 }

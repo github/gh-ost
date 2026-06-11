@@ -1819,6 +1819,10 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		mgtr.applier.CurrentCoordinates = eventStruct.coords
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
 
+		// update timestamp of the last applied DML event.
+		// we have at least one event in dmlEvents.
+		atomic.StoreInt64(&mgtr.migrationContext.DMLLastTimestamp, int64(dmlEvents[len(dmlEvents)-1].Timestamp))
+
 		if nonDmlStructToApply != nil {
 			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!
 			// We need to handle it!

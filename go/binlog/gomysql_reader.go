@@ -102,6 +102,7 @@ func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent
 			string(rowsEvent.Table.Schema),
 			string(rowsEvent.Table.Table),
 			dml,
+			ev.Header.Timestamp,
 		)
 		switch dml {
 		case InsertDML:

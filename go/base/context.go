@@ -213,6 +213,7 @@ type MigrationContext struct {
 	TotalRowsCopied                        int64
 	TotalDMLEventsApplied                  int64
 	DMLBatchSize                           int64
+	DMLLastTimestamp                       int64
 	isThrottled                            bool
 	throttleReason                         string
 	throttleReasonHint                     ThrottleReasonHint
