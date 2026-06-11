@@ -117,7 +117,7 @@ setup() {
     fi
     echo "OK"
 
-    echo -n "Initiatilizing '$DATABASE_NAME' database into each cluster..."
+    echo -n "Initializing '$DATABASE_NAME' database into each cluster..."
     exec-mysql-source-primary -e "CREATE DATABASE IF NOT EXISTS $DATABASE_NAME;"
     exec-mysql-target-primary -e "CREATE DATABASE IF NOT EXISTS $DATABASE_NAME;"
     echo "OK"
