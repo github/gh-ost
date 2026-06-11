@@ -301,7 +301,8 @@ func (suite *ApplierTestSuite) SetupSuite() {
 	suite.Require().NoError(err)
 
 	// Second database & connection for move-tables tests:
-	_, _ = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", testMysqlDatabaseOther))
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", testMysqlDatabaseOther))
+	suite.Require().NoError(err)
 	otherConf := drivermysql.NewConfig()
 	otherConf.DBName = testMysqlDatabaseOther
 	otherConf.User = testMysqlUser

@@ -989,9 +989,9 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	}
 
 	// ----- T2: capture @@gtid_executed on the SAME *sql.DB handle as T1 -----
-	// Design doc specifies @@gtid_executed; using @@global.gtid_executed because
-	// the unqualified form resolves to session scope (only this session's GTIDs),
-	// while drain requires the global GTID set (all committed transactions).
+	// The design doc specifies @@gtid_executed. We query @@GLOBAL.gtid_executed explicitly rather than the unqualified
+	// @@gtid_executed form to make the global server-wide scope unambiguous
+	// in the SQL itself.
 	// Design: https://github.com/github/gh-ost-tablemove-poc/blob/9dc6df75c4c88ff473906a497836c7518f5614ec/design/coop_cutover.md#32-correctness-verification-for-p4
 	var drainGTIDStr string
 	if err := mgtr.inspector.db.QueryRow("select @@global.gtid_executed").Scan(&drainGTIDStr); err != nil {
@@ -1022,6 +1022,9 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	ticker := time.NewTicker(moveTablesCutOverDrainPollInterval)
 	defer ticker.Stop()
 	for {
+		if err := mgtr.checkAbort(); err != nil {
+			return err
+		}
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
 		applierCoords := mgtr.applier.CurrentCoordinates
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
