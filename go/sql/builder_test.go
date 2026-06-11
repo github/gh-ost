@@ -1197,6 +1197,19 @@ func TestMoveTableCopySelectQueryBuilder(t *testing.T) {
 		_, _, err = builder.BuildQuery([]any{1, 2}, []any{10})
 		require.Error(t, err)
 	})
+
+	t.Run("mismatched start and end args count", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name", "position"})
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "name_position_uidx", uniqueKeyColumns, true)
+		require.NoError(t, err)
+
+		// Total args count matches argsCount (4), but start and end counts differ.
+		_, _, err = builder.BuildQuery([]any{1, 2, 3}, []any{10})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "mismatched number of start and end args")
+	})
 }
 
 func BenchmarkMoveTableCopySelectQueryBuilderBuildQuery(b *testing.B) {
