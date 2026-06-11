@@ -1763,7 +1763,13 @@ func (mgtr *Migrator) iterateChunks() error {
 				}
 
 				// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
-				hasFurtherRange, err := mgtr.applier.CalculateNextIterationRangeEndValues(mgtr.inspector.db)
+				var hasFurtherRange bool
+				var err error
+				if mgtr.migrationContext.IsMoveTablesMode() {
+					hasFurtherRange, err = mgtr.applier.CalculateNextIterationRangeEndValues(mgtr.inspector.db)
+				} else {
+					hasFurtherRange, err = mgtr.applier.CalculateNextIterationRangeEndValues(nil)
+				}
 				if err != nil {
 					return err // wrapping call will retry
 				}
