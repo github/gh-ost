@@ -12,11 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	_ "github.com/go-sql-driver/mysql"
@@ -26,6 +29,20 @@ import (
 )
 
 var AppVersion, GitCommit string
+
+type statsdTagList []string
+
+func (s *statsdTagList) String() string {
+	if s == nil || len(*s) == 0 {
+		return ""
+	}
+	return fmt.Sprint([]string(*s))
+}
+
+func (s *statsdTagList) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
 
 // acceptSignals registers for OS signals
 func acceptSignals(migrationContext *base.MigrationContext) {
@@ -158,6 +175,10 @@ func main() {
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")
 	flag.Int64Var(&migrationContext.CriticalLoadIntervalMilliseconds, "critical-load-interval-millis", 0, "When 0, migration immediately bails out upon meeting critical-load. When non-zero, a second check is done after given interval, and migration only bails out if 2nd check still meets critical load")
 	flag.Int64Var(&migrationContext.CriticalLoadHibernateSeconds, "critical-load-hibernate-seconds", 0, "When non-zero, critical-load does not panic and bail out; instead, gh-ost goes into hibernation for the specified duration. It will not read/write anything from/to any server")
+	statsdAddr := flag.String("statsd-addr", "", "StatsD endpoint (host:port or unix socket); empty disables StatsD")
+	var statsdTags statsdTagList
+	flag.Var(&statsdTags, "statsd-tags", "global StatsD tags applied to every metric (repeatable), format key:value. Example: --statsd-tags 'env:prod,service:my-service'")
+	runtimeMetricsInterval := flag.Int("runtime-metrics-interval", 10, "Seconds between Go runtime memory/GC gauge samples (requires --statsd-addr); 0 disables")
 	quiet := flag.Bool("quiet", false, "quiet")
 	verbose := flag.Bool("verbose", false, "verbose")
 	debug := flag.Bool("debug", false, "debug mode (very verbose)")
@@ -168,7 +189,7 @@ func main() {
 	flag.StringVar(&migrationContext.ForceTmpTableName, "force-table-names", "", "table name prefix to be used on the temporary tables")
 
 	// move tables flags
-	moveTables := flag.String("move-tables", "", "Comma delimited list of tables to move. e.g. 'table1,table2,table3'. This is a special mode that allows you to move tables between database clusters. This mode is mutually exclusive with --alter, --table, --test-on-replica, --migrate-on-replica, --execute-on-replica, and --revert.")
+	moveTables := flag.String("move-tables", "", "Comma delimited list of tables to move. e.g. 'table1,table2,table3'. This is a special mode that allows you to move tables between database clusters. This mode is mutually exclusive with --alter, --table, --test-on-replica, --migrate-on-replica and --revert.")
 	flag.StringVar(&migrationContext.MoveTables.TargetHost, "target-host", "", "Target MySQL hostname for --move-tables mode. Must be specified if --move-tables is specified.")
 	flag.IntVar(&migrationContext.MoveTables.TargetPort, "target-port", 3306, "Target MySQL port for --move-tables mode. Defaults to 3306.")
 	flag.StringVar(&migrationContext.MoveTables.TargetUser, "target-user", "", "Target MySQL username for --move-tables mode. If not provided, uses the same user as the source connection")
@@ -214,7 +235,7 @@ func main() {
 	}
 
 	if migrationContext.AlterStatement == "" && !migrationContext.Revert && *moveTables == "" {
-		log.Fatal("--alter must be provided and statement must not be empty")
+		log.Fatal("--alter must be provided and statement must not be empty, or --revert must be used, or --move-tables must be used")
 	}
 	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
 	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
@@ -344,10 +365,24 @@ func main() {
 			log.Fatal("--target-host must be specified when using --move-tables")
 		}
 		migrationContext.MoveTables.TableNames = strings.Split(*moveTables, ",")
+		for i := range migrationContext.MoveTables.TableNames {
+			migrationContext.MoveTables.TableNames[i] = strings.TrimSpace(migrationContext.MoveTables.TableNames[i])
+		}
+		migrationContext.MoveTables.TableNames = slices.DeleteFunc(migrationContext.MoveTables.TableNames, func(s string) bool { return s == "" })
 		if len(migrationContext.MoveTables.TableNames) > 1 {
 			// Future version will support moving multiple tables at the same time.
 			// For now, we only support moving a single table at a time.
 			log.Fatal("--move-tables currently supports only a single table")
+		}
+
+		if migrationContext.MoveTables.TargetUser == "" {
+			migrationContext.MoveTables.TargetUser = migrationContext.CliUser
+		}
+		if migrationContext.MoveTables.TargetPass == "" {
+			migrationContext.MoveTables.TargetPass = migrationContext.CliPassword
+		}
+		if migrationContext.MoveTables.TargetDatabase == "" {
+			migrationContext.MoveTables.TargetDatabase = migrationContext.DatabaseName
 		}
 		migrationContext.MoveTables.ConnectionConfig = mysql.NewConnectionConfig()
 	}
@@ -412,6 +447,17 @@ func main() {
 
 	log.Infof("starting gh-ost %+v (git commit: %s)", AppVersion, GitCommit)
 	acceptSignals(migrationContext)
+
+	metricsClient, metricsErr := metrics.NewClient(*statsdAddr, []string(statsdTags), "gh_ost.")
+	if metricsErr != nil {
+		log.Fatalf("metrics: %v", metricsErr)
+	}
+	defer func() { _ = metricsClient.Close() }()
+	migrationContext.Metrics = metricsClient
+	metricsClient.Count("startup", 1)
+	if *runtimeMetricsInterval > 0 {
+		metrics.StartGoRuntimeReporter(migrationContext.GetContext(), metricsClient, time.Duration(*runtimeMetricsInterval)*time.Second)
+	}
 
 	migrator := logic.NewMigrator(migrationContext, AppVersion)
 	var err error
