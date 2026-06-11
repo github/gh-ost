@@ -803,7 +803,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	mgtr.migrationContext.Log.Infof("Moving tables %v from %s to %s (%s)",
 		mgtr.migrationContext.MoveTables.TableNames,
 		sql.EscapeName(mgtr.migrationContext.DatabaseName),
-		sql.EscapeName(mgtr.migrationContext.MoveTables.TargetDatabase), mgtr.migrationContext.MoveTables.TargetHost)
+		sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()), mgtr.migrationContext.MoveTables.TargetHost)
 	mgtr.migrationContext.StartTime = time.Now()
 
 	if mgtr.migrationContext.OriginalTableName == "" {
@@ -916,7 +916,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	}
 	mgtr.migrationContext.Log.Infof("Done moving tables %v from %s to %s (%s)",
 		mgtr.migrationContext.MoveTables.TableNames, sql.EscapeName(mgtr.migrationContext.DatabaseName),
-		sql.EscapeName(mgtr.migrationContext.MoveTables.TargetDatabase), mgtr.migrationContext.MoveTables.TargetHost)
+		sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()), mgtr.migrationContext.MoveTables.TargetHost)
 	// Final check for abort before declaring success
 	if err := mgtr.checkAbort(); err != nil {
 		return err

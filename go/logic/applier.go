@@ -126,7 +126,7 @@ func (apl *Applier) compileMigrationKeyWarningRegex() (*regexp.Regexp, error) {
 }
 
 func (apl *Applier) InitDBConnections() (err error) {
-	applierUri := apl.connectionConfig.GetDBUri(apl.migrationContext.DatabaseName)
+	applierUri := apl.connectionConfig.GetDBUri(apl.migrationContext.GetTargetDatabaseName())
 	uriWithMulti := fmt.Sprintf("%s&multiStatements=true", applierUri)
 	if apl.db, _, err = mysql.GetDB(apl.migrationContext.Uuid, uriWithMulti); err != nil {
 		return err
@@ -166,7 +166,7 @@ func (apl *Applier) InitDBConnections() (err error) {
 		}
 	}
 	if apl.moveTablesConnectionConfig != nil {
-		moveTablesURI := apl.moveTablesConnectionConfig.GetDBUri(apl.migrationContext.MoveTables.TargetDatabase) + "&multiStatements=true"
+		moveTablesURI := apl.moveTablesConnectionConfig.GetDBUri(apl.migrationContext.GetTargetDatabaseName()) + "&multiStatements=true"
 		if apl.moveTablesTargetDB, _, err = mysql.GetDB(apl.migrationContext.Uuid, moveTablesURI); err != nil {
 			return err
 		}
@@ -175,7 +175,7 @@ func (apl *Applier) InitDBConnections() (err error) {
 		}
 	}
 	if apl.moveTablesConnectionConfig != nil {
-		moveTablesURI := apl.moveTablesConnectionConfig.GetDBUri(apl.migrationContext.MoveTables.TargetDatabase) + "&multiStatements=true"
+		moveTablesURI := apl.moveTablesConnectionConfig.GetDBUri(apl.migrationContext.GetTargetDatabaseName()) + "&multiStatements=true"
 		if apl.moveTablesTargetDB, _, err = mysql.GetDB(apl.migrationContext.Uuid, moveTablesURI); err != nil {
 			return err
 		}
@@ -560,10 +560,7 @@ func retryOnLockWaitTimeout(operation func() error, maxRetries int64, logger bas
 // createTargetTable creates the table on the applier host to which the applier will
 // apply changes.
 func (apl *Applier) createTargetTable(targetTableName string) error {
-	targetDatabase := apl.migrationContext.DatabaseName
-	if apl.migrationContext.IsMoveTablesMode() {
-		targetDatabase = apl.migrationContext.MoveTables.TargetDatabase
-	}
+	targetDatabase := apl.migrationContext.GetTargetDatabaseName()
 	query := fmt.Sprintf(`create /* gh-ost */ table %s.%s like %s.%s`,
 		sql.EscapeName(targetDatabase),
 		sql.EscapeName(targetTableName),
@@ -608,10 +605,7 @@ func (apl *Applier) createTargetTable(targetTableName string) error {
 func (apl *Applier) createTargetTableFromStatement(targetTableName, createStatement string) error {
 	//TODO(chriskirkland): how to inject the targetTableName in place of the original table name?
 
-	targetDatabase := apl.migrationContext.DatabaseName
-	if apl.migrationContext.IsMoveTablesMode() {
-		targetDatabase = apl.migrationContext.MoveTables.TargetDatabase
-	}
+	targetDatabase := apl.migrationContext.GetTargetDatabaseName()
 	apl.migrationContext.Log.Infof("Creating target table %s.%s",
 		sql.EscapeName(targetDatabase),
 		sql.EscapeName(targetTableName),

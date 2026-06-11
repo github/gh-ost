@@ -411,9 +411,9 @@ func (mctx *MigrationContext) GetTargetTableName() string {
 // database name unless we're in move-tables mode.
 func (mctx *MigrationContext) GetTargetDatabaseName() string {
 	if mctx.IsMoveTablesMode() {
-		return mctx.DatabaseName
+		return mctx.MoveTables.TargetDatabase
 	}
-	return mctx.MoveTables.TargetDatabase
+	return mctx.DatabaseName
 }
 
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
