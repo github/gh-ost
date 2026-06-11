@@ -640,7 +640,7 @@ func (apl *Applier) CreateGhostTable() error {
 	return apl.createTargetTable(apl.migrationContext.GetGhostTableName())
 }
 
-// CreateTargetTable creates the ghost table on the applier host
+// CreateTargetTable creates the target table on the target host (for move-tables)
 func (apl *Applier) CreateTargetTable(createStatement string) error {
 	if !apl.migrationContext.IsMoveTablesMode() {
 		return errors.New("CreateTargetTable is only available in MoveTables mode")
@@ -870,8 +870,10 @@ func (apl *Applier) createTriggers(tableName string) error {
 
 // CreateTriggers creates the original triggers on applier host
 func (apl *Applier) CreateTriggersOnGhost() error {
-	err := apl.createTriggers(apl.migrationContext.GetGhostTableName())
-	return fmt.Errorf("error creating triggers on ghost table: %w", err)
+	if err := apl.createTriggers(apl.migrationContext.GetGhostTableName()); err != nil {
+		return fmt.Errorf("error creating triggers on ghost table: %w", err)
+	}
+	return nil
 }
 
 // DropChangelogTable drops the changelog table on the applier host
