@@ -1107,11 +1107,23 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 }
 
 // rowCopyMaxTransientRetries bounds internal retries of the chunk-INSERT query on
-// transient lock errors (NOWAIT 3572, lock-wait timeout 1205, deadlock 1213).
-// Under heavy concurrent write load the SELECT ... FOR SHARE NOWAIT clause can
-// fail immediately; retrying with short backoff avoids exhausting the outer
-// retryOperation budget (which defaults to only 3 attempts).
+// transient lock errors (lock-wait timeout 1205, deadlock 1213). In single-threaded
+// mode on MySQL 8.x, NOWAIT (3572) can also occur and is retried here.
 const rowCopyMaxTransientRetries = 20
+
+// rowCopyUsesNoWait reports whether row-copy should use SELECT ... FOR SHARE NOWAIT.
+// On MySQL 8.x transactional tables, NOWAIT fails fast instead of blocking behind
+// concurrent DML. Under MTS (NumWorkers > 1), lock contention with parallel DML
+// workers is expected; row-copy waits via LOCK IN SHARE MODE instead.
+func rowCopyUsesNoWait(migrationContext *base.MigrationContext) bool {
+	if !strings.HasPrefix(migrationContext.ApplierMySQLVersion, "8.") {
+		return false
+	}
+	if migrationContext.NumWorkers > 1 {
+		return false
+	}
+	return true
+}
 
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
 // data actually gets copied from original table.
@@ -1131,8 +1143,7 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 		apl.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
 		apl.migrationContext.GetIteration() == 0,
 		apl.migrationContext.IsTransactionalTable(),
-		// TODO: Don't hardcode this
-		strings.HasPrefix(apl.migrationContext.ApplierMySQLVersion, "8."),
+		rowCopyUsesNoWait(apl.migrationContext),
 	)
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err

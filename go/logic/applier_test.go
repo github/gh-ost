@@ -233,6 +233,29 @@ func TestRowCopyMaxTransientRetries(t *testing.T) {
 	require.Equal(t, 20, rowCopyMaxTransientRetries, "rowCopyMaxTransientRetries should be 20")
 }
 
+func TestRowCopyUsesNoWait(t *testing.T) {
+	t.Run("mysql8 single-threaded uses NOWAIT", func(t *testing.T) {
+		mctx := base.NewMigrationContext()
+		mctx.ApplierMySQLVersion = "8.4.3"
+		mctx.NumWorkers = 1
+		require.True(t, rowCopyUsesNoWait(mctx))
+	})
+
+	t.Run("mysql8 MTS waits for locks", func(t *testing.T) {
+		mctx := base.NewMigrationContext()
+		mctx.ApplierMySQLVersion = "8.4.3"
+		mctx.NumWorkers = 4
+		require.False(t, rowCopyUsesNoWait(mctx))
+	})
+
+	t.Run("mysql57 never uses NOWAIT", func(t *testing.T) {
+		mctx := base.NewMigrationContext()
+		mctx.ApplierMySQLVersion = "5.7.44"
+		mctx.NumWorkers = 4
+		require.False(t, rowCopyUsesNoWait(mctx))
+	})
+}
+
 func TestApplierInstantDDL(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
 	migrationContext.DatabaseName = "test"
