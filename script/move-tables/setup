@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# This script starts four MySQL docker containers in two primary-replica clusters
+# which can be used for running tablemove replica tests.
+# Set the environment var TEST_MYSQL_IMAGE to change the docker image.
+#
+# Usage:
+#   setup         start the containers
+
+set -e
+
+GH_OST_ROOT=$(git rev-parse --show-toplevel)
+SCRIPT_PATH="${GH_OST_ROOT}/script/move-tables"
+DATABASE_NAME="gh_ost_test_db"
+
+poll_mysql() {
+    CTR=0
+    cmd="exec-mysql-$1"
+    while ! $cmd -e "select 1;" >/dev/null 2>&1; do
+        sleep 1
+        CTR=$((CTR + 1))
+        if [ $CTR -gt 30 ]; then
+            echo " ❌ MySQL $1 failed to start"
+            return 1
+        fi
+    done
+    echo " ✔ MySQL $1 OK"
+    return 0
+}
+
+exec-mysql-source-primary() {
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        ${SCRIPT_PATH}/mysql-source-primary --ssl-mode=required "$@"
+    else
+        ${SCRIPT_PATH}/mysql-source-primary "$@"
+    fi
+}
+
+exec-mysql-source-replica() {
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        ${SCRIPT_PATH}/mysql-source-replica --ssl-mode=required "$@"
+    else
+        ${SCRIPT_PATH}/mysql-source-replica "$@"
+    fi
+}
+
+exec-mysql-target-primary() {
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+       ${SCRIPT_PATH}/mysql-target-primary --ssl-mode=required "$@"
+    else
+       ${SCRIPT_PATH}/mysql-target-primary "$@"
+    fi
+}
+
+exec-mysql-target-replica() {
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        ${SCRIPT_PATH}/mysql-target-replica --ssl-mode=required "$@"
+    else
+        ${SCRIPT_PATH}/mysql-target-replica "$@"
+    fi
+}
+
+setup() {
+    [ -z "$TEST_MYSQL_IMAGE" ] && TEST_MYSQL_IMAGE="mysql:8.0.41"
+
+    echo "Starting MySQL $TEST_MYSQL_IMAGE containers (2 clusters)..."
+    compose_file="$GH_OST_ROOT/localtests/docker-compose-move-tables.yml"
+    MYSQL_SHA2_RSA_KEYS_FLAG=""
+    MYSQL_PASSWORD_HASHING_ALGORITHM="mysql_native_password"
+    MYSQL_NATIVE_PASSWORD_FLAG=""
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        MYSQL_PASSWORD_HASHING_ALGORITHM="caching_sha2_password"
+        MYSQL_SHA2_RSA_KEYS_FLAG="--caching-sha2-password-auto-generate-rsa-keys=ON"
+        MYSQL_NATIVE_PASSWORD_FLAG="$MYSQL_SHA2_RSA_KEYS_FLAG"
+    fi
+    (TEST_MYSQL_IMAGE="$TEST_MYSQL_IMAGE" MYSQL_NATIVE_PASSWORD_FLAG="$MYSQL_NATIVE_PASSWORD_FLAG" envsubst <"$compose_file") >"$compose_file.tmp"
+
+    docker compose -f "$compose_file.tmp" up -d --wait
+
+    echo "Waiting for MySQL..."
+    poll_mysql "source-primary" || exit 1
+    poll_mysql "source-replica" || exit 1
+    poll_mysql "target-primary" || exit 1
+    poll_mysql "target-replica" || exit 1
+
+    # Setup replication for source cluster, not idempotent
+    echo -n "Setting up replication for source cluster..."
+    exec-mysql-source-primary -e "create user if not exists 'repl'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'repl';"
+    exec-mysql-source-primary -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
+    exec-mysql-source-primary -e "create user if not exists 'gh-ost'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'gh-ost';"
+    exec-mysql-source-primary -e "grant all on *.* to 'gh-ost'@'%';"
+
+    sleep 1
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        exec-mysql-source-replica -e "change replication source to source_host='mysql-source-primary', source_port=3307, source_user='repl', source_password='repl', source_auto_position=1, source_ssl=1;"
+        exec-mysql-source-replica -e "start replica;"
+    else
+        exec-mysql-source-replica -e "change master to master_host='mysql-source-primary', master_port=3307, master_user='repl', master_password='repl', master_auto_position=1;"
+        exec-mysql-source-replica -e "start slave;"
+    fi
+    echo "OK"
+
+    # Setup replication for target cluster
+    echo -n "Setting up replication for target cluster..."
+    exec-mysql-target-primary -e "create user if not exists 'repl'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'repl';"
+    exec-mysql-target-primary -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
+    exec-mysql-target-primary -e "create user if not exists 'gh-ost'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'gh-ost';"
+    exec-mysql-target-primary -e "grant all on *.* to 'gh-ost'@'%';"
+
+    sleep 1
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        exec-mysql-target-replica -e "change replication source to source_host='mysql-target-primary', source_port=3309, source_user='repl', source_password='repl', source_auto_position=1, source_ssl=1;"
+        exec-mysql-target-replica -e "start replica;"
+    else
+        exec-mysql-target-replica -e "change master to master_host='mysql-target-primary', master_port=3309, master_user='repl', master_password='repl', master_auto_position=1;"
+        exec-mysql-target-replica -e "start slave;"
+    fi
+    echo "OK"
+
+    echo -n "Initiatilizing '$DATABASE_NAME' database into each cluster..."
+    exec-mysql-source-primary -e "CREATE DATABASE IF NOT EXISTS $DATABASE_NAME;"
+    exec-mysql-target-primary -e "CREATE DATABASE IF NOT EXISTS $DATABASE_NAME;"
+    echo "OK"
+
+    echo -n "Seeding data in source cluster..."
+    exec-mysql-source-primary -D $DATABASE_NAME < "$GH_OST_ROOT/localtests/move-tables/create.sql"
+    echo "OK"
+}
+
+setup

@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# This script removes the four MySQL docker containers in two primary-replica clusters
+# expected to be provisioned by the setup script.
+#
+# Usage:
+#   teardown      remove the containers
+
+set -e
+
+GH_OST_ROOT=$(git rev-parse --show-toplevel)
+if [[ ":$PATH:" != *":$GH_OST_ROOT:"* ]]; then
+    export PATH="${PATH}:${GH_OST_ROOT}/script"
+fi
+
+echo "Stopping containers..."
+docker stop mysql-source-replica
+docker stop mysql-source-primary
+docker stop mysql-target-replica
+docker stop mysql-target-primary
+
+echo "Removing containers..."
+docker rm mysql-source-replica
+docker rm mysql-source-primary
+docker rm mysql-target-replica
+docker rm mysql-target-primary
