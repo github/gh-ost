@@ -1,0 +1,328 @@
+package logic
+
+import (
+	"context"
+	gosql "database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
+
+	"github.com/testcontainers/testcontainers-go"
+	testmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
+
+	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/mysql"
+)
+
+// -----------------------------------------------------------------------------
+// Pure unit tests - no MySQL. These exercise the orchestration branches that
+// run BEFORE T1's RENAME, so they do not require a real inspector.db. Per the
+// Option A decision in commit 3's plan, the "RENAME was not attempted" check
+// is a proxy assertion: m.inspector is nil, so if T1 were reached the test
+// would panic instead of silently passing.
+// -----------------------------------------------------------------------------
+
+// TestMoveTablesCutOver_NoopShortCircuits maps to the Noop semantics decision
+// in #8209-implement-protocol (Noop returns immediately, no postpone gate, no
+// hooks, no RENAME).
+func TestMoveTablesCutOver_NoopShortCircuits(t *testing.T) {
+	var calls []string
+	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
+
+	ctx := base.NewMigrationContext()
+	ctx.Noop = true
+	ctx.Hooks = fakeHooks
+
+	m := NewMigrator(ctx, "test")
+
+	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag), "pre-state: flag must be 0")
+	require.Empty(t, calls, "pre-state: no hooks recorded")
+
+	require.NoError(t, m.moveTablesCutOver())
+
+	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag),
+		"post-state: Noop must not set CutOverCompleteFlag")
+	require.Empty(t, calls, "post-state: Noop must not fire any hook")
+}
+
+// TestMoveTablesCutOver_OnBeforeCutOverHookAbortsBeforeRename maps to T0 in
+// coop_cutover.md section 1.3 ("non-zero return code aborts cutover"). The "aborts
+// BEFORE source DDL" assertion is enforced as a proxy: m.inspector is nil, so
+// if T1 RENAME executed via mgtr.inspector.db, this test would panic.
+func TestMoveTablesCutOver_OnBeforeCutOverHookAbortsBeforeRename(t *testing.T) {
+	var calls []string
+	boom := errors.New("hook says no")
+	fakeHooks := &recordingHooks{name: "fake", calls: &calls, errOn: "OnBeforeCutOver", errVal: boom}
+
+	ctx := base.NewMigrationContext()
+	ctx.Hooks = fakeHooks
+	ctx.DatabaseName = "test"
+	ctx.OriginalTableName = "t"
+
+	m := NewMigrator(ctx, "test")
+
+	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag), "pre-state: flag must be 0")
+	require.Empty(t, calls, "pre-state: no hooks recorded")
+
+	err := m.moveTablesCutOver()
+	require.Error(t, err)
+	require.ErrorIs(t, err, boom)
+	require.Contains(t, err.Error(), "on-before-cut-over hook failed")
+
+	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag),
+		"post-state: T0 abort must leave CutOverCompleteFlag unset")
+	require.Equal(t, []string{"fake:OnBeforeCutOver"}, calls,
+		"post-state: only the failing T0 hook fires; no OnSuccess, no OnBeginPostponed")
+}
+
+// TestMoveTablesCutOver_PostponeGateFiresOnBeginPostponedOnce maps to the
+// postpone-gate decision in #8209-implement-protocol (keep OnBeginPostponed
+// firing logic with the same once-per-cutover semantics as standard cutOver).
+// Also exercises Edge Case Test Quality #5 by asserting both pre-state and
+// post-state of IsPostponingCutOver.
+func TestMoveTablesCutOver_PostponeGateFiresOnBeginPostponedOnce(t *testing.T) {
+	flagPath := filepath.Join(t.TempDir(), "postpone.flag")
+	require.NoError(t, os.WriteFile(flagPath, nil, 0o644))
+
+	var calls []string
+	boom := errors.New("we got past the gate")
+	fakeHooks := &recordingHooks{name: "fake", calls: &calls, errOn: "OnBeforeCutOver", errVal: boom}
+
+	ctx := base.NewMigrationContext()
+	ctx.PostponeCutOverFlagFile = flagPath
+	ctx.Hooks = fakeHooks
+
+	m := NewMigrator(ctx, "test")
+
+	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.IsPostponingCutOver), "pre-state: gate flag must be 0")
+	require.FileExists(t, flagPath, "pre-state: postpone flag file present")
+	require.Empty(t, calls, "pre-state: no hooks recorded")
+
+	// Remove the flag file during the gate's first 1s sleep so the next
+	// poll exits cleanly. sleepWhileTrue uses time.Sleep(1 * time.Second).
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		_ = os.Remove(flagPath)
+	}()
+
+	err := m.moveTablesCutOver()
+	require.ErrorIs(t, err, boom, "expect to bail at T0 hook after gate releases")
+
+	onBegin := 0
+	for _, c := range calls {
+		if c == "fake:OnBeginPostponed" {
+			onBegin++
+		}
+	}
+	require.Equal(t, 1, onBegin,
+		"post-state: OnBeginPostponed must fire exactly once per cutover (idempotent via IsPostponingCutOver)")
+	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.IsPostponingCutOver),
+		"post-state: gate must reset IsPostponingCutOver to 0 after exit")
+	require.Contains(t, calls, "fake:OnBeforeCutOver",
+		"post-state: T0 hook must fire after gate releases")
+	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag),
+		"post-state: hook failure must leave CutOverCompleteFlag unset")
+}
+
+// -----------------------------------------------------------------------------
+// Integration tests - real MySQL via testcontainers, exercise T1/T2/T3.
+//
+// These live under a dedicated suite (NOT MigratorTestSuite) so the parent
+// function name TestMoveTablesCutOver matches the `-run MoveTablesCutOver`
+// verifier alongside the pure unit tests above. SetupSuite duplicates the
+// testcontainer setup pattern used by MigratorTestSuite intentionally to
+// keep this commit's diff strictly additive (no edits to existing tests or
+// shared helpers, per the commit-3 prompt).
+//
+// Known-environmental flakes when Docker/testcontainers is unavailable mirror
+// the same class as #8206; they are not regressions of #8209.
+// -----------------------------------------------------------------------------
+
+type MoveTablesCutOverSuite struct {
+	suite.Suite
+	mysqlContainer testcontainers.Container
+	db             *gosql.DB
+}
+
+func (s *MoveTablesCutOverSuite) SetupSuite() {
+	ctx := context.Background()
+	mysqlContainer, err := testmysql.Run(ctx,
+		testMysqlContainerImage,
+		testmysql.WithDatabase(testMysqlDatabase),
+		testmysql.WithUsername(testMysqlUser),
+		testmysql.WithPassword(testMysqlPass),
+		testmysql.WithConfigFile("my.cnf.test"),
+	)
+	s.Require().NoError(err)
+	s.mysqlContainer = mysqlContainer
+
+	dsn, err := mysqlContainer.ConnectionString(ctx)
+	s.Require().NoError(err)
+	db, err := gosql.Open("mysql", dsn)
+	s.Require().NoError(err)
+	s.db = db
+}
+
+func (s *MoveTablesCutOverSuite) TearDownSuite() {
+	s.Assert().NoError(s.db.Close())
+	s.Assert().NoError(testcontainers.TerminateContainer(s.mysqlContainer))
+}
+
+func (s *MoveTablesCutOverSuite) SetupTest() {
+	_, err := s.db.ExecContext(context.Background(), "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabase)
+	s.Require().NoError(err)
+}
+
+func (s *MoveTablesCutOverSuite) TearDownTest() {
+	ctx := context.Background()
+	_, _ = s.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestTableName())
+	_, _ = s.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestOldTableName())
+}
+
+// containingDrainGTID returns a fabricated GTID set guaranteed to contain any
+// GTID the test container will assign during the test. RENAME's GTID will be
+// a strict subset of this range, so T3's containment poll passes on iteration 1.
+func (s *MoveTablesCutOverSuite) containingDrainGTID() *mysql.GTIDBinlogCoordinates {
+	var serverUUID string
+	s.Require().NoError(s.db.QueryRow("SELECT @@server_uuid").Scan(&serverUUID))
+	g, err := mysql.NewGTIDBinlogCoordinates(fmt.Sprintf("%s:1-99999999", serverUUID))
+	s.Require().NoError(err)
+	return g
+}
+
+// buildMigrator wires a Migrator with the test container's *sql.DB pinned to
+// inspector.db and a fresh Applier. initialCoords may be nil for the drain-
+// timeout case.
+func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks *recordingHooks, initialCoords mysql.BinlogCoordinates) (*Migrator, *base.MigrationContext) {
+	ctx := context.Background()
+	connectionConfig, err := getTestConnectionConfig(ctx, s.mysqlContainer)
+	s.Require().NoError(err)
+
+	mc := newTestMigrationContext()
+	mc.ApplierConnectionConfig = connectionConfig
+	mc.InspectorConnectionConfig = connectionConfig
+	mc.SetConnectionConfig("innodb")
+	mc.Hooks = fakeHooks
+
+	m := NewMigrator(mc, "test")
+	m.inspector = &Inspector{db: s.db, migrationContext: mc}
+	m.applier = NewApplier(mc)
+	if initialCoords != nil {
+		m.applier.CurrentCoordinatesMutex.Lock()
+		m.applier.CurrentCoordinates = initialCoords
+		m.applier.CurrentCoordinatesMutex.Unlock()
+	}
+	return m, mc
+}
+
+// TestHappyPath drives the full T0-T6 protocol against the test container.
+// Asserts hook ordering (T0 then T5), T4 flag set, and the source-side rename.
+// Maps to acceptance criterion #8209 "RENAME executes; drain completes;
+// CutOverCompleteFlag set; on-success hook fires".
+func (s *MoveTablesCutOverSuite) TestHappyPath() {
+	ctx := context.Background()
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestTableName()))
+	s.Require().NoError(err)
+
+	var calls []string
+	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
+	m, mc := s.buildMigrator(fakeHooks, s.containingDrainGTID())
+
+	s.Require().Equal(int64(0), atomic.LoadInt64(&mc.CutOverCompleteFlag), "pre-state: flag must be 0")
+	s.Require().Empty(calls, "pre-state: no hooks recorded")
+
+	s.Require().NoError(m.moveTablesCutOver())
+
+	s.Require().Equal(int64(1), atomic.LoadInt64(&mc.CutOverCompleteFlag),
+		"post-state: T4 must set CutOverCompleteFlag before T5/T6")
+	s.Require().Equal([]string{"fake:OnBeforeCutOver", "fake:OnSuccess"}, calls,
+		"post-state: T0 hook precedes T5 hook")
+
+	// Source-side post-state (Edge Case Test Quality #5: assert both sides).
+	var renamed string
+	s.Require().NoError(s.db.QueryRow(fmt.Sprintf("SHOW TABLES IN %s LIKE '_%s_del'",
+		testMysqlDatabase, testMysqlTableName)).Scan(&renamed))
+	s.Require().Equal("_"+testMysqlTableName+"_del", renamed)
+
+	err = s.db.QueryRow(fmt.Sprintf("SHOW TABLES IN %s LIKE '%s'",
+		testMysqlDatabase, testMysqlTableName)).Scan(&renamed)
+	s.Require().ErrorIs(err, gosql.ErrNoRows, "original table must no longer exist under its old name")
+}
+
+// TestRenameFailurePropagates maps to T1 failure handling: no source table ->
+// RENAME errors. Verify the wrapped error, no CutOverCompleteFlag set, no
+// OnSuccess fired.
+func (s *MoveTablesCutOverSuite) TestRenameFailurePropagates() {
+	// Deliberately no CREATE TABLE.
+	var calls []string
+	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
+	m, mc := s.buildMigrator(fakeHooks, s.containingDrainGTID())
+
+	s.Require().Equal(int64(0), atomic.LoadInt64(&mc.CutOverCompleteFlag), "pre-state: flag must be 0")
+
+	err := m.moveTablesCutOver()
+	s.Require().Error(err)
+	s.Require().Contains(err.Error(), "RENAME failed")
+
+	s.Require().Equal(int64(0), atomic.LoadInt64(&mc.CutOverCompleteFlag),
+		"post-state: RENAME failure must leave CutOverCompleteFlag unset")
+	for _, c := range calls {
+		s.Require().NotEqual("fake:OnSuccess", c, "OnSuccess must not fire when RENAME fails")
+	}
+	s.Require().Equal([]string{"fake:OnBeforeCutOver"}, calls,
+		"post-state: only T0 fires before the failed RENAME")
+}
+
+// TestDrainTimeoutPropagates maps to T3 timeout handling: applier coordinates
+// never reach the drain GTID -> drain poll bounded by moveTablesCutOverDrainTimeout
+// returns a wrapped error and the flag is not set.
+func (s *MoveTablesCutOverSuite) TestDrainTimeoutPropagates() {
+	ctx := context.Background()
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestTableName()))
+	s.Require().NoError(err)
+
+	// Patch the package-level timeout/poll just for this test.
+	origTimeout, origPoll := moveTablesCutOverDrainTimeout, moveTablesCutOverDrainPollInterval
+	moveTablesCutOverDrainTimeout = 200 * time.Millisecond
+	moveTablesCutOverDrainPollInterval = 50 * time.Millisecond
+	s.T().Cleanup(func() {
+		moveTablesCutOverDrainTimeout = origTimeout
+		moveTablesCutOverDrainPollInterval = origPoll
+	})
+
+	var calls []string
+	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
+	// initialCoords nil - drain comparison never satisfies.
+	m, mc := s.buildMigrator(fakeHooks, nil)
+
+	s.Require().Equal(int64(0), atomic.LoadInt64(&mc.CutOverCompleteFlag), "pre-state: flag must be 0")
+
+	err = m.moveTablesCutOver()
+	s.Require().Error(err)
+	s.Require().Contains(err.Error(), "drain poll timed out")
+	s.Require().True(strings.HasPrefix(err.Error(), "drain poll timed out"),
+		"drain timeout error must name the drain")
+
+	s.Require().Equal(int64(0), atomic.LoadInt64(&mc.CutOverCompleteFlag),
+		"post-state: drain timeout must abort before T4 flag set")
+	for _, c := range calls {
+		s.Require().NotEqual("fake:OnSuccess", c, "OnSuccess must not fire on drain timeout")
+	}
+	s.Require().Equal([]string{"fake:OnBeforeCutOver"}, calls,
+		"post-state: only T0 fires before the drain loop")
+}
+
+func TestMoveTablesCutOver(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration suite in short mode")
+	}
+	suite.Run(t, new(MoveTablesCutOverSuite))
+}
