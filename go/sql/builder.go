@@ -7,6 +7,7 @@ package sql
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -423,6 +424,146 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
 	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, noWait)
+}
+
+type MoveTableCopySelectQueryBuilder struct {
+	preparedStatement string
+	argsMapping       []int
+	argsCount         int
+}
+
+func NewMoveTableCopySelectQueryBuilder(sourceDatabaseName, sourceTableName string, columns *ColumnList, uniqueKey string, uniqueKeyColumns *ColumnList, includeRangeStartValues bool) (*MoveTableCopySelectQueryBuilder, error) {
+	sourceDatabaseName = EscapeName(sourceDatabaseName)
+	sourceTableName = EscapeName(sourceTableName)
+	columnNames := columns.Names()
+	for i := range columnNames {
+		columnNames[i] = EscapeName(columnNames[i])
+	}
+	sharedColumnsListing := strings.Join(columnNames, ", ")
+	uniqueKey = EscapeName(uniqueKey)
+	var minRangeComparisonSign = GreaterThanComparisonSign
+	if includeRangeStartValues {
+		minRangeComparisonSign = GreaterThanOrEqualsComparisonSign
+	}
+	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
+	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
+	dummyArgs := make([]any, len(uniqueKeyColumns.Columns()))
+	for i := range dummyArgs {
+		dummyArgs[i] = i
+	}
+	var argsMapping []int
+
+	rangeStartComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns.Names(), rangeStartValues, dummyArgs, minRangeComparisonSign)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range rangeExplodedArgs {
+		idx := slices.Index(dummyArgs, a)
+		if idx == -1 {
+			return nil, fmt.Errorf("failed to build args mapping, missing argument pointer %v", a)
+		}
+		argsMapping = append(argsMapping, idx)
+	}
+
+	rangeEndComparison, rangeExplodedArgs, err := BuildRangeComparison(uniqueKeyColumns.Names(), rangeEndValues, dummyArgs, LessThanOrEqualsComparisonSign)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range rangeExplodedArgs {
+		idx := slices.Index(dummyArgs, a)
+		if idx == -1 {
+			return nil, fmt.Errorf("failed to build args mapping, missing argument pointer %v", a)
+		}
+		argsMapping = append(argsMapping, idx+len(dummyArgs))
+	}
+
+	stmt := fmt.Sprintf(`
+		select /* gh-ost %s.%s */ %s
+		from
+			%s.%s
+		force index (%s)
+		where
+			(%s and %s)
+		`,
+		sourceDatabaseName, sourceTableName, sharedColumnsListing,
+		sourceDatabaseName, sourceTableName,
+		uniqueKey,
+		rangeStartComparison, rangeEndComparison,
+	)
+	return &MoveTableCopySelectQueryBuilder{
+		preparedStatement: stmt,
+		argsMapping:       argsMapping,
+		argsCount:         len(dummyArgs) * 2,
+	}, nil
+}
+
+func (b *MoveTableCopySelectQueryBuilder) BuildQuery(rangeStartArgs, rangeEndArgs []any) (string, []any, error) {
+	if len(rangeStartArgs)+len(rangeEndArgs) != b.argsCount {
+		return "", nil, fmt.Errorf("got %d args but expected %d", len(rangeStartArgs)+len(rangeEndArgs), b.argsCount)
+	}
+	if len(rangeStartArgs) != len(rangeEndArgs) {
+		return "", nil, fmt.Errorf("mismatched number of start and end args: %d != %d", len(rangeStartArgs), len(rangeEndArgs))
+	}
+	explodedArgs := make([]any, 0, len(b.argsMapping))
+	for _, idx := range b.argsMapping {
+		if idx < len(rangeStartArgs) {
+			explodedArgs = append(explodedArgs, rangeStartArgs[idx])
+		} else {
+			explodedArgs = append(explodedArgs, rangeEndArgs[idx-len(rangeStartArgs)])
+		}
+	}
+	return b.preparedStatement, explodedArgs, nil
+}
+
+type MoveTableCopyInsertQueryBuilder struct {
+	preparedStatement    string
+	valueListPlaceholder string
+	valueListSize        int
+}
+
+func NewMoveTableCopyInsertQueryBuilder(targetDatabaseName, targetTableName string, columns *ColumnList) (*MoveTableCopyInsertQueryBuilder, error) {
+	targetDatabaseName = EscapeName(targetDatabaseName)
+	targetTableName = EscapeName(targetTableName)
+	columnsNames := columns.Names()
+	for i := range columnsNames {
+		columnsNames[i] = EscapeName(columnsNames[i])
+	}
+	sharedColumnsListing := strings.Join(columnsNames, ", ")
+	valueListPlaceholder := "(" + strings.Join(buildColumnsPreparedValues(columns), ", ") + ")"
+	valueListSize := len(columnsNames)
+	stmt := fmt.Sprintf(`
+		insert /* gh-ost %s.%s */ ignore
+		into
+			%s.%s
+			(%s)
+		values
+		`,
+		targetDatabaseName, targetTableName,
+		targetDatabaseName, targetTableName,
+		sharedColumnsListing,
+	)
+	return &MoveTableCopyInsertQueryBuilder{
+		preparedStatement:    stmt,
+		valueListPlaceholder: valueListPlaceholder,
+		valueListSize:        valueListSize,
+	}, nil
+}
+
+func (b *MoveTableCopyInsertQueryBuilder) BuildQuery(values []*ColumnValues) (string, []any, error) {
+	var explodedArgs []any
+	var builder strings.Builder
+	builder.WriteString(b.preparedStatement)
+	for i, value := range values {
+		if len(value.AbstractValues()) != b.valueListSize {
+			return "", nil, fmt.Errorf("got %d column values but expected %d", len(value.AbstractValues()), b.valueListSize)
+		}
+		if i > 0 {
+			builder.WriteString(",\n")
+		}
+		builder.WriteString(b.valueListPlaceholder)
+		explodedArgs = append(explodedArgs, value.AbstractValues()...)
+	}
+	return builder.String(), explodedArgs, nil
 }
 
 func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {

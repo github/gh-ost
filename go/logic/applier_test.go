@@ -9,6 +9,7 @@ import (
 	"context"
 	gosql "database/sql"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -271,6 +272,7 @@ type ApplierTestSuite struct {
 
 	mysqlContainer testcontainers.Container
 	db             *gosql.DB
+	otherDB        *gosql.DB
 }
 
 func (suite *ApplierTestSuite) SetupSuite() {
@@ -291,12 +293,30 @@ func (suite *ApplierTestSuite) SetupSuite() {
 
 	db, err := gosql.Open("mysql", dsn)
 	suite.Require().NoError(err)
-
 	suite.db = db
+
+	containerHost, err := mysqlContainer.Host(ctx)
+	suite.Require().NoError(err)
+	containerPort, err := mysqlContainer.MappedPort(ctx, "3306/tcp")
+	suite.Require().NoError(err)
+
+	// Second database & connection for move-tables tests:
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", testMysqlDatabaseOther))
+	suite.Require().NoError(err)
+	otherConf := drivermysql.NewConfig()
+	otherConf.DBName = testMysqlDatabaseOther
+	otherConf.User = testMysqlUser
+	otherConf.Passwd = testMysqlPass
+	otherConf.Net = "tcp"
+	otherConf.Addr = net.JoinHostPort(containerHost, containerPort.Port())
+	otherDB, err := gosql.Open("mysql", otherConf.FormatDSN())
+	suite.Require().NoError(err)
+	suite.otherDB = otherDB
 }
 
 func (suite *ApplierTestSuite) TeardownSuite() {
 	suite.Assert().NoError(suite.db.Close())
+	suite.Assert().NoError(suite.otherDB.Close())
 	suite.Assert().NoError(testcontainers.TerminateContainer(suite.mysqlContainer))
 }
 
@@ -312,6 +332,8 @@ func (suite *ApplierTestSuite) TearDownTest() {
 	_, err := suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestTableName())
 	suite.Require().NoError(err)
 	_, err = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestGhostTableName())
+	suite.Require().NoError(err)
+	_, err = suite.otherDB.ExecContext(ctx, "DROP TABLE IF EXISTS "+getTestOtherTableName())
 	suite.Require().NoError(err)
 }
 
@@ -1617,6 +1639,208 @@ func (suite *ApplierTestSuite) TestMultipleDMLEventsInBatch() {
 	suite.Require().Equal(3, results[1].id)
 	suite.Require().Equal("charlie@example.com", results[1].email)
 	// Critically: id=2 (bob@example.com) is NOT present, proving event #3 was rolled back
+}
+
+func (suite *ApplierTestSuite) TestApplyDMLEventQueriesMoveTablesMode() {
+	ctx := context.Background()
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.otherDB.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestOtherTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "primary_key",
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	dmlEvents := []*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{123456, 42}),
+		},
+	}
+	err = applier.ApplyDMLEventQueries(dmlEvents)
+	suite.Require().NoError(err)
+
+	// Check that the row was inserted into the ghost table via moveTablesTargetDB
+	rows, err := suite.otherDB.Query("SELECT * FROM " + getTestOtherTableName())
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	var count, id, item_id int
+	for rows.Next() {
+		err = rows.Scan(&id, &item_id)
+		suite.Require().NoError(err)
+		count += 1
+	}
+	suite.Require().NoError(rows.Err())
+
+	suite.Require().Equal(1, count)
+	suite.Require().Equal(123456, id)
+	suite.Require().Equal(42, item_id)
+
+	suite.Require().Equal(int64(1), migrationContext.TotalDMLEventsApplied)
+	suite.Require().Equal(int64(0), migrationContext.RowsDeltaEstimate)
+}
+
+func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
+	ctx := context.Background()
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT NOT NULL, name VARCHAR(50), created_at DATETIME NOT NULL, PRIMARY KEY(id));", getTestTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.otherDB.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT NOT NULL, name VARCHAR(50), created_at DATETIME NOT NULL, PRIMARY KEY(id));", getTestOtherTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, name, created_at) VALUES (1, 'alice', '2024-01-15 10:30:00'), (2, 'bob', '2024-06-20 14:45:00'), (3, 'carol', '2025-12-31 23:59:59');", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "name", "created_at"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "name", "created_at"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "name", "created_at"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "PRIMARY",
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+
+	applier := NewApplier(migrationContext)
+	applier.prepareQueries()
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	err = applier.CreateChangelogTable()
+	suite.Require().NoError(err)
+
+	err = applier.ReadMigrationRangeValues()
+	suite.Require().NoError(err)
+
+	migrationContext.SetNextIterationRangeMinValues()
+	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+	suite.Require().NoError(err)
+	suite.Require().True(hasFurtherRange)
+
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries()
+	suite.Require().NoError(err)
+	suite.Require().Equal(int64(3), rowsAffected)
+	suite.Require().Equal(int64(1000), chunkSize)
+	suite.Require().Greater(duration, time.Duration(0))
+
+	// Verify rows were copied to the other table
+	rows, err := suite.otherDB.QueryContext(ctx, "SELECT id, name, created_at FROM "+getTestOtherTableName()+" ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+
+	type row struct {
+		id        int
+		name      string
+		createdAt string
+	}
+	var results []row
+	for rows.Next() {
+		var r row
+		err = rows.Scan(&r.id, &r.name, &r.createdAt)
+		suite.Require().NoError(err)
+		results = append(results, r)
+	}
+	suite.Require().NoError(rows.Err())
+
+	suite.Require().Len(results, 3)
+	suite.Require().Equal(1, results[0].id)
+	suite.Require().Equal("alice", results[0].name)
+	suite.Require().Equal("2024-01-15 10:30:00", results[0].createdAt)
+	suite.Require().Equal(2, results[1].id)
+	suite.Require().Equal("bob", results[1].name)
+	suite.Require().Equal("2024-06-20 14:45:00", results[1].createdAt)
+	suite.Require().Equal(3, results[2].id)
+	suite.Require().Equal("carol", results[2].name)
+	suite.Require().Equal("2025-12-31 23:59:59", results[2].createdAt)
+}
+
+func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesNoRows() {
+	ctx := context.Background()
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT NOT NULL, name VARCHAR(50), created_at DATETIME NOT NULL, PRIMARY KEY(id));", getTestTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.otherDB.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT NOT NULL, name VARCHAR(50), created_at DATETIME NOT NULL, PRIMARY KEY(id));", getTestOtherTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, name, created_at) VALUES (1, 'alice', '2024-01-15 10:30:00'), (2, 'bob', '2024-06-20 14:45:00'), (3, 'carol', '2025-12-31 23:59:59');", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "name", "created_at"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "name", "created_at"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "name", "created_at"})
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:    "PRIMARY",
+		Columns: *sql.NewColumnList([]string{"id"}),
+	}
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+
+	applier := NewApplier(migrationContext)
+	applier.prepareQueries()
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	// Point the iteration range at a key range that contains no rows so the
+	// SELECT returns an empty result set and the INSERT is skipped.
+	migrationContext.MigrationIterationRangeMinValues = sql.ToColumnValues([]interface{}{100})
+	migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{200})
+
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries()
+	suite.Require().NoError(err)
+	suite.Require().Equal(int64(0), rowsAffected)
+	suite.Require().Equal(int64(1000), chunkSize)
+	suite.Require().Greater(duration, time.Duration(0))
+
+	// Verify no rows were copied to the target table.
+	var count int
+	err = suite.otherDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+getTestOtherTableName()).Scan(&count)
+	suite.Require().NoError(err)
+	suite.Require().Equal(0, count)
 }
 
 func TestApplier(t *testing.T) {

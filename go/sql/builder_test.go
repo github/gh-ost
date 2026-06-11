@@ -1102,6 +1102,246 @@ func TestBuildDMLUpdateQuerySignedUnsigned(t *testing.T) {
 	}
 }
 
+func TestMoveTableCopySelectQueryBuilder(t *testing.T) {
+	t.Run("single column unique key", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name", "position"})
+		uniqueKeyColumns := NewColumnList([]string{"id"})
+
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, true)
+		require.NoError(t, err)
+
+		query, args, err := builder.BuildQuery([]any{3}, []any{103})
+		require.NoError(t, err)
+
+		expected := `
+			select /* gh-ost mydb.tbl */ id, name, position
+			from
+				mydb.tbl
+			force index (PRIMARY)
+			where
+				(((id > ?) or ((id = ?))) and ((id < ?) or ((id = ?))))
+		`
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []any{3, 3, 103, 103}, args)
+	})
+
+	t.Run("single column unique key without range start", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name", "position"})
+		uniqueKeyColumns := NewColumnList([]string{"id"})
+
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, false)
+		require.NoError(t, err)
+
+		query, args, err := builder.BuildQuery([]any{3}, []any{103})
+		require.NoError(t, err)
+
+		expected := `
+			select /* gh-ost mydb.tbl */ id, name, position
+			from
+				mydb.tbl
+			force index (PRIMARY)
+			where
+				(((id > ?)) and ((id < ?) or ((id = ?))))
+		`
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []any{3, 103, 103}, args)
+	})
+
+	t.Run("compound unique key", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name", "position"})
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "name_position_uidx", uniqueKeyColumns, true)
+		require.NoError(t, err)
+
+		query, args, err := builder.BuildQuery([]any{3, 17}, []any{103, 117})
+		require.NoError(t, err)
+
+		expected := `
+			select /* gh-ost mydb.tbl */ id, name, position
+			from
+				mydb.tbl
+			force index (name_position_uidx)
+			where
+				(((name > ?) or (((name = ?)) AND (position > ?)) or ((name = ?) and (position = ?)))
+				and ((name < ?) or (((name = ?)) AND (position < ?)) or ((name = ?) and (position = ?))))
+		`
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []any{3, 3, 17, 3, 17, 103, 103, 117, 103, 117}, args)
+	})
+
+	t.Run("reuses prepared statement across calls", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name"})
+		uniqueKeyColumns := NewColumnList([]string{"id"})
+
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, true)
+		require.NoError(t, err)
+
+		query1, args1, err := builder.BuildQuery([]any{1}, []any{10})
+		require.NoError(t, err)
+		query2, args2, err := builder.BuildQuery([]any{11}, []any{20})
+		require.NoError(t, err)
+
+		require.Equal(t, query1, query2)
+		require.Equal(t, []any{1, 1, 10, 10}, args1)
+		require.Equal(t, []any{11, 11, 20, 20}, args2)
+	})
+
+	t.Run("wrong args count", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name"})
+		uniqueKeyColumns := NewColumnList([]string{"id"})
+
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "PRIMARY", uniqueKeyColumns, true)
+		require.NoError(t, err)
+
+		_, _, err = builder.BuildQuery([]any{1, 2}, []any{10})
+		require.Error(t, err)
+	})
+
+	t.Run("mismatched start and end args count", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name", "position"})
+		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+
+		builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "name_position_uidx", uniqueKeyColumns, true)
+		require.NoError(t, err)
+
+		// Total args count matches argsCount (4), but start and end counts differ.
+		_, _, err = builder.BuildQuery([]any{1, 2, 3}, []any{10})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "mismatched number of start and end args")
+	})
+}
+
+func BenchmarkMoveTableCopySelectQueryBuilderBuildQuery(b *testing.B) {
+	sharedColumns := NewColumnList([]string{"id", "name", "position"})
+	uniqueKeyColumns := NewColumnList([]string{"name", "position"})
+
+	builder, err := NewMoveTableCopySelectQueryBuilder("mydb", "tbl", sharedColumns, "name_position_uidx", uniqueKeyColumns, true)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	rangeStartArgs := []any{3, 17}
+	rangeEndArgs := []any{103, 117}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, err := builder.BuildQuery(rangeStartArgs, rangeEndArgs)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestMoveTableCopyInsertQueryBuilder(t *testing.T) {
+	t.Run("single row", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name", "position"})
+
+		builder, err := NewMoveTableCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
+		require.NoError(t, err)
+
+		values := []*ColumnValues{
+			ToColumnValues([]interface{}{1, "alice", 10}),
+		}
+		query, args, err := builder.BuildQuery(values)
+		require.NoError(t, err)
+
+		expected := `
+			insert /* gh-ost mydb.ghost */ ignore
+			into
+				mydb.ghost
+				(id, name, position)
+			values
+			(?, ?, ?)
+		`
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []any{1, "alice", 10}, args)
+	})
+
+	t.Run("multiple rows", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name", "position"})
+
+		builder, err := NewMoveTableCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
+		require.NoError(t, err)
+
+		values := []*ColumnValues{
+			ToColumnValues([]interface{}{1, "alice", 10}),
+			ToColumnValues([]interface{}{2, "bob", 20}),
+			ToColumnValues([]interface{}{3, "carol", 30}),
+		}
+		query, args, err := builder.BuildQuery(values)
+		require.NoError(t, err)
+
+		expected := `
+			insert /* gh-ost mydb.ghost */ ignore
+			into
+				mydb.ghost
+				(id, name, position)
+			values
+			(?, ?, ?),
+			(?, ?, ?),
+			(?, ?, ?)
+		`
+		require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+		require.Equal(t, []any{1, "alice", 10, 2, "bob", 20, 3, "carol", 30}, args)
+	})
+
+	t.Run("wrong column count", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name", "position"})
+
+		builder, err := NewMoveTableCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
+		require.NoError(t, err)
+
+		values := []*ColumnValues{
+			ToColumnValues([]interface{}{1, "alice"}),
+		}
+		_, _, err = builder.BuildQuery(values)
+		require.Error(t, err)
+	})
+
+	t.Run("reuses prepared statement", func(t *testing.T) {
+		sharedColumns := NewColumnList([]string{"id", "name"})
+
+		builder, err := NewMoveTableCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
+		require.NoError(t, err)
+
+		values1 := []*ColumnValues{ToColumnValues([]interface{}{1, "a"})}
+		values2 := []*ColumnValues{ToColumnValues([]interface{}{2, "b"})}
+
+		query1, args1, err := builder.BuildQuery(values1)
+		require.NoError(t, err)
+		query2, args2, err := builder.BuildQuery(values2)
+		require.NoError(t, err)
+
+		require.Equal(t, query1, query2)
+		require.Equal(t, []any{1, "a"}, args1)
+		require.Equal(t, []any{2, "b"}, args2)
+	})
+}
+
+func BenchmarkMoveTableCopyInsertQueryBuilderBuildQuery(b *testing.B) {
+	sharedColumns := NewColumnList([]string{"id", "name", "position"})
+
+	builder, err := NewMoveTableCopyInsertQueryBuilder("mydb", "ghost", sharedColumns)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	values := []*ColumnValues{
+		ToColumnValues([]interface{}{1, "alice", 10}),
+		ToColumnValues([]interface{}{2, "bob", 20}),
+		ToColumnValues([]interface{}{3, "carol", 30}),
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, err := builder.BuildQuery(values)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestCheckpointQueryBuilder(t *testing.T) {
 	databaseName := "mydb"
 	tableName := "_tbl_ghk"
