@@ -790,14 +790,15 @@ func (mgtr *Migrator) Revert() error {
 	return nil
 }
 
-/* TODO(chriskirkland): work left to do:
-*	- validate that migrating binlog events after migration is in-flight work
-* 	- validate migration waits for cutover flag (^ related)
-*   - DROP target table if it exists on the cluster pre-migration
-*
-*   - Cleanup lots of debug/info logging
-*   - lots and lots of refactoring, state isolation, dependency injection, etc. :)
- */
+// prepareMoveTablesCopyState initializes state for row copy in move-tables mode.
+// for move-tables functionality, the source and target tables are identical so we just need to grab any valid UNIQUE key constraint.
+func (mgtr *Migrator) prepareMoveTablesCopyState() {
+	mgtr.migrationContext.UniqueKey = mgtr.inspector.selectUniqueKey(mgtr.migrationContext.OriginalTableUniqueKeys)
+
+	// In move-tables mode source and target schemas match, so shared columns are identical.
+	mgtr.migrationContext.SharedColumns = mgtr.migrationContext.OriginalTableColumns
+	mgtr.migrationContext.MappedSharedColumns = mgtr.migrationContext.OriginalTableColumns
+}
 
 func (mgtr *Migrator) MoveTables() (err error) {
 	mgtr.migrationContext.Log.Infof("Moving tables %v from %s to %s (%s)",
@@ -844,15 +845,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 		return err
 	}
 
-	// TODO(chriskirkland): move this into a well-named function
-	// populate the unique key for the migration.  in single-cluster modes where we may be ALTERing the table, we need
-	// to validate the migration has a valid unique key to use here... but in move-tables, the source and target tables
-	// are identical,s owe just need to grab any valid UNIQUE key constraint.
-	mgtr.migrationContext.UniqueKey = mgtr.inspector.selectUniqueKey(mgtr.migrationContext.OriginalTableUniqueKeys)
-
-	// columns are identical on the source and target tables
-	mgtr.migrationContext.SharedColumns = mgtr.migrationContext.OriginalTableColumns
-	mgtr.migrationContext.MappedSharedColumns = mgtr.migrationContext.OriginalTableColumns
+	mgtr.prepareMoveTablesCopyState()
 
 	// this function assumes that the unique key constraint has been set.
 	if err := mgtr.applier.prepareQueries(); err != nil {
@@ -1671,8 +1664,6 @@ func (mgtr *Migrator) initiateApplier() error {
 	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
-		//TODO(chriskirkland): drop the target table if it exists?
-
 		mgtr.migrationContext.Log.Infof("Fetching create table statement for `%s.%s`",
 			mgtr.migrationContext.DatabaseName,
 			mgtr.migrationContext.MoveTables.TableNames[0],

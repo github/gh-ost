@@ -154,12 +154,7 @@ func (apl *Applier) InitDBConnections() (err error) {
 			apl.connectionConfig.ImpliedKey = impliedKey
 		}
 	}
-	if apl.migrationContext.IsMoveTablesMode() {
-		//TODO(chriskirkland): do we need this?
-
-		// seed target columns based on the original table on source
-		apl.migrationContext.OriginalTableColumnsOnApplier = apl.migrationContext.OriginalTableColumns
-	} else {
+	if !apl.migrationContext.IsMoveTablesMode() {
 		// read target table columns from applier
 		if err := apl.readTableColumns(); err != nil {
 			return err
@@ -603,8 +598,6 @@ func (apl *Applier) createTargetTable(targetTableName string) error {
 // createTargetTableFromStatement creates the table on the applier host to which the applier will
 // apply changes.
 func (apl *Applier) createTargetTableFromStatement(targetTableName, createStatement string) error {
-	//TODO(chriskirkland): how to inject the targetTableName in place of the original table name?
-
 	targetDatabase := apl.migrationContext.GetTargetDatabaseName()
 	apl.migrationContext.Log.Infof("Creating target table %s.%s",
 		sql.EscapeName(targetDatabase),
@@ -1470,7 +1463,6 @@ func (apl *Applier) UnlockTables() error {
 // - rename ghost table to original
 // There is a point in time in between where the table does not exist.
 func (apl *Applier) SwapTablesQuickAndBumpy() error {
-	// TODO(chriskirkland): audit usage in move-tables
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s rename %s`,
 		sql.EscapeName(apl.migrationContext.DatabaseName),
 		sql.EscapeName(apl.originalTableName()),
@@ -1499,7 +1491,6 @@ func (apl *Applier) SwapTablesQuickAndBumpy() error {
 // RenameTablesRollback renames back both table: original back to ghost,
 // _old back to original. This is used by `--test-on-replica`
 func (apl *Applier) RenameTablesRollback() (renameError error) {
-	// TODO(chriskirkland): audit usage in move-tables
 	// Restoring tables to original names.
 	// We prefer the single, atomic operation:
 	query := fmt.Sprintf(`rename /* gh-ost */ table %s.%s to %s.%s, %s.%s to %s.%s`,
@@ -1852,7 +1843,6 @@ func (apl *Applier) AtomicCutOverMagicLock(sessionIdChan chan int64, tableLocked
 
 // AtomicCutoverRename
 func (apl *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed chan<- error) error {
-	// TODO(chriskirkland): audit usage in move-tables
 	tx, err := apl.db.Begin()
 	if err != nil {
 		return err

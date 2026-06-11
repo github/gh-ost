@@ -938,15 +938,8 @@ func (mctx *MigrationContext) AddThrottleControlReplicaKey(key mysql.InstanceKey
 	return nil
 }
 
-// TODO(chriskirkland): pick up from here:
-//
-// need to figure out how to populate the applier connection config from
-// the inspector connection config but using the "target" values from the CLI
-// args.
-
 // ApplyCredentials sorts out the credentials between the config file and the CLI flags
 func (mctx *MigrationContext) ApplyCredentials() {
-	//TODO(chriskirkland): make this work for move-tables
 	mctx.configMutex.Lock()
 	defer mctx.configMutex.Unlock()
 
@@ -966,23 +959,25 @@ func (mctx *MigrationContext) ApplyCredentials() {
 	}
 
 	if mctx.IsMoveTablesMode() {
-		// apply credentials for the applier from target CLI args
-		if mctx.MoveTables.ConnectionConfig == nil {
-			mctx.MoveTables.ConnectionConfig = &mysql.ConnectionConfig{}
-		}
-		mctx.MoveTables.ConnectionConfig.User = mctx.MoveTables.TargetUser
-		mctx.MoveTables.ConnectionConfig.Password = mctx.MoveTables.TargetPass
-		mctx.MoveTables.ConnectionConfig.Key = mysql.InstanceKey{
+		// Derive the applier config from the inspector config, but point it at
+		// the target host and override credentials from the target CLI args.
+		mctx.MoveTables.ConnectionConfig = mctx.InspectorConnectionConfig.DuplicateCredentials(mysql.InstanceKey{
 			Hostname: mctx.MoveTables.TargetHost,
 			Port:     mctx.MoveTables.TargetPort,
-		}
+		})
+		mctx.MoveTables.ConnectionConfig.User = mctx.MoveTables.TargetUser
+		mctx.MoveTables.ConnectionConfig.Password = mctx.MoveTables.TargetPass
 	}
 }
 
 func (mctx *MigrationContext) SetupTLS() error {
-	//TODO(chriskirkland): make this work for move-tables?
 	if mctx.UseTLS {
-		return mctx.InspectorConnectionConfig.UseTLS(mctx.TLSCACertificate, mctx.TLSCertificate, mctx.TLSKey, mctx.TLSAllowInsecure)
+		if err := mctx.InspectorConnectionConfig.UseTLS(mctx.TLSCACertificate, mctx.TLSCertificate, mctx.TLSKey, mctx.TLSAllowInsecure); err != nil {
+			return err
+		}
+		if mctx.IsMoveTablesMode() && mctx.MoveTables.ConnectionConfig != nil {
+			return mctx.MoveTables.ConnectionConfig.UseTLS(mctx.TLSCACertificate, mctx.TLSCertificate, mctx.TLSKey, mctx.TLSAllowInsecure)
+		}
 	}
 	return nil
 }
