@@ -399,8 +399,8 @@ func (suite *ApplierTestSuite) TestInitiateApplierMoveTablesMode_NoGhostOrChange
 	suite.Require().False(applier.tableExists("_testing_gho"), "ghost table should not exist in move-tables mode")
 	suite.Require().False(applier.tableExists("_testing_ghc"), "changelog table should not exist in move-tables mode")
 
-	//Verify move-tables mode seeds columns from the source table
-	suite.Require().Equal(sql.NewColumnList([]string{"id", "item_id"}), migrationContext.OriginalTableColumnsOnApplier)
+	// In move-tables mode, OriginalTableColumnsOnApplier is unused and intentionally never populated
+	suite.Require().Nil(migrationContext.OriginalTableColumnsOnApplier)
 }
 
 func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
