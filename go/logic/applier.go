@@ -854,7 +854,7 @@ func (apl *Applier) createTriggers(tableName string) error {
 				sql.EscapeName(tableName),
 				trigger.Statement,
 			)
-			apl.migrationContext.Log.Infof("Createing trigger %s on %s.%s",
+			apl.migrationContext.Log.Infof("Creating trigger %s on %s.%s",
 				sql.EscapeName(triggerName),
 				sql.EscapeName(apl.migrationContext.DatabaseName),
 				sql.EscapeName(tableName),
