@@ -281,19 +281,17 @@ func (s *MoveTablesCutOverSuite) TestRenameFailurePropagates() {
 }
 
 // TestDrainTimeoutPropagates maps to T3 timeout handling: applier coordinates
-// never reach the drain GTID -> drain poll bounded by moveTablesCutOverDrainTimeout
+// never reach the drain GTID -> drain poll bounded by CutOverLockTimeoutSeconds
 // returns a wrapped error and the flag is not set.
 func (s *MoveTablesCutOverSuite) TestDrainTimeoutPropagates() {
 	ctx := context.Background()
 	_, err := s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestTableName()))
 	s.Require().NoError(err)
 
-	// Patch the package-level timeout/poll just for this test.
-	origTimeout, origPoll := moveTablesCutOverDrainTimeout, moveTablesCutOverDrainPollInterval
-	moveTablesCutOverDrainTimeout = 200 * time.Millisecond
+	// Patch poll interval and use a 1-second drain timeout for a bounded test.
+	origPoll := moveTablesCutOverDrainPollInterval
 	moveTablesCutOverDrainPollInterval = 50 * time.Millisecond
 	s.T().Cleanup(func() {
-		moveTablesCutOverDrainTimeout = origTimeout
 		moveTablesCutOverDrainPollInterval = origPoll
 	})
 
@@ -301,6 +299,7 @@ func (s *MoveTablesCutOverSuite) TestDrainTimeoutPropagates() {
 	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
 	// initialCoords nil - drain comparison never satisfies.
 	m, mc := s.buildMigrator(fakeHooks, nil)
+	mc.CutOverLockTimeoutSeconds = 1
 
 	s.Require().Equal(int64(0), atomic.LoadInt64(&mc.CutOverCompleteFlag), "pre-state: flag must be 0")
 
@@ -327,17 +326,16 @@ func (s *MoveTablesCutOverSuite) TestDrainWaitsForQueuedDML() {
 	_, err := s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestTableName()))
 	s.Require().NoError(err)
 
-	origTimeout, origPoll := moveTablesCutOverDrainTimeout, moveTablesCutOverDrainPollInterval
-	moveTablesCutOverDrainTimeout = 200 * time.Millisecond
+	origPoll := moveTablesCutOverDrainPollInterval
 	moveTablesCutOverDrainPollInterval = 50 * time.Millisecond
 	s.T().Cleanup(func() {
-		moveTablesCutOverDrainTimeout = origTimeout
 		moveTablesCutOverDrainPollInterval = origPoll
 	})
 
 	var calls []string
 	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
 	m, mc := s.buildMigrator(fakeHooks, s.containingDrainGTID())
+	mc.CutOverLockTimeoutSeconds = 1
 	m.applyEventsQueue <- newApplyEventStructByDML(&binlog.BinlogEntry{
 		DmlEvent: &binlog.BinlogDMLEvent{
 			DatabaseName: testMysqlDatabase,

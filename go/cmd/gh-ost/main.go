@@ -198,6 +198,12 @@ func main() {
 
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Parse()
+	cutOverLockTimeoutUserSpecified := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "cut-over-lock-timeout-seconds" {
+			cutOverLockTimeoutUserSpecified = true
+		}
+	})
 
 	if *checkFlag {
 		return
@@ -386,6 +392,9 @@ func main() {
 		}
 		if migrationContext.MoveTables.TargetDatabase == "" {
 			migrationContext.MoveTables.TargetDatabase = migrationContext.DatabaseName
+		}
+		if !cutOverLockTimeoutUserSpecified {
+			*cutOverLockTimeoutSeconds = 60
 		}
 		migrationContext.MoveTables.ConnectionConfig = mysql.NewConnectionConfig()
 	}

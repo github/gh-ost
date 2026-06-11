@@ -28,13 +28,6 @@ var (
 	RetrySleepFn                      = time.Sleep
 	checkpointTimeout                 = 2 * time.Second
 
-	// moveTablesCutOverDrainTimeout caps how long T3 of the move-tables
-	// cooperative cutover (#8209) waits for the applier to catch up to the
-	// drain GTID captured at T2. 60s is a starting default chosen over
-	// CutOverLockTimeoutSeconds (which is capped at 1-10s by
-	// SetCutOverLockTimeoutSeconds and would be too short for a real drain
-	// under load). Up for review with Daniel/Eric in the PR.
-	moveTablesCutOverDrainTimeout = 60 * time.Second
 	// moveTablesCutOverDrainPollInterval is the per-iteration sleep in T3's
 	// drain poll. 100ms per move_table_mode.md §1.5.
 	moveTablesCutOverDrainPollInterval = 100 * time.Millisecond
@@ -1038,15 +1031,10 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// drain target (i.e. the applier contains every GTID in drainGTID). Reads
 	// of CurrentCoordinates hold the mutex per applier.go:75. Per-iteration
 	// logging is Debug only to avoid spamming Info on a hot loop.
-	//
-	// Timeout is a named constant (moveTablesCutOverDrainTimeout = 60s). NOTE:
-	// the internalization doc suggested reusing CutOverLockTimeoutSeconds, but
-	// that's capped at 1-10s (context.go:SetCutOverLockTimeoutSeconds) — too
-	// short for a real drain under load. 60s default is up for review with
-	// Daniel/Eric; flagged in the PR description.
+	drainTimeout := time.Duration(mgtr.migrationContext.CutOverLockTimeoutSeconds) * time.Second
 	mgtr.migrationContext.Log.Infof("T3: draining applier to drain GTID (timeout %s, poll %s)",
-		moveTablesCutOverDrainTimeout, moveTablesCutOverDrainPollInterval)
-	drainCtx, cancel := context.WithTimeout(context.Background(), moveTablesCutOverDrainTimeout)
+		drainTimeout, moveTablesCutOverDrainPollInterval)
+	drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
 	ticker := time.NewTicker(moveTablesCutOverDrainPollInterval)
 	defer ticker.Stop()
@@ -1073,7 +1061,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		}
 		select {
 		case <-drainCtx.Done():
-			return fmt.Errorf("drain poll timed out after %s: applier did not catch up to drain GTID", moveTablesCutOverDrainTimeout)
+			return fmt.Errorf("drain poll timed out after %s: applier did not catch up to drain GTID", drainTimeout)
 		case <-ticker.C:
 			// next iteration
 		}
