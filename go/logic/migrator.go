@@ -1294,7 +1294,6 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 	if err := mgtr.inspector.validateLogSlaveUpdates(); err != nil {
 		return err
 	}
-	mgtr.migrationContext.Log.Infof("Inspector validated and initialized")
 
 	return nil
 }
@@ -1664,16 +1663,10 @@ func (mgtr *Migrator) initiateApplier() error {
 	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
-		mgtr.migrationContext.Log.Infof("Fetching create table statement for `%s.%s`",
-			mgtr.migrationContext.DatabaseName,
-			mgtr.migrationContext.MoveTables.TableNames[0],
-		)
 		createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.MoveTables.TableNames[0])
 		if err != nil {
 			return fmt.Errorf("failed to fetch create table statement: %w", err)
 		}
-		mgtr.migrationContext.Log.Infof("Create table statement: %s", createTableStatement)
-
 		if err := mgtr.applier.CreateTargetTable(createTableStatement); err != nil {
 			mgtr.migrationContext.Log.Errorf("unable to create target table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
 			return err
@@ -2022,7 +2015,6 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 		select {
 		case eventStruct := <-mgtr.applyEventsQueue:
 			{
-				mgtr.migrationContext.Log.Debugf("[execWriteFuncs] Processing apply event struct")
 				if err := mgtr.onApplyEventStruct(eventStruct); err != nil {
 					return err
 				}
@@ -2032,7 +2024,6 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 				select {
 				case copyRowsFunc := <-mgtr.copyRowsQueue:
 					{
-						mgtr.migrationContext.Log.Debugf("[execWriteFuncs] Processing row copy function")
 						copyRowsStartTime := time.Now()
 						// Retries are handled within the copyRowsFunc
 						if err := copyRowsFunc(); err != nil {
@@ -2105,7 +2096,9 @@ func (mgtr *Migrator) finalCleanup() error {
 	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
-		// all done
+		// for move-tables mode, we're done at this point
+		// TODO(zacharysierakowski): when we add the checkpoint table in for 1.6, make sure we cleanup
+		// the checkpoint table here first before returning (looks like that's a few lines below changelog table cleanup)
 		return nil
 	}
 
