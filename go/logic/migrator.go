@@ -875,7 +875,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.addDMLEventsListener(); err != nil {
 		return err
 	}
-	if err := mgtr.applier.ReadMigrationRangeValues(); err != nil {
+	if err := mgtr.applier.ReadMigrationRangeValues(nil); err != nil {
 		return err
 	}
 
@@ -1690,6 +1690,7 @@ func (mgtr *Migrator) initiateApplier() error {
 			mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table, see further error details. Bailing out")
 			return err
 		}
+	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
 		//TODO(chriskirkland): drop the target table if it exists?
