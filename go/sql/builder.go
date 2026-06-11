@@ -501,6 +501,9 @@ func (b *MoveTableCopySelectQueryBuilder) BuildQuery(rangeStartArgs, rangeEndArg
 	if len(rangeStartArgs)+len(rangeEndArgs) != b.argsCount {
 		return "", nil, fmt.Errorf("got %d args but expected %d", len(rangeStartArgs)+len(rangeEndArgs), b.argsCount)
 	}
+	if len(rangeStartArgs) != len(rangeEndArgs) {
+		return "", nil, fmt.Errorf("mismatched number of start and end args: %d != %d", len(rangeStartArgs), len(rangeEndArgs))
+	}
 	explodedArgs := make([]any, 0, len(b.argsMapping))
 	for _, idx := range b.argsMapping {
 		if idx < len(rangeStartArgs) {

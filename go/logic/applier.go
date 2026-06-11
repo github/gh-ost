@@ -1312,7 +1312,7 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 }
 
 // ApplyIterationMoveTableCopyQueries issues a SELECT query on the original table and an INSERT query on the target table,
-// copying a chunk of rows. It is used when `--move-table` is specified, instead of ApplyIterationInsertQuery.
+// copying a chunk of rows. It is used when `--move-tables` is specified, instead of ApplyIterationInsertQuery.
 func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&apl.migrationContext.ChunkSize)
@@ -1353,13 +1353,19 @@ func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chun
 			}
 			chunkRows = append(chunkRows, row)
 		}
-		if err := sqlRows.Err(); err != nil {
-			return nil, err
+		if rowsErr := sqlRows.Err(); rowsErr != nil {
+			return nil, rowsErr
 		}
 		return chunkRows, nil
 	}()
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
+	}
+
+	// no need to INSERT if there are no rows to copy:
+	if len(rows) == 0 {
+		duration = time.Since(startTime)
+		return chunkSize, 0, duration, nil
 	}
 
 	// Then, insert data into the destination database:
