@@ -999,6 +999,11 @@ func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
 // Apl is done asynchronously
 func (apl *Applier) InitiateHeartbeat() {
+	// In move-tables mode, there is no heartbeat table (§1.2).
+	if apl.migrationContext.IsMoveTablesMode() {
+		return
+	}
+
 	var numSuccessiveFailures int64
 	injectHeartbeat := func() error {
 		if atomic.LoadInt64(&apl.migrationContext.HibernateUntil) > 0 {
