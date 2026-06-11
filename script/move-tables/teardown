@@ -14,13 +14,7 @@ if [[ ":$PATH:" != *":$GH_OST_ROOT:"* ]]; then
 fi
 
 echo "Stopping containers..."
-docker stop mysql-source-replica
-docker stop mysql-source-primary
-docker stop mysql-target-replica
-docker stop mysql-target-primary
+docker stop mysql-source-replica mysql-source-primary mysql-target-replica mysql-target-primary 2>/dev/null || true
 
 echo "Removing containers..."
-docker rm mysql-source-replica
-docker rm mysql-source-primary
-docker rm mysql-target-replica
-docker rm mysql-target-primary
+docker rm -f mysql-source-replica mysql-source-primary mysql-target-replica mysql-target-primary 2>/dev/null || true
