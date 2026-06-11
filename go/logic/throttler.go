@@ -213,7 +213,13 @@ func (thlr *Throttler) collectControlReplicasLag() {
 		}
 		lagResults := make(chan *mysql.ReplicationLagResult, instanceKeyMap.Len())
 		for replicaKey := range *instanceKeyMap {
-			connectionConfig := thlr.migrationContext.InspectorConnectionConfig.DuplicateCredentials(replicaKey)
+			var connectionConfig *mysql.ConnectionConfig
+			if thlr.migrationContext.IsMoveTablesMode() {
+				connectionConfig = thlr.migrationContext.MoveTables.ConnectionConfig.DuplicateCredentials(replicaKey)
+			} else {
+				connectionConfig = thlr.migrationContext.InspectorConnectionConfig.DuplicateCredentials(replicaKey)
+			}
+
 			if err := connectionConfig.RegisterTLSConfig(); err != nil {
 				return &mysql.ReplicationLagResult{Err: err}
 			}
