@@ -29,7 +29,7 @@ Run gh-ost to move tables:
 
 ### WIP
 
-Current state based on the current outter-dev loop:
+Current state based on the current outer dev loop:
 
 
 ```bash
