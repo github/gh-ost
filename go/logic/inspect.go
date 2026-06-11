@@ -86,7 +86,6 @@ func (isp *Inspector) InitDBConnections() (err error) {
 }
 
 func (isp *Inspector) ValidateOriginalTable() (err error) {
-	isp.migrationContext.Log.Infof("Inspector validating original table")
 	if err := isp.validateTable(); err != nil {
 		return err
 	}
