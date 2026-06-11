@@ -13,8 +13,10 @@ import (
 
 // BinlogEntry describes an entry in the binary log
 type BinlogEntry struct {
-	Coordinates mysql.BinlogCoordinates
-	DmlEvent    *BinlogDMLEvent
+	Coordinates    mysql.BinlogCoordinates
+	DmlEvent       *BinlogDMLEvent
+	LastCommitted  int64 // logical timestamp of commit parent (0 = SEQ_UNINIT, unavailable)
+	SequenceNumber int64 // monotonically increasing logical timestamp (0 = SEQ_UNINIT)
 }
 
 // NewBinlogEntryAt creates an empty, ready to go BinlogEntry object

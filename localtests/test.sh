@@ -329,6 +329,12 @@ test_single() {
     table_name="gh_ost_test"
     ghost_table_name="_gh_ost_test_gho"
 
+    # Per-test timeout override (e.g. mts-sysbench needs more than 120s).
+    local test_timeout_for_run=$test_timeout
+    if [ -f $tests_path/$test_name/timeout ]; then
+        test_timeout_for_run=$(cat $tests_path/$test_name/timeout)
+    fi
+
     # Check for custom test script
     if [ -f $tests_path/$test_name/test.sh ]; then
         # Run the custom test script in a subshell with timeout monitoring
@@ -339,7 +345,7 @@ test_single() {
         # Monitor the test with timeout
         timeout_counter=0
         while kill -0 $test_pid 2>/dev/null; do
-            if [ $timeout_counter -ge $test_timeout ]; then
+            if [ $timeout_counter -ge $test_timeout_for_run ]; then
                 kill -TERM $test_pid 2>/dev/null
                 sleep 1
                 kill -KILL $test_pid 2>/dev/null

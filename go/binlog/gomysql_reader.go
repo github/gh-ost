@@ -85,7 +85,7 @@ func (gmr *GoMySQLReader) GetCurrentBinlogCoordinates() mysql.BinlogCoordinates 
 	return gmr.currentCoordinates.Clone()
 }
 
-func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
+func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry, lastCommitted int64, sequenceNumber int64) error {
 	currentCoords := gmr.GetCurrentBinlogCoordinates()
 	dml := ToEventDML(ev.Header.EventType.String())
 	if dml == NotDML {
@@ -98,6 +98,8 @@ func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent
 			continue
 		}
 		binlogEntry := NewBinlogEntryAt(currentCoords)
+		binlogEntry.LastCommitted = lastCommitted
+		binlogEntry.SequenceNumber = sequenceNumber
 		binlogEntry.DmlEvent = NewBinlogDMLEvent(
 			string(rowsEvent.Table.Schema),
 			string(rowsEvent.Table.Table),
@@ -130,6 +132,10 @@ func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent
 
 // StreamEvents
 func (gmr *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChannel chan<- *BinlogEntry) error {
+	var currentLastCommitted int64
+	var currentSequenceNumber int64
+	logicalTimestampsDetected := false
+
 	for !canStopStreaming() {
 		ev, err := gmr.binlogStreamer.GetEvent(context.Background())
 		if err != nil {
@@ -155,6 +161,14 @@ func (gmr *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChan
 		case *replication.GTIDEvent:
 			if !gmr.migrationContext.UseGTIDs {
 				continue
+			}
+			// Capture logical timestamps for MTS dependency tracking
+			currentLastCommitted = event.LastCommitted
+			currentSequenceNumber = event.SequenceNumber
+			// Detect whether binlog contains logical timestamps (MySQL 5.7+)
+			if !logicalTimestampsDetected && (event.LastCommitted > 0 || event.SequenceNumber > 0) {
+				logicalTimestampsDetected = true
+				gmr.migrationContext.NotifyLogicalTimestampsDetection(true)
 			}
 			sid, err := uuid.FromBytes(event.SID)
 			if err != nil {
@@ -184,12 +198,13 @@ func (gmr *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChan
 				gmr.LastTrxCoords = gmr.currentCoordinates.Clone()
 			}
 		case *replication.RowsEvent:
-			if err := gmr.handleRowsEvent(ev, event, entriesChannel); err != nil {
+			if err := gmr.handleRowsEvent(ev, event, entriesChannel, currentLastCommitted, currentSequenceNumber); err != nil {
 				return err
 			}
 		}
 	}
 	gmr.migrationContext.Log.Debugf("done streaming events")
+	gmr.migrationContext.NotifyLogicalTimestampsDetection(logicalTimestampsDetected)
 
 	return nil
 }

@@ -296,6 +296,18 @@ func (apl *Applier) releaseMigrationLock() {
 	apl.migrationLockConn = nil
 }
 
+// adoptDMLQueryBuildersFrom shares read-only DML query builders from the primary applier.
+// The primary applier must have called prepareQueries() before MTS workers start.
+func (apl *Applier) adoptDMLQueryBuildersFrom(source *Applier) error {
+	if source.dmlInsertQueryBuilder == nil {
+		return fmt.Errorf("primary applier DML query builders are not prepared")
+	}
+	apl.dmlDeleteQueryBuilder = source.dmlDeleteQueryBuilder
+	apl.dmlInsertQueryBuilder = source.dmlInsertQueryBuilder
+	apl.dmlUpdateQueryBuilder = source.dmlUpdateQueryBuilder
+	return nil
+}
+
 func (apl *Applier) prepareQueries() (err error) {
 	if apl.dmlDeleteQueryBuilder, err = sql.NewDMLDeleteQueryBuilder(
 		apl.migrationContext.DatabaseName,
@@ -460,6 +472,31 @@ func (apl *Applier) AttemptInstantDDL() error {
 		_, err := apl.db.Exec(query)
 		return err
 	}, apl.migrationContext.MaxRetries(), apl.migrationContext.Log)
+}
+
+// isDeadlockError checks whether the given error is a MySQL InnoDB deadlock (errno 1213).
+func isDeadlockError(err error) bool {
+	var mysqlErr *drivermysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1213
+}
+
+// isRetryableApplyError reports whether a failed DML apply is a transient
+// concurrency error that should be retried. Under concurrent MTS workers the
+// following errors are expected: InnoDB deadlocks (1213), lock-wait timeouts
+// (1205), and NOWAIT lock failures (3572). Gap locks on the ghost table's
+// secondary indexes cause contention between parallel statements. All are
+// resolved by retrying the whole transaction, mirroring MySQL's
+// slave_transaction_retries behaviour.
+func isRetryableApplyError(err error) bool {
+	var mysqlErr *drivermysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	switch mysqlErr.Number {
+	case 1205, 1213, 3572:
+		return true
+	}
+	return false
 }
 
 // retryOnLockWaitTimeout retries the given operation on MySQL lock wait timeout
@@ -1069,6 +1106,25 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 	return hasFurtherRange, nil
 }
 
+// rowCopyMaxTransientRetries bounds internal retries of the chunk-INSERT query on
+// transient lock errors (lock-wait timeout 1205, deadlock 1213). In single-threaded
+// mode on MySQL 8.x, NOWAIT (3572) can also occur and is retried here.
+const rowCopyMaxTransientRetries = 20
+
+// rowCopyUsesNoWait reports whether row-copy should use SELECT ... FOR SHARE NOWAIT.
+// On MySQL 8.x transactional tables, NOWAIT fails fast instead of blocking behind
+// concurrent DML. Under MTS (NumWorkers > 1), lock contention with parallel DML
+// workers is expected; row-copy waits via LOCK IN SHARE MODE instead.
+func rowCopyUsesNoWait(migrationContext *base.MigrationContext) bool {
+	if !strings.HasPrefix(migrationContext.ApplierMySQLVersion, "8.") {
+		return false
+	}
+	if migrationContext.NumWorkers > 1 {
+		return false
+	}
+	return true
+}
+
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
 // data actually gets copied from original table.
 func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
@@ -1087,68 +1143,29 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 		apl.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
 		apl.migrationContext.GetIteration() == 0,
 		apl.migrationContext.IsTransactionalTable(),
-		// TODO: Don't hardcode this
-		strings.HasPrefix(apl.migrationContext.ApplierMySQLVersion, "8."),
+		rowCopyUsesNoWait(apl.migrationContext),
 	)
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
 	}
 
-	sqlResult, err := func() (gosql.Result, error) {
-		tx, err := apl.db.Begin()
-		if err != nil {
-			return nil, err
+	var sqlResult gosql.Result
+	for attempt := 0; attempt < rowCopyMaxTransientRetries; attempt++ {
+		sqlResult, err = apl.executeChunkInsertTx(query, explodedArgs)
+		if err == nil {
+			break
 		}
-		defer tx.Rollback()
-
-		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, apl.migrationContext.ApplierTimeZone)
-		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, apl.generateSqlModeQuery())
-
-		if _, err := tx.Exec(sessionQuery); err != nil {
-			return nil, err
+		if !isRetryableApplyError(err) {
+			return chunkSize, rowsAffected, duration, err
 		}
-		result, err := tx.Exec(query, explodedArgs...)
-		if err != nil {
-			return nil, err
+		if attempt == rowCopyMaxTransientRetries-1 {
+			// Exhausted internal retries; propagate to outer retryOperation.
+			break
 		}
-
-		if apl.migrationContext.PanicOnWarnings {
-			rows, err := tx.Query("SHOW WARNINGS")
-			if err != nil {
-				return nil, err
-			}
-			defer rows.Close()
-			if err = rows.Err(); err != nil {
-				return nil, err
-			}
-
-			// Compile regex once before loop to avoid performance penalty and handle errors properly
-			migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
-			if err != nil {
-				return nil, err
-			}
-
-			var sqlWarnings []string
-			for rows.Next() {
-				var level, message string
-				var code int
-				if err := rows.Scan(&level, &code, &message); err != nil {
-					apl.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
-					continue
-				}
-				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
-					continue
-				}
-				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
-			}
-			apl.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
-		}
-
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
-		return result, nil
-	}()
+		apl.migrationContext.Log.Infof("Retrying row-copy after transient lock error (attempt %d/%d): %v",
+			attempt+2, rowCopyMaxTransientRetries, err)
+		RetrySleepFn(time.Duration(100+attempt*50) * time.Millisecond)
+	}
 
 	if err != nil {
 		return chunkSize, rowsAffected, duration, err
@@ -1162,6 +1179,63 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 		apl.migrationContext.GetIteration(),
 		chunkSize)
 	return chunkSize, rowsAffected, duration, nil
+}
+
+// executeChunkInsertTx runs a single chunk-INSERT transaction (Begin/Exec/Commit).
+func (apl *Applier) executeChunkInsertTx(query string, explodedArgs []interface{}) (gosql.Result, error) {
+	tx, err := apl.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, apl.migrationContext.ApplierTimeZone)
+	sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, apl.generateSqlModeQuery())
+
+	if _, err := tx.Exec(sessionQuery); err != nil {
+		return nil, err
+	}
+	result, err := tx.Exec(query, explodedArgs...)
+	if err != nil {
+		return nil, err
+	}
+
+	if apl.migrationContext.PanicOnWarnings {
+		rows, err := tx.Query("SHOW WARNINGS")
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		if err = rows.Err(); err != nil {
+			return nil, err
+		}
+
+		// Compile regex once before loop to avoid performance penalty and handle errors properly
+		migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
+		if err != nil {
+			return nil, err
+		}
+
+		var sqlWarnings []string
+		for rows.Next() {
+			var level, message string
+			var code int
+			if err := rows.Scan(&level, &code, &message); err != nil {
+				apl.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+				continue
+			}
+			if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
+				continue
+			}
+			sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+		}
+		apl.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // LockOriginalTable places a write lock on the original table
@@ -1660,12 +1734,16 @@ func (apl *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBu
 	case binlog.UpdateDML:
 		{
 			if _, isModified := apl.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
-				results := make([]*dmlBuildResult, 0, 2)
-				dmlEvent.DML = binlog.DeleteDML
-				results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
-				dmlEvent.DML = binlog.InsertDML
-				results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
-				return results
+				// A unique-key-modifying UPDATE is split into DELETE + INSERT.
+				// We must NOT mutate dmlEvent.DML here: the same event may be
+				// re-applied (e.g. MTS deadlock retry), and a mutated DML would
+				// be rebuilt as the wrong statement, corrupting the ghost table.
+				deleteQuery, deleteArgs, deleteErr := apl.dmlDeleteQueryBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
+				insertQuery, insertArgs, insertErr := apl.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
+				return []*dmlBuildResult{
+					newDmlBuildResult(deleteQuery, deleteArgs, -1, deleteErr),
+					newDmlBuildResult(insertQuery, insertArgs, 1, insertErr),
+				}
 			}
 			query, updateArgs, err := apl.dmlUpdateQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args := sqlutils.Args()
@@ -1778,9 +1856,8 @@ func (apl *Applier) executeBatchWithWarningChecking(ctx context.Context, tx *gos
 }
 
 // ApplyDMLEventQueries applies multiple DML queries onto the _ghost_ table
-func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) error {
+func (apl *Applier) ApplyDMLEventQueries(ctx context.Context, dmlEvents [](*binlog.BinlogDMLEvent)) error {
 	var totalDelta int64
-	ctx := context.Background()
 
 	err := func() error {
 		conn, err := apl.db.Conn(ctx)

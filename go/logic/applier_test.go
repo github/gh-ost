@@ -185,6 +185,75 @@ func TestApplierBuildDMLEventQuery(t *testing.T) {
 		require.Equal(t, 123456, res[0].args[2])
 		require.Equal(t, 42, res[0].args[3])
 	})
+
+	t.Run("update modifying unique key does not mutate event and is retry-safe", func(t *testing.T) {
+		// A UPDATE that changes the unique key splits into DELETE + INSERT.
+		// The event must NOT be mutated, so a re-apply (e.g. MTS deadlock retry)
+		// produces the identical DELETE + INSERT pair rather than a bare INSERT.
+		whereValues := sql.ToColumnValues([]interface{}{123456, 42})
+		newValues := sql.ToColumnValues([]interface{}{123456, 99})
+		binlogEvent := &binlog.BinlogDMLEvent{
+			DatabaseName:      "test",
+			DML:               binlog.UpdateDML,
+			NewColumnValues:   newValues,
+			WhereColumnValues: whereValues,
+		}
+
+		first := applier.buildDMLEventQuery(binlogEvent)
+		require.Len(t, first, 2)
+		require.NoError(t, first[0].err)
+		require.NoError(t, first[1].err)
+		require.Equal(t, int64(-1), first[0].rowsDelta)
+		require.Equal(t, int64(1), first[1].rowsDelta)
+		require.Contains(t, first[0].query, "delete")
+		require.Contains(t, first[1].query, "insert")
+
+		// Event type is untouched after building the query.
+		require.Equal(t, binlog.UpdateDML, binlogEvent.DML)
+
+		// Re-applying the same event (retry) yields the same DELETE + INSERT.
+		second := applier.buildDMLEventQuery(binlogEvent)
+		require.Len(t, second, 2)
+		require.Equal(t, first[0].query, second[0].query)
+		require.Equal(t, first[1].query, second[1].query)
+		require.Equal(t, binlog.UpdateDML, binlogEvent.DML)
+	})
+}
+
+func TestIsRetryableApplyError(t *testing.T) {
+	require.True(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 1213, Message: "Deadlock found"}))
+	require.True(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}))
+	require.True(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 3572, Message: "Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set."}))
+	require.False(t, isRetryableApplyError(&drivermysql.MySQLError{Number: 1146, Message: "Table doesn't exist"}))
+	require.False(t, isRetryableApplyError(errors.New("generic error")))
+	require.False(t, isRetryableApplyError(nil))
+}
+
+func TestRowCopyMaxTransientRetries(t *testing.T) {
+	require.Equal(t, 20, rowCopyMaxTransientRetries, "rowCopyMaxTransientRetries should be 20")
+}
+
+func TestRowCopyUsesNoWait(t *testing.T) {
+	t.Run("mysql8 single-threaded uses NOWAIT", func(t *testing.T) {
+		mctx := base.NewMigrationContext()
+		mctx.ApplierMySQLVersion = "8.4.3"
+		mctx.NumWorkers = 1
+		require.True(t, rowCopyUsesNoWait(mctx))
+	})
+
+	t.Run("mysql8 MTS waits for locks", func(t *testing.T) {
+		mctx := base.NewMigrationContext()
+		mctx.ApplierMySQLVersion = "8.4.3"
+		mctx.NumWorkers = 4
+		require.False(t, rowCopyUsesNoWait(mctx))
+	})
+
+	t.Run("mysql57 never uses NOWAIT", func(t *testing.T) {
+		mctx := base.NewMigrationContext()
+		mctx.ApplierMySQLVersion = "5.7.44"
+		mctx.NumWorkers = 4
+		require.False(t, rowCopyUsesNoWait(mctx))
+	})
 }
 
 func TestApplierInstantDDL(t *testing.T) {
@@ -385,7 +454,7 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 			NewColumnValues: sql.ToColumnValues([]interface{}{123456, 42}),
 		},
 	}
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().NoError(err)
 
 	// Check that the row was inserted
@@ -674,7 +743,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySuc
 			NewColumnValues: sql.ToColumnValues([]interface{}{123456, 42}),
 		},
 	}
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().NoError(err)
 
 	err = applier.CreateChangelogTable()
@@ -918,7 +987,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateKeyOnNonMigration
 	}
 
 	// This should return an error when PanicOnWarnings is enabled
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().Error(err)
 	suite.Require().Contains(err.Error(), "Duplicate entry")
 
@@ -1008,7 +1077,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateCompositeUniqueKe
 	}
 
 	// This should return an error when PanicOnWarnings is enabled
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().Error(err)
 	suite.Require().Contains(err.Error(), "Duplicate entry")
 
@@ -1120,7 +1189,7 @@ func (suite *ApplierTestSuite) TestUpdateModifyingUniqueKeyWithDuplicateOnOtherI
 	suite.Require().Len(buildResults, 2, "UPDATE modifying unique key should be converted to DELETE+INSERT")
 
 	// Apply the event - this should FAIL because INSERT will have duplicate email warning
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().Error(err, "Should fail when DELETE+INSERT causes duplicate on non-migration unique key")
 	suite.Require().Contains(err.Error(), "Duplicate entry", "Error should mention duplicate entry")
 
@@ -1209,7 +1278,7 @@ func (suite *ApplierTestSuite) TestNormalUpdateWithPanicOnWarnings() {
 	suite.Require().Len(buildResults, 1, "Normal UPDATE should generate single UPDATE query")
 
 	// Apply the event - should succeed
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().NoError(err)
 
 	// Verify the update was applied correctly
@@ -1284,7 +1353,7 @@ func (suite *ApplierTestSuite) TestDuplicateOnMigrationKeyAllowedInBinlogReplay(
 	}
 
 	// This should succeed - duplicate on migration unique key is expected and should be filtered out
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().NoError(err)
 
 	// Verify that the ghost table still has only the original 2 rows with correct data
@@ -1375,7 +1444,7 @@ func (suite *ApplierTestSuite) TestRegexMetacharactersInIndexName() {
 		},
 	}
 
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().NoError(err, "Duplicate on idx+email (migration key) should be allowed with PanicOnWarnings enabled")
 
 	// Test: duplicate on PRIMARY (not the migration key) should fail
@@ -1388,7 +1457,7 @@ func (suite *ApplierTestSuite) TestRegexMetacharactersInIndexName() {
 		},
 	}
 
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().Error(err, "Duplicate on PRIMARY (not migration key) should fail with PanicOnWarnings enabled")
 	suite.Require().Contains(err.Error(), "Duplicate entry")
 
@@ -1477,7 +1546,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsDisabled() {
 	}
 
 	// Should succeed because PanicOnWarnings is disabled
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().NoError(err)
 
 	// Verify that only 2 original rows exist with correct data (the duplicate was silently ignored)
@@ -1583,7 +1652,7 @@ func (suite *ApplierTestSuite) TestMultipleDMLEventsInBatch() {
 	}
 
 	// Should fail due to the second event
-	err = applier.ApplyDMLEventQueries(dmlEvents)
+	err = applier.ApplyDMLEventQueries(context.Background(), dmlEvents)
 	suite.Require().Error(err)
 	suite.Require().Contains(err.Error(), "Duplicate entry")
 
