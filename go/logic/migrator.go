@@ -875,7 +875,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.addDMLEventsListener(); err != nil {
 		return err
 	}
-	if err := mgtr.applier.ReadMigrationRangeValues(nil); err != nil {
+	if err := mgtr.applier.ReadMigrationRangeValues(mgtr.inspector.db); err != nil {
 		return err
 	}
 
@@ -1668,28 +1668,6 @@ func (mgtr *Migrator) initiateApplier() error {
 	}
 	if err := mgtr.applier.AcquireMigrationLock(mgtr.migrationContext.GetContext()); err != nil {
 		return err
-	}
-	if mgtr.migrationContext.Revert {
-		if err := mgtr.applier.CreateChangelogTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
-			return err
-		}
-	} else if !mgtr.migrationContext.Resume {
-		if err := mgtr.applier.ValidateOrDropExistingTables(); err != nil {
-			return err
-		}
-		if err := mgtr.applier.CreateChangelogTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create changelog table, see further error details. Perhaps a previous migration failed without dropping the table? OR is there a running migration? Bailing out")
-			return err
-		}
-		if err := mgtr.applier.CreateGhostTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create ghost table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
-			return err
-		}
-		if err := mgtr.applier.AlterGhost(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to ALTER ghost table, see further error details. Bailing out")
-			return err
-		}
 	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
