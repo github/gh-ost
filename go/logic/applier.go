@@ -202,7 +202,7 @@ func buildMigrationLockName(db, table string) string {
 // preventing two gh-ost processes from migrating the same table concurrently
 // on the same MySQL server.
 func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
-	lockName := buildMigrationLockName(apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName)
+	lockName := buildMigrationLockName(apl.migrationContext.DatabaseName, apl.originalTableName())
 
 	// Use a dedicated *sql.DB so the pinned connection does not consume a
 	// slot in apl.db's small pool (mysql.MaxDBPoolConnections).
@@ -240,10 +240,10 @@ func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
 		lockDB.Close()
 		if holderID.Valid {
 			return fmt.Errorf("another gh-ost process is already migrating `%s`.`%s`: migration lock %s held by connection id %d",
-				apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName, lockName, holderID.Int64)
+				apl.migrationContext.DatabaseName, apl.originalTableName(), lockName, holderID.Int64)
 		}
 		return fmt.Errorf("another gh-ost process is already migrating `%s`.`%s`: migration lock %s is held",
-			apl.migrationContext.DatabaseName, apl.migrationContext.OriginalTableName, lockName)
+			apl.migrationContext.DatabaseName, apl.originalTableName(), lockName)
 	}
 
 	apl.migrationLockConn = conn
@@ -373,7 +373,7 @@ func (apl *Applier) prepareQueries() (err error) {
 	if apl.migrationContext.IsMoveTablesMode() {
 		if apl.moveTablesCopySelectFirstQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
 			apl.migrationContext.DatabaseName,
-			apl.migrationContext.OriginalTableName,
+			apl.originalTableName(),
 			apl.migrationContext.OriginalTableColumns,
 			apl.migrationContext.UniqueKey.Name,
 			&apl.migrationContext.UniqueKey.Columns,
@@ -383,7 +383,7 @@ func (apl *Applier) prepareQueries() (err error) {
 		}
 		if apl.moveTablesCopySelectNextQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
 			apl.migrationContext.DatabaseName,
-			apl.migrationContext.OriginalTableName,
+			apl.originalTableName(),
 			apl.migrationContext.OriginalTableColumns,
 			apl.migrationContext.UniqueKey.Name,
 			&apl.migrationContext.UniqueKey.Columns,
@@ -568,7 +568,7 @@ func (apl *Applier) createTargetTable(targetTableName string) error {
 		sql.EscapeName(targetDatabase),
 		sql.EscapeName(targetTableName),
 		sql.EscapeName(apl.migrationContext.DatabaseName),
-		sql.EscapeName(apl.migrationContext.OriginalTableName),
+		sql.EscapeName(apl.originalTableName()),
 	)
 	apl.migrationContext.Log.Infof("Creating target table %s.%s",
 		sql.EscapeName(targetDatabase),
