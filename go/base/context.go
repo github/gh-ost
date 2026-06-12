@@ -508,8 +508,12 @@ func (mctx *MigrationContext) SetCutOverLockTimeoutSeconds(timeoutSeconds int64)
 	if timeoutSeconds < 1 {
 		return fmt.Errorf("minimal timeout is 1sec. Timeout remains at %d", mctx.CutOverLockTimeoutSeconds)
 	}
-	if timeoutSeconds > 10 {
-		return fmt.Errorf("maximal timeout is 10sec. Timeout remains at %d", mctx.CutOverLockTimeoutSeconds)
+	maxTimeout := int64(10)
+	if mctx.IsMoveTablesMode() {
+		maxTimeout = 60
+	}
+	if timeoutSeconds > maxTimeout {
+		return fmt.Errorf("maximal timeout is %dsec. Timeout remains at %d", maxTimeout, mctx.CutOverLockTimeoutSeconds)
 	}
 	mctx.CutOverLockTimeoutSeconds = timeoutSeconds
 	return nil
