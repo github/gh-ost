@@ -776,11 +776,10 @@ func (suite *ApplierTestSuite) TestCreateGhostTable() {
 //
 // It calls CreateTargetTable (not just IsMoveTablesMode()), asserts the table
 // exists on the target database, verifies schema equivalence via SHOW CREATE TABLE,
-// and confirms no table was accidentally created on the source (TI #3: both-side assertion).
+// and confirms no table was accidentally created on the source.
 func (suite *ApplierTestSuite) TestCreateTargetTable_HappyPath() {
 	ctx := context.Background()
 
-	// Create the source table
 	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, name VARCHAR(64), updated_at DATETIME);", getTestTableName()))
 	suite.Require().NoError(err)
 
@@ -801,12 +800,10 @@ func (suite *ApplierTestSuite) TestCreateTargetTable_HappyPath() {
 	err = applier.InitDBConnections()
 	suite.Require().NoError(err)
 
-	// Capture source schema via inspector's showCreateTable pattern
 	var dummy, sourceCreateDDL string
 	err = suite.db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", getTestTableName())).Scan(&dummy, &sourceCreateDDL)
 	suite.Require().NoError(err)
 
-	// Precondition: target table does not exist yet (TQ #4)
 	var count int
 	err = suite.otherDB.QueryRow(
 		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
@@ -815,21 +812,15 @@ func (suite *ApplierTestSuite) TestCreateTargetTable_HappyPath() {
 	suite.Require().NoError(err)
 	suite.Require().Equal(0, count, "precondition: target table must not exist before CreateTargetTable")
 
-	// Act
 	err = applier.CreateTargetTable(sourceCreateDDL)
 	suite.Require().NoError(err)
 
-	// Assert: table exists on target (TI #3: assert target side)
 	var targetTableName, targetCreateDDL string
 	err = suite.otherDB.QueryRow(fmt.Sprintf("SHOW CREATE TABLE `%s`.`%s`", testMysqlDatabaseOther, testMysqlTableName)).Scan(&targetTableName, &targetCreateDDL)
 	suite.Require().NoError(err)
 	suite.Require().Equal(testMysqlTableName, targetTableName)
 	suite.Require().Equal(sourceCreateDDL, targetCreateDDL, "target table schema must be equivalent to source")
 
-	// Assert: table does NOT exist on source under the target database name (TI #3: assert source side)
-	// The source already has the table under testMysqlDatabase, but the target database
-	// (testMysqlDatabaseOther) should have it now. Verify the table was created in the
-	// right database by checking it does NOT appear a second time in the source DB.
 	err = suite.otherDB.QueryRow(
 		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
 		testMysqlDatabaseOther, testMysqlTableName,
@@ -846,15 +837,12 @@ func (suite *ApplierTestSuite) TestCreateTargetTable_HappyPath() {
 func (suite *ApplierTestSuite) TestCreateTargetTable_AbortsIfExists() {
 	ctx := context.Background()
 
-	// Create the source table
 	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY);", getTestTableName()))
 	suite.Require().NoError(err)
 
-	// Pre-create the same table on the target — this is the "already exists" condition
 	_, err = suite.otherDB.ExecContext(ctx, fmt.Sprintf("CREATE TABLE `%s`.`%s` (id INT PRIMARY KEY);", testMysqlDatabaseOther, testMysqlTableName))
 	suite.Require().NoError(err)
 
-	// Precondition: target table exists (TQ #4)
 	var count int
 	err = suite.otherDB.QueryRow(
 		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
@@ -880,12 +868,10 @@ func (suite *ApplierTestSuite) TestCreateTargetTable_AbortsIfExists() {
 	err = applier.InitDBConnections()
 	suite.Require().NoError(err)
 
-	// Capture source schema
 	var dummy, sourceCreateDDL string
 	err = suite.db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", getTestTableName())).Scan(&dummy, &sourceCreateDDL)
 	suite.Require().NoError(err)
 
-	// Act
 	err = applier.CreateTargetTable(sourceCreateDDL)
 	suite.Require().Error(err, "CreateTargetTable must return an error when target table already exists")
 	suite.Require().Contains(err.Error(), "already exists", "error message must mention 'already exists'")
