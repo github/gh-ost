@@ -192,7 +192,7 @@ func (s *MoveTablesCutOverSuite) TearDownTest() {
 func (s *MoveTablesCutOverSuite) containingDrainGTID() *mysql.GTIDBinlogCoordinates {
 	var serverUUID string
 	s.Require().NoError(s.db.QueryRow("SELECT @@server_uuid").Scan(&serverUUID))
-	g, err := mysql.NewGTIDBinlogCoordinates(fmt.Sprintf("%s:1-99999999", serverUUID))
+	g, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, fmt.Sprintf("%s:1-99999999", serverUUID))
 	s.Require().NoError(err)
 	return g
 }
