@@ -199,6 +199,12 @@ func main() {
 
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Parse()
+	cutOverLockTimeoutUserSpecified := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "cut-over-lock-timeout-seconds" {
+			cutOverLockTimeoutUserSpecified = true
+		}
+	})
 
 	if *checkFlag {
 		return
@@ -365,6 +371,9 @@ func main() {
 		if migrationContext.MoveTables.TargetHost == "" {
 			log.Fatal("--target-host must be specified when using --move-tables")
 		}
+		if migrationContext.PostponeCutOverFlagFile == "" {
+			log.Fatal("--postpone-cut-over-flag-file must be specified when using --move-tables")
+		}
 		migrationContext.MoveTables.TableNames = strings.Split(*moveTables, ",")
 		for i := range migrationContext.MoveTables.TableNames {
 			migrationContext.MoveTables.TableNames[i] = strings.TrimSpace(migrationContext.MoveTables.TableNames[i])
@@ -384,6 +393,9 @@ func main() {
 		}
 		if migrationContext.MoveTables.TargetDatabase == "" {
 			migrationContext.MoveTables.TargetDatabase = migrationContext.DatabaseName
+		}
+		if !cutOverLockTimeoutUserSpecified {
+			*cutOverLockTimeoutSeconds = 60
 		}
 		migrationContext.MoveTables.ConnectionConfig = mysql.NewConnectionConfig()
 	}

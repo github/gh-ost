@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Continuously insert new rows into gh_ost_test on source primary.
+# Usage:
+#   script/move-tables/insert-source-primary-loop [start_column1] [sleep_seconds]
+# Example:
+#   script/move-tables/insert-source-primary-loop 100000 0.2
+
+start_i="${1:-100000}"
+delay="${2:-0.2}"
+i="$start_i"
+
+echo "Starting continuous inserts on source primary. Press Ctrl+C to stop."
+echo "start_column1=$start_i sleep_seconds=$delay"
+
+trap 'echo; echo "Stopped."; exit 0' INT TERM
+
+while true; do
+  ts="$(date +%s)"
+
+  script/move-tables/mysql-source-primary -D gh_ost_test_db -e "
+    INSERT INTO gh_ost_test (column1, column2, column3, column4, column5, column6)
+    VALUES ($i, $((i % 65535)), $((i % 16777215)), $((i % 255)), $ts, $((ts + 1)));
+  "
+
+  echo "inserted row: column1=$i ts=$ts"
+  i=$((i + 1))
+  sleep "$delay"
+done
