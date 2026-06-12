@@ -776,8 +776,8 @@ func (apl *Applier) CreateCheckpointTable() error {
 	}
 	if apl.migrationContext.IsMoveTablesMode() {
 		colDefs = append(colDefs,
-			"`gh_ost_cutover_started` tinyint(1) DEFAULT '0'",
-			"`gh_ost_drain_gtid` text charset ascii",
+			"`gh_ost_move_tables_cutover_started` tinyint(1) DEFAULT '0'",
+			"`gh_ost_move_tables_drain_gtid` text charset ascii",
 		)
 	}
 	for _, col := range apl.migrationContext.UniqueKey.Columns.Columns() {
@@ -1041,7 +1041,7 @@ func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 }
 
 func (apl *Applier) ReadMoveTablesCutOverCheckpoint() (*Checkpoint, error) {
-	row := apl.checkpointDB().QueryRow(fmt.Sprintf(`select /* gh-ost */ gh_ost_chk_id, gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration, gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover, gh_ost_cutover_started, gh_ost_drain_gtid from %s.%s order by gh_ost_chk_id desc limit 1`, sql.EscapeName(apl.checkpointDatabaseName()), sql.EscapeName(apl.migrationContext.GetCheckpointTableName())))
+	row := apl.checkpointDB().QueryRow(fmt.Sprintf(`select /* gh-ost */ gh_ost_chk_id, gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration, gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover, gh_ost_move_tables_cutover_started, gh_ost_move_tables_drain_gtid from %s.%s order by gh_ost_chk_id desc limit 1`, sql.EscapeName(apl.checkpointDatabaseName()), sql.EscapeName(apl.migrationContext.GetCheckpointTableName())))
 	chk := &Checkpoint{}
 	var coordStr, drainGTIDStr string
 	var timestamp int64

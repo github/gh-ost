@@ -140,48 +140,47 @@ func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns 
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
-	stmt := ""
-	if includeMoveTablesCutOverColumns {
-		stmt = fmt.Sprintf(`
-			insert /* gh-ost */
-			into %s.%s
-				(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
-				 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
-				 gh_ost_cutover_started, gh_ost_drain_gtid,
-				 %s, %s)
-			values
-				(unix_timestamp(now()), ?, ?,
-				 ?, ?, ?,
-				 ?, ?,
-				 %s, %s)`,
-			databaseName, tableName,
-			strings.Join(minUniqueColNames, ", "),
-			strings.Join(maxUniqueColNames, ", "),
-			strings.Join(values, ", "),
-			strings.Join(values, ", "),
-		)
-	} else {
-		stmt = fmt.Sprintf(`
-			insert /* gh-ost */
-			into %s.%s
-				(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
-				 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
-				 %s, %s)
-			values
-				(unix_timestamp(now()), ?, ?,
-				 ?, ?, ?,
-				 %s, %s)`,
-			databaseName, tableName,
-			strings.Join(minUniqueColNames, ", "),
-			strings.Join(maxUniqueColNames, ", "),
-			strings.Join(values, ", "),
-			strings.Join(values, ", "),
-		)
-	}
-
 	b := &CheckpointInsertQueryBuilder{
 		uniqueKeyColumns:                uniqueKeyColumns,
-		preparedStatement:               stmt,
+		preparedStatement: func() string {
+			if includeMoveTablesCutOverColumns {
+				return fmt.Sprintf(`
+					insert /* gh-ost */
+					into %s.%s
+						(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
+						 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
+						 gh_ost_move_tables_cutover_started, gh_ost_move_tables_drain_gtid,
+						 %s, %s)
+					values
+						(unix_timestamp(now()), ?, ?,
+						 ?, ?, ?,
+						 ?, ?,
+						 %s, %s)`,
+					databaseName, tableName,
+					strings.Join(minUniqueColNames, ", "),
+					strings.Join(maxUniqueColNames, ", "),
+					strings.Join(values, ", "),
+					strings.Join(values, ", "),
+				)
+			}
+
+			return fmt.Sprintf(`
+				insert /* gh-ost */
+				into %s.%s
+					(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
+					 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
+					 %s, %s)
+				values
+					(unix_timestamp(now()), ?, ?,
+					 ?, ?, ?,
+					 %s, %s)`,
+				databaseName, tableName,
+				strings.Join(minUniqueColNames, ", "),
+				strings.Join(maxUniqueColNames, ", "),
+				strings.Join(values, ", "),
+				strings.Join(values, ", "),
+			)
+		}(),
 		includeMoveTablesCutOverColumns: includeMoveTablesCutOverColumns,
 	}
 	return b, nil
