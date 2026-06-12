@@ -31,3 +31,30 @@ Note: replicas in this local topology are configured with `read_only=ON` and
 `super_read_only=ON`. If you point `--host` at `mysql-source-replica` (3308),
 the cutover `RENAME TABLE` step will fail by design. Use source primary (3307)
 as the inspected host when you want cutover to rename on source.
+
+Start continuous inserts against the source.
+```bash
+script/move-tables/insert-source-primary-loop
+```
+
+Check the target - it should have the initial data from the source and should be receiving the new data.
+```bash
+script/move-tables/mysql-target-primary -D gh_ost_test_db -e "SELECT * FROM gh_ost_test;"
+```
+
+Remove the cutover flag file.
+```bash
+rm /tmp/ghost-move-tables.postpone.flag
+```
+
+You'll see the continous inserts will stop because of the table rename.
+
+Check the source - table has been renamed.
+```bash
+script/move-tables/mysql-source-primary -D gh_ost_test_db -e "SELECT * FROM _gh_ost_test_del;"
+```
+
+Check the target has the same set of data.
+```bash
+script/move-tables/mysql-target-primary -D gh_ost_test_db -e "SELECT * FROM gh_ost_test;"
+```
