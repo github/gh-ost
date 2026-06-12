@@ -20,8 +20,6 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-
-	"github.com/openark/golib/sqlutils"
 )
 
 var (
@@ -30,13 +28,6 @@ var (
 	RetrySleepFn                      = time.Sleep
 	checkpointTimeout                 = 2 * time.Second
 
-	// moveTablesCutOverDrainTimeout caps how long T3 of the move-tables
-	// cooperative cutover (#8209) waits for the applier to catch up to the
-	// drain GTID captured at T2. 60s is a starting default chosen over
-	// CutOverLockTimeoutSeconds (which is capped at 1-10s by
-	// SetCutOverLockTimeoutSeconds and would be too short for a real drain
-	// under load). Up for review with Daniel/Eric in the PR.
-	moveTablesCutOverDrainTimeout = 60 * time.Second
 	// moveTablesCutOverDrainPollInterval is the per-iteration sleep in T3's
 	// drain poll. 100ms per move_table_mode.md §1.5.
 	moveTablesCutOverDrainPollInterval = 100 * time.Millisecond
@@ -851,6 +842,15 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.initiateApplier(); err != nil {
 		return err
 	}
+	if err := mgtr.checkAbort(); err != nil {
+		return err
+	}
+	if err := mgtr.createFlagFiles(); err != nil {
+		return err
+	}
+	if err := mgtr.checkAbort(); err != nil {
+		return err
+	}
 	if err := mgtr.initiateStreaming(); err != nil {
 		return err
 	}
@@ -985,11 +985,22 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		return fmt.Errorf("on-before-cut-over hook failed: %w", err)
 	}
 
-	// ----- T1: RENAME source table -----
-	// Issued on mgtr.inspector.db (the privileged source connection per
-	// move_table_mode.md §1.5). No retry: RENAME is not idempotent — a partial
-	// success leaves the table already renamed and a retry would fail. The
-	// operator re-runs the whole hook chain on failure.
+	// ----- T1 + T2: RENAME then capture @@gtid_executed on the same connection -----
+	// Pin both operations to a single *sql.Conn so MySQL's within-session
+	// ordering guarantee makes it impossible for T2 to observe a state that
+	// pre-dates T1's commit. Using mgtr.inspector.db directly would let the
+	// pool schedule T1 and T2 on different underlying TCP connections (or, with
+	// a proxy, different servers), breaking the happens-before relationship.
+	//
+	// No retry on the RENAME: it is not idempotent — a partial success leaves
+	// the table already renamed and a retry would fail. The operator re-runs
+	// the whole hook chain on failure.
+	pinnedConn, err := mgtr.inspector.db.Conn(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to pin connection for T1/T2: %w", err)
+	}
+	defer pinnedConn.Close()
+
 	sourceDB := mgtr.migrationContext.DatabaseName
 	sourceTable := mgtr.migrationContext.OriginalTableName
 	delTable := mgtr.migrationContext.GetOldTableName()
@@ -997,17 +1008,15 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		sql.EscapeName(sourceDB), sql.EscapeName(sourceTable),
 		sql.EscapeName(sourceDB), sql.EscapeName(delTable))
 	mgtr.migrationContext.Log.Infof("T1: renaming source table: %s", renameQuery)
-	if _, err := sqlutils.ExecNoPrepare(mgtr.inspector.db, renameQuery); err != nil {
+	if _, err := pinnedConn.ExecContext(context.Background(), renameQuery); err != nil {
 		return fmt.Errorf("RENAME failed: %w", err)
 	}
 
-	// ----- T2: capture @@gtid_executed on the SAME *sql.DB handle as T1 -----
-	// The design doc specifies @@gtid_executed. We query @@GLOBAL.gtid_executed explicitly rather than the unqualified
-	// @@gtid_executed form to make the global server-wide scope unambiguous
-	// in the SQL itself.
+	// ----- T2: capture @@gtid_executed on the SAME connection as T1 -----
+	// @@GLOBAL scope is explicit so the intent is unambiguous in the SQL itself.
 	// Design: https://github.com/github/gh-ost-tablemove-poc/blob/9dc6df75c4c88ff473906a497836c7518f5614ec/design/coop_cutover.md#32-correctness-verification-for-p4
 	var drainGTIDStr string
-	if err := mgtr.inspector.db.QueryRow("select @@global.gtid_executed").Scan(&drainGTIDStr); err != nil {
+	if err := pinnedConn.QueryRowContext(context.Background(), "select @@gtid_executed").Scan(&drainGTIDStr); err != nil {
 		return fmt.Errorf("drain GTID capture failed: %w", err)
 	}
 	drainGTID, err := mysql.NewGTIDBinlogCoordinates(drainGTIDStr)
@@ -1022,15 +1031,10 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// drain target (i.e. the applier contains every GTID in drainGTID). Reads
 	// of CurrentCoordinates hold the mutex per applier.go:75. Per-iteration
 	// logging is Debug only to avoid spamming Info on a hot loop.
-	//
-	// Timeout is a named constant (moveTablesCutOverDrainTimeout = 60s). NOTE:
-	// the internalization doc suggested reusing CutOverLockTimeoutSeconds, but
-	// that's capped at 1-10s (context.go:SetCutOverLockTimeoutSeconds) — too
-	// short for a real drain under load. 60s default is up for review with
-	// Daniel/Eric; flagged in the PR description.
+	drainTimeout := time.Duration(mgtr.migrationContext.CutOverLockTimeoutSeconds) * time.Second
 	mgtr.migrationContext.Log.Infof("T3: draining applier to drain GTID (timeout %s, poll %s)",
-		moveTablesCutOverDrainTimeout, moveTablesCutOverDrainPollInterval)
-	drainCtx, cancel := context.WithTimeout(context.Background(), moveTablesCutOverDrainTimeout)
+		drainTimeout, moveTablesCutOverDrainPollInterval)
+	drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
 	ticker := time.NewTicker(moveTablesCutOverDrainPollInterval)
 	defer ticker.Stop()
@@ -1041,14 +1045,23 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
 		applierCoords := mgtr.applier.CurrentCoordinates
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-		if applierCoords != nil && !applierCoords.IsEmpty() && !applierCoords.SmallerThan(drainGTID) {
+		applyBacklog := len(mgtr.applyEventsQueue)
+		streamerBacklog := 0
+		if mgtr.eventsStreamer != nil {
+			streamerBacklog = len(mgtr.eventsStreamer.eventsChannel)
+		}
+		if applierCoords != nil && !applierCoords.IsEmpty() && !applierCoords.SmallerThan(drainGTID) && applyBacklog == 0 && streamerBacklog == 0 {
 			mgtr.migrationContext.Log.Infof("T3: drain complete; applier caught up to drain GTID")
 			break
 		}
-		mgtr.migrationContext.Log.Debugf("T3: applier still behind drain GTID, polling")
+		if applierCoords != nil && !applierCoords.IsEmpty() && !applierCoords.SmallerThan(drainGTID) {
+			mgtr.migrationContext.Log.Debugf("T3: drain GTID reached but backlog remains (apply=%d, streamer=%d)", applyBacklog, streamerBacklog)
+		} else {
+			mgtr.migrationContext.Log.Debugf("T3: applier still behind drain GTID, polling")
+		}
 		select {
 		case <-drainCtx.Done():
-			return fmt.Errorf("drain poll timed out after %s: applier did not catch up to drain GTID", moveTablesCutOverDrainTimeout)
+			return fmt.Errorf("drain poll timed out after %s: applier did not catch up to drain GTID", drainTimeout)
 		case <-ticker.C:
 			// next iteration
 		}
