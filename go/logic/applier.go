@@ -596,7 +596,8 @@ func (apl *Applier) createTargetTable(targetTableName string) error {
 }
 
 // createTargetTableFromStatement creates the table on the applier host to which the applier will
-// apply changes.
+// apply changes. In move-tables mode this executes on moveTablesTargetDB (the target cluster);
+// in standard mode it executes on apl.db (the source/applier host).
 func (apl *Applier) createTargetTableFromStatement(targetTableName, createStatement string) error {
 	targetDatabase := apl.migrationContext.GetTargetDatabaseName()
 	apl.migrationContext.Log.Infof("Creating target table %s.%s",
@@ -604,8 +605,13 @@ func (apl *Applier) createTargetTableFromStatement(targetTableName, createStatem
 		sql.EscapeName(targetTableName),
 	)
 
+	db := apl.db
+	if apl.migrationContext.IsMoveTablesMode() {
+		db = apl.moveTablesTargetDB
+	}
+
 	err := func() error {
-		tx, err := apl.db.Begin()
+		tx, err := db.Begin()
 		if err != nil {
 			return err
 		}
@@ -640,12 +646,35 @@ func (apl *Applier) CreateGhostTable() error {
 	return apl.createTargetTable(apl.migrationContext.GetGhostTableName())
 }
 
-// CreateTargetTable creates the target table on the target host (for move-tables)
+// CreateTargetTable creates the target table on the target host (for move-tables).
+// It aborts with an error if the target table already exists on the target cluster,
+// to prevent silently writing into a table that has unrelated data or a different
+// schema (move_table_mode.md §1.3: "Don't use IF NOT EXISTS for the target table.
+// An existing table is an error condition, not a no-op.").
 func (apl *Applier) CreateTargetTable(createStatement string) error {
 	if !apl.migrationContext.IsMoveTablesMode() {
 		return errors.New("CreateTargetTable is only available in MoveTables mode")
 	}
-	return apl.createTargetTableFromStatement(apl.originalTableName(), createStatement)
+	targetTableName := apl.originalTableName()
+	targetDatabase := apl.migrationContext.GetTargetDatabaseName()
+
+	// Explicit pre-check: abort before any data is copied if the target table
+	// already exists. The CREATE TABLE would also fail (MySQL ERROR 1050), but
+	// this gives operators a clear gh-ost error message explaining what to do.
+	var count int
+	err := apl.moveTablesTargetDB.QueryRow(
+		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+		targetDatabase, targetTableName,
+	).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check for existing target table: %w", err)
+	}
+	if count > 0 {
+		return fmt.Errorf("target table %s.%s already exists on the target cluster. Aborting to prevent writing into a table with unrelated data. Drop the table manually if this is intentional",
+			sql.EscapeName(targetDatabase), sql.EscapeName(targetTableName))
+	}
+
+	return apl.createTargetTableFromStatement(targetTableName, createStatement)
 }
 
 // AlterGhost applies `alter` statement on ghost table
