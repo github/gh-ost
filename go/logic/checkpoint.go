@@ -30,5 +30,5 @@ type Checkpoint struct {
 	DMLApplied                 int64
 	IsCutover                  bool
 	MoveTablesCutOverStarted   bool
-	MoveTablesCutoverDrainGTID mysql.BinlogCoordinates
+	MoveTablesCutOverDrainGTID mysql.BinlogCoordinates
 }

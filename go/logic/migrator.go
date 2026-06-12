@@ -840,7 +840,7 @@ func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogC
 		RowsCopied:                 atomic.LoadInt64(&mgtr.migrationContext.TotalRowsCopied),
 		DMLApplied:                 atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
 		MoveTablesCutOverStarted:   true,
-		MoveTablesCutoverDrainGTID: drainGTID,
+		MoveTablesCutOverDrainGTID: drainGTID,
 	}
 	mgtr.applier.LastIterationRangeMutex.Lock()
 	if mgtr.applier.LastIterationRangeMinValues != nil {
@@ -893,7 +893,7 @@ func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) 
 }
 
 func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) error {
-	if chk == nil || !chk.MoveTablesCutOverStarted || chk.MoveTablesCutoverDrainGTID == nil || chk.MoveTablesCutoverDrainGTID.IsEmpty() {
+	if chk == nil || !chk.MoveTablesCutOverStarted || chk.MoveTablesCutOverDrainGTID == nil || chk.MoveTablesCutOverDrainGTID.IsEmpty() {
 		return errors.New("checkpoint does not contain move-tables cutover resume state")
 	}
 	if chk.LastTrxCoords != nil && !chk.LastTrxCoords.IsEmpty() {
@@ -902,12 +902,12 @@ func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) err
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
 	}
 	mgtr.migrationContext.Log.Infof("Resuming move-tables cutover from checkpoint at coords=%+v drain_gtid=%s",
-		chk.LastTrxCoords, chk.MoveTablesCutoverDrainGTID.DisplayString())
-	if err := mgtr.drainMoveTablesCutOver(chk.MoveTablesCutoverDrainGTID); err != nil {
+		chk.LastTrxCoords, chk.MoveTablesCutOverDrainGTID.DisplayString())
+	if err := mgtr.drainMoveTablesCutOver(chk.MoveTablesCutOverDrainGTID); err != nil {
 		return err
 	}
 	if mgtr.migrationContext.Checkpoint {
-		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(chk.MoveTablesCutoverDrainGTID); err != nil {
+		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(chk.MoveTablesCutOverDrainGTID); err != nil {
 			mgtr.migrationContext.Log.Warningf("failed to checkpoint drained move-tables cutover: %+v", err)
 		}
 	}
@@ -958,7 +958,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 		if err != nil && !errors.Is(err, ErrNoCheckpointFound) {
 			return err
 		}
-		if cutoverResumeCheckpoint != nil && cutoverResumeCheckpoint.MoveTablesCutOverStarted && cutoverResumeCheckpoint.MoveTablesCutoverDrainGTID != nil && !cutoverResumeCheckpoint.MoveTablesCutoverDrainGTID.IsEmpty() {
+		if cutoverResumeCheckpoint != nil && cutoverResumeCheckpoint.MoveTablesCutOverStarted && cutoverResumeCheckpoint.MoveTablesCutOverDrainGTID != nil && !cutoverResumeCheckpoint.MoveTablesCutOverDrainGTID.IsEmpty() {
 			mgtr.migrationContext.InitialStreamerCoords = cutoverResumeCheckpoint.LastTrxCoords
 			mgtr.migrationContext.Iteration = cutoverResumeCheckpoint.Iteration
 			atomic.StoreInt64(&mgtr.migrationContext.TotalRowsCopied, cutoverResumeCheckpoint.RowsCopied)
