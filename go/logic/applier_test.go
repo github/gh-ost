@@ -1009,6 +1009,94 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().Nil(gotChk.MoveTablesCutOverDrainGTID)
 }
 
+func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
+	ctx := context.Background()
+
+	var err error
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id int not null, id2 char(4) CHARACTER SET utf8mb4, primary key(id, id2))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, id2) VALUES (?,?), (?,?), (?,?)", getTestTableName()), 411, "君子懷德", 411, "小人懷土", 212, "君子不器")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.UseGTIDs = true
+
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "id2"})
+	migrationContext.SharedColumns = sql.NewColumnList([]string{"id", "id2"})
+	migrationContext.MappedSharedColumns = sql.NewColumnList([]string{"id", "id2"})
+	migrationContext.Checkpoint = true
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabase
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.UniqueKey = &sql.UniqueKey{
+		Name:             "PRIMARY",
+		NameInGhostTable: "PRIMARY",
+		Columns:          *sql.NewColumnList([]string{"id", "id2"}),
+	}
+
+	inspector := NewInspector(migrationContext)
+	suite.Require().NoError(inspector.InitDBConnections())
+
+	err = inspector.applyColumnTypes(testMysqlDatabase, testMysqlTableName, &migrationContext.UniqueKey.Columns)
+	suite.Require().NoError(err)
+
+	applier := NewApplier(migrationContext)
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	err = applier.CreateCheckpointTable()
+	suite.Require().NoError(err)
+
+	err = applier.prepareQueries()
+	suite.Require().NoError(err)
+
+	err = applier.ReadMigrationRangeValues(inspector.db)
+	suite.Require().NoError(err)
+
+	coords, err := mysql.NewGTIDBinlogCoordinates("00000000-0000-0000-0000-000000000001:1-10")
+	suite.Require().NoError(err)
+	drainGTID, err := mysql.NewGTIDBinlogCoordinates("00000000-0000-0000-0000-000000000001:1-20")
+	suite.Require().NoError(err)
+
+	chk := &Checkpoint{
+		LastTrxCoords:              coords,
+		IterationRangeMin:          applier.migrationContext.MigrationRangeMinValues,
+		IterationRangeMax:          applier.migrationContext.MigrationRangeMaxValues,
+		Iteration:                  3,
+		RowsCopied:                 1000,
+		DMLApplied:                 2000,
+		IsCutover:                  false,
+		MoveTablesCutOverStarted:   true,
+		MoveTablesCutOverDrainGTID: drainGTID,
+	}
+	id, err := applier.WriteCheckpoint(chk)
+	suite.Require().NoError(err)
+	suite.Require().Equal(int64(1), id)
+
+	gotChk, err := applier.ReadLastCheckpoint()
+	suite.Require().NoError(err)
+
+	suite.Require().Equal(chk.Iteration, gotChk.Iteration)
+	suite.Require().Equal(chk.LastTrxCoords.String(), gotChk.LastTrxCoords.String())
+	suite.Require().Equal(chk.IterationRangeMin.String(), gotChk.IterationRangeMin.String())
+	suite.Require().Equal(chk.IterationRangeMax.String(), gotChk.IterationRangeMax.String())
+	suite.Require().Equal(chk.RowsCopied, gotChk.RowsCopied)
+	suite.Require().Equal(chk.DMLApplied, gotChk.DMLApplied)
+	suite.Require().Equal(chk.IsCutover, gotChk.IsCutover)
+	suite.Require().True(gotChk.MoveTablesCutOverStarted)
+	suite.Require().NotNil(gotChk.MoveTablesCutOverDrainGTID)
+	suite.Require().Equal(drainGTID.String(), gotChk.MoveTablesCutOverDrainGTID.String())
+}
+
 func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateKeyOnNonMigrationIndex() {
 	ctx := context.Background()
 

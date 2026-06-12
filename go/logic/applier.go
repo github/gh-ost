@@ -131,6 +131,14 @@ func (apl *Applier) checkpointDrainGTIDString(chk *Checkpoint) string {
 	return chk.MoveTablesCutOverDrainGTID.String()
 }
 
+func (apl *Applier) checkpointRangeColumnNames() (minColumnNames []string, maxColumnNames []string) {
+	for _, col := range apl.migrationContext.UniqueKey.Columns.Columns() {
+		minColumnNames = append(minColumnNames, sql.TruncateColumnName(col.Name, sql.MaxColumnNameLength-4)+"_min")
+		maxColumnNames = append(maxColumnNames, sql.TruncateColumnName(col.Name, sql.MaxColumnNameLength-4)+"_max")
+	}
+	return minColumnNames, maxColumnNames
+}
+
 // compileMigrationKeyWarningRegex compiles a regex pattern that matches duplicate key warnings
 // for the migration's unique key. Duplicate warnings are formatted differently across MySQL versions,
 // hence the optional table name prefix. Metacharacters in table/index names are escaped to avoid
@@ -994,15 +1002,39 @@ func (apl *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 }
 
 func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
-	row := apl.checkpointDB().QueryRow(fmt.Sprintf(`select /* gh-ost */ * from %s.%s order by gh_ost_chk_id desc limit 1`, sql.EscapeName(apl.checkpointDatabaseName()), sql.EscapeName(apl.migrationContext.GetCheckpointTableName())))
+	minColumnNames, maxColumnNames := apl.checkpointRangeColumnNames()
+	selectColumns := []string{
+		"gh_ost_chk_id",
+		"gh_ost_chk_timestamp",
+		"gh_ost_chk_coords",
+		"gh_ost_chk_iteration",
+		"gh_ost_rows_copied",
+		"gh_ost_dml_applied",
+		"gh_ost_is_cutover",
+	}
+	if apl.migrationContext.IsMoveTablesMode() {
+		selectColumns = append(selectColumns, "gh_ost_move_tables_cutover_started", "gh_ost_move_tables_drain_gtid")
+	}
+	selectColumns = append(selectColumns, minColumnNames...)
+	selectColumns = append(selectColumns, maxColumnNames...)
+
+	row := apl.checkpointDB().QueryRow(fmt.Sprintf(
+		`select /* gh-ost */ %s from %s.%s order by gh_ost_chk_id desc limit 1`,
+		strings.Join(selectColumns, ", "),
+		sql.EscapeName(apl.checkpointDatabaseName()),
+		sql.EscapeName(apl.migrationContext.GetCheckpointTableName()),
+	))
 	chk := &Checkpoint{
 		IterationRangeMin: sql.NewColumnValues(apl.migrationContext.UniqueKey.Columns.Len()),
 		IterationRangeMax: sql.NewColumnValues(apl.migrationContext.UniqueKey.Columns.Len()),
 	}
 
-	var coordStr string
+	var coordStr, drainGTIDStr string
 	var timestamp int64
 	ptrs := []interface{}{&chk.Id, &timestamp, &coordStr, &chk.Iteration, &chk.RowsCopied, &chk.DMLApplied, &chk.IsCutover}
+	if apl.migrationContext.IsMoveTablesMode() {
+		ptrs = append(ptrs, &chk.MoveTablesCutOverStarted, &drainGTIDStr)
+	}
 	ptrs = append(ptrs, chk.IterationRangeMin.ValuesPointers...)
 	ptrs = append(ptrs, chk.IterationRangeMax.ValuesPointers...)
 	err := row.Scan(ptrs...)
@@ -1025,6 +1057,13 @@ func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 			return nil, err
 		}
 		chk.LastTrxCoords = fileCoords
+	}
+	if apl.migrationContext.IsMoveTablesMode() && drainGTIDStr != "" {
+		drainGTID, err := mysql.NewGTIDBinlogCoordinates(drainGTIDStr)
+		if err != nil {
+			return nil, err
+		}
+		chk.MoveTablesCutOverDrainGTID = drainGTID
 	}
 	return chk, nil
 }

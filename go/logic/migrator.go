@@ -1015,11 +1015,27 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
+	mgtr.prepareMoveTablesCopyState()
 	if err := mgtr.initiateApplier(); err != nil {
 		return err
 	}
 	if err := mgtr.checkAbort(); err != nil {
 		return err
+	}
+	if mgtr.migrationContext.Checkpoint && mgtr.migrationContext.Resume {
+		lastCheckpoint, err := mgtr.applier.ReadLastCheckpoint()
+		if err != nil {
+			return mgtr.migrationContext.Log.Errorf("no checkpoint found, unable to resume: %+v", err)
+		}
+		mgtr.migrationContext.Log.Infof("Resuming move-tables from checkpoint coords=%+v range_min=%+v range_max=%+v iteration=%d",
+			lastCheckpoint.LastTrxCoords, lastCheckpoint.IterationRangeMin.String(), lastCheckpoint.IterationRangeMax.String(), lastCheckpoint.Iteration)
+
+		mgtr.migrationContext.MigrationIterationRangeMinValues = lastCheckpoint.IterationRangeMin
+		mgtr.migrationContext.MigrationIterationRangeMaxValues = lastCheckpoint.IterationRangeMax
+		mgtr.migrationContext.Iteration = lastCheckpoint.Iteration
+		atomic.StoreInt64(&mgtr.migrationContext.TotalRowsCopied, lastCheckpoint.RowsCopied)
+		atomic.StoreInt64(&mgtr.migrationContext.TotalDMLEventsApplied, lastCheckpoint.DMLApplied)
+		mgtr.migrationContext.InitialStreamerCoords = lastCheckpoint.LastTrxCoords
 	}
 	if err := mgtr.createFlagFiles(); err != nil {
 		return err
@@ -1033,8 +1049,6 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
-
-	mgtr.prepareMoveTablesCopyState()
 
 	// this function assumes that the unique key constraint has been set.
 	if err := mgtr.applier.prepareQueries(); err != nil {
@@ -1993,13 +2007,20 @@ func (mgtr *Migrator) initiateApplier() error {
 	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
-		createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.MoveTables.TableNames[0])
-		if err != nil {
-			return fmt.Errorf("failed to fetch create table statement: %w", err)
-		}
-		if err := mgtr.applier.CreateTargetTable(createTableStatement); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create target table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
-			return err
+		if !mgtr.migrationContext.Resume {
+			createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.MoveTables.TableNames[0])
+			if err != nil {
+				return fmt.Errorf("failed to fetch create table statement: %w", err)
+			}
+			if err := mgtr.applier.CreateTargetTable(createTableStatement); err != nil {
+				mgtr.migrationContext.Log.Errorf("unable to create target table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+				return err
+			}
+		} else {
+			mgtr.migrationContext.Log.Infof("Resuming move-tables; reusing existing target table %s.%s",
+				sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()),
+				sql.EscapeName(mgtr.migrationContext.GetTargetTableName()),
+			)
 		}
 	} else {
 		if mgtr.migrationContext.Revert {
