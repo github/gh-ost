@@ -326,3 +326,22 @@ func TestSetAbortError_ThreadSafe(t *testing.T) {
 		t.Errorf("Stored error %v not in list of sent errors", got)
 	}
 }
+
+func TestSetCutOverLockTimeoutSecondsRangeByMode(t *testing.T) {
+	{
+		ctx := NewMigrationContext()
+		require.NoError(t, ctx.SetCutOverLockTimeoutSeconds(10))
+		err := ctx.SetCutOverLockTimeoutSeconds(11)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "maximal timeout is 10sec")
+	}
+
+	{
+		ctx := NewMigrationContext()
+		ctx.MoveTables.TableNames = []string{"tbl"}
+		require.NoError(t, ctx.SetCutOverLockTimeoutSeconds(60))
+		err := ctx.SetCutOverLockTimeoutSeconds(61)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "maximal timeout is 60sec")
+	}
+}

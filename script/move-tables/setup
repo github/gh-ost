@@ -98,6 +98,9 @@ setup() {
         exec-mysql-source-replica -e "change master to master_host='mysql-source-primary', master_port=3307, master_user='repl', master_password='repl', master_auto_position=1;"
         exec-mysql-source-replica -e "start slave;"
     fi
+    # Keep replicas non-writable so local move-tables runs that point --host at
+    # a replica fail at cutover (RENAME) instead of mutating only the replica.
+    exec-mysql-source-replica -e "set global read_only=ON; set global super_read_only=ON;"
     echo "OK"
 
     # Setup replication for target cluster
@@ -115,6 +118,7 @@ setup() {
         exec-mysql-target-replica -e "change master to master_host='mysql-target-primary', master_port=3309, master_user='repl', master_password='repl', master_auto_position=1;"
         exec-mysql-target-replica -e "start slave;"
     fi
+    exec-mysql-target-replica -e "set global read_only=ON; set global super_read_only=ON;"
     echo "OK"
 
     echo -n "Initializing '$DATABASE_NAME' database into each cluster..."
