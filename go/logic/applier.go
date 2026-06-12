@@ -382,6 +382,7 @@ func (apl *Applier) prepareQueries() (err error) {
 			apl.checkpointDatabaseName(),
 			apl.migrationContext.GetCheckpointTableName(),
 			&apl.migrationContext.UniqueKey.Columns,
+			apl.migrationContext.IsMoveTablesMode(),
 		); err != nil {
 			return err
 		}
@@ -772,8 +773,12 @@ func (apl *Applier) CreateCheckpointTable() error {
 		"`gh_ost_rows_copied` bigint",
 		"`gh_ost_dml_applied` bigint",
 		"`gh_ost_is_cutover` tinyint(1) DEFAULT '0'",
-		"`gh_ost_cutover_started` tinyint(1) DEFAULT '0'",
-		"`gh_ost_drain_gtid` text charset ascii",
+	}
+	if apl.migrationContext.IsMoveTablesMode() {
+		colDefs = append(colDefs,
+			"`gh_ost_cutover_started` tinyint(1) DEFAULT '0'",
+			"`gh_ost_drain_gtid` text charset ascii",
+		)
 	}
 	for _, col := range apl.migrationContext.UniqueKey.Columns.Columns() {
 		if col.MySQLType == "" {
@@ -976,7 +981,10 @@ func (apl *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 	if err != nil {
 		return insertId, err
 	}
-	args := sqlutils.Args(chk.LastTrxCoords.String(), chk.Iteration, chk.RowsCopied, chk.DMLApplied, chk.IsCutover, chk.MoveTablesCutOverStarted, apl.checkpointDrainGTIDString(chk))
+	args := sqlutils.Args(chk.LastTrxCoords.String(), chk.Iteration, chk.RowsCopied, chk.DMLApplied, chk.IsCutover)
+	if apl.migrationContext.IsMoveTablesMode() {
+		args = append(args, chk.MoveTablesCutOverStarted, apl.checkpointDrainGTIDString(chk))
+	}
 	args = append(args, uniqueKeyArgs...)
 	res, err := apl.checkpointDB().Exec(query, args...)
 	if err != nil {
@@ -995,7 +1003,10 @@ func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 	var coordStr string
 	var drainGTIDStr string
 	var timestamp int64
-	ptrs := []interface{}{&chk.Id, &timestamp, &coordStr, &chk.Iteration, &chk.RowsCopied, &chk.DMLApplied, &chk.IsCutover, &chk.MoveTablesCutOverStarted, &drainGTIDStr}
+	ptrs := []interface{}{&chk.Id, &timestamp, &coordStr, &chk.Iteration, &chk.RowsCopied, &chk.DMLApplied, &chk.IsCutover}
+	if apl.migrationContext.IsMoveTablesMode() {
+		ptrs = append(ptrs, &chk.MoveTablesCutOverStarted, &drainGTIDStr)
+	}
 	ptrs = append(ptrs, chk.IterationRangeMin.ValuesPointers...)
 	ptrs = append(ptrs, chk.IterationRangeMax.ValuesPointers...)
 	err := row.Scan(ptrs...)

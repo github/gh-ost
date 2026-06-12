@@ -120,11 +120,12 @@ func BuildEqualsPreparedComparison(columns []string) (result string, err error) 
 
 // It holds the prepared query statement so it doesn't need to be recreated every time.
 type CheckpointInsertQueryBuilder struct {
-	uniqueKeyColumns  *ColumnList
-	preparedStatement string
+	uniqueKeyColumns                *ColumnList
+	preparedStatement               string
+	includeMoveTablesCutOverColumns bool
 }
 
-func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns *ColumnList) (*CheckpointInsertQueryBuilder, error) {
+func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns *ColumnList, includeMoveTablesCutOverColumns bool) (*CheckpointInsertQueryBuilder, error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return nil, fmt.Errorf("got 0 columns in BuildSetCheckpointInsertQuery")
 	}
@@ -139,28 +140,49 @@ func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns 
 	}
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
-	stmt := fmt.Sprintf(`
-		insert /* gh-ost */
-		into %s.%s
-			(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
-			 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
-			 gh_ost_cutover_started, gh_ost_drain_gtid,
-  			 %s, %s)
-		values
-			(unix_timestamp(now()), ?, ?,
-			 ?, ?, ?,
-			 ?, ?,
-			 %s, %s)`,
-		databaseName, tableName,
-		strings.Join(minUniqueColNames, ", "),
-		strings.Join(maxUniqueColNames, ", "),
-		strings.Join(values, ", "),
-		strings.Join(values, ", "),
-	)
+	stmt := ""
+	if includeMoveTablesCutOverColumns {
+		stmt = fmt.Sprintf(`
+			insert /* gh-ost */
+			into %s.%s
+				(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
+				 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
+				 gh_ost_cutover_started, gh_ost_drain_gtid,
+				 %s, %s)
+			values
+				(unix_timestamp(now()), ?, ?,
+				 ?, ?, ?,
+				 ?, ?,
+				 %s, %s)`,
+			databaseName, tableName,
+			strings.Join(minUniqueColNames, ", "),
+			strings.Join(maxUniqueColNames, ", "),
+			strings.Join(values, ", "),
+			strings.Join(values, ", "),
+		)
+	} else {
+		stmt = fmt.Sprintf(`
+			insert /* gh-ost */
+			into %s.%s
+				(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
+				 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
+				 %s, %s)
+			values
+				(unix_timestamp(now()), ?, ?,
+				 ?, ?, ?,
+				 %s, %s)`,
+			databaseName, tableName,
+			strings.Join(minUniqueColNames, ", "),
+			strings.Join(maxUniqueColNames, ", "),
+			strings.Join(values, ", "),
+			strings.Join(values, ", "),
+		)
+	}
 
 	b := &CheckpointInsertQueryBuilder{
-		uniqueKeyColumns:  uniqueKeyColumns,
-		preparedStatement: stmt,
+		uniqueKeyColumns:                uniqueKeyColumns,
+		preparedStatement:               stmt,
+		includeMoveTablesCutOverColumns: includeMoveTablesCutOverColumns,
 	}
 	return b, nil
 }
