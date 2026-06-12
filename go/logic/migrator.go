@@ -1636,17 +1636,13 @@ func (mgtr *Migrator) addDMLEventsListener() error {
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
 func (mgtr *Migrator) initiateThrottler() {
-	if mgtr.migrationContext.IsMoveTablesMode() {
-		// TODO(chriskirkland): throttle against the target cluster
-		mgtr.migrationContext.Log.Info("Skipping throttling in move tables mode")
-		return
-	}
-
 	mgtr.throttler = NewThrottler(mgtr.migrationContext, mgtr.applier, mgtr.inspector, mgtr.appVersion)
 
 	go mgtr.throttler.initiateThrottlerCollection(mgtr.firstThrottlingCollected)
 	mgtr.migrationContext.Log.Infof("Waiting for first throttle metrics to be collected")
-	<-mgtr.firstThrottlingCollected // replication lag
+	if !mgtr.migrationContext.IsMoveTablesMode() {
+		<-mgtr.firstThrottlingCollected // replication lag
+	}
 	<-mgtr.firstThrottlingCollected // HTTP status
 	<-mgtr.firstThrottlingCollected // other, general metrics
 	mgtr.migrationContext.Log.Infof("First throttle metrics collected")

@@ -455,7 +455,9 @@ func (thlr *Throttler) collectGeneralThrottleMetrics() error {
 // that may affect throttling. There are several components, all running independently,
 // that collect such metrics.
 func (thlr *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan<- bool) {
-	go thlr.collectReplicationLag(firstThrottlingCollected)
+	if !thlr.migrationContext.IsMoveTablesMode() {
+		go thlr.collectReplicationLag(firstThrottlingCollected)
+	}
 	go thlr.collectControlReplicasLag()
 	go thlr.collectThrottleHTTPStatus(firstThrottlingCollected)
 
