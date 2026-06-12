@@ -995,7 +995,8 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// No retry on the RENAME: it is not idempotent — a partial success leaves
 	// the table already renamed and a retry would fail. The operator re-runs
 	// the whole hook chain on failure.
-	pinnedConn, err := mgtr.inspector.db.Conn(context.Background())
+	cutOverCtx := mgtr.migrationContext.GetContext()
+	pinnedConn, err := mgtr.inspector.db.Conn(cutOverCtx)
 	if err != nil {
 		return fmt.Errorf("failed to pin connection for T1/T2: %w", err)
 	}
@@ -1008,7 +1009,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		sql.EscapeName(sourceDB), sql.EscapeName(sourceTable),
 		sql.EscapeName(sourceDB), sql.EscapeName(delTable))
 	mgtr.migrationContext.Log.Infof("T1: renaming source table: %s", renameQuery)
-	if _, err := pinnedConn.ExecContext(context.Background(), renameQuery); err != nil {
+	if _, err := pinnedConn.ExecContext(cutOverCtx, renameQuery); err != nil {
 		return fmt.Errorf("RENAME failed: %w", err)
 	}
 
@@ -1016,7 +1017,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// @@GLOBAL scope is explicit so the intent is unambiguous in the SQL itself.
 	// Design: https://github.com/github/gh-ost-tablemove-poc/blob/9dc6df75c4c88ff473906a497836c7518f5614ec/design/coop_cutover.md#32-correctness-verification-for-p4
 	var drainGTIDStr string
-	if err := pinnedConn.QueryRowContext(context.Background(), "select @@gtid_executed").Scan(&drainGTIDStr); err != nil {
+	if err := pinnedConn.QueryRowContext(cutOverCtx, "select @@global.gtid_executed").Scan(&drainGTIDStr); err != nil {
 		return fmt.Errorf("drain GTID capture failed: %w", err)
 	}
 	drainGTID, err := mysql.NewGTIDBinlogCoordinates(drainGTIDStr)
