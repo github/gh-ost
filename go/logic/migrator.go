@@ -963,7 +963,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// unpostpone-socket gate because per coop_cutover.md §1.1 P4, operator-removes-
 	// postpone is the trigger for the entire cutover phase.
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone")
-	if err := mgtr.sleepWhileTrue(func() (bool, error) {
+	if err := mgtr.sleepWhileTrue("cut_over_postpone", func() (bool, error) {
 		if mgtr.migrationContext.PostponeCutOverFlagFile == "" {
 			return false, nil
 		}
@@ -1027,7 +1027,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	if err := pinnedConn.QueryRowContext(context.Background(), "select @@gtid_executed").Scan(&drainGTIDStr); err != nil {
 		return fmt.Errorf("drain GTID capture failed: %w", err)
 	}
-	drainGTID, err := mysql.NewGTIDBinlogCoordinates(drainGTIDStr)
+	drainGTID, err := mysql.NewGTIDBinlogCoordinates(mysql.FlavorFor(mgtr.migrationContext.InspectorMySQLVersion), drainGTIDStr)
 	if err != nil {
 		return fmt.Errorf("drain GTID parse failed: %w", err)
 	}
