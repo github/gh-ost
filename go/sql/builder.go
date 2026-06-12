@@ -141,7 +141,7 @@ func NewCheckpointQueryBuilder(databaseName, tableName string, uniqueKeyColumns 
 	databaseName = EscapeName(databaseName)
 	tableName = EscapeName(tableName)
 	b := &CheckpointInsertQueryBuilder{
-		uniqueKeyColumns:                uniqueKeyColumns,
+		uniqueKeyColumns: uniqueKeyColumns,
 		preparedStatement: func() string {
 			if includeMoveTablesCutOverColumns {
 				return fmt.Sprintf(`
