@@ -1001,12 +1001,8 @@ func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 	}
 
 	var coordStr string
-	var drainGTIDStr string
 	var timestamp int64
 	ptrs := []interface{}{&chk.Id, &timestamp, &coordStr, &chk.Iteration, &chk.RowsCopied, &chk.DMLApplied, &chk.IsCutover}
-	if apl.migrationContext.IsMoveTablesMode() {
-		ptrs = append(ptrs, &chk.MoveTablesCutOverStarted, &drainGTIDStr)
-	}
 	ptrs = append(ptrs, chk.IterationRangeMin.ValuesPointers...)
 	ptrs = append(ptrs, chk.IterationRangeMax.ValuesPointers...)
 	err := row.Scan(ptrs...)
@@ -1023,13 +1019,6 @@ func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 			return nil, err
 		}
 		chk.LastTrxCoords = gtidCoords
-		if drainGTIDStr != "" {
-			drainGTID, err := mysql.NewGTIDBinlogCoordinates(drainGTIDStr)
-			if err != nil {
-				return nil, err
-			}
-			chk.DrainGTID = drainGTID
-		}
 	} else {
 		fileCoords, err := mysql.ParseFileBinlogCoordinates(coordStr)
 		if err != nil {
