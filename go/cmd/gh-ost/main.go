@@ -373,6 +373,9 @@ func main() {
 		if migrationContext.PostponeCutOverFlagFile == "" {
 			log.Fatal("--postpone-cut-over-flag-file must be specified when using --move-tables")
 		}
+		if !migrationContext.Checkpoint {
+			log.Fatal("--checkpoint must be specified when using --move-tables")
+		}
 		migrationContext.MoveTables.TableNames = strings.Split(*moveTables, ",")
 		for i := range migrationContext.MoveTables.TableNames {
 			migrationContext.MoveTables.TableNames[i] = strings.TrimSpace(migrationContext.MoveTables.TableNames[i])
