@@ -1006,7 +1006,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().Equal(chk.DMLApplied, gotChk.DMLApplied)
 	suite.Require().Equal(chk.IsCutover, gotChk.IsCutover)
 	suite.Require().False(gotChk.MoveTablesCutOverStarted)
-	suite.Require().Nil(gotChk.DrainGTID)
+	suite.Require().Nil(gotChk.MoveTablesCutoverDrainGTID)
 }
 
 func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateKeyOnNonMigrationIndex() {

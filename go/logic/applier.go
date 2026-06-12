@@ -125,10 +125,10 @@ func (apl *Applier) checkpointDatabaseName() string {
 }
 
 func (apl *Applier) checkpointDrainGTIDString(chk *Checkpoint) string {
-	if chk == nil || chk.DrainGTID == nil || chk.DrainGTID.IsEmpty() {
+	if chk == nil || chk.MoveTablesCutoverDrainGTID == nil || chk.MoveTablesCutoverDrainGTID.IsEmpty() {
 		return ""
 	}
-	return chk.DrainGTID.String()
+	return chk.MoveTablesCutoverDrainGTID.String()
 }
 
 // compileMigrationKeyWarningRegex compiles a regex pattern that matches duplicate key warnings
@@ -1054,7 +1054,7 @@ func (apl *Applier) ReadMoveTablesCutOverCheckpoint() (*Checkpoint, error) {
 		if err != nil {
 			return nil, err
 		}
-		chk.DrainGTID = drainGTID
+		chk.MoveTablesCutoverDrainGTID = drainGTID
 	}
 	return chk, nil
 }

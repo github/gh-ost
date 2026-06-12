@@ -149,9 +149,9 @@ func TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained(t *testing.T) {
 	require.NoError(t, err)
 
 	chk := &Checkpoint{
-		LastTrxCoords:            drainGTID,
-		MoveTablesCutOverStarted: true,
-		DrainGTID:                drainGTID,
+		LastTrxCoords:              drainGTID,
+		MoveTablesCutOverStarted:   true,
+		MoveTablesCutoverDrainGTID: drainGTID,
 	}
 
 	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag), "pre-state: flag must be 0")
