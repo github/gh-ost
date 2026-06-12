@@ -24,9 +24,11 @@ type Checkpoint struct {
 	IterationRangeMin *sql.ColumnValues
 	// IterationRangeMax is the max shared key value
 	// for the chunk copier range.
-	IterationRangeMax *sql.ColumnValues
-	Iteration         int64
-	RowsCopied        int64
-	DMLApplied        int64
-	IsCutover         bool
+	IterationRangeMax        *sql.ColumnValues
+	Iteration                int64
+	RowsCopied               int64
+	DMLApplied               int64
+	IsCutover                bool
+	MoveTablesCutOverStarted bool
+	DrainGTID                mysql.BinlogCoordinates
 }

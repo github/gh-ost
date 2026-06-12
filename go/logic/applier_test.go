@@ -983,13 +983,15 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	coords := mysql.NewFileBinlogCoordinates("mysql-bin.000003", int64(219202907))
 
 	chk := &Checkpoint{
-		LastTrxCoords:     coords,
-		IterationRangeMin: applier.migrationContext.MigrationRangeMinValues,
-		IterationRangeMax: applier.migrationContext.MigrationRangeMaxValues,
-		Iteration:         2,
-		RowsCopied:        100000,
-		DMLApplied:        200000,
-		IsCutover:         true,
+		LastTrxCoords:            coords,
+		IterationRangeMin:        applier.migrationContext.MigrationRangeMinValues,
+		IterationRangeMax:        applier.migrationContext.MigrationRangeMaxValues,
+		Iteration:                2,
+		RowsCopied:               100000,
+		DMLApplied:               200000,
+		IsCutover:                true,
+		MoveTablesCutOverStarted: true,
+		DrainGTID:                coords,
 	}
 	id, err := applier.WriteCheckpoint(chk)
 	suite.Require().NoError(err)
@@ -1005,6 +1007,8 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 	suite.Require().Equal(chk.RowsCopied, gotChk.RowsCopied)
 	suite.Require().Equal(chk.DMLApplied, gotChk.DMLApplied)
 	suite.Require().Equal(chk.IsCutover, gotChk.IsCutover)
+	suite.Require().Equal(chk.MoveTablesCutOverStarted, gotChk.MoveTablesCutOverStarted)
+	suite.Require().Equal(chk.DrainGTID.String(), gotChk.DrainGTID.String())
 }
 
 func (suite *ApplierTestSuite) TestPanicOnWarningsWithDuplicateKeyOnNonMigrationIndex() {

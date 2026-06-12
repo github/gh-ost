@@ -131,6 +131,43 @@ func TestMoveTablesCutOver_PostponeGateFiresOnBeginPostponedOnce(t *testing.T) {
 		"post-state: hook failure must leave CutOverCompleteFlag unset")
 }
 
+// TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained verifies the crash-
+// safe resume branch skips T1 entirely and proceeds directly to T5 when the
+// persisted checkpoint already shows a drain-satisfied position.
+func TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained(t *testing.T) {
+	var calls []string
+	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
+
+	ctx := base.NewMigrationContext()
+	ctx.Hooks = fakeHooks
+	ctx.Checkpoint = false
+
+	m := NewMigrator(ctx, "test")
+	m.applier = NewApplier(ctx)
+
+	drainGTID, err := mysql.NewGTIDBinlogCoordinates("11111111-1111-1111-1111-111111111111:1-10")
+	require.NoError(t, err)
+
+	chk := &Checkpoint{
+		LastTrxCoords:            drainGTID,
+		MoveTablesCutOverStarted: true,
+		DrainGTID:                drainGTID,
+	}
+
+	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag), "pre-state: flag must be 0")
+	require.Empty(t, calls, "pre-state: no hooks recorded")
+
+	require.NoError(t, m.resumeMoveTablesCutOverFromCheckpoint(chk))
+
+	require.Equal(t, int64(1), atomic.LoadInt64(&ctx.CutOverCompleteFlag),
+		"post-state: resume path must set CutOverCompleteFlag before exiting")
+	require.Equal(t, []string{"fake:OnSuccess"}, calls,
+		"post-state: resume path should jump directly to T5 without rerunning T0/T1")
+	if m.applier.CurrentCoordinates != nil {
+		require.Equal(t, drainGTID.String(), m.applier.CurrentCoordinates.String())
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Integration tests - real MySQL via testcontainers, exercise T1/T2/T3.
 //
