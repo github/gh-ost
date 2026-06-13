@@ -683,17 +683,17 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySuc
 	suite.Require().NoError(err)
 
 	migrationContext.SetNextIterationRangeMinValues()
-	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+	iterationRange, err := applier.CalculateNextIterationRangeEndValues(false)
 
 	suite.Require().NoError(err)
-	suite.Require().True(hasFurtherRange)
+	suite.Require().True(iterationRange.HasFurtherRange)
 
-	_, rowsAffected, _, err := applier.ApplyIterationInsertQuery()
+	_, rowsAffected, _, sqlWarnings, err := applier.ApplyIterationInsertQuery(ctx, iterationRange)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(0), rowsAffected)
 
 	// Ensure Duplicate entry '42' for key '_testing_gho.item_id' is ignored correctly
-	suite.Require().Empty(applier.migrationContext.MigrationLastInsertSQLWarnings)
+	suite.Require().Empty(sqlWarnings)
 
 	// Check that the row was inserted
 	rows, err := suite.db.Query("SELECT * FROM " + getTestGhostTableName())
@@ -763,17 +763,17 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQueryFai
 	suite.Require().NoError(err)
 
 	migrationContext.SetNextIterationRangeMinValues()
-	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues()
+	iterationRange, err := applier.CalculateNextIterationRangeEndValues(false)
 	suite.Require().NoError(err)
-	suite.Require().True(hasFurtherRange)
+	suite.Require().True(iterationRange.HasFurtherRange)
 
-	_, rowsAffected, _, err := applier.ApplyIterationInsertQuery()
+	_, rowsAffected, _, sqlWarnings, err := applier.ApplyIterationInsertQuery(ctx, iterationRange)
 	suite.Equal(int64(1), rowsAffected)
 	suite.Require().NoError(err)
 
 	// Verify the warning was recorded and will cause the migrator to panic
-	suite.Require().NotEmpty(applier.migrationContext.MigrationLastInsertSQLWarnings)
-	suite.Require().Contains(applier.migrationContext.MigrationLastInsertSQLWarnings[0], "Warning: Data truncated for column 'name' at row 1")
+	suite.Require().NotEmpty(sqlWarnings)
+	suite.Require().Contains(sqlWarnings[0], "Warning: Data truncated for column 'name' at row 1")
 }
 
 func (suite *ApplierTestSuite) TestWriteCheckpoint() {

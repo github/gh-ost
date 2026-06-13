@@ -78,6 +78,18 @@ See also: [`resuming-migrations`](resume.md)
 
 `--checkpoint-seconds` specifies the seconds between checkpoints. Default is 300.
 
+### chunk-concurrent-size
+
+`--chunk-concurrent-size=1`, the number of goroutines to execute chunk-copy operations concurrently in each copy time slot. Default `1` (sequential). Minimum `1`.
+
+When set to a value greater than 1, multiple chunks are calculated and copied in parallel within each write-function invocation. This can significantly speed up row-copy on large tables when MySQL can handle concurrent writes to the ghost table.
+
+Each concurrent chunk calculates its own non-overlapping key range under a serialization lock, so there is no risk of duplicate or overlapping copies. A single dedicated producer goroutine streams these pre-calculated ranges to a pool of copy workers that run continuously (rather than in fixed barrier-synchronized batches), so the serialized boundary calculation overlaps with the parallel `INSERT`s and a slow chunk does not stall the others. Each chunk also applies its session variables and `INSERT` in a single autocommit round-trip, avoiding the per-chunk `BEGIN`/`SET SESSION`/`COMMIT` overhead. The applier connection pool is sized to `chunk-concurrent-size + 1 (producer) + headroom` automatically.
+
+For the speedup to materialize, MySQL should allow concurrent inserts to scale: on MySQL 8.0+ the default `innodb_autoinc_lock_mode = 2` (interleaved) is required for tables with an `AUTO_INCREMENT` column — under mode 0/1 an `INSERT ... SELECT` holds a table-level AUTO-INC lock that serializes concurrent chunks.
+
+Note: concurrency multiplies write pressure per time slot. Throttling (`--max-load`, `--nice-ratio`) applies per batch, not per chunk. Start with small values (2-8) and monitor replication lag.
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:

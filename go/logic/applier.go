@@ -123,6 +123,16 @@ func (apl *Applier) InitDBConnections() (err error) {
 	if apl.db, _, err = mysql.GetDB(apl.migrationContext.Uuid, uriWithMulti); err != nil {
 		return err
 	}
+	concurrentSize := atomic.LoadInt64(&apl.migrationContext.ChunkConcurrentSize)
+	if concurrentSize > 1 {
+		// Size the pool for concurrentSize parallel chunk-INSERTs plus the dedicated
+		// range-producer connection, with MaxDBPoolConnections of additional headroom
+		// for other applier queries. Without this, small concurrency values (2, 3)
+		// would contend with the producer for a connection and serialize.
+		poolSize := int(concurrentSize) + 1 + mysql.MaxDBPoolConnections
+		apl.db.SetMaxOpenConns(poolSize)
+		apl.db.SetMaxIdleConns(poolSize)
+	}
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
 	if apl.singletonDB, _, err = mysql.GetDB(apl.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
@@ -1021,10 +1031,40 @@ func (apl *Applier) ReadMigrationRangeValues() error {
 }
 
 // CalculateNextIterationRangeEndValues reads the next-iteration-range-end unique key values,
-// which will be used for copying the next chunk of rows. Ir returns "false" if there is
-// no further chunk to work through, i.e. we're past the last chunk and are done with
-// iterating the range (and thus done with copying row chunks)
-func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool, err error) {
+// which will be used for copying the next chunk of rows. It returns an IterationRangeValues
+// struct with HasFurtherRange=false if there is no further chunk to work through.
+// Thread-safe: uses a mutex to serialize access for concurrent row-copy.
+// When advanceCursor is true, the function determines min from MigrationIterationRangeMaxValues
+// (for concurrent mode where each goroutine advances the cursor).
+// When advanceCursor is false, min is read from MigrationIterationRangeMinValues (pre-set by
+// SetNextIterationRangeMinValues for single-threaded retry compatibility).
+func (apl *Applier) CalculateNextIterationRangeEndValues(advanceCursor bool) (values *base.IterationRangeValues, err error) {
+	apl.migrationContext.CalculateNextIterationRangeEndValuesLock.Lock()
+	defer apl.migrationContext.CalculateNextIterationRangeEndValuesLock.Unlock()
+
+	result := &base.IterationRangeValues{
+		Size: atomic.LoadInt64(&apl.migrationContext.ChunkSize),
+	}
+
+	if advanceCursor {
+		// Concurrent mode: advance min from current max cursor
+		result.Min = apl.migrationContext.MigrationIterationRangeMaxValues
+		if result.Min == nil {
+			result.Min = apl.migrationContext.MigrationRangeMinValues
+			result.IncludeMinValues = true
+		}
+	} else {
+		// Single-threaded mode: min was pre-set by SetNextIterationRangeMinValues
+		result.Min = apl.migrationContext.MigrationIterationRangeMinValues
+		if result.Min == nil {
+			result.Min = apl.migrationContext.MigrationRangeMinValues
+		}
+		// First iteration: include the minimum values. Use Iteration counter (not cursor state)
+		// because cursor is mutated on first calc success, but Iteration only advances after
+		// successful insert — so on retry of the first chunk, this still returns true.
+		result.IncludeMinValues = (apl.migrationContext.GetIteration() == 0)
+	}
+
 	for i := 0; i < 2; i++ {
 		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
 		if i == 1 {
@@ -1034,46 +1074,56 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 			apl.migrationContext.DatabaseName,
 			apl.migrationContext.OriginalTableName,
 			&apl.migrationContext.UniqueKey.Columns,
-			apl.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
+			result.Min.AbstractValues(),
 			apl.migrationContext.MigrationRangeMaxValues.AbstractValues(),
-			atomic.LoadInt64(&apl.migrationContext.ChunkSize),
-			apl.migrationContext.GetIteration() == 0,
+			result.Size,
+			result.IncludeMinValues,
 			fmt.Sprintf("iteration:%d", apl.migrationContext.GetIteration()),
 		)
 		if err != nil {
-			return hasFurtherRange, err
+			return result, err
 		}
 
 		rows, err := apl.db.Query(query, explodedArgs...)
 		if err != nil {
-			return hasFurtherRange, err
+			return result, err
 		}
 		defer rows.Close()
 
 		iterationRangeMaxValues := sql.NewColumnValues(apl.migrationContext.UniqueKey.Len())
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
-				return hasFurtherRange, err
+				return result, err
 			}
-			hasFurtherRange = true
+			result.HasFurtherRange = true
 		}
 		if err = rows.Err(); err != nil {
-			return hasFurtherRange, err
+			return result, err
 		}
-		if hasFurtherRange {
-			apl.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
-			return hasFurtherRange, nil
+		if result.HasFurtherRange {
+			result.Max = iterationRangeMaxValues
+			// Advance global cursor
+			apl.migrationContext.MigrationIterationRangeMinValues = result.Min
+			apl.migrationContext.MigrationIterationRangeMaxValues = result.Max
+			return result, nil
 		}
 	}
 	apl.migrationContext.Log.Debugf("Iteration complete: no further range to iterate")
-	return hasFurtherRange, nil
+	return result, nil
 }
 
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
 // data actually gets copied from original table.
-func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+//
+// The session variables (time_zone, sql_mode) and the chunk INSERT are sent as a single
+// multi-statement, autocommit round-trip on one pinned connection. The applier pool sets
+// multiStatements + interpolateParams + autocommit, so this avoids the extra
+// BEGIN / SET SESSION / COMMIT round-trips an explicit transaction would add to every
+// chunk — the dominant per-chunk overhead at small chunk sizes. `RowsAffected()` reports
+// the last statement's count (the INSERT), so the returned row count stays correct.
+func (apl *Applier) ApplyIterationInsertQuery(ctx context.Context, iterationRangeValues *base.IterationRangeValues) (chunkSize int64, rowsAffected int64, duration time.Duration, warnings []string, err error) {
 	startTime := time.Now()
-	chunkSize = atomic.LoadInt64(&apl.migrationContext.ChunkSize)
+	chunkSize = iterationRangeValues.Size
 
 	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
 		apl.migrationContext.DatabaseName,
@@ -1083,85 +1133,93 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 		apl.migrationContext.MappedSharedColumns.Names(),
 		apl.migrationContext.UniqueKey.Name,
 		&apl.migrationContext.UniqueKey.Columns,
-		apl.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
-		apl.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
-		apl.migrationContext.GetIteration() == 0,
+		iterationRangeValues.Min.AbstractValues(),
+		iterationRangeValues.Max.AbstractValues(),
+		iterationRangeValues.IncludeMinValues,
 		apl.migrationContext.IsTransactionalTable(),
 		// TODO: Don't hardcode this
 		strings.HasPrefix(apl.migrationContext.ApplierMySQLVersion, "8."),
 	)
 	if err != nil {
-		return chunkSize, rowsAffected, duration, err
+		return chunkSize, rowsAffected, duration, nil, err
 	}
 
-	sqlResult, err := func() (gosql.Result, error) {
-		tx, err := apl.db.Begin()
+	sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s', %s`,
+		apl.migrationContext.ApplierTimeZone, apl.generateSqlModeQuery())
+	combinedQuery := sessionQuery + "; " + query
+
+	sqlResult, sqlWarnings, err := func() (gosql.Result, []string, error) {
+		// Pin a single connection so the optional SHOW WARNINGS observes this INSERT's
+		// warnings (and not another pooled query's).
+		conn, err := apl.db.Conn(ctx)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		defer tx.Rollback()
+		defer conn.Close()
 
-		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, apl.migrationContext.ApplierTimeZone)
-		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, apl.generateSqlModeQuery())
-
-		if _, err := tx.Exec(sessionQuery); err != nil {
-			return nil, err
-		}
-		result, err := tx.Exec(query, explodedArgs...)
+		result, err := conn.ExecContext(ctx, combinedQuery, explodedArgs...)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
+		var collectedWarnings []string
 		if apl.migrationContext.PanicOnWarnings {
-			rows, err := tx.Query("SHOW WARNINGS")
+			collectedWarnings, err = apl.collectChunkInsertWarnings(ctx, conn)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			defer rows.Close()
-			if err = rows.Err(); err != nil {
-				return nil, err
-			}
-
-			// Compile regex once before loop to avoid performance penalty and handle errors properly
-			migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
-			if err != nil {
-				return nil, err
-			}
-
-			var sqlWarnings []string
-			for rows.Next() {
-				var level, message string
-				var code int
-				if err := rows.Scan(&level, &code, &message); err != nil {
-					apl.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
-					continue
-				}
-				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
-					continue
-				}
-				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
-			}
-			apl.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
 		}
-
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
-		return result, nil
+		return result, collectedWarnings, nil
 	}()
 
 	if err != nil {
-		return chunkSize, rowsAffected, duration, err
+		return chunkSize, rowsAffected, duration, nil, err
 	}
 	rowsAffected, _ = sqlResult.RowsAffected()
 	duration = time.Since(startTime)
+	warnings = sqlWarnings
 	apl.migrationContext.Log.Debugf(
 		"Issued INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
-		apl.migrationContext.MigrationIterationRangeMinValues,
-		apl.migrationContext.MigrationIterationRangeMaxValues,
+		iterationRangeValues.Min,
+		iterationRangeValues.Max,
 		apl.migrationContext.GetIteration(),
 		chunkSize)
-	return chunkSize, rowsAffected, duration, nil
+	return chunkSize, rowsAffected, duration, warnings, nil
+}
+
+// collectChunkInsertWarnings runs SHOW WARNINGS on the given (pinned) connection right
+// after a chunk INSERT and returns the warnings, skipping the benign duplicate-key
+// warnings that INSERT IGNORE produces on the migration unique key.
+func (apl *Applier) collectChunkInsertWarnings(ctx context.Context, conn *gosql.Conn) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, "SHOW WARNINGS")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Compile regex once before loop to avoid performance penalty and handle errors properly
+	migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
+	if err != nil {
+		return nil, err
+	}
+
+	var collectedWarnings []string
+	for rows.Next() {
+		var level, message string
+		var code int
+		if err := rows.Scan(&level, &code, &message); err != nil {
+			apl.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+			continue
+		}
+		if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
+			continue
+		}
+		collectedWarnings = append(collectedWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return collectedWarnings, nil
 }
 
 // LockOriginalTable places a write lock on the original table
