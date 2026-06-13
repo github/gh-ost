@@ -124,9 +124,14 @@ func (apl *Applier) InitDBConnections() (err error) {
 		return err
 	}
 	concurrentSize := atomic.LoadInt64(&apl.migrationContext.ChunkConcurrentSize)
-	if concurrentSize > int64(mysql.MaxDBPoolConnections) {
-		apl.db.SetMaxOpenConns(int(concurrentSize) + mysql.MaxDBPoolConnections)
-		apl.db.SetMaxIdleConns(int(concurrentSize) + mysql.MaxDBPoolConnections)
+	if concurrentSize > 1 {
+		// Size the pool for concurrentSize parallel chunk-INSERTs plus the dedicated
+		// range-producer connection, with MaxDBPoolConnections of additional headroom
+		// for other applier queries. Without this, small concurrency values (2, 3)
+		// would contend with the producer for a connection and serialize.
+		poolSize := int(concurrentSize) + 1 + mysql.MaxDBPoolConnections
+		apl.db.SetMaxOpenConns(poolSize)
+		apl.db.SetMaxIdleConns(poolSize)
 	}
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
 	if apl.singletonDB, _, err = mysql.GetDB(apl.migrationContext.Uuid, singletonApplierUri); err != nil {
@@ -1109,7 +1114,14 @@ func (apl *Applier) CalculateNextIterationRangeEndValues(advanceCursor bool) (va
 
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
 // data actually gets copied from original table.
-func (apl *Applier) ApplyIterationInsertQuery(iterationRangeValues *base.IterationRangeValues) (chunkSize int64, rowsAffected int64, duration time.Duration, warnings []string, err error) {
+//
+// The session variables (time_zone, sql_mode) and the chunk INSERT are sent as a single
+// multi-statement, autocommit round-trip on one pinned connection. The applier pool sets
+// multiStatements + interpolateParams + autocommit, so this avoids the extra
+// BEGIN / SET SESSION / COMMIT round-trips an explicit transaction would add to every
+// chunk — the dominant per-chunk overhead at small chunk sizes. `RowsAffected()` reports
+// the last statement's count (the INSERT), so the returned row count stays correct.
+func (apl *Applier) ApplyIterationInsertQuery(ctx context.Context, iterationRangeValues *base.IterationRangeValues) (chunkSize int64, rowsAffected int64, duration time.Duration, warnings []string, err error) {
 	startTime := time.Now()
 	chunkSize = iterationRangeValues.Size
 
@@ -1132,60 +1144,30 @@ func (apl *Applier) ApplyIterationInsertQuery(iterationRangeValues *base.Iterati
 		return chunkSize, rowsAffected, duration, nil, err
 	}
 
+	sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s', %s`,
+		apl.migrationContext.ApplierTimeZone, apl.generateSqlModeQuery())
+	combinedQuery := sessionQuery + "; " + query
+
 	sqlResult, sqlWarnings, err := func() (gosql.Result, []string, error) {
-		tx, err := apl.db.Begin()
+		// Pin a single connection so the optional SHOW WARNINGS observes this INSERT's
+		// warnings (and not another pooled query's).
+		conn, err := apl.db.Conn(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		defer tx.Rollback()
+		defer conn.Close()
 
-		sessionQuery := fmt.Sprintf(`SET SESSION time_zone = '%s'`, apl.migrationContext.ApplierTimeZone)
-		sessionQuery = fmt.Sprintf("%s, %s", sessionQuery, apl.generateSqlModeQuery())
-
-		if _, err := tx.Exec(sessionQuery); err != nil {
-			return nil, nil, err
-		}
-		result, err := tx.Exec(query, explodedArgs...)
+		result, err := conn.ExecContext(ctx, combinedQuery, explodedArgs...)
 		if err != nil {
 			return nil, nil, err
 		}
 
 		var collectedWarnings []string
 		if apl.migrationContext.PanicOnWarnings {
-			rows, err := tx.Query("SHOW WARNINGS")
+			collectedWarnings, err = apl.collectChunkInsertWarnings(ctx, conn)
 			if err != nil {
 				return nil, nil, err
 			}
-			defer rows.Close()
-			if err = rows.Err(); err != nil {
-				return nil, nil, err
-			}
-
-			// Compile regex once before loop to avoid performance penalty and handle errors properly
-			migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
-			if err != nil {
-				return nil, nil, err
-			}
-
-			for rows.Next() {
-				var level, message string
-				var code int
-				if err := rows.Scan(&level, &code, &message); err != nil {
-					apl.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
-					continue
-				}
-				if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
-					continue
-				}
-				collectedWarnings = append(collectedWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
-			}
-			if err := rows.Err(); err != nil {
-				return nil, nil, err
-			}
-		}
-
-		if err := tx.Commit(); err != nil {
-			return nil, nil, err
 		}
 		return result, collectedWarnings, nil
 	}()
@@ -1203,6 +1185,41 @@ func (apl *Applier) ApplyIterationInsertQuery(iterationRangeValues *base.Iterati
 		apl.migrationContext.GetIteration(),
 		chunkSize)
 	return chunkSize, rowsAffected, duration, warnings, nil
+}
+
+// collectChunkInsertWarnings runs SHOW WARNINGS on the given (pinned) connection right
+// after a chunk INSERT and returns the warnings, skipping the benign duplicate-key
+// warnings that INSERT IGNORE produces on the migration unique key.
+func (apl *Applier) collectChunkInsertWarnings(ctx context.Context, conn *gosql.Conn) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, "SHOW WARNINGS")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Compile regex once before loop to avoid performance penalty and handle errors properly
+	migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
+	if err != nil {
+		return nil, err
+	}
+
+	var collectedWarnings []string
+	for rows.Next() {
+		var level, message string
+		var code int
+		if err := rows.Scan(&level, &code, &message); err != nil {
+			apl.migrationContext.Log.Warningf("Failed to read SHOW WARNINGS row")
+			continue
+		}
+		if strings.Contains(message, "Duplicate entry") && migrationKeyRegex.MatchString(message) {
+			continue
+		}
+		collectedWarnings = append(collectedWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return collectedWarnings, nil
 }
 
 // LockOriginalTable places a write lock on the original table

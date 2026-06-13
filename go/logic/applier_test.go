@@ -688,7 +688,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySuc
 	suite.Require().NoError(err)
 	suite.Require().True(iterationRange.HasFurtherRange)
 
-	_, rowsAffected, _, sqlWarnings, err := applier.ApplyIterationInsertQuery(iterationRange)
+	_, rowsAffected, _, sqlWarnings, err := applier.ApplyIterationInsertQuery(ctx, iterationRange)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(0), rowsAffected)
 
@@ -767,7 +767,7 @@ func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQueryFai
 	suite.Require().NoError(err)
 	suite.Require().True(iterationRange.HasFurtherRange)
 
-	_, rowsAffected, _, sqlWarnings, err := applier.ApplyIterationInsertQuery(iterationRange)
+	_, rowsAffected, _, sqlWarnings, err := applier.ApplyIterationInsertQuery(ctx, iterationRange)
 	suite.Equal(int64(1), rowsAffected)
 	suite.Require().NoError(err)
 

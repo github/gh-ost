@@ -31,6 +31,12 @@ var (
 	checkpointTimeout                 = 2 * time.Second
 )
 
+// rowCopyQuantumDuration bounds how long the concurrent row-copy worker pool keeps
+// dispatching chunks before yielding control back to executeWriteFuncs (which then
+// applies any pending binlog events and re-checks throttling). It trades a small
+// increase in worst-case event-apply latency for far fewer per-batch barriers.
+const rowCopyQuantumDuration = 200 * time.Millisecond
+
 type ChangelogState string
 
 const (
@@ -1583,116 +1589,211 @@ func (mgtr *Migrator) iterateChunks() error {
 		return terminateRowIteration(nil)
 	}
 
+	concurrentSize := atomic.LoadInt64(&mgtr.migrationContext.ChunkConcurrentSize)
+	if concurrentSize < 1 {
+		concurrentSize = 1
+	}
+
+	if concurrentSize == 1 {
+		return mgtr.iterateChunksSingle(terminateRowIteration)
+	}
+	return mgtr.iterateChunksConcurrent(concurrentSize, terminateRowIteration)
+}
+
+// iterateChunksSingle is the single-threaded row-copy loop. It matches master
+// behavior exactly: the next-iteration range is (re)calculated inside the retry
+// loop so that hook-based chunk-size reduction takes effect on retry.
+func (mgtr *Migrator) iterateChunksSingle(terminateRowIteration func(error) error) error {
+	ctx := mgtr.migrationContext.GetContext()
 	var hasNoFurtherRangeFlag int64
-	// Iterate per chunk:
 	for {
 		if err := mgtr.checkAbort(); err != nil {
 			return terminateRowIteration(err)
 		}
 		if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
-			// Done
-			// There's another such check down the line
 			return nil
 		}
 		copyRowsFunc := func() error {
-			concurrentSize := atomic.LoadInt64(&mgtr.migrationContext.ChunkConcurrentSize)
-			if concurrentSize < 1 {
-				concurrentSize = 1
+			if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
+				return nil
+			}
+			// Min is fixed before retry loop; range calc + insert are retried together.
+			mgtr.migrationContext.SetNextIterationRangeMinValues()
+
+			applyCopyRowsFunc := func() error {
+				if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
+					return nil
+				}
+
+				iterationRangeValues, err := mgtr.applier.CalculateNextIterationRangeEndValues(false)
+				if err != nil {
+					return err
+				}
+				if !iterationRangeValues.HasFurtherRange {
+					atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
+					return nil
+				}
+				if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
+					return nil
+				}
+
+				_, rowsAffected, _, sqlWarnings, err := mgtr.applier.ApplyIterationInsertQuery(ctx, iterationRangeValues)
+				if err != nil {
+					return err
+				}
+				if err := mgtr.checkInsertWarnings(sqlWarnings); err != nil {
+					return err
+				}
+
+				atomic.AddInt64(&mgtr.migrationContext.TotalRowsCopied, rowsAffected)
+				atomic.AddInt64(&mgtr.migrationContext.Iteration, 1)
+
+				mgtr.recordLastIterationRange(iterationRangeValues)
+				return nil
+			}
+			if err := mgtr.retryBatchCopyWithHooks(applyCopyRowsFunc); err != nil { //nolint:contextcheck
+				return terminateRowIteration(err)
+			}
+			if atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
+				return terminateRowIteration(nil)
+			}
+			return nil
+		}
+		if err := base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.copyRowsQueue, copyRowsFunc); err != nil {
+			if abortErr := mgtr.checkAbort(); abortErr != nil {
+				return terminateRowIteration(abortErr)
+			}
+			return terminateRowIteration(err)
+		}
+	}
+}
+
+// iterateChunksConcurrent copies row chunks using up to `concurrentSize` parallel
+// INSERTs per batch.
+//
+// The dominant cost that previously capped concurrency was not the INSERTs but
+// the per-chunk boundary calculation (CalculateNextIterationRangeEndValues): it
+// runs a serialized, indexed scan of the source under a global mutex, and in the
+// original implementation a batch's boundary calculations could not overlap with
+// any INSERT — only the INSERTs ran in parallel, so the serial boundary scans
+// (proportional to the whole table) showed up as pure overhead between batches.
+//
+// To remove that stall we run a single, dedicated producer goroutine that streams
+// pre-calculated ranges into a buffered channel. The producer is the sole caller
+// of CalculateNextIterationRangeEndValues, so cursor advancement stays correct and
+// serialized, but it now runs *concurrently with* the INSERTs of earlier batches:
+// by the time a batch is dequeued its ranges are already computed, so the worker
+// goroutines never wait on boundary calculation.
+func (mgtr *Migrator) iterateChunksConcurrent(concurrentSize int64, terminateRowIteration func(error) error) error {
+	ctx := mgtr.migrationContext.GetContext()
+
+	// Buffer enough ranges so the producer can run a batch (or two) ahead of the
+	// consumers without blocking.
+	rangesChannel := make(chan *base.IterationRangeValues, 2*concurrentSize)
+	producerErrChannel := make(chan error, 1)
+
+	// Range producer: serialized boundary calculation, decoupled from the INSERTs.
+	go func() {
+		defer close(rangesChannel)
+		for {
+			if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
+				return
+			}
+			if err := mgtr.checkAbort(); err != nil {
+				return
+			}
+			iterationRangeValues, err := mgtr.applier.CalculateNextIterationRangeEndValues(true)
+			if err != nil {
+				producerErrChannel <- err
+				return
+			}
+			if !iterationRangeValues.HasFurtherRange {
+				return
+			}
+			if err := base.SendWithContext(ctx, rangesChannel, iterationRangeValues); err != nil {
+				return
+			}
+		}
+	}()
+
+	var hasNoFurtherRangeFlag int64
+	for {
+		if err := mgtr.checkAbort(); err != nil {
+			return terminateRowIteration(err)
+		}
+		if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
+			return nil
+		}
+		copyRowsFunc := func() error {
+			if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
+				return nil
 			}
 
-			g, gctx := errgroup.WithContext(mgtr.migrationContext.GetContext())
+			g, gctx := errgroup.WithContext(ctx)
 			g.SetLimit(int(concurrentSize))
 
-			for i := int64(0); i < concurrentSize; i++ {
+			// Continuously dispatch pre-calculated ranges to up to concurrentSize
+			// workers for one time quantum. g.Go blocks while concurrentSize inserts
+			// are in flight, so workers stay saturated and a slow chunk no longer
+			// stalls the others behind a per-batch barrier; the only barrier is
+			// g.Wait() at the quantum boundary. Bounding the quantum by time keeps the
+			// single executeWriteFuncs goroutine returning to apply binlog events.
+			quantum := time.NewTimer(rowCopyQuantumDuration)
+			defer quantum.Stop()
+
+			var lastDispatched *base.IterationRangeValues
+			dispatching := true
+			for dispatching {
+				var iterationRangeValues *base.IterationRangeValues
+				select {
+				case rv, ok := <-rangesChannel:
+					if !ok {
+						// Producer finished: table exhausted, or it hit an error.
+						select {
+						case err := <-producerErrChannel:
+							if err != nil {
+								_ = g.Wait()
+								return terminateRowIteration(err)
+							}
+						default:
+						}
+						atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
+						dispatching = false
+						continue
+					}
+					iterationRangeValues = rv
+				case <-quantum.C:
+					dispatching = false
+					continue
+				case <-gctx.Done():
+					// A worker failed (or the migration is aborting); stop dispatching
+					// and let g.Wait surface the underlying error.
+					dispatching = false
+					continue
+				}
+
+				lastDispatched = iterationRangeValues
+				rv := iterationRangeValues
 				g.Go(func() error {
 					if gctx.Err() != nil {
 						return gctx.Err()
 					}
-					if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
-						return nil
-					}
-
-					if concurrentSize == 1 {
-						// Single-threaded path: matches master behavior exactly.
-						// Min is fixed before retry loop; range calc + insert are retried together.
-						// This allows hook-based chunk size reduction to take effect on retry.
-						mgtr.migrationContext.SetNextIterationRangeMinValues()
-
-						applyCopyRowsFunc := func() error {
-							if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
-								return nil
-							}
-
-							iterationRangeValues, err := mgtr.applier.CalculateNextIterationRangeEndValues(false)
-							if err != nil {
-								return err
-							}
-							if !iterationRangeValues.HasFurtherRange {
-								atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
-								return nil
-							}
-							if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
-								return nil
-							}
-
-							_, rowsAffected, _, sqlWarnings, err := mgtr.applier.ApplyIterationInsertQuery(iterationRangeValues)
-							if err != nil {
-								return err
-							}
-
-							if mgtr.migrationContext.PanicOnWarnings && len(sqlWarnings) > 0 {
-								for _, warning := range sqlWarnings {
-									mgtr.migrationContext.Log.Infof("ApplyIterationInsertQuery has SQL warnings! %s", warning)
-								}
-								joinedWarnings := strings.Join(sqlWarnings, "; ")
-								return fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings)
-							}
-
-							atomic.AddInt64(&mgtr.migrationContext.TotalRowsCopied, rowsAffected)
-							atomic.AddInt64(&mgtr.migrationContext.Iteration, 1)
+					applyCopyRowsFunc := func() error {
+						if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
 							return nil
 						}
-						if err := mgtr.retryBatchCopyWithHooks(applyCopyRowsFunc); err != nil { //nolint:contextcheck
-							return err
-						}
-					} else {
-						// Concurrent path: range calculation is serialized under mutex upfront.
-						// Each goroutine gets its own range; retries apply to the INSERT only.
-						iterationRangeValues, err := mgtr.applier.CalculateNextIterationRangeEndValues(true)
+						_, rowsAffected, _, sqlWarnings, err := mgtr.applier.ApplyIterationInsertQuery(ctx, rv)
 						if err != nil {
 							return err
 						}
-						if !iterationRangeValues.HasFurtherRange {
-							atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
-							return nil
-						}
-
-						applyCopyRowsFunc := func() error {
-							if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
-								return nil
-							}
-							_, rowsAffected, _, sqlWarnings, err := mgtr.applier.ApplyIterationInsertQuery(iterationRangeValues)
-							if err != nil {
-								return err
-							}
-
-							if mgtr.migrationContext.PanicOnWarnings && len(sqlWarnings) > 0 {
-								for _, warning := range sqlWarnings {
-									mgtr.migrationContext.Log.Infof("ApplyIterationInsertQuery has SQL warnings! %s", warning)
-								}
-								joinedWarnings := strings.Join(sqlWarnings, "; ")
-								return fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings)
-							}
-
-							atomic.AddInt64(&mgtr.migrationContext.TotalRowsCopied, rowsAffected)
-							atomic.AddInt64(&mgtr.migrationContext.Iteration, 1)
-							return nil
-						}
-						if err := mgtr.retryBatchCopyWithHooks(applyCopyRowsFunc); err != nil { //nolint:contextcheck
+						if err := mgtr.checkInsertWarnings(sqlWarnings); err != nil {
 							return err
 						}
+						atomic.AddInt64(&mgtr.migrationContext.TotalRowsCopied, rowsAffected)
+						atomic.AddInt64(&mgtr.migrationContext.Iteration, 1)
+						return nil
 					}
-					return nil
+					return mgtr.retryBatchCopyWithHooks(applyCopyRowsFunc) //nolint:contextcheck
 				})
 			}
 
@@ -1700,31 +1801,52 @@ func (mgtr *Migrator) iterateChunks() error {
 				return terminateRowIteration(err)
 			}
 
-			// record last successfully copied range (before checking termination flag,
-			// so the final batch's range is captured for resume)
-			mgtr.applier.LastIterationRangeMutex.Lock()
-			if mgtr.migrationContext.MigrationIterationRangeMinValues != nil && mgtr.migrationContext.MigrationIterationRangeMaxValues != nil {
-				mgtr.applier.LastIterationRangeMinValues = mgtr.migrationContext.MigrationIterationRangeMinValues.Clone()
-				mgtr.applier.LastIterationRangeMaxValues = mgtr.migrationContext.MigrationIterationRangeMaxValues.Clone()
+			// Every range dispatched this quantum has completed. Ranges are pulled in
+			// contiguous, increasing order, so the last one dispatched is the highest
+			// fully-copied boundary — record it so a checkpoint resumes from copied
+			// data rather than from the producer's prefetched cursor.
+			if lastDispatched != nil {
+				mgtr.recordLastIterationRange(lastDispatched)
 			}
-			mgtr.applier.LastIterationRangeMutex.Unlock()
 
 			if atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
 				return terminateRowIteration(nil)
 			}
-
 			return nil
 		}
 		// Enqueue copy operation; to be executed by executeWriteFuncs()
 		// Use helper to prevent deadlock if executeWriteFuncs exits
-		if err := base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.copyRowsQueue, copyRowsFunc); err != nil {
-			// Context cancelled, check for abort and exit
+		if err := base.SendWithContext(ctx, mgtr.copyRowsQueue, copyRowsFunc); err != nil {
 			if abortErr := mgtr.checkAbort(); abortErr != nil {
 				return terminateRowIteration(abortErr)
 			}
 			return terminateRowIteration(err)
 		}
 	}
+}
+
+// checkInsertWarnings turns SQL warnings collected from a chunk INSERT into a fatal
+// error when --panic-on-warnings is set.
+func (mgtr *Migrator) checkInsertWarnings(sqlWarnings []string) error {
+	if !mgtr.migrationContext.PanicOnWarnings || len(sqlWarnings) == 0 {
+		return nil
+	}
+	for _, warning := range sqlWarnings {
+		mgtr.migrationContext.Log.Infof("ApplyIterationInsertQuery has SQL warnings! %s", warning)
+	}
+	return fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", strings.Join(sqlWarnings, "; "))
+}
+
+// recordLastIterationRange stores the most recently *completed* chunk range, used
+// by Checkpoint to resume from a fully-copied boundary.
+func (mgtr *Migrator) recordLastIterationRange(iterationRangeValues *base.IterationRangeValues) {
+	if iterationRangeValues == nil || iterationRangeValues.Min == nil || iterationRangeValues.Max == nil {
+		return
+	}
+	mgtr.applier.LastIterationRangeMutex.Lock()
+	mgtr.applier.LastIterationRangeMinValues = iterationRangeValues.Min.Clone()
+	mgtr.applier.LastIterationRangeMaxValues = iterationRangeValues.Max.Clone()
+	mgtr.applier.LastIterationRangeMutex.Unlock()
 }
 
 func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
