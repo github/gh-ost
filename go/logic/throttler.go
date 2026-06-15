@@ -209,6 +209,14 @@ func (thlr *Throttler) collectControlReplicasLag() {
 			return lag, err
 		}
 
+		if thlr.migrationContext.IsMoveTablesMode() {
+			dbVersion, err := mysql.GetDBVersion(thlr.migrationContext.Uuid, dbUri)
+			if err != nil {
+				return lag, err
+			}
+			return mysql.GetReplicationLagFromSlaveStatus(dbVersion, db)
+		}
+
 		if err := db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
 			return lag, err
 		}
