@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/mysql"
 )
 
 func newTestThrottler() *Throttler {
@@ -84,6 +85,40 @@ func TestThrottleReturnsOnContextCancellation(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("throttle() did not return after context cancellation")
 	}
+}
+
+func TestControlReplicaConnectionConfig(t *testing.T) {
+	replicaKey := mysql.InstanceKey{Hostname: "replica-host", Port: 3307}
+
+	t.Run("uses inspector connection config when not in move-tables mode", func(t *testing.T) {
+		thlr := newTestThrottler()
+		thlr.migrationContext.InspectorConnectionConfig.Key = mysql.InstanceKey{Hostname: "source-host", Port: 3306}
+		thlr.migrationContext.InspectorConnectionConfig.User = "source-user"
+		thlr.migrationContext.InspectorConnectionConfig.Password = "source-pass"
+
+		connectionConfig := thlr.controlReplicaConnectionConfig(replicaKey)
+
+		assert.False(t, thlr.migrationContext.IsMoveTablesMode())
+		assert.Equal(t, replicaKey, connectionConfig.Key)
+		assert.Equal(t, "source-user", connectionConfig.User)
+		assert.Equal(t, "source-pass", connectionConfig.Password)
+	})
+
+	t.Run("uses move-tables connection config when in move-tables mode", func(t *testing.T) {
+		thlr := newTestThrottler()
+		thlr.migrationContext.MoveTables.TableNames = []string{"my_table"}
+		thlr.migrationContext.MoveTables.ConnectionConfig = mysql.NewConnectionConfig()
+		thlr.migrationContext.MoveTables.ConnectionConfig.Key = mysql.InstanceKey{Hostname: "target-host", Port: 3306}
+		thlr.migrationContext.MoveTables.ConnectionConfig.User = "target-user"
+		thlr.migrationContext.MoveTables.ConnectionConfig.Password = "target-pass"
+
+		connectionConfig := thlr.controlReplicaConnectionConfig(replicaKey)
+
+		assert.True(t, thlr.migrationContext.IsMoveTablesMode())
+		assert.Equal(t, replicaKey, connectionConfig.Key)
+		assert.Equal(t, "target-user", connectionConfig.User)
+		assert.Equal(t, "target-pass", connectionConfig.Password)
+	})
 }
 
 func TestThrottleCallsOnThrottledCallback(t *testing.T) {

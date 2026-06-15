@@ -47,6 +47,8 @@ func (rlg *ReplicationLagResult) HasLag() bool {
 // knownDBs is a DB cache by uri
 var knownDBs map[string]*gosql.DB = make(map[string]*gosql.DB)
 var knownDBsMutex = &sync.Mutex{}
+var knownDBsVersions map[string]string = make(map[string]string)
+var knownDBsVersionsMutex = &sync.Mutex{}
 
 func GetDB(migrationUuid string, mysql_uri string) (db *gosql.DB, exists bool, err error) {
 	cacheKey := migrationUuid + ":" + mysql_uri
@@ -64,6 +66,30 @@ func GetDB(migrationUuid string, mysql_uri string) (db *gosql.DB, exists bool, e
 		knownDBs[cacheKey] = db
 	}
 	return db, exists, nil
+}
+
+// GetDBVersion returns the MySQL version for a given mysql_uri, and caches it for future calls.
+// Uses GetDB to get a connection to the database.
+func GetDBVersion(migrationUuid string, mysql_uri string) (dbVersion string, err error) {
+	cacheKey := migrationUuid + ":" + mysql_uri
+
+	knownDBsVersionsMutex.Lock()
+	defer knownDBsVersionsMutex.Unlock()
+
+	if dbVersion, exists := knownDBsVersions[cacheKey]; exists {
+		return dbVersion, nil
+	}
+
+	db, _, err := GetDB(migrationUuid, mysql_uri)
+	if err != nil {
+		return "", err
+	}
+	var version string
+	if err := db.QueryRow(`select @@global.version`).Scan(&version); err != nil {
+		return "", err
+	}
+	knownDBsVersions[cacheKey] = version
+	return version, nil
 }
 
 // GetReplicationLagFromSlaveStatus returns replication lag for a given db; via SHOW SLAVE STATUS
