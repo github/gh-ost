@@ -2072,6 +2072,62 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesNoRows() {
 	suite.Require().Equal(0, count)
 }
 
+func (suite *ApplierTestSuite) TestShowStatusVariable() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	suite.Require().NoError(applier.InitDBConnections())
+
+	// Uptime is always present in `SHOW GLOBAL STATUS` and is non-negative.
+	result, err := applier.ShowStatusVariable("Uptime")
+	suite.Require().NoError(err)
+	suite.Require().GreaterOrEqual(result, int64(0))
+}
+
+func (suite *ApplierTestSuite) TestShowStatusVariableMoveTablesMode() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	suite.Require().NoError(applier.InitDBConnections())
+
+	// In move-tables mode the status variable must be read from the
+	// move-tables target DB connection rather than the applier DB.
+	suite.Require().True(migrationContext.IsMoveTablesMode())
+	suite.Require().NotNil(applier.moveTablesTargetDB)
+
+	result, err := applier.ShowStatusVariable("Uptime")
+	suite.Require().NoError(err)
+	suite.Require().GreaterOrEqual(result, int64(0))
+}
+
 func TestApplier(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping applier test suite in short mode")

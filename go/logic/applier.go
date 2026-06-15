@@ -1929,8 +1929,12 @@ func (apl *Applier) AtomicCutoverRename(sessionIdChan chan int64, tablesRenamed 
 }
 
 func (apl *Applier) ShowStatusVariable(variableName string) (result int64, err error) {
+	targetDB := apl.db
+	if apl.migrationContext.IsMoveTablesMode() {
+		targetDB = apl.moveTablesTargetDB
+	}
 	query := fmt.Sprintf(`show /* gh-ost */ global status like '%s'`, variableName)
-	if err := apl.db.QueryRow(query).Scan(&variableName, &result); err != nil {
+	if err := targetDB.QueryRow(query).Scan(&variableName, &result); err != nil {
 		return 0, err
 	}
 	return result, nil
