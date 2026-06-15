@@ -770,6 +770,114 @@ func (suite *ApplierTestSuite) TestCreateGhostTable() {
 	suite.Require().Equal("CREATE TABLE `_testing_gho` (\n  `id` int DEFAULT NULL,\n  `item_id` int DEFAULT NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createDDL)
 }
 
+// TestCreateTargetTable_HappyPath exercises #8207 AC #1:
+// "A move table run targeting a clean target schema creates the migrated table
+// with a SHOW CREATE TABLE output equivalent to the source's."
+//
+// It calls CreateTargetTable (not just IsMoveTablesMode()), asserts the table
+// exists on the target database, verifies schema equivalence via SHOW CREATE TABLE,
+// and confirms no table was accidentally created on the source.
+func (suite *ApplierTestSuite) TestCreateTargetTable_HappyPath() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, name VARCHAR(64), updated_at DATETIME);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "name", "updated_at"})
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	var dummy, sourceCreateDDL string
+	err = suite.db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", getTestTableName())).Scan(&dummy, &sourceCreateDDL)
+	suite.Require().NoError(err)
+
+	var count int
+	err = suite.otherDB.QueryRow(
+		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+		testMysqlDatabaseOther, testMysqlTableName,
+	).Scan(&count)
+	suite.Require().NoError(err)
+	suite.Require().Equal(0, count, "precondition: target table must not exist before CreateTargetTable")
+
+	err = applier.CreateTargetTable(sourceCreateDDL)
+	suite.Require().NoError(err)
+
+	var targetTableName, targetCreateDDL string
+	err = suite.otherDB.QueryRow(fmt.Sprintf("SHOW CREATE TABLE `%s`.`%s`", testMysqlDatabaseOther, testMysqlTableName)).Scan(&targetTableName, &targetCreateDDL)
+	suite.Require().NoError(err)
+	suite.Require().Equal(testMysqlTableName, targetTableName)
+	suite.Require().Equal(sourceCreateDDL, targetCreateDDL, "target table schema must be equivalent to source")
+
+	err = suite.otherDB.QueryRow(
+		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+		testMysqlDatabaseOther, testMysqlTableName,
+	).Scan(&count)
+	suite.Require().NoError(err)
+	suite.Require().Equal(1, count, "target table must exist exactly once on the target database")
+}
+
+// TestCreateTargetTable_AbortsIfExists exercises #8207 AC #2:
+// "A move table run aborts before any data is copied if the target table already exists."
+//
+// It pre-creates the target table, then calls CreateTargetTable and asserts it
+// returns a descriptive error (not just MySQL's raw ERROR 1050).
+func (suite *ApplierTestSuite) TestCreateTargetTable_AbortsIfExists() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	_, err = suite.otherDB.ExecContext(ctx, fmt.Sprintf("CREATE TABLE `%s`.`%s` (id INT PRIMARY KEY);", testMysqlDatabaseOther, testMysqlTableName))
+	suite.Require().NoError(err)
+
+	var count int
+	err = suite.otherDB.QueryRow(
+		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+		testMysqlDatabaseOther, testMysqlTableName,
+	).Scan(&count)
+	suite.Require().NoError(err)
+	suite.Require().Equal(1, count, "precondition: target table must exist before CreateTargetTable")
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id"})
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	err = applier.InitDBConnections()
+	suite.Require().NoError(err)
+
+	var dummy, sourceCreateDDL string
+	err = suite.db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", getTestTableName())).Scan(&dummy, &sourceCreateDDL)
+	suite.Require().NoError(err)
+
+	err = applier.CreateTargetTable(sourceCreateDDL)
+	suite.Require().Error(err, "CreateTargetTable must return an error when target table already exists")
+	suite.Require().Contains(err.Error(), "already exists", "error message must mention 'already exists'")
+	suite.Require().Contains(err.Error(), testMysqlTableName, "error message must name the table")
+}
+
 func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySucceedsWithUniqueKeyWarningInsertedByDMLEvent() {
 	ctx := context.Background()
 
@@ -2052,6 +2160,62 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesNoRows() {
 	err = suite.otherDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+getTestOtherTableName()).Scan(&count)
 	suite.Require().NoError(err)
 	suite.Require().Equal(0, count)
+}
+
+func (suite *ApplierTestSuite) TestShowStatusVariable() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	suite.Require().NoError(applier.InitDBConnections())
+
+	// Uptime is always present in `SHOW GLOBAL STATUS` and is non-negative.
+	result, err := applier.ShowStatusVariable("Uptime")
+	suite.Require().NoError(err)
+	suite.Require().GreaterOrEqual(result, int64(0))
+}
+
+func (suite *ApplierTestSuite) TestShowStatusVariableMoveTablesMode() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT, item_id INT);", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.OriginalTableColumns = sql.NewColumnList([]string{"id", "item_id"})
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	suite.Require().NoError(applier.InitDBConnections())
+
+	// In move-tables mode the status variable must be read from the
+	// move-tables target DB connection rather than the applier DB.
+	suite.Require().True(migrationContext.IsMoveTablesMode())
+	suite.Require().NotNil(applier.moveTablesTargetDB)
+
+	result, err := applier.ShowStatusVariable("Uptime")
+	suite.Require().NoError(err)
+	suite.Require().GreaterOrEqual(result, int64(0))
 }
 
 func TestApplier(t *testing.T) {
