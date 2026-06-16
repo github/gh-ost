@@ -233,6 +233,7 @@ func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []s
 	env = append(env, fmt.Sprintf("GH_OST_MIGRATED_HOST=%s", he.migrationContext.GetApplierHostname()))
 	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_HOST=%s", he.migrationContext.GetInspectorHostname()))
 	env = append(env, fmt.Sprintf("GH_OST_EXECUTING_HOST=%s", he.migrationContext.Hostname))
+	env = append(env, fmt.Sprintf("GH_OST_TARGET_HOST=%s", he.migrationContext.GetTargetHostname()))
 	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_LAG=%f", he.migrationContext.GetCurrentLagDuration().Seconds()))
 	env = append(env, fmt.Sprintf("GH_OST_HEARTBEAT_LAG=%f", he.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds()))
 	env = append(env, fmt.Sprintf("GH_OST_PROGRESS=%f", he.migrationContext.GetProgressPct()))
@@ -242,6 +243,9 @@ func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []s
 	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT_TOKEN=%s", he.migrationContext.HooksHintToken))
 	env = append(env, fmt.Sprintf("GH_OST_DRY_RUN=%t", he.migrationContext.Noop))
 	env = append(env, fmt.Sprintf("GH_OST_REVERT=%t", he.migrationContext.Revert))
+	env = append(env, fmt.Sprintf("GH_OST_MOVE_TABLES=%t", he.migrationContext.IsMoveTablesMode()))
+	env = append(env, fmt.Sprintf("GH_OST_TARGET_DATABASE_NAME=%s", he.migrationContext.GetTargetDatabaseName()))
+	env = append(env, fmt.Sprintf("GH_OST_TARGET_TABLE_NAME=%s", he.migrationContext.GetTargetTableName()))
 
 	env = append(env, extraVariables...)
 	return env
@@ -320,8 +324,11 @@ func (he *HooksExecutor) OnInteractiveCommand(command string) error {
 }
 
 func (he *HooksExecutor) OnSuccess(instantDDL bool) error {
-	v := fmt.Sprintf("GH_OST_INSTANT_DDL=%t", instantDDL)
-	return he.executeHooks(onSuccess, v)
+	v := []string{fmt.Sprintf("GH_OST_INSTANT_DDL=%t", instantDDL)}
+	if he.migrationContext.IsMoveTablesMode() && he.migrationContext.MoveTables.DrainGTID != nil {
+		v = append(v, fmt.Sprintf("GH_OST_DRAIN_GTID=%s", he.migrationContext.MoveTables.DrainGTID.String()))
+	}
+	return he.executeHooks(onSuccess, v...)
 }
 
 func (he *HooksExecutor) OnFailure() error {
