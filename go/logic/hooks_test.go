@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/mysql"
 )
 
 type recordingHooks struct {
@@ -242,9 +243,130 @@ func TestHooksExecutorExecuteHooks(t *testing.T) {
 				require.Equal(t, migrationContext.OriginalTableName, split[1])
 			case "GH_OST_INSTANT_DDL":
 				require.Equal(t, "false", split[1])
+			case "GH_OST_MOVE_TABLES":
+				require.Equal(t, "false", split[1])
+			case "GH_OST_TARGET_DATABASE_NAME":
+				require.Equal(t, migrationContext.DatabaseName, split[1])
+			case "GH_OST_TARGET_TABLE_NAME":
+				require.Equal(t, fmt.Sprintf("_%s_gho", migrationContext.OriginalTableName), split[1])
+			case "GH_OST_TARGET_HOST":
+				require.Equal(t, migrationContext.GetApplierHostname(), split[1])
 			case "TEST":
 				require.Equal(t, t.Name(), split[1])
 			}
 		}
+	})
+}
+
+func TestHooksExecutorMoveTablesEnvironmentVariables(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrationContext.DatabaseName = "source_db"
+	migrationContext.OriginalTableName = "tablename"
+	migrationContext.MoveTables.TableNames = []string{"tablename"}
+	migrationContext.MoveTables.TargetDatabase = "target_db"
+	migrationContext.MoveTables.ConnectionConfig = mysql.NewConnectionConfig()
+	migrationContext.MoveTables.ConnectionConfig.Key.Hostname = "target.example.com"
+	migrationContext.MoveTables.ConnectionConfig.ImpliedKey = &migrationContext.MoveTables.ConnectionConfig.Key
+
+	hooksExecutor := NewHooksExecutor(migrationContext)
+
+	hooksPath, err := os.MkdirTemp("", "TestHooksExecutorMoveTablesEnvironmentVariables")
+	require.NoError(t, err)
+	defer os.RemoveAll(hooksPath)
+	migrationContext.HooksPath = hooksPath
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(hooksPath, "success-hook"),
+		[]byte("#!/bin/sh\nenv"),
+		0o777,
+	))
+
+	var buf bytes.Buffer
+	hooksExecutor.writer = &buf
+	require.Nil(t, hooksExecutor.executeHooks("success-hook"))
+
+	scanner := bufio.NewScanner(&buf)
+	for scanner.Scan() {
+		split := strings.SplitN(scanner.Text(), "=", 2)
+		switch split[0] {
+		case "GH_OST_MOVE_TABLES":
+			require.Equal(t, "true", split[1])
+		case "GH_OST_TARGET_DATABASE_NAME":
+			require.Equal(t, "target_db", split[1])
+		case "GH_OST_TARGET_TABLE_NAME":
+			require.Equal(t, "tablename", split[1])
+		case "GH_OST_TARGET_HOST":
+			require.Equal(t, "target.example.com", split[1])
+		}
+	}
+}
+
+func TestHooksExecutorOnSuccessEnvironmentVariables(t *testing.T) {
+	writeOnSuccessHook := func(t *testing.T, hooksPath string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(
+			filepath.Join(hooksPath, onSuccess),
+			[]byte("#!/bin/sh\nenv"),
+			0o777,
+		))
+	}
+
+	envFromBuffer := func(buf *bytes.Buffer) map[string]string {
+		envMap := map[string]string{}
+		scanner := bufio.NewScanner(buf)
+		for scanner.Scan() {
+			split := strings.SplitN(scanner.Text(), "=", 2)
+			if len(split) == 2 {
+				envMap[split[0]] = split[1]
+			}
+		}
+		return envMap
+	}
+
+	t.Run("move-tables-includes-drain-gtid", func(t *testing.T) {
+		migrationContext := base.NewMigrationContext()
+		migrationContext.DatabaseName = "source_db"
+		migrationContext.OriginalTableName = "tablename"
+		migrationContext.MoveTables.TableNames = []string{"tablename"}
+		migrationContext.MoveTables.DrainGTID = &mysql.FileBinlogCoordinates{LogFile: "mysql-bin.000001", LogPos: 12345}
+
+		hooksExecutor := NewHooksExecutor(migrationContext)
+
+		hooksPath, err := os.MkdirTemp("", "TestHooksExecutorOnSuccessEnvironmentVariables-move-tables")
+		require.NoError(t, err)
+		defer os.RemoveAll(hooksPath)
+		migrationContext.HooksPath = hooksPath
+		writeOnSuccessHook(t, hooksPath)
+
+		var buf bytes.Buffer
+		hooksExecutor.writer = &buf
+		require.NoError(t, hooksExecutor.OnSuccess(true))
+
+		envMap := envFromBuffer(&buf)
+		require.Equal(t, "true", envMap["GH_OST_INSTANT_DDL"])
+		require.Equal(t, migrationContext.MoveTables.DrainGTID.String(), envMap["GH_OST_DRAIN_GTID"])
+	})
+
+	t.Run("non-move-tables-omits-drain-gtid", func(t *testing.T) {
+		migrationContext := base.NewMigrationContext()
+		migrationContext.DatabaseName = "source_db"
+		migrationContext.OriginalTableName = "tablename"
+
+		hooksExecutor := NewHooksExecutor(migrationContext)
+
+		hooksPath, err := os.MkdirTemp("", "TestHooksExecutorOnSuccessEnvironmentVariables-standard")
+		require.NoError(t, err)
+		defer os.RemoveAll(hooksPath)
+		migrationContext.HooksPath = hooksPath
+		writeOnSuccessHook(t, hooksPath)
+
+		var buf bytes.Buffer
+		hooksExecutor.writer = &buf
+		require.NoError(t, hooksExecutor.OnSuccess(false))
+
+		envMap := envFromBuffer(&buf)
+		require.Equal(t, "false", envMap["GH_OST_INSTANT_DDL"])
+		_, exists := envMap["GH_OST_DRAIN_GTID"]
+		require.False(t, exists)
 	})
 }
