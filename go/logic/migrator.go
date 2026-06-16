@@ -1082,6 +1082,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// OnSuccess call that used to live in MoveTables() (after finalCleanup) has
 	// been removed so the hook fires in the order coop_cutover.md §3.2 step 6
 	// requires (T5 between T4 and T6, BEFORE finalCleanup).
+	mgtr.migrationContext.MoveTables.DrainGTID = drainGTID
 	if err := mgtr.hooksExecutor.OnSuccess(false); err != nil {
 		return fmt.Errorf("on-success hook failed: %w", err)
 	}
