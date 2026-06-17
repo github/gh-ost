@@ -823,11 +823,11 @@ func (mgtr *Migrator) hydrateMoveTablesStateFromTarget() error {
 	return nil
 }
 
-func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogCoordinates, isCutover bool) (*Checkpoint, error) {
+func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogCoordinates, isCutover bool) error {
 	mgtr.applier.CurrentCoordinatesMutex.Lock()
 	if mgtr.applier.CurrentCoordinates == nil || mgtr.applier.CurrentCoordinates.IsEmpty() {
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-		return nil, errors.New("current coordinates are empty, cannot checkpoint move-tables cutover")
+		return errors.New("current coordinates are empty, cannot checkpoint move-tables cutover")
 	}
 	safeCoords := mgtr.applier.CurrentCoordinates.Clone()
 	mgtr.applier.CurrentCoordinatesMutex.Unlock()
@@ -853,7 +853,7 @@ func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogC
 	mgtr.applier.LastIterationRangeMutex.Unlock()
 	id, err := mgtr.applier.WriteCheckpoint(chk)
 	chk.Id = id
-	return chk, err
+	return err
 }
 
 // moveTablesDrainCoordinateReached returns true when current is at-or-ahead of
@@ -958,7 +958,7 @@ func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) err
 		return err
 	}
 	if mgtr.migrationContext.Checkpoint {
-		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(chk.MoveTablesCutOverDrainGTID, true); err != nil {
+		if err := mgtr.persistMoveTablesCutOverCheckpoint(chk.MoveTablesCutOverDrainGTID, true); err != nil {
 			mgtr.migrationContext.Log.Warningf("failed to checkpoint drained move-tables cutover: %+v", err)
 		}
 	}
@@ -1279,7 +1279,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	}
 	mgtr.migrationContext.Log.Infof("T2: captured drain GTID: %s", drainGTID.DisplayString())
 	if mgtr.migrationContext.Checkpoint {
-		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID, false); err != nil {
+		if err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID, false); err != nil {
 			return fmt.Errorf("failed to persist move-tables cutover checkpoint: %w", err)
 		}
 	}
@@ -1288,7 +1288,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		return err
 	}
 	if mgtr.migrationContext.Checkpoint {
-		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID, true); err != nil {
+		if err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID, true); err != nil {
 			mgtr.migrationContext.Log.Warningf("failed to checkpoint drained move-tables cutover: %+v", err)
 		}
 	}
