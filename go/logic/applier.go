@@ -197,11 +197,11 @@ func buildMigrationLockName(db, table string) string {
 // preventing two gh-ost processes from migrating the same table concurrently
 // on the same MySQL server.
 func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
-	lockName := buildMigrationLockName(apl.migrationContext.DatabaseName, apl.originalTableName())
+	lockName := buildMigrationLockName(apl.migrationContext.GetTargetDatabaseName(), apl.originalTableName())
 
 	// Use a dedicated *sql.DB so the pinned connection does not consume a
 	// slot in apl.db's small pool (mysql.MaxDBPoolConnections).
-	lockURI := apl.connectionConfig.GetDBUri(apl.migrationContext.DatabaseName)
+	lockURI := apl.connectionConfig.GetDBUri(apl.migrationContext.GetTargetDatabaseName())
 	lockDB, err := gosql.Open("mysql", lockURI)
 	if err != nil {
 		return fmt.Errorf("failed to open migration lock DB: %w", err)
