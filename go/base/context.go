@@ -983,8 +983,14 @@ func (mctx *MigrationContext) ApplyCredentials() {
 			Hostname: mctx.MoveTables.TargetHost,
 			Port:     mctx.MoveTables.TargetPort,
 		})
-		mctx.MoveTables.ConnectionConfig.User = mctx.MoveTables.TargetUser
-		mctx.MoveTables.ConnectionConfig.Password = mctx.MoveTables.TargetPass
+		if mctx.MoveTables.TargetUser != "" {
+			// Override
+			mctx.MoveTables.ConnectionConfig.User = mctx.MoveTables.TargetUser
+		}
+		if mctx.MoveTables.TargetPass != "" {
+			// Override
+			mctx.MoveTables.ConnectionConfig.Password = mctx.MoveTables.TargetPass
+		}
 	}
 }
 
