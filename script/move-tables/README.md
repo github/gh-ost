@@ -24,7 +24,7 @@ script/build --cli
 
 Run gh-ost to move tables:
 ```bash
-./script/build --cli; ./bin/gh-ost --move-tables=gh_ost_test --host=localhost --port=3307 --user root --password opensesame --database=gh_ost_test_db --target-host=localhost --target-port=3309 --target-user root --target-password opensesame --target-database=gh_ost_test_db --postpone-cut-over-flag-file=/tmp/ghost-move-tables.postpone.flag --execute --verbose
+./script/build --cli; ./bin/gh-ost --move-tables=gh_ost_test --host=localhost --port=3307 --user root --password opensesame --database=gh_ost_test_db --target-host=localhost --target-port=3309 --target-user root --target-password opensesame --target-database=gh_ost_test_db --postpone-cut-over-flag-file=/tmp/ghost-move-tables.postpone.flag --execute --verbose --checkpoint --checkpoint-seconds 10
 ```
 
 Note: replicas in this local topology are configured with `read_only=ON` and

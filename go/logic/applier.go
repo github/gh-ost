@@ -1098,7 +1098,7 @@ func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 }
 
 func (apl *Applier) ReadMoveTablesCutOverCheckpoint() (*Checkpoint, error) {
-	row := apl.checkpointDB().QueryRow(fmt.Sprintf(`select /* gh-ost */ gh_ost_chk_id, gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration, gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover, gh_ost_move_tables_cutover_started, gh_ost_move_tables_drain_gtid from %s.%s order by gh_ost_chk_id desc limit 1`, sql.EscapeName(apl.checkpointDatabaseName()), sql.EscapeName(apl.migrationContext.GetCheckpointTableName())))
+	row := apl.checkpointDB().QueryRow(fmt.Sprintf(`select /* gh-ost */ gh_ost_chk_id, gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration, gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover, gh_ost_move_tables_cutover_started, gh_ost_move_tables_drain_gtid from %s.%s where gh_ost_move_tables_cutover_started = 1 and gh_ost_move_tables_drain_gtid is not null and gh_ost_move_tables_drain_gtid != '' order by gh_ost_chk_id desc limit 1`, sql.EscapeName(apl.checkpointDatabaseName()), sql.EscapeName(apl.migrationContext.GetCheckpointTableName())))
 	chk := &Checkpoint{}
 	var coordStr, drainGTIDStr string
 	var timestamp int64
@@ -1111,11 +1111,19 @@ func (apl *Applier) ReadMoveTablesCutOverCheckpoint() (*Checkpoint, error) {
 	}
 	chk.Timestamp = time.Unix(timestamp, 0)
 	if coordStr != "" {
-		coords, err := mysql.NewGTIDBinlogCoordinates(coordStr)
-		if err != nil {
-			return nil, err
+		if apl.migrationContext.UseGTIDs {
+			coords, err := mysql.NewGTIDBinlogCoordinates(coordStr)
+			if err != nil {
+				return nil, err
+			}
+			chk.LastTrxCoords = coords
+		} else {
+			coords, err := mysql.ParseFileBinlogCoordinates(coordStr)
+			if err != nil {
+				return nil, err
+			}
+			chk.LastTrxCoords = coords
 		}
-		chk.LastTrxCoords = coords
 	}
 	if drainGTIDStr != "" {
 		drainGTID, err := mysql.NewGTIDBinlogCoordinates(drainGTIDStr)

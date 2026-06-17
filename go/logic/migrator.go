@@ -990,7 +990,8 @@ func (mgtr *Migrator) MoveTables() (err error) {
 					_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
 				}
 			}()
-			go mgtr.initiateStatus()
+			// Do not initiate status ticker in cutover resume path: inspector is not initialized,
+			// and we're only doing drain polling + hooks before exit (no row copy to monitor).
 			if err := mgtr.resumeMoveTablesCutOverFromCheckpoint(cutoverResumeCheckpoint); err != nil {
 				return err
 			}
@@ -1005,7 +1006,10 @@ func (mgtr *Migrator) MoveTables() (err error) {
 			}
 			return nil
 		}
-		mgtr.applier.Teardown()
+		// Do not teardown this preflight applier on the miss path. Its DB handles
+		// come from the shared connection cache keyed by migration UUID, and
+		// closing them here would poison the later inspector/applier init path
+		// with "sql: database is closed".
 		mgtr.applier = nil
 	}
 
@@ -1134,11 +1138,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 // NOT the standard cutOver() path: every internal call from cutOver() (throttle,
 // atomicCutOver, waitForEventsUpToLock, heartbeat-lag) was built on a
 // single-server assumption that no longer holds when the applier writes target
-// and the streamer reads source. Each is replaced or dropped here.
-//
-// Crash safety (persisting the drain GTID before T3) is #8210. Enriched hook
-// env vars (GH_OST_DRAIN_GTID, GH_OST_TARGET_*) are #8211. Target-side
-// throttling is #8212. None of those are wired here.
+// and the streamer reads source. Each is replaced or dropped here.s
 func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	if mgtr.migrationContext.Noop {
 		mgtr.migrationContext.Log.Debugf("Noop operation; not really moving tables")
@@ -1228,6 +1228,9 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 			return fmt.Errorf("failed to persist move-tables cutover checkpoint: %w", err)
 		}
 	}
+
+	// force a crash
+	panic("force crash between table rename and drain completion")
 
 	if err := mgtr.drainMoveTablesCutOver(drainGTID); err != nil {
 		return err
@@ -2268,6 +2271,17 @@ func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 		}
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
 		if coords.SmallerThanOrEquals(mgtr.applier.CurrentCoordinates) {
+			id, err := mgtr.applier.WriteCheckpoint(chk)
+			chk.Id = id
+			mgtr.applier.CurrentCoordinatesMutex.Unlock()
+			return chk, err
+		}
+		// In move-tables mode we do not emit heartbeat rows into _ghc, so
+		// CurrentCoordinates may not advance while the system is otherwise idle.
+		// If there is no backlog in either queue, it is safe to treat the current
+		// streamer coordinates as applied for checkpointing purposes.
+		if mgtr.migrationContext.IsMoveTablesMode() && len(mgtr.applyEventsQueue) == 0 && (mgtr.eventsStreamer == nil || len(mgtr.eventsStreamer.eventsChannel) == 0) {
+			mgtr.applier.CurrentCoordinates = coords.Clone()
 			id, err := mgtr.applier.WriteCheckpoint(chk)
 			chk.Id = id
 			mgtr.applier.CurrentCoordinatesMutex.Unlock()
