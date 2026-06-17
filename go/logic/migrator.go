@@ -1198,7 +1198,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 // NOT the standard cutOver() path: every internal call from cutOver() (throttle,
 // atomicCutOver, waitForEventsUpToLock, heartbeat-lag) was built on a
 // single-server assumption that no longer holds when the applier writes target
-	// and the streamer reads source. Each is replaced or dropped here.
+// and the streamer reads source. Each is replaced or dropped here.
 func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	if mgtr.migrationContext.Noop {
 		mgtr.migrationContext.Log.Debugf("Noop operation; not really moving tables")
