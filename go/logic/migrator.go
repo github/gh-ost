@@ -823,7 +823,7 @@ func (mgtr *Migrator) hydrateMoveTablesStateFromTarget() error {
 	return nil
 }
 
-func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogCoordinates) (*Checkpoint, error) {
+func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogCoordinates, isCutover bool) (*Checkpoint, error) {
 	mgtr.applier.CurrentCoordinatesMutex.Lock()
 	if mgtr.applier.CurrentCoordinates == nil || mgtr.applier.CurrentCoordinates.IsEmpty() {
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
@@ -839,6 +839,7 @@ func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogC
 		Iteration:                  mgtr.migrationContext.GetIteration(),
 		RowsCopied:                 atomic.LoadInt64(&mgtr.migrationContext.TotalRowsCopied),
 		DMLApplied:                 atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
+		IsCutover:                  isCutover,
 		MoveTablesCutOverStarted:   true,
 		MoveTablesCutOverDrainGTID: drainGTID,
 	}
@@ -855,6 +856,32 @@ func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogC
 	return chk, err
 }
 
+// moveTablesDrainCoordinateReached returns true when current is at-or-ahead of
+// drain within the same coordinate family. For GTID drains, current must also
+// be GTID-backed; mixed GTID/file-pos comparisons are treated as not reached.
+func moveTablesDrainCoordinateReached(current mysql.BinlogCoordinates, drain mysql.BinlogCoordinates) bool {
+	if current == nil || current.IsEmpty() || drain == nil || drain.IsEmpty() {
+		return false
+	}
+	switch drain.(type) {
+	case *mysql.GTIDBinlogCoordinates:
+		if _, ok := current.(*mysql.GTIDBinlogCoordinates); !ok {
+			return false
+		}
+	}
+	return !current.SmallerThan(drain)
+}
+
+// moveTablesDrainProvenByStreamerProgress is the non-DML-tail fallback used
+// in T3: if both queues are empty and the streamer has advanced to drain,
+// drain is considered complete even when applier coords did not move.
+func moveTablesDrainProvenByStreamerProgress(drain mysql.BinlogCoordinates, streamer mysql.BinlogCoordinates, applyBacklog int, streamerBacklog int) bool {
+	if applyBacklog != 0 || streamerBacklog != 0 {
+		return false
+	}
+	return moveTablesDrainCoordinateReached(streamer, drain)
+}
+
 func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) error {
 	drainTimeout := time.Duration(mgtr.migrationContext.CutOverLockTimeoutSeconds) * time.Second
 	mgtr.migrationContext.Log.Infof("T3: draining applier to drain GTID (timeout %s, poll %s)",
@@ -867,26 +894,50 @@ func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) 
 		if err := mgtr.checkAbort(); err != nil {
 			return err
 		}
+		// Primary signal: applier's coordinate (advances when relevant apply work runs).
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
 		applierCoords := mgtr.applier.CurrentCoordinates
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
+		drainReached := moveTablesDrainCoordinateReached(applierCoords, drainGTID)
+		// Backlogs gate completion: if either queue is non-empty, drain is not done.
 		applyBacklog := len(mgtr.applyEventsQueue)
 		streamerBacklog := 0
+		var streamerCoords mysql.BinlogCoordinates
+		applierDisplay := ""
+		if applierCoords != nil {
+			applierDisplay = applierCoords.DisplayString()
+		}
 		if mgtr.eventsStreamer != nil {
 			streamerBacklog = len(mgtr.eventsStreamer.eventsChannel)
+			if mgtr.eventsStreamer.binlogReader != nil {
+				// Secondary signal: streamer's latest source position.
+				streamerCoords = mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
+			}
 		}
-		if applierCoords != nil && !applierCoords.IsEmpty() && !applierCoords.SmallerThan(drainGTID) && applyBacklog == 0 && streamerBacklog == 0 {
+		// Normal completion path: applier reached drain and both queues are empty.
+		if drainReached && applyBacklog == 0 && streamerBacklog == 0 {
 			mgtr.migrationContext.Log.Infof("T3: drain complete; applier caught up to drain GTID")
 			return nil
 		}
-		if applierCoords != nil && !applierCoords.IsEmpty() && !applierCoords.SmallerThan(drainGTID) {
+		// Fallback for non-DML tail: GTID can advance due to unrelated/non-row events,
+		// so applier may stop moving while streamer has already crossed drain.
+		if moveTablesDrainProvenByStreamerProgress(drainGTID, streamerCoords, applyBacklog, streamerBacklog) {
+			mgtr.migrationContext.Log.Infof("T3: drain complete via streamer frontier (non-DML tail after T2)")
+			return nil
+		}
+		if drainReached {
 			mgtr.migrationContext.Log.Debugf("T3: drain GTID reached but backlog remains (apply=%d, streamer=%d)", applyBacklog, streamerBacklog)
 		} else {
-			mgtr.migrationContext.Log.Debugf("T3: applier still behind drain GTID, polling")
+			mgtr.migrationContext.Log.Debugf("T3: applier still behind drain GTID, polling (applier=%s drain=%s)", applierDisplay, drainGTID.DisplayString())
 		}
 		select {
 		case <-drainCtx.Done():
-			return fmt.Errorf("drain poll timed out after %s: applier did not catch up to drain GTID", drainTimeout)
+			streamerDisplay := ""
+			if streamerCoords != nil {
+				streamerDisplay = streamerCoords.DisplayString()
+			}
+			return fmt.Errorf("drain poll timed out after %s: applier did not catch up to drain GTID (applier=%s drain=%s streamer=%s apply_backlog=%d streamer_backlog=%d)",
+				drainTimeout, applierDisplay, drainGTID.DisplayString(), streamerDisplay, applyBacklog, streamerBacklog)
 		case <-ticker.C:
 		}
 	}
@@ -907,7 +958,7 @@ func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) err
 		return err
 	}
 	if mgtr.migrationContext.Checkpoint {
-		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(chk.MoveTablesCutOverDrainGTID); err != nil {
+		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(chk.MoveTablesCutOverDrainGTID, true); err != nil {
 			mgtr.migrationContext.Log.Warningf("failed to checkpoint drained move-tables cutover: %+v", err)
 		}
 	}
@@ -1144,6 +1195,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		mgtr.migrationContext.Log.Debugf("Noop operation; not really moving tables")
 		return nil
 	}
+	defer atomic.StoreInt64(&mgtr.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	// ----- Postpone gate (precedes T0) -----
 	// Mirrors standard cutOver()'s sleepWhileTrue postpone structure but DROPS the
@@ -1176,6 +1228,9 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	}
 	atomic.StoreInt64(&mgtr.migrationContext.IsPostponingCutOver, 0)
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
+
+	// Disables throttling and background checkpoint loop
+	atomic.StoreInt64(&mgtr.migrationContext.InCutOverCriticalSectionFlag, 1)
 
 	// ----- T0: on-before-cut-over hook -----
 	// Non-zero hook exit aborts cutover BEFORE any source DDL fires.
@@ -1224,19 +1279,16 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	}
 	mgtr.migrationContext.Log.Infof("T2: captured drain GTID: %s", drainGTID.DisplayString())
 	if mgtr.migrationContext.Checkpoint {
-		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID); err != nil {
+		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID, false); err != nil {
 			return fmt.Errorf("failed to persist move-tables cutover checkpoint: %w", err)
 		}
 	}
-
-	// force a crash
-	panic("force crash between table rename and drain completion")
 
 	if err := mgtr.drainMoveTablesCutOver(drainGTID); err != nil {
 		return err
 	}
 	if mgtr.migrationContext.Checkpoint {
-		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID); err != nil {
+		if _, err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID, true); err != nil {
 			mgtr.migrationContext.Log.Warningf("failed to checkpoint drained move-tables cutover: %+v", err)
 		}
 	}
