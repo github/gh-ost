@@ -825,12 +825,21 @@ func (mgtr *Migrator) hydrateMoveTablesStateFromTarget() error {
 
 func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogCoordinates, isCutover bool) error {
 	mgtr.applier.CurrentCoordinatesMutex.Lock()
-	if mgtr.applier.CurrentCoordinates == nil || mgtr.applier.CurrentCoordinates.IsEmpty() {
-		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-		return errors.New("current coordinates are empty, cannot checkpoint move-tables cutover")
-	}
-	safeCoords := mgtr.applier.CurrentCoordinates.Clone()
+	safeCoords := mgtr.applier.CurrentCoordinates
 	mgtr.applier.CurrentCoordinatesMutex.Unlock()
+
+	if safeCoords == nil || safeCoords.IsEmpty() {
+		// In move-tables mode CurrentCoordinates may never advance on a quiet source
+		// (no _ghc heartbeats, no DML). If there is no backlog, the streamer's
+		// frontier is a safe fallback for checkpointing.
+		if mgtr.eventsStreamer != nil && len(mgtr.applyEventsQueue) == 0 && len(mgtr.eventsStreamer.eventsChannel) == 0 {
+			safeCoords = mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
+		}
+		if safeCoords == nil || safeCoords.IsEmpty() {
+			return errors.New("current coordinates are empty, cannot checkpoint move-tables cutover")
+		}
+	}
+	safeCoords = safeCoords.Clone()
 
 	chk := &Checkpoint{
 		LastTrxCoords:              safeCoords,
