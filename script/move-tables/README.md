@@ -47,7 +47,7 @@ Remove the cutover flag file.
 rm /tmp/ghost-move-tables.postpone.flag
 ```
 
-You'll see the continous inserts will stop because of the table rename.
+You'll see the continuous inserts will stop because of the table rename.
 
 Check the source - table has been renamed.
 ```bash
