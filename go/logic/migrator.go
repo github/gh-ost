@@ -100,8 +100,9 @@ type Migrator struct {
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive before realizing the copy is complete
-	copyRowsQueue    chan tableWriteFunc
-	applyEventsQueue chan *applyEventStruct
+	copyRowsQueue       chan tableWriteFunc
+	applyEventsQueue    chan *applyEventStruct
+	applyEventsInFlight int64
 
 	finishedMigrating int64
 }
@@ -804,6 +805,183 @@ func (mgtr *Migrator) prepareMoveTablesCopyState() {
 	mgtr.migrationContext.MappedSharedColumns = mgtr.migrationContext.OriginalTableColumns
 }
 
+func (mgtr *Migrator) hydrateMoveTablesStateFromTarget() error {
+	probeContext := base.NewMigrationContext()
+	probeContext.DatabaseName = mgtr.migrationContext.GetTargetDatabaseName()
+	targetInspector := &Inspector{db: mgtr.applier.moveTablesTargetDB, migrationContext: probeContext}
+
+	columns, virtualColumns, uniqueKeys, err := targetInspector.InspectTableColumnsAndUniqueKeys(mgtr.migrationContext.GetTargetTableName())
+	if err != nil {
+		return err
+	}
+
+	mgtr.migrationContext.OriginalTableColumns = columns
+	mgtr.migrationContext.OriginalTableVirtualColumns = virtualColumns
+	mgtr.migrationContext.OriginalTableUniqueKeys = uniqueKeys
+	mgtr.migrationContext.UniqueKey = targetInspector.selectUniqueKey(uniqueKeys)
+	mgtr.migrationContext.SharedColumns = columns
+	mgtr.migrationContext.MappedSharedColumns = columns
+	return nil
+}
+
+func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogCoordinates, isCutover bool) error {
+	mgtr.applier.CurrentCoordinatesMutex.Lock()
+	safeCoords := mgtr.applier.CurrentCoordinates
+	mgtr.applier.CurrentCoordinatesMutex.Unlock()
+
+	if safeCoords == nil || safeCoords.IsEmpty() {
+		// In move-tables mode CurrentCoordinates may never advance on a quiet source
+		// (no _ghc heartbeats, no DML). If there is no backlog, the streamer's
+		// frontier is a safe fallback for checkpointing.
+		if mgtr.eventsStreamer != nil && len(mgtr.applyEventsQueue) == 0 && len(mgtr.eventsStreamer.eventsChannel) == 0 {
+			safeCoords = mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
+		}
+		if safeCoords == nil || safeCoords.IsEmpty() {
+			return errors.New("current coordinates are empty, cannot checkpoint move-tables cutover")
+		}
+	}
+	safeCoords = safeCoords.Clone()
+
+	chk := &Checkpoint{
+		LastTrxCoords:              safeCoords,
+		IterationRangeMin:          sql.NewColumnValues(mgtr.migrationContext.UniqueKey.Len()),
+		IterationRangeMax:          sql.NewColumnValues(mgtr.migrationContext.UniqueKey.Len()),
+		Iteration:                  mgtr.migrationContext.GetIteration(),
+		RowsCopied:                 atomic.LoadInt64(&mgtr.migrationContext.TotalRowsCopied),
+		DMLApplied:                 atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
+		IsCutover:                  isCutover,
+		MoveTablesCutOverStarted:   true,
+		MoveTablesCutOverDrainGTID: drainGTID,
+	}
+	mgtr.applier.LastIterationRangeMutex.Lock()
+	if mgtr.applier.LastIterationRangeMinValues != nil {
+		chk.IterationRangeMin = mgtr.applier.LastIterationRangeMinValues.Clone()
+	}
+	if mgtr.applier.LastIterationRangeMaxValues != nil {
+		chk.IterationRangeMax = mgtr.applier.LastIterationRangeMaxValues.Clone()
+	}
+	mgtr.applier.LastIterationRangeMutex.Unlock()
+	id, err := mgtr.applier.WriteCheckpoint(chk)
+	chk.Id = id
+	return err
+}
+
+// moveTablesDrainCoordinateReached returns true when current is at-or-ahead of
+// drain within the same coordinate family. For GTID drains, current must also
+// be GTID-backed; mixed GTID/file-pos comparisons are treated as not reached.
+func moveTablesDrainCoordinateReached(current mysql.BinlogCoordinates, drain mysql.BinlogCoordinates) bool {
+	if current == nil || current.IsEmpty() || drain == nil || drain.IsEmpty() {
+		return false
+	}
+	switch drain.(type) {
+	case *mysql.GTIDBinlogCoordinates:
+		if _, ok := current.(*mysql.GTIDBinlogCoordinates); !ok {
+			return false
+		}
+	}
+	return !current.SmallerThan(drain)
+}
+
+// moveTablesDrainProvenByStreamerProgress is the non-DML-tail fallback used
+// in T3: if both queues are empty and the streamer has advanced to drain,
+// drain is considered complete even when applier coords did not move.
+func moveTablesDrainProvenByStreamerProgress(drain mysql.BinlogCoordinates, streamer mysql.BinlogCoordinates, applyBacklog int, streamerBacklog int) bool {
+	if applyBacklog != 0 || streamerBacklog != 0 {
+		return false
+	}
+	return moveTablesDrainCoordinateReached(streamer, drain)
+}
+
+func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) error {
+	drainTimeout := time.Duration(mgtr.migrationContext.CutOverLockTimeoutSeconds) * time.Second
+	mgtr.migrationContext.Log.Infof("T3: draining applier to drain GTID (timeout %s, poll %s)",
+		drainTimeout, moveTablesCutOverDrainPollInterval)
+	drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
+	ticker := time.NewTicker(moveTablesCutOverDrainPollInterval)
+	defer ticker.Stop()
+	for {
+		if err := mgtr.checkAbort(); err != nil {
+			return err
+		}
+		// Primary signal: applier's coordinate (advances when relevant apply work runs).
+		mgtr.applier.CurrentCoordinatesMutex.Lock()
+		applierCoords := mgtr.applier.CurrentCoordinates
+		mgtr.applier.CurrentCoordinatesMutex.Unlock()
+		drainReached := moveTablesDrainCoordinateReached(applierCoords, drainGTID)
+		// Backlogs gate completion: if either queue is non-empty, drain is not done.
+		applyBacklog := len(mgtr.applyEventsQueue)
+		streamerBacklog := 0
+		var streamerCoords mysql.BinlogCoordinates
+		applierDisplay := ""
+		if applierCoords != nil {
+			applierDisplay = applierCoords.DisplayString()
+		}
+		if mgtr.eventsStreamer != nil {
+			streamerBacklog = len(mgtr.eventsStreamer.eventsChannel)
+			if mgtr.eventsStreamer.binlogReader != nil {
+				// Secondary signal: streamer's latest source position.
+				streamerCoords = mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
+			}
+		}
+		applyInFlight := atomic.LoadInt64(&mgtr.applyEventsInFlight)
+		// Normal completion path: applier reached drain, both queues are empty,
+		// and no apply handler is still running.
+		if drainReached && applyBacklog == 0 && streamerBacklog == 0 && applyInFlight == 0 {
+			mgtr.migrationContext.Log.Infof("T3: drain complete; applier caught up to drain GTID")
+			return nil
+		}
+		// Fallback for non-DML tail: GTID can advance due to unrelated/non-row events,
+		// so applier may stop moving while streamer has already crossed drain.
+		if applyInFlight == 0 && moveTablesDrainProvenByStreamerProgress(drainGTID, streamerCoords, applyBacklog, streamerBacklog) {
+			mgtr.migrationContext.Log.Infof("T3: drain complete via streamer frontier (non-DML tail after T2)")
+			return nil
+		}
+		if drainReached {
+			mgtr.migrationContext.Log.Debugf("T3: drain GTID reached but backlog remains (apply=%d, streamer=%d, in_flight=%d)", applyBacklog, streamerBacklog, applyInFlight)
+		} else {
+			mgtr.migrationContext.Log.Debugf("T3: applier still behind drain GTID, polling (applier=%s drain=%s in_flight=%d)", applierDisplay, drainGTID.DisplayString(), applyInFlight)
+		}
+		select {
+		case <-drainCtx.Done():
+			streamerDisplay := ""
+			if streamerCoords != nil {
+				streamerDisplay = streamerCoords.DisplayString()
+			}
+			return fmt.Errorf("drain poll timed out after %s: applier did not catch up to drain GTID (applier=%s drain=%s streamer=%s apply_backlog=%d streamer_backlog=%d in_flight=%d)",
+				drainTimeout, applierDisplay, drainGTID.DisplayString(), streamerDisplay, applyBacklog, streamerBacklog, applyInFlight)
+		case <-ticker.C:
+		}
+	}
+}
+
+func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) error {
+	if chk == nil || !chk.MoveTablesCutOverStarted || chk.MoveTablesCutOverDrainGTID == nil || chk.MoveTablesCutOverDrainGTID.IsEmpty() {
+		return errors.New("checkpoint does not contain move-tables cutover resume state")
+	}
+	if chk.LastTrxCoords != nil && !chk.LastTrxCoords.IsEmpty() {
+		mgtr.applier.CurrentCoordinatesMutex.Lock()
+		mgtr.applier.CurrentCoordinates = chk.LastTrxCoords.Clone()
+		mgtr.applier.CurrentCoordinatesMutex.Unlock()
+	}
+	mgtr.migrationContext.Log.Infof("Resuming move-tables cutover from checkpoint at coords=%+v drain_gtid=%s",
+		chk.LastTrxCoords, chk.MoveTablesCutOverDrainGTID.DisplayString())
+	if err := mgtr.drainMoveTablesCutOver(chk.MoveTablesCutOverDrainGTID); err != nil {
+		return err
+	}
+	if mgtr.migrationContext.Checkpoint {
+		if err := mgtr.persistMoveTablesCutOverCheckpoint(chk.MoveTablesCutOverDrainGTID, true); err != nil {
+			mgtr.migrationContext.Log.Warningf("failed to checkpoint drained move-tables cutover: %+v", err)
+		}
+	}
+	atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
+	mgtr.migrationContext.Log.Debugf("T4: CutOverCompleteFlag set")
+	if err := mgtr.hooksExecutor.OnSuccess(false); err != nil {
+		return fmt.Errorf("on-success hook failed: %w", err)
+	}
+	return nil
+}
+
 func (mgtr *Migrator) MoveTables() (err error) {
 	mgtr.migrationContext.Log.Infof("Moving tables %v from %s to %s (%s)",
 		mgtr.migrationContext.MoveTables.TableNames,
@@ -833,17 +1011,99 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	// so we don't leave things hanging around
 	defer mgtr.teardown()
 
+	if mgtr.migrationContext.Checkpoint && mgtr.migrationContext.Resume {
+		mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.MoveTables.ConnectionConfig
+		mgtr.applier = NewApplier(mgtr.migrationContext)
+		if err := mgtr.applier.InitDBConnections(); err != nil {
+			return err
+		}
+		cutoverResumeCheckpoint, err := mgtr.applier.ReadMoveTablesCutOverCheckpoint()
+		if err != nil && !errors.Is(err, ErrNoCheckpointFound) {
+			return err
+		}
+		if cutoverResumeCheckpoint != nil && cutoverResumeCheckpoint.MoveTablesCutOverStarted && cutoverResumeCheckpoint.MoveTablesCutOverDrainGTID != nil && !cutoverResumeCheckpoint.MoveTablesCutOverDrainGTID.IsEmpty() {
+			mgtr.migrationContext.InitialStreamerCoords = cutoverResumeCheckpoint.LastTrxCoords
+			mgtr.migrationContext.Iteration = cutoverResumeCheckpoint.Iteration
+			atomic.StoreInt64(&mgtr.migrationContext.TotalRowsCopied, cutoverResumeCheckpoint.RowsCopied)
+			atomic.StoreInt64(&mgtr.migrationContext.TotalDMLEventsApplied, cutoverResumeCheckpoint.DMLApplied)
+			if err := mgtr.hydrateMoveTablesStateFromTarget(); err != nil {
+				return fmt.Errorf("failed to hydrate move-tables resume state from target: %w", err)
+			}
+			if err := mgtr.createFlagFiles(); err != nil {
+				return err
+			}
+			if err := mgtr.initiateStreaming(); err != nil {
+				return err
+			}
+			if err := mgtr.applier.prepareQueries(); err != nil {
+				return err
+			}
+			if err := mgtr.hooksExecutor.OnValidated(); err != nil {
+				return err
+			}
+			if err := mgtr.initiateServer(); err != nil {
+				return err
+			}
+			defer mgtr.server.RemoveSocketFile()
+			if err := mgtr.addDMLEventsListener(); err != nil {
+				return err
+			}
+			mgtr.initiateThrottler()
+			go func() {
+				if err := mgtr.executeWriteFuncs(); err != nil {
+					_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+				}
+			}()
+			// Do not initiate status ticker in cutover resume path: inspector is not initialized,
+			// and we're only doing drain polling + hooks before exit (no row copy to monitor).
+			if err := mgtr.resumeMoveTablesCutOverFromCheckpoint(cutoverResumeCheckpoint); err != nil {
+				return err
+			}
+			if err := mgtr.finalCleanup(); err != nil {
+				return nil
+			}
+			mgtr.migrationContext.Log.Infof("Done moving tables %v from %s to %s (%s)",
+				mgtr.migrationContext.MoveTables.TableNames, sql.EscapeName(mgtr.migrationContext.DatabaseName),
+				sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()), mgtr.migrationContext.MoveTables.TargetHost)
+			if err := mgtr.checkAbort(); err != nil {
+				return err
+			}
+			return nil
+		}
+		// Do not teardown this preflight applier on the miss path. Its DB handles
+		// come from the shared connection cache keyed by migration UUID, and
+		// closing them here would poison the later inspector/applier init path
+		// with "sql: database is closed".
+		mgtr.applier = nil
+	}
+
 	if err := mgtr.initiateInspector(); err != nil {
 		return err
 	}
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
+	mgtr.prepareMoveTablesCopyState()
 	if err := mgtr.initiateApplier(); err != nil {
 		return err
 	}
 	if err := mgtr.checkAbort(); err != nil {
 		return err
+	}
+	if mgtr.migrationContext.Checkpoint && mgtr.migrationContext.Resume {
+		lastCheckpoint, err := mgtr.applier.ReadLastCheckpoint()
+		if err != nil {
+			return mgtr.migrationContext.Log.Errorf("no checkpoint found, unable to resume: %+v", err)
+		}
+		mgtr.migrationContext.Log.Infof("Resuming move-tables from checkpoint coords=%+v range_min=%+v range_max=%+v iteration=%d",
+			lastCheckpoint.LastTrxCoords, lastCheckpoint.IterationRangeMin.String(), lastCheckpoint.IterationRangeMax.String(), lastCheckpoint.Iteration)
+
+		mgtr.migrationContext.MigrationIterationRangeMinValues = lastCheckpoint.IterationRangeMin
+		mgtr.migrationContext.MigrationIterationRangeMaxValues = lastCheckpoint.IterationRangeMax
+		mgtr.migrationContext.Iteration = lastCheckpoint.Iteration
+		atomic.StoreInt64(&mgtr.migrationContext.TotalRowsCopied, lastCheckpoint.RowsCopied)
+		atomic.StoreInt64(&mgtr.migrationContext.TotalDMLEventsApplied, lastCheckpoint.DMLApplied)
+		mgtr.migrationContext.InitialStreamerCoords = lastCheckpoint.LastTrxCoords
 	}
 	if err := mgtr.createFlagFiles(); err != nil {
 		return err
@@ -858,11 +1118,14 @@ func (mgtr *Migrator) MoveTables() (err error) {
 		return err
 	}
 
-	mgtr.prepareMoveTablesCopyState()
-
 	// this function assumes that the unique key constraint has been set.
 	if err := mgtr.applier.prepareQueries(); err != nil {
 		return err
+	}
+	if mgtr.migrationContext.Checkpoint && !mgtr.migrationContext.Resume {
+		if err := mgtr.applier.CreateCheckpointTable(); err != nil {
+			mgtr.migrationContext.Log.Errorf("unable to create checkpoint table, see further error details")
+		}
 	}
 
 	// Validation complete! Run on-validated hook.
@@ -900,6 +1163,9 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	go mgtr.iterateChunks()
 	mgtr.migrationContext.MarkRowCopyStartTime()
 	go mgtr.initiateStatus()
+	if mgtr.migrationContext.Checkpoint {
+		go mgtr.checkpointLoop()
+	}
 
 	mgtr.migrationContext.Log.Debugf("Operating until row copy is complete")
 	mgtr.consumeRowCopyComplete()
@@ -937,15 +1203,12 @@ func (mgtr *Migrator) MoveTables() (err error) {
 // atomicCutOver, waitForEventsUpToLock, heartbeat-lag) was built on a
 // single-server assumption that no longer holds when the applier writes target
 // and the streamer reads source. Each is replaced or dropped here.
-//
-// Crash safety (persisting the drain GTID before T3) is #8210. Enriched hook
-// env vars (GH_OST_DRAIN_GTID, GH_OST_TARGET_*) are #8211. Target-side
-// throttling is #8212. None of those are wired here.
 func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	if mgtr.migrationContext.Noop {
 		mgtr.migrationContext.Log.Debugf("Noop operation; not really moving tables")
 		return nil
 	}
+	defer atomic.StoreInt64(&mgtr.migrationContext.InCutOverCriticalSectionFlag, 0)
 
 	// ----- Postpone gate (precedes T0) -----
 	// Mirrors standard cutOver()'s sleepWhileTrue postpone structure but DROPS the
@@ -979,6 +1242,9 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	atomic.StoreInt64(&mgtr.migrationContext.IsPostponingCutOver, 0)
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
 
+	// Disables throttling and background checkpoint loop
+	atomic.StoreInt64(&mgtr.migrationContext.InCutOverCriticalSectionFlag, 1)
+
 	// ----- T0: on-before-cut-over hook -----
 	// Non-zero hook exit aborts cutover BEFORE any source DDL fires.
 	if err := mgtr.hooksExecutor.OnBeforeCutOver(); err != nil {
@@ -995,7 +1261,8 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// No retry on the RENAME: it is not idempotent — a partial success leaves
 	// the table already renamed and a retry would fail. The operator re-runs
 	// the whole hook chain on failure.
-	pinnedConn, err := mgtr.inspector.db.Conn(context.Background())
+	cutOverCtx := mgtr.migrationContext.GetContext()
+	pinnedConn, err := mgtr.inspector.db.Conn(cutOverCtx)
 	if err != nil {
 		return fmt.Errorf("failed to pin connection for T1/T2: %w", err)
 	}
@@ -1008,7 +1275,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		sql.EscapeName(sourceDB), sql.EscapeName(sourceTable),
 		sql.EscapeName(sourceDB), sql.EscapeName(delTable))
 	mgtr.migrationContext.Log.Infof("T1: renaming source table: %s", renameQuery)
-	if _, err := pinnedConn.ExecContext(context.Background(), renameQuery); err != nil {
+	if _, err := pinnedConn.ExecContext(cutOverCtx, renameQuery); err != nil {
 		return fmt.Errorf("RENAME failed: %w", err)
 	}
 
@@ -1016,7 +1283,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// @@GLOBAL scope is explicit so the intent is unambiguous in the SQL itself.
 	// Design: https://github.com/github/gh-ost-tablemove-poc/blob/9dc6df75c4c88ff473906a497836c7518f5614ec/design/coop_cutover.md#32-correctness-verification-for-p4
 	var drainGTIDStr string
-	if err := pinnedConn.QueryRowContext(context.Background(), "select @@gtid_executed").Scan(&drainGTIDStr); err != nil {
+	if err := pinnedConn.QueryRowContext(cutOverCtx, "select @@global.gtid_executed").Scan(&drainGTIDStr); err != nil {
 		return fmt.Errorf("drain GTID capture failed: %w", err)
 	}
 	drainGTID, err := mysql.NewGTIDBinlogCoordinates(drainGTIDStr)
@@ -1024,46 +1291,18 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		return fmt.Errorf("drain GTID parse failed: %w", err)
 	}
 	mgtr.migrationContext.Log.Infof("T2: captured drain GTID: %s", drainGTID.DisplayString())
+	if mgtr.migrationContext.Checkpoint {
+		if err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID, false); err != nil {
+			return fmt.Errorf("failed to persist move-tables cutover checkpoint: %w", err)
+		}
+	}
 
-	// ----- T3: drain poll -----
-	// Wait until applier.CurrentCoordinates catches up to drainGTID. The drain
-	// is complete when the applier's coords are not strictly smaller than the
-	// drain target (i.e. the applier contains every GTID in drainGTID). Reads
-	// of CurrentCoordinates hold the mutex per applier.go:75. Per-iteration
-	// logging is Debug only to avoid spamming Info on a hot loop.
-	drainTimeout := time.Duration(mgtr.migrationContext.CutOverLockTimeoutSeconds) * time.Second
-	mgtr.migrationContext.Log.Infof("T3: draining applier to drain GTID (timeout %s, poll %s)",
-		drainTimeout, moveTablesCutOverDrainPollInterval)
-	drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
-	defer cancel()
-	ticker := time.NewTicker(moveTablesCutOverDrainPollInterval)
-	defer ticker.Stop()
-	for {
-		if err := mgtr.checkAbort(); err != nil {
-			return err
-		}
-		mgtr.applier.CurrentCoordinatesMutex.Lock()
-		applierCoords := mgtr.applier.CurrentCoordinates
-		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-		applyBacklog := len(mgtr.applyEventsQueue)
-		streamerBacklog := 0
-		if mgtr.eventsStreamer != nil {
-			streamerBacklog = len(mgtr.eventsStreamer.eventsChannel)
-		}
-		if applierCoords != nil && !applierCoords.IsEmpty() && !applierCoords.SmallerThan(drainGTID) && applyBacklog == 0 && streamerBacklog == 0 {
-			mgtr.migrationContext.Log.Infof("T3: drain complete; applier caught up to drain GTID")
-			break
-		}
-		if applierCoords != nil && !applierCoords.IsEmpty() && !applierCoords.SmallerThan(drainGTID) {
-			mgtr.migrationContext.Log.Debugf("T3: drain GTID reached but backlog remains (apply=%d, streamer=%d)", applyBacklog, streamerBacklog)
-		} else {
-			mgtr.migrationContext.Log.Debugf("T3: applier still behind drain GTID, polling")
-		}
-		select {
-		case <-drainCtx.Done():
-			return fmt.Errorf("drain poll timed out after %s: applier did not catch up to drain GTID", drainTimeout)
-		case <-ticker.C:
-			// next iteration
+	if err := mgtr.drainMoveTablesCutOver(drainGTID); err != nil {
+		return err
+	}
+	if mgtr.migrationContext.Checkpoint {
+		if err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID, true); err != nil {
+			mgtr.migrationContext.Log.Warningf("failed to checkpoint drained move-tables cutover: %+v", err)
 		}
 	}
 
@@ -1833,13 +2072,20 @@ func (mgtr *Migrator) initiateApplier() error {
 	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
-		createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.MoveTables.TableNames[0])
-		if err != nil {
-			return fmt.Errorf("failed to fetch create table statement: %w", err)
-		}
-		if err := mgtr.applier.CreateTargetTable(createTableStatement); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create target table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
-			return err
+		if !mgtr.migrationContext.Resume {
+			createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.MoveTables.TableNames[0])
+			if err != nil {
+				return fmt.Errorf("failed to fetch create table statement: %w", err)
+			}
+			if err := mgtr.applier.CreateTargetTable(createTableStatement); err != nil {
+				mgtr.migrationContext.Log.Errorf("unable to create target table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+				return err
+			}
+		} else {
+			mgtr.migrationContext.Log.Infof("Resuming move-tables; reusing existing target table %s.%s",
+				sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()),
+				sql.EscapeName(mgtr.migrationContext.GetTargetTableName()),
+			)
 		}
 	} else {
 		if mgtr.migrationContext.Revert {
@@ -2010,6 +2256,9 @@ func (mgtr *Migrator) iterateChunks() error {
 }
 
 func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
+	atomic.AddInt64(&mgtr.applyEventsInFlight, 1)
+	defer atomic.AddInt64(&mgtr.applyEventsInFlight, -1)
+
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
 		if eventStruct.writeFunc != nil {
 			if err := mgtr.retryOperation(*eventStruct.writeFunc); err != nil {
@@ -2091,6 +2340,17 @@ func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 		}
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
 		if coords.SmallerThanOrEquals(mgtr.applier.CurrentCoordinates) {
+			id, err := mgtr.applier.WriteCheckpoint(chk)
+			chk.Id = id
+			mgtr.applier.CurrentCoordinatesMutex.Unlock()
+			return chk, err
+		}
+		// In move-tables mode we do not emit heartbeat rows into _ghc, so
+		// CurrentCoordinates may not advance while the system is otherwise idle.
+		// If there is no backlog in either queue, it is safe to treat the current
+		// streamer coordinates as applied for checkpointing purposes.
+		if mgtr.migrationContext.IsMoveTablesMode() && len(mgtr.applyEventsQueue) == 0 && (mgtr.eventsStreamer == nil || len(mgtr.eventsStreamer.eventsChannel) == 0) {
+			mgtr.applier.CurrentCoordinates = coords.Clone()
 			id, err := mgtr.applier.WriteCheckpoint(chk)
 			chk.Id = id
 			mgtr.applier.CurrentCoordinatesMutex.Unlock()
@@ -2265,9 +2525,17 @@ func (mgtr *Migrator) finalCleanup() error {
 	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
+		if mgtr.migrationContext.Checkpoint {
+			if mgtr.migrationContext.OkToDropTable {
+				if err := mgtr.retryOperation(mgtr.applier.DropCheckpointTable); err != nil {
+					return err
+				}
+			} else if !mgtr.migrationContext.Noop {
+				mgtr.migrationContext.Log.Infof("Am not dropping checkpoint table without `--ok-to-drop-table`. To drop the checkpoint table, issue:")
+				mgtr.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()), sql.EscapeName(mgtr.migrationContext.GetCheckpointTableName()))
+			}
+		}
 		// for move-tables mode, we're done at this point
-		// TODO(zacharysierakowski): when we add the checkpoint table in for 1.6, make sure we cleanup
-		// the checkpoint table here first before returning (looks like that's a few lines below changelog table cleanup)
 		return nil
 	}
 

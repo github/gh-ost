@@ -3,28 +3,45 @@ set -euo pipefail
 
 # Continuously insert new rows into gh_ost_test on source primary.
 # Usage:
-#   script/move-tables/insert-source-primary-loop [start_column1] [sleep_seconds]
+#   script/move-tables/insert-source-primary-loop [start_column1] [sleep_seconds] [rows_per_batch]
 # Example:
-#   script/move-tables/insert-source-primary-loop 100000 0.2
+#   script/move-tables/insert-source-primary-loop 100000 0.2 1
+# Fast example:
+#   script/move-tables/insert-source-primary-loop 100000 0 50
 
 start_i="${1:-100000}"
 delay="${2:-0.2}"
+rows_per_batch="${3:-1}"
 i="$start_i"
 
 echo "Starting continuous inserts on source primary. Press Ctrl+C to stop."
-echo "start_column1=$start_i sleep_seconds=$delay"
+echo "start_column1=$start_i sleep_seconds=$delay rows_per_batch=$rows_per_batch"
 
 trap 'echo; echo "Stopped."; exit 0' INT TERM
 
 while true; do
   ts="$(date +%s)"
+  values=""
+  batch_start="$i"
+
+  for ((n=0; n<rows_per_batch; n++)); do
+    current_i=$((i + n))
+    row="($current_i, $((current_i % 65535)), $((current_i % 16777215)), $((current_i % 255)), $ts, $((ts + 1)))"
+    if [[ -n "$values" ]]; then
+      values+=" , "
+    fi
+    values+="$row"
+  done
 
   script/move-tables/mysql-source-primary -D gh_ost_test_db -e "
     INSERT INTO gh_ost_test (column1, column2, column3, column4, column5, column6)
-    VALUES ($i, $((i % 65535)), $((i % 16777215)), $((i % 255)), $ts, $((ts + 1)));
+    VALUES $values;
   "
 
-  echo "inserted row: column1=$i ts=$ts"
-  i=$((i + 1))
-  sleep "$delay"
+  i=$((i + rows_per_batch))
+  echo "inserted rows: column1=${batch_start}..$((i - 1)) ts=$ts"
+
+  if [[ "$delay" != "0" && "$delay" != "0.0" ]]; then
+    sleep "$delay"
+  fi
 done
