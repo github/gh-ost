@@ -2177,11 +2177,7 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 			return nil
 		}
 
-		if !mgtr.migrationContext.IsMoveTablesMode() {
-			// disable throttling in move-tables mode for now
-			// https://github.com/github/database-infrastructure/issues/8212
-			mgtr.throttler.throttle(nil)
-		}
+		mgtr.throttler.throttle(nil)
 
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy
