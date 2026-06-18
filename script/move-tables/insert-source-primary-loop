@@ -33,7 +33,7 @@ while true; do
     values+="$row"
   done
 
-  script/move-tables/mysql-source-primary -D gh_ost_test_db -e "
+  script/move-tables/mysql-source-primary -D test -e "
     INSERT INTO gh_ost_test (column1, column2, column3, column4, column5, column6)
     VALUES $values;
   "

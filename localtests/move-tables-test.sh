@@ -8,10 +8,8 @@
 # By default, runs all move-tables tests. Given filter, will only run tests matching given regep
 
 # TODO(chriskirkland):
-# - tidy up unnecessary complexity
-# - support cleanup between multiple test runs
 # - (nice-to-have) remove trailing newline requirement for tables.txt
-# - ....
+# - ...
 
 repo_root=$(git rev-parse --show-toplevel)
 script_path="$repo_root/script/move-tables"
@@ -19,6 +17,7 @@ tests_path=$(dirname $0)/move-tables
 test_logfile=/tmp/gh-ost-test.log
 default_ghost_binary=/tmp/gh-ost-test
 ghost_binary=""
+database=test
 docker=false
 gtid=false
 storage_engine=innodb
@@ -67,7 +66,6 @@ mysql-exec() {
     cluster=$1
     role=$2
     shift 2
-    # echo "Executing mysql command on the $role of $cluster: \"$@\""
 
     if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
         $script_path/mysql-$cluster-$role --ssl-mode=required "$@"
@@ -187,12 +185,12 @@ build_ghost_command() {
     --password=opensesame \
     --host=$source_replica_host \
     --port=$source_replica_port \
-    --database=test \
+    --database=$database \
     --target-user=root \
     --target-password=opensesame \
     --target-host=$target_master_host \
     --target-port=$target_master_port \
-    --target-database=test \
+    --target-database=$database \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
     --default-retries=3 \
@@ -245,8 +243,9 @@ validate_expected_failure() {
 }
 
 cleanup() {
-    # noop
-    return 0
+    # reset test database
+    mysql-exec source primary --default-character-set=utf8mb4 $database -e "drop database if exists $database; create database $database;"
+    mysql-exec target primary --default-character-set=utf8mb4 $database -e "drop database if exists $database; create database $database;"
 }
 
 test_single() {
@@ -295,13 +294,13 @@ s       return 1
     fi
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
-        mysql-exec source primary --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
-        mysql-exec source replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
-        mysql-exec target primary --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
-        mysql-exec target replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+        mysql-exec source primary --default-character-set=utf8mb4 $database -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+        mysql-exec source replica --default-character-set=utf8mb4 $database -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+        mysql-exec target primary --default-character-set=utf8mb4 $database -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+        mysql-exec target replica --default-character-set=utf8mb4 $database -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
     fi
 
-    mysql-exec source primary --default-character-set=utf8mb4 test <$tests_path/$test_name/create.sql
+    mysql-exec source primary --default-character-set=utf8mb4 $database <$tests_path/$test_name/create.sql
     test_create_result=$?
 
     if [ $test_create_result -ne 0 ]; then
@@ -353,6 +352,17 @@ s       return 1
         return $execution_result
     fi
 
+    # kick off the on_test script for the test. this enables arbitrary custom logic 
+    # concurrent with the gh-ost process. this enables additional scenarios like
+    # streaming of writes prior to the write cutover.
+    #
+    # IMPORTANT: The on-test script is executed in the background and will be killed as soon
+    # as the gh-ost process terminates.
+    if [ -f $tests_path/$test_name/on_test.sh ]; then
+        $tests_path/$test_name/on_test.sh &> /dev/null &
+        on_test_pid=$!
+    fi
+
     # Build and execute gh-ost command
     move_tables_arg=$(IFS=, ; echo "${tables_to_migrate[*]}")
     build_ghost_command "$move_tables_arg"
@@ -362,7 +372,10 @@ s       return 1
     timeout $test_timeout bash $exec_command_file >$test_logfile 2>&1
 
     execution_result=$?
-    cleanup
+
+    if [ -n "$on_test_pid" ]; then
+        kill -KILL $on_test_pid &>/dev/null
+    fi
 
     # Check for timeout (exit code 124)
     if [ $execution_result -eq 124 ]; then
@@ -373,16 +386,16 @@ s       return 1
     fi
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
-        mysql-exec source primary --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
-        mysql-exec source replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
-        mysql-exec target primary --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
-        mysql-exec target replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
+        mysql-exec source primary --default-character-set=utf8mb4 $database -e "set @@global.sql_mode='${original_sql_mode}'"
+        mysql-exec source replica --default-character-set=utf8mb4 $database -e "set @@global.sql_mode='${original_sql_mode}'"
+        mysql-exec target primary --default-character-set=utf8mb4 $database -e "set @@global.sql_mode='${original_sql_mode}'"
+        mysql-exec target replica --default-character-set=utf8mb4 $database -e "set @@global.sql_mode='${original_sql_mode}'"
     fi
 
     # TODO(chriskirkland): use this reset schemas and/or ACLs/permissions on each cluster?
     if [ -f $tests_path/$test_name/destroy.sql ]; then
-        mysql-exec source primary --default-character-set=utf8mb4 test <$tests_path/$test_name/destroy.sql
-        mysql-exec target primary --default-character-set=utf8mb4 test <$tests_path/$test_name/destroy.sql
+        mysql-exec source primary --default-character-set=utf8mb4 $database <$tests_path/$test_name/destroy.sql
+        mysql-exec target primary --default-character-set=utf8mb4 $database <$tests_path/$test_name/destroy.sql
     fi
 
     # Validate expected failure or success
@@ -400,8 +413,8 @@ s       return 1
         echo "⚙️ Validating table: $table_name"
 
         # Validate that the structure of the table matches on the source and target clusters
-        mysql-exec source replica --default-character-set=utf8mb4 test -e "show create table _${table_name}_del\G" -ss >$orig_structure_output_file
-        mysql-exec target replica --default-character-set=utf8mb4 test -e "show create table ${table_name}\G" -ss >$ghost_structure_output_file
+        mysql-exec source replica --default-character-set=utf8mb4 $database -e "show create table _${table_name}_del\G" -ss >$orig_structure_output_file
+        mysql-exec target replica --default-character-set=utf8mb4 $database -e "show create table ${table_name}\G" -ss >$ghost_structure_output_file
 
         if $(diff $orig_structure_output_file $ghost_structure_output_file > /dev/null 2>&1); then
             echo "ERROR $test_name: structure mismatch on table $table_name"
@@ -417,14 +430,14 @@ s       return 1
         echo_dot
 
         # validate contents match
-        mysql-exec source replica --default-character-set=utf8mb4 test -e "select * from _${table_name}_del" -ss >$orig_content_output_file
-        mysql-exec target replica --default-character-set=utf8mb4 test -e "select * from ${table_name}" -ss >$ghost_content_output_file
+        mysql-exec source replica --default-character-set=utf8mb4 $database -e "select * from _${table_name}_del" -ss >$orig_content_output_file
+        mysql-exec target replica --default-character-set=utf8mb4 $database -e "select * from ${table_name}" -ss >$ghost_content_output_file
         orig_content_checksum=$(cat $orig_content_output_file | md5sum)
         ghost_content_checksum=$(cat $ghost_content_output_file | md5sum)
 
         if [ "$orig_content_checksum" != "$ghost_content_checksum" ]; then
-            mysql-exec source replica --default-character-set=utf8mb4 test -e "select * from _${table_name}_del" -ss >$orig_content_output_file
-            mysql-exec target replica --default-character-set=utf8mb4 test -e "select * from ${table_name}" -ss >$ghost_content_output_file
+            mysql-exec source replica --default-character-set=utf8mb4 $database -e "select * from _${table_name}_del" -ss >$orig_content_output_file
+            mysql-exec target replica --default-character-set=utf8mb4 $database -e "select * from ${table_name}" -ss >$ghost_content_output_file
             echo "ERROR $test_name: checksum mismatch on table $table_name"
             echo "---"
             diff $orig_content_output_file $ghost_content_output_file
@@ -474,6 +487,8 @@ test_all() {
             echo
             echo "+ pass (${test_duration}s)"
         fi
+
+        cleanup
 
         for cluster in source target; do
             mysql_version="$(mysql-exec $cluster replica -e "select @@version")"

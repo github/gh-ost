@@ -111,6 +111,15 @@ main() {
         teardown
     elif [[ "$cmd" == "run" ]]; then
         shift 1
+
+        if [ "$1" == "--rm" ]; then
+            # run teardown, setup,a nd run for convenience
+            echo "⚙️ Bootstrapping environment from scratch..."
+            teardown
+            setup
+            shift 1
+        fi
+
         "$GH_OST_ROOT/localtests/move-tables-test.sh" -d "$@"
     fi
 }
