@@ -1320,6 +1320,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// OnSuccess call that used to live in MoveTables() (after finalCleanup) has
 	// been removed so the hook fires in the order coop_cutover.md §3.2 step 6
 	// requires (T5 between T4 and T6, BEFORE finalCleanup).
+	mgtr.migrationContext.MoveTables.DrainGTID = drainGTID
 	if err := mgtr.hooksExecutor.OnSuccess(false); err != nil {
 		return fmt.Errorf("on-success hook failed: %w", err)
 	}
@@ -2435,11 +2436,7 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 			return nil
 		}
 
-		if !mgtr.migrationContext.IsMoveTablesMode() {
-			// disable throttling in move-tables mode for now
-			// https://github.com/github/database-infrastructure/issues/8212
-			mgtr.throttler.throttle(nil)
-		}
+		mgtr.throttler.throttle(nil)
 
 		// We give higher priority to event processing, then secondary priority to
 		// rowcopy

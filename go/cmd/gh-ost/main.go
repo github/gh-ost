@@ -391,13 +391,6 @@ func main() {
 			// For now, we only support moving a single table at a time.
 			log.Fatal("--move-tables currently supports only a single table")
 		}
-
-		if migrationContext.MoveTables.TargetUser == "" {
-			migrationContext.MoveTables.TargetUser = migrationContext.CliUser
-		}
-		if migrationContext.MoveTables.TargetPass == "" {
-			migrationContext.MoveTables.TargetPass = migrationContext.CliPassword
-		}
 		if migrationContext.MoveTables.TargetDatabase == "" {
 			migrationContext.MoveTables.TargetDatabase = migrationContext.DatabaseName
 		}

@@ -283,6 +283,8 @@ type MigrationContext struct {
 		TargetPass       string   // Target password for the move. If not specified, it will default to the source password.
 		TargetDatabase   string   // Target database name for the move. If not specified, it will default to the source database name.
 		ConnectionConfig *mysql.ConnectionConfig
+
+		DrainGTID mysql.BinlogCoordinates // Source @@gtid_executed captured immediately after the source RENAME TABLE; the applier drains until it reaches this coordinate (move-tables only).
 	}
 
 	Log Logger
@@ -489,6 +491,18 @@ func (mctx *MigrationContext) GetInspectorHostname() string {
 		return ""
 	}
 	return mctx.InspectorConnectionConfig.ImpliedKey.Hostname
+}
+
+// GetTargetHostname is a safe access method to the target hostname.
+// In move-tables mode, this is the hostname of the target database,
+// otherwise it's the same as the applier hostname.
+func (mctx *MigrationContext) GetTargetHostname() string {
+	if mctx.IsMoveTablesMode() &&
+		mctx.MoveTables.ConnectionConfig != nil &&
+		mctx.MoveTables.ConnectionConfig.ImpliedKey != nil {
+		return mctx.MoveTables.ConnectionConfig.ImpliedKey.Hostname
+	}
+	return mctx.GetApplierHostname()
 }
 
 // InspectorIsAlsoApplier is `true` when the both inspector and applier are the
@@ -969,8 +983,14 @@ func (mctx *MigrationContext) ApplyCredentials() {
 			Hostname: mctx.MoveTables.TargetHost,
 			Port:     mctx.MoveTables.TargetPort,
 		})
-		mctx.MoveTables.ConnectionConfig.User = mctx.MoveTables.TargetUser
-		mctx.MoveTables.ConnectionConfig.Password = mctx.MoveTables.TargetPass
+		if mctx.MoveTables.TargetUser != "" {
+			// Override
+			mctx.MoveTables.ConnectionConfig.User = mctx.MoveTables.TargetUser
+		}
+		if mctx.MoveTables.TargetPass != "" {
+			// Override
+			mctx.MoveTables.ConnectionConfig.Password = mctx.MoveTables.TargetPass
+		}
 	}
 }
 
