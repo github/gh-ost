@@ -100,8 +100,9 @@ type Migrator struct {
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
 	//  excessive work happens at the end of the iteration as new copy-jobs arrive before realizing the copy is complete
-	copyRowsQueue    chan tableWriteFunc
-	applyEventsQueue chan *applyEventStruct
+	copyRowsQueue       chan tableWriteFunc
+	applyEventsQueue    chan *applyEventStruct
+	applyEventsInFlight int64
 
 	finishedMigrating int64
 }
@@ -923,21 +924,23 @@ func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) 
 				streamerCoords = mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
 			}
 		}
-		// Normal completion path: applier reached drain and both queues are empty.
-		if drainReached && applyBacklog == 0 && streamerBacklog == 0 {
+		applyInFlight := atomic.LoadInt64(&mgtr.applyEventsInFlight)
+		// Normal completion path: applier reached drain, both queues are empty,
+		// and no apply handler is still running.
+		if drainReached && applyBacklog == 0 && streamerBacklog == 0 && applyInFlight == 0 {
 			mgtr.migrationContext.Log.Infof("T3: drain complete; applier caught up to drain GTID")
 			return nil
 		}
 		// Fallback for non-DML tail: GTID can advance due to unrelated/non-row events,
 		// so applier may stop moving while streamer has already crossed drain.
-		if moveTablesDrainProvenByStreamerProgress(drainGTID, streamerCoords, applyBacklog, streamerBacklog) {
+		if applyInFlight == 0 && moveTablesDrainProvenByStreamerProgress(drainGTID, streamerCoords, applyBacklog, streamerBacklog) {
 			mgtr.migrationContext.Log.Infof("T3: drain complete via streamer frontier (non-DML tail after T2)")
 			return nil
 		}
 		if drainReached {
-			mgtr.migrationContext.Log.Debugf("T3: drain GTID reached but backlog remains (apply=%d, streamer=%d)", applyBacklog, streamerBacklog)
+			mgtr.migrationContext.Log.Debugf("T3: drain GTID reached but backlog remains (apply=%d, streamer=%d, in_flight=%d)", applyBacklog, streamerBacklog, applyInFlight)
 		} else {
-			mgtr.migrationContext.Log.Debugf("T3: applier still behind drain GTID, polling (applier=%s drain=%s)", applierDisplay, drainGTID.DisplayString())
+			mgtr.migrationContext.Log.Debugf("T3: applier still behind drain GTID, polling (applier=%s drain=%s in_flight=%d)", applierDisplay, drainGTID.DisplayString(), applyInFlight)
 		}
 		select {
 		case <-drainCtx.Done():
@@ -945,8 +948,8 @@ func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) 
 			if streamerCoords != nil {
 				streamerDisplay = streamerCoords.DisplayString()
 			}
-			return fmt.Errorf("drain poll timed out after %s: applier did not catch up to drain GTID (applier=%s drain=%s streamer=%s apply_backlog=%d streamer_backlog=%d)",
-				drainTimeout, applierDisplay, drainGTID.DisplayString(), streamerDisplay, applyBacklog, streamerBacklog)
+			return fmt.Errorf("drain poll timed out after %s: applier did not catch up to drain GTID (applier=%s drain=%s streamer=%s apply_backlog=%d streamer_backlog=%d in_flight=%d)",
+				drainTimeout, applierDisplay, drainGTID.DisplayString(), streamerDisplay, applyBacklog, streamerBacklog, applyInFlight)
 		case <-ticker.C:
 		}
 	}
@@ -2251,6 +2254,9 @@ func (mgtr *Migrator) iterateChunks() error {
 }
 
 func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
+	atomic.AddInt64(&mgtr.applyEventsInFlight, 1)
+	defer atomic.AddInt64(&mgtr.applyEventsInFlight, -1)
+
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
 		if eventStruct.writeFunc != nil {
 			if err := mgtr.retryOperation(*eventStruct.writeFunc); err != nil {
