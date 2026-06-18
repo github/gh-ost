@@ -1048,6 +1048,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 			if err := mgtr.addDMLEventsListener(); err != nil {
 				return err
 			}
+			mgtr.initiateThrottler()
 			go func() {
 				if err := mgtr.executeWriteFuncs(); err != nil {
 					_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
