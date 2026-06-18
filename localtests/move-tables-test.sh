@@ -10,9 +10,8 @@
 # TODO(chriskirkland):
 # - tidy up unnecessary complexity
 # - support cleanup between multiple test runs
+# - (nice-to-have) remove trailing newline requirement for tables.txt
 # - ....
-
-set -x
 
 repo_root=$(git rev-parse --show-toplevel)
 script_path="$repo_root/script/move-tables"
@@ -254,12 +253,18 @@ test_single() {
     local test_name
     test_name="$1"
 
-    if [ !-f $tests_path/$test_name/tables.txt ]; then
+    # Read the list of tables to migrate from the test's tables.txt
+    if [ ! -f $tests_path/$test_name/tables.txt ]; then
         echo "🐛 ERROR: $tests_path/$test_name/tables.txt not found"
-        return 1
+s       return 1
     fi
-    # NOTE(chriskirkland): relies on bash >=4.x
-    readarray -t tables_to_migrate < <(cat $tests_path/$test_name/tables.txt)
+    echo "----"
+    cat $tests_path/$test_name/tables.txt
+    echo "----"
+    tables_to_migrate=()
+    while IFS='' read -r line; do
+        tables_to_migrate+=("$line")
+    done < <(cat $tests_path/$test_name/tables.txt)
 
     if [ -f $tests_path/$test_name/ignore_versions ]; then
         ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
@@ -274,7 +279,7 @@ test_single() {
         fi
     fi
 
-    echo -n "Testing: $test_name"
+    echo -n "Testing: $test_name (${#tables_to_migrate[@]} table(s))"
 
     echo_dot
     start_replication source
@@ -349,7 +354,7 @@ test_single() {
     fi
 
     # Build and execute gh-ost command
-    move_tables_arg=$(IFS=,; echo "${tables_to_migrate[*]}")
+    move_tables_arg=$(IFS=, ; echo "${tables_to_migrate[*]}")
     build_ghost_command "$move_tables_arg"
     echo_dot
     echo $cmd >$exec_command_file
