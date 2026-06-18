@@ -7,6 +7,8 @@
 # Usage: localtests/test/sh [filter]
 # By default, runs all move-tables tests. Given filter, will only run tests matching given regep
 
+set -x
+
 repo_root=$(git rev-parse --show-toplevel)
 script_path="$repo_root/script/move-tables"
 tests_path=$(dirname $0)/move-tables
@@ -61,6 +63,7 @@ mysql-exec() {
     cluster=$1
     role=$2
     shift 2
+    # echo "Executing mysql command on the $role of $cluster: \"$@\""
 
     if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
         $script_path/mysql-$cluster-$role --ssl-mode=required "$@"
@@ -73,23 +76,23 @@ verify_master_and_replica() {
     cluster=$1
     echo "Verifying $cluster cluster..."
 
-    if [ "$(mysql-exec $cluster master -e "select 1" -ss)" != "1" ]; then
+    if [ "$(mysql-exec $cluster primary -e "select 1" -ss)" != "1" ]; then
         echo "Cannot verify $cluster primary"
         exit 1
     fi
-    read master_host master_port <<<$(mysql-exec $cluster master -e "select @@hostname, @@port" -ss)
+    read master_host master_port <<<$(mysql-exec $cluster primary -e "select @@hostname, @@port" -ss)
     [ "$master_host" == "$(hostname)" ] && master_host="127.0.0.1"
     echo "# master verified at $master_host:$master_port"
-    if ! mysql-exec $cluster master -e "set global event_scheduler := 1"; then
+    if ! mysql-exec $cluster primary -e "set global event_scheduler := 1"; then
         echo "Cannot enable event_scheduler on master"
         exit 1
     fi
-    original_sql_mode="$(mysql-exec $cluster master -e "select @@global.sql_mode" -s -s)"
+    original_sql_mode="$(mysql-exec $cluster primary -e "select @@global.sql_mode" -s -s)"
     echo "sql_mode on master is ${original_sql_mode}"
 
-    current_gtid_mode=$(mysql-exec $cluster master -s -s -e "select @@global.gtid_mode" 2>/dev/null || echo unsupported)
-    current_enforce_gtid_consistency=$(mysql-exec $cluster master -s -s -e "select @@global.enforce_gtid_consistency" 2>/dev/null || echo unsupported)
-    current_master_server_uuid=$(mysql-exec $cluster master -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
+    current_gtid_mode=$(mysql-exec $cluster primary -s -s -e "select @@global.gtid_mode" 2>/dev/null || echo unsupported)
+    current_enforce_gtid_consistency=$(mysql-exec $cluster primary -s -s -e "select @@global.enforce_gtid_consistency" 2>/dev/null || echo unsupported)
+    current_master_server_uuid=$(mysql-exec $cluster primary -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
     current_replica_server_uuid=$(mysql-exec $cluster replica -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
     echo "gtid_mode on master is ${current_gtid_mode} with enforce_gtid_consistency=${current_enforce_gtid_consistency}"
     echo "server_uuid on master is ${current_master_server_uuid}, replica is ${current_replica_server_uuid}"
@@ -111,10 +114,18 @@ verify_master_and_replica() {
 
     if [ "$docker" = true ]; then
         master_host="0.0.0.0"
-        master_port="3307"
+        if [ "$cluster" == "source" ]; then
+            master_port="3307"
+        elif [ "$cluster" == "target" ]; then
+            master_port="3309"
+        fi
         echo "# using docker master at $master_host:$master_port"
         replica_host="0.0.0.0"
-        replica_port="3308"
+        if [ "$cluster" == "source" ]; then
+            replica_port="3308"
+        elif [ "$cluster" == "target" ]; then
+            replica_port="3310"
+        fi
         echo "# using docker replica at $replica_host:$replica_port"
     fi
 
@@ -168,19 +179,18 @@ build_ghost_command() {
     # TODO(chriskirkland): make --move-tables configurable
     cmd="GOTRACEBACK=crash $ghost_binary \
     --move-tables="gh_ost_test" \
-    --user=gh-ost \
-    --password=gh-ost \
+    --user=root \
+    --password=opensesame \
     --host=$source_replica_host \
     --port=$source_replica_port \
     --database=test \
-    --target-user=gh-ost \
-    --target-password=gh-ost \
+    --target-user=root \
+    --target-password=opensesame \
     --target-host=$target_master_host \
     --target-port=$target_master_port \
     --target-database=test \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
-    --test-on-replica \
     --default-retries=3 \
     --chunk-size=10 \
     --verbose \
@@ -232,6 +242,7 @@ validate_expected_failure() {
 
 cleanup() {
     # noop
+    continue
 }
 
 test_single() {
@@ -240,8 +251,8 @@ test_single() {
 
     if [ -f $tests_path/$test_name/ignore_versions ]; then
         ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
-        mysql_version=$(mysql-exec source master -s -s -e "select @@version")
-        mysql_version_comment=$(mysql-exec source master -s -s -e "select @@version_comment")
+        mysql_version=$(mysql-exec source primary -s -s -e "select @@version")
+        mysql_version_comment=$(mysql-exec source primary -s -s -e "select @@version_comment")
         if echo "$mysql_version" | egrep -q "^${ignore_versions}"; then
             echo -n "Skipping: $test_name"
             return 0
@@ -267,13 +278,13 @@ test_single() {
     fi
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
-        mysql-exec source master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+        mysql-exec source primary --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
         mysql-exec source replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
-        mysql-exec target master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
+        mysql-exec target primary --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
         mysql-exec target replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
     fi
 
-    mysql-exec source master --default-character-set=utf8mb4 test <$tests_path/$test_name/create.sql
+    mysql-exec source primary --default-character-set=utf8mb4 test <$tests_path/$test_name/create.sql
     test_create_result=$?
 
     if [ $test_create_result -ne 0 ]; then
@@ -359,16 +370,16 @@ test_single() {
     fi
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
-        mysql-exec source master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
+        mysql-exec source primary --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
         mysql-exec source replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
-        mysql-exec target master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
+        mysql-exec target primary --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
         mysql-exec target replica --default-character-set=utf8mb4 test -e "set @@global.sql_mode='${original_sql_mode}'"
     fi
 
     # TODO(chriskirkland): use this reset schemas and/or ACLs/permissions on each cluster?
     if [ -f $tests_path/$test_name/destroy.sql ]; then
-        mysql-exec source master --default-character-set=utf8mb4 test <$tests_path/$test_name/destroy.sql
-        mysql-exec target master --default-character-set=utf8mb4 test <$tests_path/$test_name/destroy.sql
+        mysql-exec source primary --default-character-set=utf8mb4 test <$tests_path/$test_name/destroy.sql
+        mysql-exec target primary --default-character-set=utf8mb4 test <$tests_path/$test_name/destroy.sql
     fi
 
     # Validate expected failure or success
@@ -462,5 +473,6 @@ test_all() {
     done <<<"$test_dirs"
 }
 
-verify_master_and_replica
+verify_master_and_replica source
+verify_master_and_replica target
 test_all

@@ -23,6 +23,8 @@ poll_mysql() {
     role=$2
     cmd="$SCRIPT_PATH/mysql-$cluster-$role"
 
+    echo "polling $role for $cluster..."
+
     CTR=0
     while ! $cmd -e "select 1;" >/dev/null 2>&1; do
         sleep 1
@@ -69,14 +71,14 @@ setup() {
         echo "-----------------------------------"
 
         echo "Waiting for MySQL..."
-        poll_mysql "$cluster" "master" || exit 1
+        poll_mysql "$cluster" "primary" || exit 1
         poll_mysql "$cluster" "replica" || exit 1
 
         echo -n "Setting up replication..."
-        mysql-exec "$cluster" "master" -e "create user if not exists 'repl'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'repl';"
-        mysql-exec "$cluster" "master" -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
-        mysql-exec "$cluster" "master" -e "create user if not exists 'gh-ost'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'gh-ost';"
-        mysql-exec "$cluster" "master" -e "grant all on *.* to 'gh-ost'@'%';"
+        mysql-exec "$cluster" "primary" -e "create user if not exists 'repl'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'repl';"
+        mysql-exec "$cluster" "primary" -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
+        mysql-exec "$cluster" "primary" -e "create user if not exists 'gh-ost'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'gh-ost';"
+        mysql-exec "$cluster" "primary" -e "grant all on *.* to 'gh-ost'@'%';"
 
         primary_port=3307
         if [ "$cluster" = "target" ]; then
@@ -85,18 +87,20 @@ setup() {
 
         sleep 1
         if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
-            mysql-exec "$cluster" "replica" -e "change replication source to source_host='mysql-primary', source_port=$primary_port, source_user='repl', source_password='repl', source_auto_position=1, source_ssl=1;"
+            mysql-exec "$cluster" "replica" -e "change replication source to source_host='mysql-$cluster-primary', source_port=$primary_port, source_user='repl', source_password='repl', source_auto_position=1, source_ssl=1;"
             mysql-exec "$cluster" "replica" -e "start replica;"
         else
-            mysql-exec "$cluster" "replica" -e "change master to master_host='mysql-primary', master_port=$primary_port, master_user='repl', master_password='repl', master_auto_position=1;"
+            mysql-exec "$cluster" "replica" -e "change master to master_host='mysql-$cluster-primary', master_port=$primary_port, master_user='repl', master_password='repl', master_auto_position=1;"
             mysql-exec "$cluster" "replica" -e "start slave;"
         fi
         echo "OK"
+    done
 }
 
 teardown() {
     echo "Tearing down..."
-    docker compose down -f "$compose_file.tmp" --volumes --remove-orphans
+    compose_file="$GH_OST_ROOT/localtests/docker-compose-move-tables.yml"
+    docker compose -f "$compose_file.tmp" down --volumes --remove-orphans
 }
 
 main() {
@@ -107,7 +111,7 @@ main() {
         teardown
     elif [[ "$cmd" == "run" ]]; then
         shift 1
-        "$GH_OST_ROOT/localtests/test.sh" -d "$@"
+        "$GH_OST_ROOT/localtests/move-tables-test.sh" -d "$@"
     fi
 }
 
