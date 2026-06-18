@@ -1,0 +1,114 @@
+#!/bin/bash
+
+# This script starts four MySQL docker containers in a primary-replica setup
+# for two distinct clusters which can be used to run move-tables tests
+# in localtests/ .
+# Set the environment var TEST_MYSQL_IMAGE to change the docker image.
+#
+# Usage:
+#   docker-gh-ost-move-tables-tests up [-t]     start the containers
+#   docker-gh-ost-move-tables-tests down        remove the containers
+#   docker-gh-ost-move-tables-tests run [-t]    run move-tables tests on the containers
+
+set -e
+
+GH_OST_ROOT=$(git rev-parse --show-toplevel)
+if [[ ":$PATH:" != *":$GH_OST_ROOT:"* ]]; then
+    export PATH="${PATH}:${GH_OST_ROOT}/script"
+fi
+SCRIPT_PATH="${GH_OST_ROOT}/script/move-tables"
+
+poll_mysql() {
+    cluster=$1
+    role=$2
+    cmd="$SCRIPT_PATH/mysql-$cluster-$role"
+
+    CTR=0
+    while ! $cmd -e "select 1;" >/dev/null 2>&1; do
+        sleep 1
+        CTR=$((CTR + 1))
+        if [ $CTR -gt 30 ]; then
+            echo " ❌ MySQL $1 failed to start"
+            return 1
+        fi
+    done
+    echo " ✔ MySQL $1 OK"
+    return 0
+}
+
+mysql-exec() {
+    cluster=$1
+    role=$2
+    shift 2
+
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        $SCRIPT_PATH/mysql-$cluster-$role --ssl-mode=required "$@"
+    else
+        $SCRIPT_PATH/mysql-$cluster-$role "$@"
+    fi
+}
+
+setup() {
+    [ -z "$TEST_MYSQL_IMAGE" ] && TEST_MYSQL_IMAGE="mysql:8.0.41"
+
+    echo "Starting MySQL $TEST_MYSQL_IMAGE containers..."
+    compose_file="$GH_OST_ROOT/localtests/docker-compose-move-tables.yml"
+    MYSQL_SHA2_RSA_KEYS_FLAG=""
+    MYSQL_PASSWORD_HASHING_ALGORITHM="mysql_native_password"
+    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        MYSQL_PASSWORD_HASHING_ALGORITHM="caching_sha2_password"
+        MYSQL_SHA2_RSA_KEYS_FLAG="--caching-sha2-password-auto-generate-rsa-keys=ON"
+    fi
+    (TEST_MYSQL_IMAGE="$TEST_MYSQL_IMAGE" MYSQL_SHA2_RSA_KEYS_FLAG="$MYSQL_SHA2_RSA_KEYS_FLAG" envsubst <"$compose_file") >"$compose_file.tmp"
+
+    docker compose -f "$compose_file.tmp" up -d --wait
+
+    for cluster in "source" "target"; do
+        echo "-----------------------------------"
+        echo "--- Setting up $cluster cluster ---"
+        echo "-----------------------------------"
+
+        echo "Waiting for MySQL..."
+        poll_mysql "$cluster" "master" || exit 1
+        poll_mysql "$cluster" "replica" || exit 1
+
+        echo -n "Setting up replication..."
+        mysql-exec "$cluster" "master" -e "create user if not exists 'repl'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'repl';"
+        mysql-exec "$cluster" "master" -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
+        mysql-exec "$cluster" "master" -e "create user if not exists 'gh-ost'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'gh-ost';"
+        mysql-exec "$cluster" "master" -e "grant all on *.* to 'gh-ost'@'%';"
+
+        primary_port=3307
+        if [ "$cluster" = "target" ]; then
+            primary_port=3309
+        fi
+
+        sleep 1
+        if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+            mysql-exec "$cluster" "replica" -e "change replication source to source_host='mysql-primary', source_port=$primary_port, source_user='repl', source_password='repl', source_auto_position=1, source_ssl=1;"
+            mysql-exec "$cluster" "replica" -e "start replica;"
+        else
+            mysql-exec "$cluster" "replica" -e "change master to master_host='mysql-primary', master_port=$primary_port, master_user='repl', master_password='repl', master_auto_position=1;"
+            mysql-exec "$cluster" "replica" -e "start slave;"
+        fi
+        echo "OK"
+}
+
+teardown() {
+    echo "Tearing down..."
+    docker compose down -f "$compose_file.tmp" --volumes --remove-orphans
+}
+
+main() {
+    local cmd="$1"
+    if [[ "$cmd" == "up" ]]; then
+        setup
+    elif [[ "$cmd" == "down" ]]; then
+        teardown
+    elif [[ "$cmd" == "run" ]]; then
+        shift 1
+        "$GH_OST_ROOT/localtests/test.sh" -d "$@"
+    fi
+}
+
+main "$@"
