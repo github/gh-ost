@@ -7,6 +7,11 @@
 # Usage: localtests/test/sh [filter]
 # By default, runs all move-tables tests. Given filter, will only run tests matching given regep
 
+# TODO(chriskirkland):
+# - tidy up unnecessary complexity
+# - support cleanup between multiple test runs
+# - ....
+
 set -x
 
 repo_root=$(git rev-parse --show-toplevel)
@@ -19,11 +24,11 @@ docker=false
 gtid=false
 storage_engine=innodb
 exec_command_file=/tmp/gh-ost-test.bash
+orig_structure_output_file=/tmp/gh-ost-test.orig.structure.sql
 ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
 throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
-table_name=
 
 source_master_host=
 source_master_port=
@@ -176,9 +181,9 @@ start_replication() {
 build_ghost_command() {
     # Build gh-ost command with all standard options
     #
-    # TODO(chriskirkland): make --move-tables configurable
+    # expected $1 to be a comma-separated list of tables to move
     cmd="GOTRACEBACK=crash $ghost_binary \
-    --move-tables="gh_ost_test" \
+    --move-tables="$1" \
     --user=root \
     --password=opensesame \
     --host=$source_replica_host \
@@ -242,12 +247,19 @@ validate_expected_failure() {
 
 cleanup() {
     # noop
-    continue
+    return 0
 }
 
 test_single() {
     local test_name
     test_name="$1"
+
+    if [ !-f $tests_path/$test_name/tables.txt ]; then
+        echo "🐛 ERROR: $tests_path/$test_name/tables.txt not found"
+        return 1
+    fi
+    # NOTE(chriskirkland): relies on bash >=4.x
+    readarray -t tables_to_migrate < <(cat $tests_path/$test_name/tables.txt)
 
     if [ -f $tests_path/$test_name/ignore_versions ]; then
         ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
@@ -302,24 +314,9 @@ test_single() {
         extra_args+=" --gtid"
     fi
 
-    # TODO(chriskirkland): remove this static before/after column behavior
-    orig_columns="*"
-    ghost_columns="*"
-    order_by=""
-    if [ -f $tests_path/$test_name/orig_columns ]; then
-        orig_columns=$(cat $tests_path/$test_name/orig_columns)
-    fi
-    if [ -f $tests_path/$test_name/ghost_columns ]; then
-        ghost_columns=$(cat $tests_path/$test_name/ghost_columns)
-    fi
-    if [ -f $tests_path/$test_name/order_by ]; then
-        order_by="order by $(cat $tests_path/$test_name/order_by)"
-    fi
     # graceful sleep for replica to catch up
     echo_dot
     sleep 1
-
-    table_name="gh_ost_test"
 
     # Check for custom test script
     if [ -f $tests_path/$test_name/test.sh ]; then
@@ -352,7 +349,8 @@ test_single() {
     fi
 
     # Build and execute gh-ost command
-    build_ghost_command
+    move_tables_arg=$(IFS=,; echo "${tables_to_migrate[*]}")
+    build_ghost_command "$move_tables_arg"
     echo_dot
     echo $cmd >$exec_command_file
     echo_dot
@@ -392,39 +390,49 @@ test_single() {
         return 0
     fi
 
-    # Test succeeded - now validate structure and checksums
-    mysql-exec target replica --default-character-set=utf8mb4 test -e "show create table ${table_name}\G" -ss >$ghost_structure_output_file
+    # Test succeeded - now validate structure/checksums and contents
+    for table_name in "${tables_to_migrate[@]}"; do
+        echo "⚙️ Validating table: $table_name"
 
-    if [ -f $tests_path/$test_name/expect_table_structure ]; then
-        # TODO(chriskirkland): 
-        # - capture this at the start of the run rather than requiring a file?
-        # - support multi-table
-        expected_table_structure="$(cat $tests_path/$test_name/expect_table_structure)"
-        if ! grep -q "$expected_table_structure" $ghost_structure_output_file; then
-            echo
-            echo "ERROR $test_name: table structure was expected to include ${expected_table_structure} but did not. cat $ghost_structure_output_file:"
-            cat $ghost_structure_output_file
+        # Validate that the structure of the table matches on the source and target clusters
+        mysql-exec source replica --default-character-set=utf8mb4 test -e "show create table _${table_name}_del\G" -ss >$orig_structure_output_file
+        mysql-exec target replica --default-character-set=utf8mb4 test -e "show create table ${table_name}\G" -ss >$ghost_structure_output_file
+
+        if $(diff $orig_structure_output_file $ghost_structure_output_file > /dev/null 2>&1); then
+            echo "ERROR $test_name: structure mismatch on table $table_name"
+            echo "---"
+            diff $orig_structure_output_file $ghost_structure_output_file
+
+            echo "diff $orig_structure_output_file $ghost_structure_output_file"
+
             return 1
         fi
-    fi
+        echo "✅ Table $table_name: structures match"
 
-    echo_dot
-    mysql-exec source replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from _${table_name}_del ${order_by}" -ss >$orig_content_output_file
-    mysql-exec target replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from ${table_name} ${order_by}" -ss >$ghost_content_output_file
-    orig_checksum=$(cat $orig_content_output_file | md5sum)
-    ghost_checksum=$(cat $ghost_content_output_file | md5sum)
+        echo_dot
 
-    if [ "$orig_checksum" != "$ghost_checksum" ]; then
-        mysql-exec source replica --default-character-set=utf8mb4 test -e "select ${orig_columns} from _${table_name}_del" -ss >$orig_content_output_file
-        mysql-exec target replica --default-character-set=utf8mb4 test -e "select ${ghost_columns} from ${table_name}" -ss >$ghost_content_output_file
-        echo "ERROR $test_name: checksum mismatch"
-        echo "---"
-        diff $orig_content_output_file $ghost_content_output_file
+        # validate contents match
+        mysql-exec source replica --default-character-set=utf8mb4 test -e "select * from _${table_name}_del" -ss >$orig_content_output_file
+        mysql-exec target replica --default-character-set=utf8mb4 test -e "select * from ${table_name}" -ss >$ghost_content_output_file
+        orig_content_checksum=$(cat $orig_content_output_file | md5sum)
+        ghost_content_checksum=$(cat $ghost_content_output_file | md5sum)
 
-        echo "diff $orig_content_output_file $ghost_content_output_file"
+        if [ "$orig_content_checksum" != "$ghost_content_checksum" ]; then
+            mysql-exec source replica --default-character-set=utf8mb4 test -e "select * from _${table_name}_del" -ss >$orig_content_output_file
+            mysql-exec target replica --default-character-set=utf8mb4 test -e "select * from ${table_name}" -ss >$ghost_content_output_file
+            echo "ERROR $test_name: checksum mismatch on table $table_name"
+            echo "---"
+            diff $orig_content_output_file $ghost_content_output_file
 
-        return 1
-    fi
+            echo "diff $orig_content_output_file $ghost_content_output_file"
+
+            return 1
+        fi
+        echo "✅ Table $table_name: content checksums match"
+
+        echo_dot
+        echo_dot
+    done
 }
 
 build_binary() {
@@ -471,6 +479,8 @@ test_all() {
             mysql-exec $cluster replica -e "start $replica_terminology"
         done
     done <<<"$test_dirs"
+
+    echo "✅ All tests completed."
 }
 
 verify_master_and_replica source
