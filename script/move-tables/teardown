@@ -18,3 +18,7 @@ docker stop mysql-source-replica mysql-source-primary mysql-target-replica mysql
 
 echo "Removing containers..."
 docker rm -f mysql-source-replica mysql-source-primary mysql-target-replica mysql-target-primary 2>/dev/null || true
+
+echo "Cleaning up Docker resources..."
+docker system prune -f
+docker volume prune -f

@@ -1347,7 +1347,7 @@ func TestCheckpointQueryBuilder(t *testing.T) {
 	tableName := "_tbl_ghk"
 	valueArgs := []interface{}{"mona", "mascot", int8(-17), "anothername", "anotherposition", int8(-2)}
 	uniqueKeyColumns := NewColumnList([]string{"name", "position", "my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长很长很长"})
-	builder, err := NewCheckpointQueryBuilder(databaseName, tableName, uniqueKeyColumns)
+	builder, err := NewCheckpointQueryBuilder(databaseName, tableName, uniqueKeyColumns, false)
 	require.NoError(t, err)
 	query, uniqueKeyArgs, err := builder.BuildQuery(valueArgs)
 	require.NoError(t, err)
@@ -1360,6 +1360,33 @@ func TestCheckpointQueryBuilder(t *testing.T) {
 		values
 		(unix_timestamp(now()), ?, ?,
 			 ?, ?, ?,
+			 ?, ?, ?,
+			 ?, ?, ?)
+    `
+	require.Equal(t, normalizeQuery(expected), normalizeQuery(query))
+	require.Equal(t, []interface{}{"mona", "mascot", int8(-17), "anothername", "anotherposition", int8(-2)}, uniqueKeyArgs)
+}
+
+func TestMoveTablesCheckpointQueryBuilder(t *testing.T) {
+	databaseName := "mydb"
+	tableName := "_tbl_ghk"
+	valueArgs := []interface{}{"mona", "mascot", int8(-17), "anothername", "anotherposition", int8(-2)}
+	uniqueKeyColumns := NewColumnList([]string{"name", "position", "my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长很长很长"})
+	builder, err := NewCheckpointQueryBuilder(databaseName, tableName, uniqueKeyColumns, true)
+	require.NoError(t, err)
+	query, uniqueKeyArgs, err := builder.BuildQuery(valueArgs)
+	require.NoError(t, err)
+	expected := `
+		insert /* gh-ost */ into mydb._tbl_ghk
+		(gh_ost_chk_timestamp, gh_ost_chk_coords, gh_ost_chk_iteration,
+		 gh_ost_rows_copied, gh_ost_dml_applied, gh_ost_is_cutover,
+		 gh_ost_move_tables_cutover_started, gh_ost_move_tables_drain_gtid,
+		 name_min, position_min, my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长_min,
+		 name_max, position_max, my_very_long_column_that_is_64_utf8_characters_long_很长很长很长很长_max)
+		values
+		(unix_timestamp(now()), ?, ?,
+			 ?, ?, ?,
+			 ?, ?,
 			 ?, ?, ?,
 			 ?, ?, ?)
     `
