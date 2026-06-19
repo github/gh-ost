@@ -21,6 +21,24 @@ import (
 	uuid "github.com/google/uuid"
 )
 
+type RowsEventFilterFunc func(databaseName, tableName string) bool
+
+func newRowsEventDecodeFunc(rowsEventFilter RowsEventFilterFunc) func(*replication.RowsEvent, []byte) error {
+	if rowsEventFilter == nil {
+		return nil
+	}
+	return func(rowsEvent *replication.RowsEvent, data []byte) error {
+		pos, err := rowsEvent.DecodeHeader(data)
+		if err != nil {
+			return err
+		}
+		if !rowsEventFilter(string(rowsEvent.Table.Schema), string(rowsEvent.Table.Table)) {
+			return nil
+		}
+		return rowsEvent.DecodeData(pos, data)
+	}
+}
+
 type GoMySQLReader struct {
 	migrationContext        *base.MigrationContext
 	connectionConfig        *mysql.ConnectionConfig
@@ -33,24 +51,30 @@ type GoMySQLReader struct {
 	LastTrxCoords mysql.BinlogCoordinates
 }
 
-func NewGoMySQLReader(migrationContext *base.MigrationContext) *GoMySQLReader {
+func NewGoMySQLReader(migrationContext *base.MigrationContext, rowsEventFilters ...RowsEventFilterFunc) *GoMySQLReader {
 	connectionConfig := migrationContext.InspectorConnectionConfig
+	var rowsEventFilter RowsEventFilterFunc
+	if len(rowsEventFilters) > 0 {
+		rowsEventFilter = rowsEventFilters[0]
+	}
+	config := replication.BinlogSyncerConfig{
+		ServerID:                uint32(migrationContext.ReplicaServerId),
+		Flavor:                  gomysql.MySQLFlavor,
+		Host:                    connectionConfig.Key.Hostname,
+		Port:                    uint16(connectionConfig.Key.Port),
+		User:                    connectionConfig.User,
+		Password:                connectionConfig.Password,
+		TLSConfig:               connectionConfig.TLSConfig(),
+		UseDecimal:              true,
+		TimestampStringLocation: time.UTC,
+		MaxReconnectAttempts:    migrationContext.BinlogSyncerMaxReconnectAttempts,
+	}
+	config.RowsEventDecodeFunc = newRowsEventDecodeFunc(rowsEventFilter)
 	return &GoMySQLReader{
 		migrationContext:        migrationContext,
 		connectionConfig:        connectionConfig,
 		currentCoordinatesMutex: &sync.Mutex{},
-		binlogSyncer: replication.NewBinlogSyncer(replication.BinlogSyncerConfig{
-			ServerID:                uint32(migrationContext.ReplicaServerId),
-			Flavor:                  gomysql.MySQLFlavor,
-			Host:                    connectionConfig.Key.Hostname,
-			Port:                    uint16(connectionConfig.Key.Port),
-			User:                    connectionConfig.User,
-			Password:                connectionConfig.Password,
-			TLSConfig:               connectionConfig.TLSConfig(),
-			UseDecimal:              true,
-			TimestampStringLocation: time.UTC,
-			MaxReconnectAttempts:    migrationContext.BinlogSyncerMaxReconnectAttempts,
-		}),
+		binlogSyncer:            replication.NewBinlogSyncer(config),
 	}
 }
 
