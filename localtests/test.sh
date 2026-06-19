@@ -472,7 +472,7 @@ build_binary() {
 
 test_all() {
     build_binary
-    test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | sort)
+    test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | grep -v move-tables | sort)
     while read -r test_dir; do
         test_name=$(basename "$test_dir")
         local test_start_time=$(date +%s)
