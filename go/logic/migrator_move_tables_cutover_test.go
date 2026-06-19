@@ -24,10 +24,10 @@ import (
 
 // -----------------------------------------------------------------------------
 // Pure unit tests - no MySQL. These exercise the orchestration branches that
-// run BEFORE T1's RENAME, so they do not require a real inspector.db. Per the
-// Option A decision in commit 3's plan, the "RENAME was not attempted" check
-// is a proxy assertion: m.inspector is nil, so if T1 were reached the test
-// would panic instead of silently passing.
+// run BEFORE T1's RENAME, so they do not require a real source-primary DB. The
+// "RENAME was not attempted" check is a proxy assertion: m.sourcePrimaryDB is
+// nil, so if T1 were reached the test would fail with the source-primary-not-
+// initialized error instead of the earlier error it asserts on.
 // -----------------------------------------------------------------------------
 
 // TestMoveTablesCutOver_NoopShortCircuits maps to the Noop semantics decision
@@ -55,8 +55,9 @@ func TestMoveTablesCutOver_NoopShortCircuits(t *testing.T) {
 
 // TestMoveTablesCutOver_OnBeforeCutOverHookAbortsBeforeRename maps to T0 in
 // coop_cutover.md section 1.3 ("non-zero return code aborts cutover"). The "aborts
-// BEFORE source DDL" assertion is enforced as a proxy: m.inspector is nil, so
-// if T1 RENAME executed via mgtr.inspector.db, this test would panic.
+// BEFORE source DDL" assertion is enforced as a proxy: m.sourcePrimaryDB is nil,
+// so if T1 RENAME executed it would fail with the source-primary-not-initialized
+// error rather than the asserted hook error.
 func TestMoveTablesCutOver_OnBeforeCutOverHookAbortsBeforeRename(t *testing.T) {
 	var calls []string
 	boom := errors.New("hook says no")
@@ -251,8 +252,10 @@ func (s *MoveTablesCutOverSuite) containingDrainGTID() *mysql.GTIDBinlogCoordina
 }
 
 // buildMigrator wires a Migrator with the test container's *sql.DB pinned to
-// inspector.db and a fresh Applier. initialCoords may be nil for the drain-
-// timeout case.
+// inspector.db and a fresh Applier. The cutover RENAME + drain-GTID capture run
+// on sourcePrimaryDB (a dedicated handle with multiStatements enabled, since
+// T1/T2 are issued as a single multi-statement round trip). initialCoords may be
+// nil for the drain-timeout case.
 func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks base.Hooks, initialCoords mysql.BinlogCoordinates) (*Migrator, *base.MigrationContext) {
 	ctx := context.Background()
 	connectionConfig, err := getTestConnectionConfig(ctx, s.mysqlContainer)
@@ -261,11 +264,17 @@ func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks base.Hooks, initialCoor
 	mc := newTestMigrationContext()
 	mc.ApplierConnectionConfig = connectionConfig
 	mc.InspectorConnectionConfig = connectionConfig
+	mc.MoveTables.SourcePrimaryConnectionConfig = connectionConfig
 	mc.SetConnectionConfig("innodb")
 	mc.Hooks = fakeHooks
 
 	m := NewMigrator(mc, "test")
 	m.inspector = &Inspector{db: s.db, migrationContext: mc}
+	// The source primary handle needs multiStatements enabled for the consolidated
+	// T1+T2 (RENAME; SELECT @@global.gtid_executed) round trip.
+	sourcePrimaryDB, _, err := mysql.GetDB(mc.Uuid, connectionConfig.GetDBUri(testMysqlDatabase)+"&multiStatements=true")
+	s.Require().NoError(err)
+	m.sourcePrimaryDB = sourcePrimaryDB
 	m.applier = NewApplier(mc)
 	if initialCoords != nil {
 		m.applier.CurrentCoordinatesMutex.Lock()
@@ -273,6 +282,27 @@ func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks base.Hooks, initialCoor
 		m.applier.CurrentCoordinatesMutex.Unlock()
 	}
 	return m, mc
+}
+
+// TestDropSourceOldTableUsesSourcePrimary verifies the source `__del` rollback
+// handle is dropped through the dedicated source-primary connection. In
+// production the inspector/streamer source connections may be a read replica, so
+// the drop must not route through them.
+func (s *MoveTablesCutOverSuite) TestDropSourceOldTableUsesSourcePrimary() {
+	ctx := context.Background()
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestOldTableName()))
+	s.Require().NoError(err)
+
+	var calls []string
+	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
+	m, _ := s.buildMigrator(fakeHooks, s.containingDrainGTID())
+
+	s.Require().NoError(m.dropSourceOldTable())
+
+	var name string
+	err = s.db.QueryRow(fmt.Sprintf("SHOW TABLES IN %s LIKE '_%s_del'",
+		testMysqlDatabase, testMysqlTableName)).Scan(&name)
+	s.Require().ErrorIs(err, gosql.ErrNoRows, "source __del handle must be dropped via the source primary")
 }
 
 // TestHappyPath drives the full T0-T6 protocol against the test container.
@@ -322,7 +352,7 @@ func (s *MoveTablesCutOverSuite) TestRenameFailurePropagates() {
 
 	err := m.moveTablesCutOver()
 	s.Require().Error(err)
-	s.Require().Contains(err.Error(), "RENAME failed")
+	s.Require().Contains(err.Error(), "source RENAME + drain GTID capture failed")
 
 	s.Require().Equal(int64(0), atomic.LoadInt64(&mc.CutOverCompleteFlag),
 		"post-state: RENAME failure must leave CutOverCompleteFlag unset")

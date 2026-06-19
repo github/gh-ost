@@ -285,6 +285,15 @@ type MigrationContext struct {
 		TargetDatabase   string   // Target database name for the move. If not specified, it will default to the source database name.
 		ConnectionConfig *mysql.ConnectionConfig
 
+		// SourcePrimaryConnectionConfig is the detected source-cluster primary. All
+		// source reads (schema inspection, row copy, binlog streaming) go through the
+		// inspector config (InspectorConnectionConfig), which may point at a read
+		// replica to take load off the primary. The cutover RENAME + drain-GTID
+		// capture and the source `__del` DROP must run on a writable primary, so they
+		// use this dedicated config. When the source --host is itself the primary (no
+		// replica topology), detection returns the inspector key and the two coincide.
+		SourcePrimaryConnectionConfig *mysql.ConnectionConfig
+
 		DrainGTID mysql.BinlogCoordinates // Source @@gtid_executed captured immediately after the source RENAME TABLE; the applier drains until it reaches this coordinate (move-tables only).
 	}
 
