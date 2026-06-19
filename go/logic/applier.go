@@ -18,6 +18,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/sql"
 
 	"context"
@@ -1044,8 +1045,10 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 			return hasFurtherRange, err
 		}
 
+		queryStartTime := time.Now()
 		rows, err := apl.db.Query(query, explodedArgs...)
 		if err != nil {
+			metrics.RecordQueryDuration(apl.migrationContext.Metrics, "source", "range_select", time.Since(queryStartTime), err)
 			return hasFurtherRange, err
 		}
 		defer rows.Close()
@@ -1053,13 +1056,16 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 		iterationRangeMaxValues := sql.NewColumnValues(apl.migrationContext.UniqueKey.Len())
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
+				metrics.RecordQueryDuration(apl.migrationContext.Metrics, "source", "range_select", time.Since(queryStartTime), err)
 				return hasFurtherRange, err
 			}
 			hasFurtherRange = true
 		}
 		if err = rows.Err(); err != nil {
+			metrics.RecordQueryDuration(apl.migrationContext.Metrics, "source", "range_select", time.Since(queryStartTime), err)
 			return hasFurtherRange, err
 		}
+		metrics.RecordQueryDuration(apl.migrationContext.Metrics, "source", "range_select", time.Since(queryStartTime), nil)
 		if hasFurtherRange {
 			apl.migrationContext.MigrationIterationRangeMaxValues = iterationRangeMaxValues
 			return hasFurtherRange, nil
@@ -1107,7 +1113,9 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 		if _, err := tx.Exec(sessionQuery); err != nil {
 			return nil, err
 		}
+		queryStartTime := time.Now()
 		result, err := tx.Exec(query, explodedArgs...)
+		metrics.RecordQueryDuration(apl.migrationContext.Metrics, "target", "chunk_copy", time.Since(queryStartTime), err)
 		if err != nil {
 			return nil, err
 		}
@@ -1820,13 +1828,16 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 		// in the batch. SHOW WARNINGS only shows warnings from the last statement in a
 		// multi-statement query, so we interleave SHOW WARNINGS after each DML statement.
 		if apl.migrationContext.PanicOnWarnings {
+			queryStartTime := time.Now()
 			totalDelta, err = apl.executeBatchWithWarningChecking(ctx, tx, buildResults)
+			metrics.RecordQueryDuration(apl.migrationContext.Metrics, "target", "binlog_apply", time.Since(queryStartTime), err)
 			if err != nil {
 				return rollback(err)
 			}
 		} else {
 			// Fast path: batch together DML queries into multi-statements to minimize network trips.
 			// We use the raw driver connection to access the rows affected for each statement.
+			queryStartTime := time.Now()
 			execErr := conn.Raw(func(driverConn any) error {
 				ex := driverConn.(driver.ExecerContext)
 				nvc := driverConn.(driver.NamedValueChecker)
@@ -1860,6 +1871,7 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 				return nil
 			})
 
+			metrics.RecordQueryDuration(apl.migrationContext.Metrics, "target", "binlog_apply", time.Since(queryStartTime), execErr)
 			if execErr != nil {
 				return rollback(execErr)
 			}

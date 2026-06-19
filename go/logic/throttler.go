@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 )
@@ -38,7 +39,10 @@ var (
 	}
 )
 
-const frenoMagicHint = "freno"
+const (
+	frenoMagicHint               = "freno"
+	throttleActiveMetricInterval = time.Second
+)
 
 // Throttler collects metrics related to throttling and makes informed decision
 // whether throttling should take place.
@@ -50,6 +54,10 @@ type Throttler struct {
 	httpClientTimeout time.Duration
 	inspector         *Inspector
 	finishedMigrating int64
+
+	throttleStartedAt     time.Time
+	throttleStartedReason string
+	throttleActiveEmitted time.Time
 }
 
 func NewThrottler(migrationContext *base.MigrationContext, applier *Applier, inspector *Inspector, appVersion string) *Throttler {
@@ -463,6 +471,32 @@ func (thlr *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan
 	}()
 }
 
+func (thlr *Throttler) recordThrottleMetrics(alreadyThrottling bool, shouldThrottle bool, throttleReason string, now time.Time) {
+	throttleStateChanged := shouldThrottle != alreadyThrottling
+	shouldEmitActiveGauge := throttleStateChanged ||
+		thlr.throttleActiveEmitted.IsZero() ||
+		now.Sub(thlr.throttleActiveEmitted) >= throttleActiveMetricInterval
+	if shouldEmitActiveGauge {
+		metrics.EmitThrottleActiveGauge(thlr.migrationContext.Metrics, shouldThrottle)
+		thlr.throttleActiveEmitted = now
+	}
+
+	if shouldThrottle && !alreadyThrottling {
+		thlr.throttleStartedAt = now
+		thlr.throttleStartedReason = throttleReason
+		return
+	}
+	if alreadyThrottling && !shouldThrottle && !thlr.throttleStartedAt.IsZero() {
+		metrics.EmitThrottleInterval(
+			thlr.migrationContext.Metrics,
+			now.Sub(thlr.throttleStartedAt),
+			thlr.throttleStartedReason,
+		)
+		thlr.throttleStartedAt = time.Time{}
+		thlr.throttleStartedReason = ""
+	}
+}
+
 // initiateThrottlerChecks initiates the throttle ticker and sets the basic behavior of throttling.
 func (thlr *Throttler) initiateThrottlerChecks() {
 	throttlerFunction := func() {
@@ -478,6 +512,7 @@ func (thlr *Throttler) initiateThrottlerChecks() {
 			// End of throttling
 			thlr.applier.WriteAndLogChangelog("throttle", "done throttling")
 		}
+		thlr.recordThrottleMetrics(alreadyThrottling, shouldThrottle, throttleReason, time.Now())
 		thlr.migrationContext.SetThrottled(shouldThrottle, throttleReason, throttleReasonHint)
 	}
 	throttlerFunction()
