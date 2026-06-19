@@ -226,6 +226,7 @@ type MigrationContext struct {
 	UserCommandedUnpostponeFlag            int64
 	CutOverCompleteFlag                    int64
 	InCutOverCriticalSectionFlag           int64
+	MoveTablesSourceRenamedFlag            int64
 	PanicAbort                             chan error
 
 	// Context for cancellation signaling across all goroutines
