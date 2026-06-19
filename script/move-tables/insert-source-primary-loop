@@ -13,6 +13,7 @@ start_i="${1:-100000}"
 delay="${2:-0.2}"
 rows_per_batch="${3:-1}"
 i="$start_i"
+DATABASE="${DATABASE:-gh_ost_test_db}
 
 echo "Starting continuous inserts on source primary. Press Ctrl+C to stop."
 echo "start_column1=$start_i sleep_seconds=$delay rows_per_batch=$rows_per_batch"
@@ -33,7 +34,7 @@ while true; do
     values+="$row"
   done
 
-  script/move-tables/mysql-source-primary -D test -e "
+  script/move-tables/mysql-source-primary -D $DATABASE -e "
     INSERT INTO gh_ost_test (column1, column2, column3, column4, column5, column6)
     VALUES $values;
   "

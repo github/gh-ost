@@ -370,9 +370,9 @@ func main() {
 		if migrationContext.MoveTables.TargetHost == "" {
 			log.Fatal("--target-host must be specified when using --move-tables")
 		}
-		//if migrationContext.PostponeCutOverFlagFile == "" {
-		//	log.Fatal("--postpone-cut-over-flag-file must be specified when using --move-tables")
-		//}
+		if migrationContext.PostponeCutOverFlagFile == "" {
+			log.Fatal("--postpone-cut-over-flag-file must be specified when using --move-tables")
+		}
 		if !migrationContext.Checkpoint {
 			log.Infof("--move-tables requires checkpointing; enabling --checkpoint")
 			migrationContext.Checkpoint = true

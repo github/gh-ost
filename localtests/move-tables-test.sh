@@ -26,7 +26,7 @@ orig_structure_output_file=/tmp/gh-ost-test.orig.structure.sql
 ghost_structure_output_file=/tmp/gh-ost-test.ghost.structure.sql
 orig_content_output_file=/tmp/gh-ost-test.orig.content.csv
 ghost_content_output_file=/tmp/gh-ost-test.ghost.content.csv
-throttle_flag_file=/tmp/gh-ost-test.ghost.throttle.flag
+postpone_cutover_flag_file=/tmp/gh-ost-test.ghost.postpone.flag
 
 source_master_host=
 source_master_port=
@@ -199,6 +199,7 @@ build_ghost_command() {
     --debug \
     --stack \
     --checkpoint \
+    --postpone-cut-over-flag-file=$postpone_cutover_flag_file \
     --execute ${extra_args[@]}"
 }
 
@@ -362,6 +363,13 @@ s       return 1
         $tests_path/$test_name/on_test.sh &> /dev/null &
         on_test_pid=$!
     fi
+
+    # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
+    (
+        sleep 1; 
+        echo "⏩ Sending unpostpone cutover"
+        rm $postpone_cutover_flag_file &> /dev/null;
+    ) &
 
     # Build and execute gh-ost command
     move_tables_arg=$(IFS=, ; echo "${tables_to_migrate[*]}")
