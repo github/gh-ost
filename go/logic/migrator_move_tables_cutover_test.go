@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -82,6 +83,21 @@ func TestMoveTablesCutOver_OnBeforeCutOverHookAbortsBeforeRename(t *testing.T) {
 		"post-state: only the failing T0 hook fires; no OnSuccess, no OnBeginPostponed")
 }
 
+type onSuccessCheckHooks struct {
+	*recordingHooks
+	onSuccessCheck func() error
+}
+
+func (h *onSuccessCheckHooks) OnSuccess(bool) error {
+	if err := h.record("OnSuccess"); err != nil {
+		return err
+	}
+	if h.onSuccessCheck != nil {
+		return h.onSuccessCheck()
+	}
+	return nil
+}
+
 // TestMoveTablesCutOver_PostponeGateFiresOnBeginPostponedOnce maps to the
 // postpone-gate decision in #8209-implement-protocol (keep OnBeginPostponed
 // firing logic with the same once-per-cutover semantics as standard cutOver).
@@ -129,6 +145,43 @@ func TestMoveTablesCutOver_PostponeGateFiresOnBeginPostponedOnce(t *testing.T) {
 		"post-state: T0 hook must fire after gate releases")
 	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag),
 		"post-state: hook failure must leave CutOverCompleteFlag unset")
+}
+
+// TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained verifies the crash-
+// safe resume branch skips T1 entirely and proceeds directly to T5 when the
+// persisted checkpoint already shows a drain-satisfied position.
+func TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained(t *testing.T) {
+	var calls []string
+	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
+
+	ctx := base.NewMigrationContext()
+	ctx.Hooks = fakeHooks
+	ctx.Checkpoint = false
+
+	m := NewMigrator(ctx, "test")
+	m.applier = NewApplier(ctx)
+
+	drainGTID, err := mysql.NewGTIDBinlogCoordinates("11111111-1111-1111-1111-111111111111:1-10")
+	require.NoError(t, err)
+
+	chk := &Checkpoint{
+		LastTrxCoords:              drainGTID,
+		MoveTablesCutOverStarted:   true,
+		MoveTablesCutOverDrainGTID: drainGTID,
+	}
+
+	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag), "pre-state: flag must be 0")
+	require.Empty(t, calls, "pre-state: no hooks recorded")
+
+	require.NoError(t, m.resumeMoveTablesCutOverFromCheckpoint(chk))
+
+	require.Equal(t, int64(1), atomic.LoadInt64(&ctx.CutOverCompleteFlag),
+		"post-state: resume path must set CutOverCompleteFlag before exiting")
+	require.Equal(t, []string{"fake:OnSuccess"}, calls,
+		"post-state: resume path should jump directly to T5 without rerunning T0/T1")
+	if m.applier.CurrentCoordinates != nil {
+		require.Equal(t, drainGTID.String(), m.applier.CurrentCoordinates.String())
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -200,7 +253,7 @@ func (s *MoveTablesCutOverSuite) containingDrainGTID() *mysql.GTIDBinlogCoordina
 // buildMigrator wires a Migrator with the test container's *sql.DB pinned to
 // inspector.db and a fresh Applier. initialCoords may be nil for the drain-
 // timeout case.
-func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks *recordingHooks, initialCoords mysql.BinlogCoordinates) (*Migrator, *base.MigrationContext) {
+func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks base.Hooks, initialCoords mysql.BinlogCoordinates) (*Migrator, *base.MigrationContext) {
 	ctx := context.Background()
 	connectionConfig, err := getTestConnectionConfig(ctx, s.mysqlContainer)
 	s.Require().NoError(err)
@@ -356,6 +409,98 @@ func (s *MoveTablesCutOverSuite) TestDrainWaitsForQueuedDML() {
 	}
 	s.Require().Equal([]string{"fake:OnBeforeCutOver"}, calls,
 		"post-state: only T0 fires before the drain loop times out")
+}
+
+// TestDrainWaitsForInFlightApplyEvent ensures T3 does not complete while an
+// apply handler is still running. The blocked handler simulates the last source
+// DML not yet landing on the target. If T3 exits early, OnSuccess observes the
+// target missing that row and fails immediately.
+func (s *MoveTablesCutOverSuite) TestDrainWaitsForInFlightApplyEvent() {
+	ctx := context.Background()
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", testMysqlDatabaseOther))
+	s.Require().NoError(err)
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestTableName()))
+	s.Require().NoError(err)
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestOtherTableName()))
+	s.Require().NoError(err)
+	s.T().Cleanup(func() {
+		_, _ = s.db.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+getTestOtherTableName())
+	})
+
+	drainGTID := s.containingDrainGTID()
+	const pendingID = 42
+	raceErr := errors.New("on-success observed target missing in-flight apply")
+
+	origPoll := moveTablesCutOverDrainPollInterval
+	moveTablesCutOverDrainPollInterval = 50 * time.Millisecond
+	s.T().Cleanup(func() {
+		moveTablesCutOverDrainPollInterval = origPoll
+	})
+
+	var calls []string
+	fakeHooks := &onSuccessCheckHooks{
+		recordingHooks: &recordingHooks{name: "fake", calls: &calls},
+		onSuccessCheck: func() error {
+			var count int
+			query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id = ?", getTestOtherTableName())
+			if err := s.db.QueryRowContext(context.Background(), query, pendingID).Scan(&count); err != nil {
+				return err
+			}
+			if count == 0 {
+				return raceErr
+			}
+			return nil
+		},
+	}
+	m, mc := s.buildMigrator(fakeHooks, drainGTID)
+	mc.CutOverLockTimeoutSeconds = 1
+	m.applier.CurrentCoordinatesMutex.Lock()
+	m.applier.CurrentCoordinates = drainGTID
+	m.applier.CurrentCoordinatesMutex.Unlock()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	releaseApply := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	s.T().Cleanup(releaseApply)
+	blockApply := tableWriteFunc(func() error {
+		startedOnce.Do(func() {
+			close(started)
+		})
+		<-release
+		_, err := s.db.ExecContext(context.Background(), fmt.Sprintf("INSERT INTO %s VALUES (?)", getTestOtherTableName()), pendingID)
+		return err
+	})
+	go func() {
+		<-started
+		time.Sleep(200 * time.Millisecond)
+		releaseApply()
+	}()
+	go func() {
+		_ = m.onApplyEventStruct(newApplyEventStructByFunc(&blockApply))
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		s.Require().FailNow("blocked apply event never started")
+	}
+
+	s.Require().Equal(int64(0), atomic.LoadInt64(&mc.CutOverCompleteFlag), "pre-state: flag must be 0")
+	err = m.moveTablesCutOver()
+	s.Require().NoError(err)
+
+	var count int
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id = ?", getTestOtherTableName())
+	s.Require().NoError(s.db.QueryRowContext(context.Background(), query, pendingID).Scan(&count))
+	s.Require().Equal(1, count, "post-state: target must contain the pending row by the time cutover succeeds")
+	s.Require().Equal([]string{"fake:OnBeforeCutOver", "fake:OnSuccess"}, calls,
+		"post-state: cutover should only reach OnSuccess after the target row is present")
 }
 
 func TestMoveTablesCutOver(t *testing.T) {
