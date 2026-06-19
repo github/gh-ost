@@ -21,20 +21,19 @@ SCRIPT_PATH="${GH_OST_ROOT}/script/move-tables"
 poll_mysql() {
     cluster=$1
     role=$2
-    cmd="$SCRIPT_PATH/mysql-$cluster-$role"
 
     echo "polling $role for $cluster..."
 
     CTR=0
-    while ! $cmd -e "select 1;" >/dev/null 2>&1; do
+    while ! mysql-exec "$cluster" "$role" -e "select 1;" >/dev/null 2>&1; do
         sleep 1
         CTR=$((CTR + 1))
         if [ $CTR -gt 30 ]; then
-            echo " ❌ MySQL $1 failed to start"
+            echo " ❌ MySQL $cluster/$role failed to start"
             return 1
         fi
     done
-    echo " ✔ MySQL $1 OK"
+    echo " ✔ MySQL $cluster/$role OK"
     return 0
 }
 
