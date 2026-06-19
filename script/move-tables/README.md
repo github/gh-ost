@@ -24,13 +24,8 @@ script/build --cli
 
 Run gh-ost to move tables:
 ```bash
-./script/build --cli; ./bin/gh-ost --move-tables=gh_ost_test --host=localhost --port=3307 --user root --password opensesame --database=gh_ost_test_db --target-host=localhost --target-port=3309 --target-user root --target-password opensesame --target-database=gh_ost_test_db --postpone-cut-over-flag-file=/tmp/ghost-move-tables.postpone.flag --execute --verbose --checkpoint --checkpoint-seconds 10 --initially-drop-socket-file
+./script/build --cli; ./bin/gh-ost --move-tables=gh_ost_test --host=localhost --port=3308 --user root --password opensesame --database=gh_ost_test_db --target-host=localhost --target-port=3309 --target-user root --target-password opensesame --target-database=gh_ost_test_db --postpone-cut-over-flag-file=/tmp/ghost-move-tables.postpone.flag --execute --verbose --checkpoint --checkpoint-seconds 10 --initially-drop-socket-file
 ```
-
-Note: replicas in this local topology are configured with `read_only=ON` and
-`super_read_only=ON`. If you point `--host` at `mysql-source-replica` (3308),
-the cutover `RENAME TABLE` step will fail by design. Use source primary (3307)
-as the inspected host when you want cutover to rename on source.
 
 Start continuous inserts against the source.
 ```bash

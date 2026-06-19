@@ -1785,6 +1785,28 @@ func (mgtr *Migrator) setupMoveTablesSourcePrimary(dbVersion string) error {
 	return nil
 }
 
+// validateMoveTablesSourceReadHost stops a move-tables run early when the source
+// --host is the cluster primary. The read path (schema inspection, the full row
+// copy, and binlog streaming) all run on --host; pointing it at the primary puts
+// the copy load on the primary, which is exactly what move-tables aims to avoid.
+// We detect this by comparing the resolved source primary against the inspector
+// key — when --host is the primary, master detection returns the inspector
+// config unchanged, so the keys match. The operator can repoint --host at a
+// replica or explicitly opt in with --allow-on-source-primary.
+func (mgtr *Migrator) validateMoveTablesSourceReadHost() error {
+	if mgtr.migrationContext.MoveTables.AllowOnSourcePrimary {
+		return nil
+	}
+	spc := mgtr.migrationContext.MoveTables.SourcePrimaryConnectionConfig
+	if spc == nil {
+		return nil
+	}
+	if !spc.Key.Equals(&mgtr.migrationContext.InspectorConnectionConfig.Key) {
+		return nil
+	}
+	return fmt.Errorf("move-tables source --host %+v is the cluster primary; reading the full table copy from the primary is the load move-tables is meant to avoid. Point --host at a replica so reads come off the primary, or pass --allow-on-source-primary to proceed against the primary anyway", spc.Key)
+}
+
 // dropSourceOldTable drops the source `__del` rollback handle on the source
 // primary. The inspector/streamer source connections may be a read replica, so
 // the drop cannot go through them; it must use the writable source-primary handle.
@@ -1836,6 +1858,11 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 		// replica. Detect and connect the source-cluster primary, which the cutover
 		// RENAME, drain-GTID capture, and source `__del` DROP run against.
 		if err := mgtr.setupMoveTablesSourcePrimary(mgtr.inspector.dbVersion); err != nil {
+			return err
+		}
+		// Guard the read path: if --host turned out to be the primary itself, stop
+		// early rather than silently copying the whole table off the primary.
+		if err := mgtr.validateMoveTablesSourceReadHost(); err != nil {
 			return err
 		}
 	} else if mgtr.migrationContext.AssumeMasterHostname == "" {

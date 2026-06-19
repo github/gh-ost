@@ -277,12 +277,20 @@ type MigrationContext struct {
 
 	// move tables:
 	MoveTables struct {
-		TableNames       []string // List of table names to be moved.
-		TargetHost       string   // Target hostname for the move. This must be a primary/writable host.
-		TargetPort       int      // Target MySQL port for the move.
-		TargetUser       string   // Target username for the move. If not specified, it will default to the source user.
-		TargetPass       string   // Target password for the move. If not specified, it will default to the source password.
-		TargetDatabase   string   // Target database name for the move. If not specified, it will default to the source database name.
+		TableNames     []string // List of table names to be moved.
+		TargetHost     string   // Target hostname for the move. This must be a primary/writable host.
+		TargetPort     int      // Target MySQL port for the move.
+		TargetUser     string   // Target username for the move. If not specified, it will default to the source user.
+		TargetPass     string   // Target password for the move. If not specified, it will default to the source password.
+		TargetDatabase string   // Target database name for the move. If not specified, it will default to the source database name.
+
+		// AllowOnSourcePrimary opts in to running the move-tables read path (schema
+		// inspection, the full row copy, binlog streaming) directly against the
+		// source cluster's primary. By default gh-ost stops early when --host is the
+		// primary, since reading the whole table copy from the primary is the load
+		// move-tables is meant to avoid; the operator should point --host at a replica.
+		AllowOnSourcePrimary bool
+
 		ConnectionConfig *mysql.ConnectionConfig
 
 		// SourcePrimaryConnectionConfig is the detected source-cluster primary. All

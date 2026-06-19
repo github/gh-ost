@@ -216,6 +216,36 @@ func TestResolveSourcePrimaryConnectionConfig_AssumeMasterHostnameOverride(t *te
 	require.Equal(t, "src_pass", cfg.Password)
 }
 
+// TestValidateMoveTablesSourceReadHost verifies the read-path guard: a replica
+// source passes, a source that resolves to the primary is blocked with a hint to
+// use a replica or --allow-on-source-primary, and the opt-in flag bypasses it.
+func TestValidateMoveTablesSourceReadHost(t *testing.T) {
+	newMigrator := func(srcKey, primaryKey mysql.InstanceKey, allow bool) *Migrator {
+		mc := base.NewMigrationContext()
+		mc.MoveTables.TableNames = []string{"t"}
+		mc.InspectorConnectionConfig.Key = srcKey
+		mc.MoveTables.SourcePrimaryConnectionConfig = &mysql.ConnectionConfig{Key: primaryKey}
+		mc.MoveTables.AllowOnSourcePrimary = allow
+		return NewMigrator(mc, "test")
+	}
+	replica := mysql.InstanceKey{Hostname: "replica.example.com", Port: 3306}
+	primary := mysql.InstanceKey{Hostname: "primary.example.com", Port: 3306}
+
+	t.Run("source is a replica: passes", func(t *testing.T) {
+		require.NoError(t, newMigrator(replica, primary, false).validateMoveTablesSourceReadHost())
+	})
+
+	t.Run("source is the primary: blocked", func(t *testing.T) {
+		err := newMigrator(primary, primary, false).validateMoveTablesSourceReadHost()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "--allow-on-source-primary")
+	})
+
+	t.Run("source is the primary but opted in: passes", func(t *testing.T) {
+		require.NoError(t, newMigrator(primary, primary, true).validateMoveTablesSourceReadHost())
+	})
+}
+
 // -----------------------------------------------------------------------------
 // Integration tests - real MySQL via testcontainers, exercise T1/T2/T3.
 //
