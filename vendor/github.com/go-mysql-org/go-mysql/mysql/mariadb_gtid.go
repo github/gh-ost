@@ -1,14 +1,13 @@
 package mysql
 
 import (
-	"bytes"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/pingcap/errors"
-	"github.com/siddontang/go-log/log"
 )
 
 // MariadbGTID represent mariadb gtid, [domain ID]-[server-id]-[sequence]
@@ -50,7 +49,8 @@ func ParseMariadbGTID(str string) (*MariadbGTID, error) {
 	return &MariadbGTID{
 		DomainID:       uint32(domainID),
 		ServerID:       uint32(serverID),
-		SequenceNumber: sequenceID}, nil
+		SequenceNumber: sequenceID,
+	}, nil
 }
 
 func (gtid *MariadbGTID) String() string {
@@ -61,7 +61,6 @@ func (gtid *MariadbGTID) String() string {
 	return fmt.Sprintf("%d-%d-%d", gtid.DomainID, gtid.ServerID, gtid.SequenceNumber)
 }
 
-// Contain return whether one mariadb gtid covers another mariadb gtid
 func (gtid *MariadbGTID) Contain(other *MariadbGTID) bool {
 	return gtid.DomainID == other.DomainID && gtid.SequenceNumber >= other.SequenceNumber
 }
@@ -75,7 +74,7 @@ func (gtid *MariadbGTID) Clone() *MariadbGTID {
 
 func (gtid *MariadbGTID) forward(newer *MariadbGTID) error {
 	if newer.DomainID != gtid.DomainID {
-		return errors.Errorf("%s is not same with doamin of %s", newer, gtid)
+		return errors.Errorf("%s is not same with domain of %s", newer, gtid)
 	}
 
 	/*
@@ -93,7 +92,7 @@ func (gtid *MariadbGTID) forward(newer *MariadbGTID) error {
 		| mysqld-bin.000001 | 2215 | Gtid              |       111 |        2257 | BEGIN GTID 0-111-6  |
 	*/
 	if newer.SequenceNumber <= gtid.SequenceNumber {
-		log.Warnf("out of order binlog appears with gtid %s vs current position gtid %s", newer, gtid)
+		slog.Warn("out of order binlog", slog.Any("new", newer), slog.Any("current", gtid))
 	}
 
 	gtid.ServerID = newer.ServerID
@@ -101,15 +100,17 @@ func (gtid *MariadbGTID) forward(newer *MariadbGTID) error {
 	return nil
 }
 
-// MariadbGTIDSet is a set of mariadb gtid
+// MariadbGTIDSet represents a MariaDB GTID position (one GTID per domain_id).
+// Despite the name, this is a position, not a set — unlike MySQL's executed GTID set.
+// See https://github.com/go-mysql-org/go-mysql/issues/1123
 type MariadbGTIDSet struct {
-	Sets map[uint32]map[uint32]*MariadbGTID
+	Sets map[uint32]*MariadbGTID
 }
 
 // ParseMariadbGTIDSet parses str into mariadb gtid sets
 func ParseMariadbGTIDSet(str string) (GTIDSet, error) {
 	s := new(MariadbGTIDSet)
-	s.Sets = make(map[uint32]map[uint32]*MariadbGTID)
+	s.Sets = make(map[uint32]*MariadbGTID)
 	if str == "" {
 		return s, nil
 	}
@@ -120,23 +121,20 @@ func ParseMariadbGTIDSet(str string) (GTIDSet, error) {
 	return s, nil
 }
 
-// AddSet adds mariadb gtid into mariadb gtid set
+// AddSet adds or updates a GTID position for a domain. If the domain already has
+// a GTID with a different server_id (e.g. after primary failover), the old entry
+// is replaced via forward() to maintain one position per domain_id.
 func (s *MariadbGTIDSet) AddSet(gtid *MariadbGTID) error {
 	if gtid == nil {
 		return nil
 	}
 
-	if serverSets, ok := s.Sets[gtid.DomainID]; !ok {
-		s.Sets[gtid.DomainID] = map[uint32]*MariadbGTID{
-			gtid.ServerID: gtid,
-		}
-	} else if o, ok := serverSets[gtid.ServerID]; !ok {
-		serverSets[gtid.ServerID] = gtid
-	} else {
-		err := o.forward(gtid)
-		if err != nil {
+	if existing, ok := s.Sets[gtid.DomainID]; ok {
+		if err := existing.forward(gtid); err != nil {
 			return errors.Trace(err)
 		}
+	} else {
+		s.Sets[gtid.DomainID] = gtid.Clone()
 	}
 
 	return nil
@@ -145,8 +143,8 @@ func (s *MariadbGTIDSet) AddSet(gtid *MariadbGTID) error {
 // Update updates mariadb gtid set
 func (s *MariadbGTIDSet) Update(GTIDStr string) error {
 	sp := strings.Split(GTIDStr, ",")
-	//todo, handle redundant same uuid
-	for i := 0; i < len(sp); i++ {
+	// todo, handle redundant same uuid
+	for i := range sp {
 		gtid, err := ParseMariadbGTID(sp[i])
 		if err != nil {
 			return errors.Trace(err)
@@ -161,10 +159,8 @@ func (s *MariadbGTIDSet) Update(GTIDStr string) error {
 
 func (s *MariadbGTIDSet) String() string {
 	sets := make([]string, 0, len(s.Sets))
-	for _, set := range s.Sets {
-		for _, gtid := range set {
-			sets = append(sets, gtid.String())
-		}
+	for _, gtid := range s.Sets {
+		sets = append(sets, gtid.String())
 	}
 	sort.Strings(sets)
 
@@ -173,29 +169,16 @@ func (s *MariadbGTIDSet) String() string {
 
 // Encode encodes mariadb gtid set
 func (s *MariadbGTIDSet) Encode() []byte {
-	var buf bytes.Buffer
-	sep := ""
-	for _, set := range s.Sets {
-		for _, gtid := range set {
-			buf.WriteString(sep)
-			buf.WriteString(gtid.String())
-			sep = ","
-		}
-	}
-
-	return buf.Bytes()
+	return []byte(s.String())
 }
 
 // Clone clones a mariadb gtid set
 func (s *MariadbGTIDSet) Clone() GTIDSet {
 	clone := &MariadbGTIDSet{
-		Sets: make(map[uint32]map[uint32]*MariadbGTID),
+		Sets: make(map[uint32]*MariadbGTID),
 	}
-	for domainID, set := range s.Sets {
-		clone.Sets[domainID] = make(map[uint32]*MariadbGTID)
-		for serverID, gtid := range set {
-			clone.Sets[domainID][serverID] = gtid.Clone()
-		}
+	for domainID, gtid := range s.Sets {
+		clone.Sets[domainID] = gtid.Clone()
 	}
 
 	return clone
@@ -212,20 +195,13 @@ func (s *MariadbGTIDSet) Equal(o GTIDSet) bool {
 		return false
 	}
 
-	for domainID, set := range other.Sets {
-		serverSet, ok := s.Sets[domainID]
+	for domainID, gtid := range other.Sets {
+		ourGTID, ok := s.Sets[domainID]
 		if !ok {
 			return false
 		}
-		if len(serverSet) != len(set) {
+		if *gtid != *ourGTID {
 			return false
-		}
-		for serverID, gtid := range set {
-			if o, ok := serverSet[serverID]; !ok {
-				return false
-			} else if *gtid != *o {
-				return false
-			}
 		}
 	}
 
@@ -239,19 +215,19 @@ func (s *MariadbGTIDSet) Contain(o GTIDSet) bool {
 		return false
 	}
 
-	for doaminID, set := range other.Sets {
-		serverSet, ok := s.Sets[doaminID]
+	for domainID, gtid := range other.Sets {
+		ourGTID, ok := s.Sets[domainID]
 		if !ok {
 			return false
 		}
-		for serverID, gtid := range set {
-			if o, ok := serverSet[serverID]; !ok {
-				return false
-			} else if !o.Contain(gtid) {
-				return false
-			}
+		if !ourGTID.Contain(gtid) {
+			return false
 		}
 	}
 
 	return true
+}
+
+func (s *MariadbGTIDSet) IsEmpty() bool {
+	return len(s.Sets) == 0
 }
