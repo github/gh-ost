@@ -185,6 +185,37 @@ func TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained(t *testing.T) {
 	}
 }
 
+// TestResolveSourcePrimaryConnectionConfig_AssumeMasterHostnameOverride verifies
+// that --assume-master-host forces the move-tables source primary to the given
+// host, and that --master-user/--master-password override the inherited source
+// credentials. No DB is required: the override branch builds the config purely
+// from the inspector config.
+func TestResolveSourcePrimaryConnectionConfig_AssumeMasterHostnameOverride(t *testing.T) {
+	mc := base.NewMigrationContext()
+	mc.InspectorConnectionConfig.User = "src_user"
+	mc.InspectorConnectionConfig.Password = "src_pass"
+	mc.AssumeMasterHostname = "10.0.0.5:3307"
+	mc.CliMasterUser = "master_user"
+	mc.CliMasterPassword = "master_pass"
+	m := NewMigrator(mc, "test")
+
+	cfg, err := m.resolveSourcePrimaryConnectionConfig("8.0.42")
+	require.NoError(t, err)
+	require.Equal(t, "10.0.0.5", cfg.Key.Hostname)
+	require.Equal(t, 3307, cfg.Key.Port)
+	require.Equal(t, "master_user", cfg.User, "--master-user must override source credentials")
+	require.Equal(t, "master_pass", cfg.Password, "--master-password must override source credentials")
+
+	// Without explicit master credentials, the forced primary inherits the source
+	// (inspector) credentials.
+	mc.CliMasterUser = ""
+	mc.CliMasterPassword = ""
+	cfg, err = m.resolveSourcePrimaryConnectionConfig("8.0.42")
+	require.NoError(t, err)
+	require.Equal(t, "src_user", cfg.User)
+	require.Equal(t, "src_pass", cfg.Password)
+}
+
 // -----------------------------------------------------------------------------
 // Integration tests - real MySQL via testcontainers, exercise T1/T2/T3.
 //
@@ -303,6 +334,37 @@ func (s *MoveTablesCutOverSuite) TestDropSourceOldTableUsesSourcePrimary() {
 	err = s.db.QueryRow(fmt.Sprintf("SHOW TABLES IN %s LIKE '_%s_del'",
 		testMysqlDatabase, testMysqlTableName)).Scan(&name)
 	s.Require().ErrorIs(err, gosql.ErrNoRows, "source __del handle must be dropped via the source primary")
+}
+
+// TestResolveSourcePrimaryFallsBackToInspectorWhenNoReplica verifies the
+// graceful fallback: when the source --host has no upstream primary (the
+// standalone test container), master detection returns the inspector connection
+// config, so source reads and cutover writes share the one available host.
+func (s *MoveTablesCutOverSuite) TestResolveSourcePrimaryFallsBackToInspectorWhenNoReplica() {
+	var calls []string
+	m, mc := s.buildMigrator(&recordingHooks{name: "fake", calls: &calls}, nil)
+
+	cfg, err := m.resolveSourcePrimaryConnectionConfig("8.0.42")
+	s.Require().NoError(err)
+	s.Require().Equal(mc.InspectorConnectionConfig.Key.Hostname, cfg.Key.Hostname)
+	s.Require().Equal(mc.InspectorConnectionConfig.Key.Port, cfg.Key.Port)
+}
+
+// TestAssertConnectionWritableRejectsReadOnly verifies the startup writability
+// gate: a writable primary passes, and a read_only server is rejected with a
+// clear error. The same helper guards both the source primary and the target.
+func (s *MoveTablesCutOverSuite) TestAssertConnectionWritableRejectsReadOnly() {
+	key := mysql.InstanceKey{Hostname: "test-host", Port: 3306}
+	s.Require().NoError(assertConnectionWritable(s.db, key, "source primary"),
+		"a writable primary must pass the gate")
+
+	_, err := s.db.Exec("SET GLOBAL read_only = ON")
+	s.Require().NoError(err)
+	defer func() { _, _ = s.db.Exec("SET GLOBAL read_only = OFF") }()
+
+	err = assertConnectionWritable(s.db, key, "source primary")
+	s.Require().Error(err)
+	s.Require().Contains(err.Error(), "read_only")
 }
 
 // TestHappyPath drives the full T0-T6 protocol against the test container.
