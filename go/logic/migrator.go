@@ -18,6 +18,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 )
@@ -129,7 +130,7 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 
 // sleepWhileTrue sleeps indefinitely until the given function returns 'false'
 // (or fails with error)
-func (mgtr *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
+func (mgtr *Migrator) sleepWhileTrue(stage string, operation func() (bool, error)) error {
 	for {
 		// Check for abort before continuing
 		if err := mgtr.checkAbort(); err != nil {
@@ -142,6 +143,7 @@ func (mgtr *Migrator) sleepWhileTrue(operation func() (bool, error)) error {
 		if !shouldSleep {
 			return nil
 		}
+		metrics.RecordSleep(mgtr.migrationContext.Metrics, stage, time.Second)
 		time.Sleep(time.Second)
 	}
 }
@@ -165,7 +167,9 @@ func (mgtr *Migrator) retryOperation(operation func() error, notFatalHint ...boo
 	for i := 0; i < maxRetries; i++ {
 		if i != 0 {
 			// sleep after previous iteration
-			RetrySleepFn(1 * time.Second)
+			sleepDuration := 1 * time.Second
+			metrics.RecordSleep(mgtr.migrationContext.Metrics, "retry_backoff", sleepDuration)
+			RetrySleepFn(sleepDuration)
 		}
 		// Check for abort/context cancellation before each retry
 		if abortErr := mgtr.checkAbort(); abortErr != nil {
@@ -206,7 +210,9 @@ func (mgtr *Migrator) retryOperationWithExponentialBackoff(operation func() erro
 		)
 
 		if i != 0 {
-			RetrySleepFn(time.Duration(interval) * time.Second)
+			sleepDuration := time.Duration(interval) * time.Second
+			metrics.RecordSleep(mgtr.migrationContext.Metrics, "retry_backoff", sleepDuration)
+			RetrySleepFn(sleepDuration)
 		}
 		// Check for abort/context cancellation before each retry
 		if abortErr := mgtr.checkAbort(); abortErr != nil {
@@ -636,7 +642,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.hooksExecutor.OnRowCopyComplete(); err != nil {
 		return err
 	}
-	mgtr.printStatus(ForcePrintStatusRule)
+	mgtr.reportStatus(ForcePrintStatusRule)
 
 	if mgtr.migrationContext.IsCountingTableRows() {
 		mgtr.migrationContext.Log.Info("stopping query for exact row count, because that can accidentally lock out the cut over")
@@ -651,7 +657,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 	} else {
 		retrier = mgtr.retryOperation
 	}
-	if err := retrier(mgtr.cutOver); err != nil {
+	if err := mgtr.cutOverWithMetrics(retrier); err != nil {
 		return err
 	}
 	atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
@@ -766,7 +772,7 @@ func (mgtr *Migrator) Revert() error {
 		}
 	}()
 
-	mgtr.printStatus(ForcePrintStatusRule)
+	mgtr.reportStatus(ForcePrintStatusRule)
 	var retrier func(func() error, ...bool) error
 	if mgtr.migrationContext.CutOverExponentialBackoff {
 		retrier = mgtr.retryOperationWithExponentialBackoff
@@ -776,7 +782,7 @@ func (mgtr *Migrator) Revert() error {
 	if err := mgtr.hooksExecutor.OnBeforeCutOver(); err != nil {
 		return err
 	}
-	if err := retrier(mgtr.cutOver); err != nil {
+	if err := mgtr.cutOverWithMetrics(retrier); err != nil {
 		return err
 	}
 	atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
@@ -794,6 +800,28 @@ func (mgtr *Migrator) Revert() error {
 // hook access point
 func (mgtr *Migrator) ExecOnFailureHook() (err error) {
 	return mgtr.hooksExecutor.OnFailure()
+}
+
+func (mgtr *Migrator) cutOverWithMetrics(retrier func(func() error, ...bool) error) error {
+	return mgtr.cutOverOperationWithMetrics(retrier, mgtr.cutOver)
+}
+
+func (mgtr *Migrator) cutOverOperationWithMetrics(retrier func(func() error, ...bool) error, operation func() error) error {
+	cutOverStartTime := time.Now()
+	err := retrier(func() error {
+		err := operation()
+		if err != nil {
+			metrics.RecordCutOverAttempt(mgtr.migrationContext.Metrics, metrics.CutOverOutcomeRetry)
+			return err
+		}
+		metrics.RecordCutOverAttempt(mgtr.migrationContext.Metrics, metrics.CutOverOutcomeSuccess)
+		return nil
+	})
+	if err != nil {
+		metrics.RecordCutOverAttempt(mgtr.migrationContext.Metrics, metrics.CutOverOutcomeAbort)
+	}
+	metrics.RecordCutOverTotal(mgtr.migrationContext.Metrics, time.Since(cutOverStartTime), err)
+	return err
 }
 
 func (mgtr *Migrator) handleCutOverResult(cutOverError error) (err error) {
@@ -841,6 +869,7 @@ func (mgtr *Migrator) cutOver() (err error) {
 	mgtr.migrationContext.MarkPointOfInterest()
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone")
 	if err := mgtr.sleepWhileTrue(
+		"cut_over_postpone",
 		func() (bool, error) {
 			heartbeatLag := mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog()
 			maxLagMillisecondsThrottle := time.Duration(atomic.LoadInt64(&mgtr.migrationContext.MaxLagMillisecondsThrottleThreshold)) * time.Millisecond
@@ -944,7 +973,7 @@ func (mgtr *Migrator) waitForEventsUpToLock() error {
 	waitForEventsUpToLockDuration := time.Since(waitForEventsUpToLockStartTime)
 
 	mgtr.migrationContext.Log.Infof("Done waiting for events up to lock; duration=%+v", waitForEventsUpToLockDuration)
-	mgtr.printStatus(ForcePrintStatusAndHintRule)
+	mgtr.reportStatus(ForcePrintStatusAndHintRule)
 
 	return nil
 }
@@ -958,9 +987,12 @@ func (mgtr *Migrator) cutOverTwoStep() (err error) {
 	defer atomic.StoreInt64(&mgtr.migrationContext.InCutOverCriticalSectionFlag, 0)
 	atomic.StoreInt64(&mgtr.migrationContext.AllEventsUpToLockProcessedInjectedFlag, 0)
 
+	phaseStartTime := time.Now()
 	if err := mgtr.retryOperation(mgtr.applier.LockOriginalTable); err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseOriginalTableLock, time.Since(phaseStartTime), err)
 		return err
 	}
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseOriginalTableLock, time.Since(phaseStartTime), nil)
 
 	if err := mgtr.retryOperation(mgtr.waitForEventsUpToLock); err != nil {
 		return err
@@ -971,12 +1003,19 @@ func (mgtr *Migrator) cutOverTwoStep() (err error) {
 			return err
 		}
 	}
+	phaseStartTime = time.Now()
 	if err := mgtr.retryOperation(mgtr.applier.SwapTablesQuickAndBumpy); err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), err)
 		return err
 	}
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), nil)
+
+	phaseStartTime = time.Now()
 	if err := mgtr.retryOperation(mgtr.applier.UnlockTables); err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseUnlock, time.Since(phaseStartTime), err)
 		return err
 	}
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseUnlock, time.Since(phaseStartTime), nil)
 
 	lockAndRenameDuration := mgtr.migrationContext.RenameTablesEndTime.Sub(mgtr.migrationContext.LockTablesStartTime)
 	renameDuration := mgtr.migrationContext.RenameTablesEndTime.Sub(mgtr.migrationContext.RenameTablesStartTime)
@@ -1000,14 +1039,17 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 	tableLocked := make(chan error, 2)
 	tableUnlocked := make(chan error, 2)
 	var renameLockSessionId int64
+	phaseStartTime := time.Now()
 	go func() {
 		if err := mgtr.applier.AtomicCutOverMagicLock(lockOriginalSessionIdChan, tableLocked, okToUnlockTable, tableUnlocked, &renameLockSessionId); err != nil {
 			mgtr.migrationContext.Log.Errore(err)
 		}
 	}()
 	if err := <-tableLocked; err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicLock, time.Since(phaseStartTime), err)
 		return mgtr.migrationContext.Log.Errore(err)
 	}
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicLock, time.Since(phaseStartTime), nil)
 	lockOriginalSessionId := <-lockOriginalSessionIdChan
 	mgtr.migrationContext.Log.Infof("Session locking original & magic tables is %+v", lockOriginalSessionId)
 	// At this point we know the original table is locked.
@@ -1025,7 +1067,8 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 
 	// Step 2
 	// We now attempt an atomic RENAME on original & ghost tables, and expect it to block.
-	mgtr.migrationContext.RenameTablesStartTime = time.Now()
+	phaseStartTime = time.Now()
+	mgtr.migrationContext.RenameTablesStartTime = phaseStartTime
 
 	var tableRenameKnownToHaveFailed int64
 	renameSessionIdChan := make(chan int64, 2)
@@ -1050,6 +1093,7 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 	}
 	// Wait for the RENAME to appear in PROCESSLIST
 	if err := mgtr.retryOperation(waitForRename, true); err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), err)
 		// Abort! Release the lock
 		okToUnlockTable <- true
 		return err
@@ -1058,6 +1102,7 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 		mgtr.migrationContext.Log.Infof("Found atomic RENAME to be blocking, as expected. Double checking the lock is still in place (though I don't strictly have to)")
 	}
 	if err := mgtr.applier.ExpectUsedLock(lockOriginalSessionId); err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), err)
 		// Abort operation. Just make sure to drop the magic table.
 		return mgtr.migrationContext.Log.Errore(err)
 	}
@@ -1067,16 +1112,21 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 	// we know it is safe to proceed to release the lock
 
 	renameLockSessionId = renameSessionId
+	unlockStartTime := time.Now()
 	okToUnlockTable <- true
 	// BAM! magic table dropped, original table lock is released
 	// -> RENAME released -> queries on original are unblocked.
 	if err := <-tableUnlocked; err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseUnlock, time.Since(unlockStartTime), err)
 		return mgtr.migrationContext.Log.Errore(err)
 	}
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseUnlock, time.Since(unlockStartTime), nil)
 	if err := <-tablesRenamed; err != nil {
+		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), err)
 		return mgtr.migrationContext.Log.Errore(err)
 	}
 	mgtr.migrationContext.RenameTablesEndTime = time.Now()
+	metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, mgtr.migrationContext.RenameTablesEndTime.Sub(phaseStartTime), nil)
 
 	// ooh nice! We're actually truly and thankfully done
 	lockAndRenameDuration := mgtr.migrationContext.RenameTablesEndTime.Sub(mgtr.migrationContext.LockTablesStartTime)
@@ -1087,7 +1137,7 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 // initiateServer begins listening on unix socket/tcp for incoming interactive commands
 func (mgtr *Migrator) initiateServer() (err error) {
 	var f printStatusFunc = func(rule PrintStatusRule, writer io.Writer) {
-		mgtr.printStatus(rule, writer)
+		mgtr.reportStatus(rule, writer)
 	}
 	mgtr.server = NewServer(mgtr.migrationContext, mgtr.hooksExecutor, f)
 	if err := mgtr.server.BindSocketFile(); err != nil {
@@ -1167,9 +1217,38 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 	return nil
 }
 
-// initiateStatus sets and activates the printStatus() ticker
+// emitProgressMetrics emits StatsD gauges from a progress snapshot.
+func (mgtr *Migrator) emitProgressMetrics(snap migrationProgressSnapshot) {
+	metrics.EmitProgressGauges(
+		mgtr.migrationContext.Metrics,
+		snap.totalRowsCopied,
+		snap.rowsEstimate,
+		snap.dmlApplied,
+	)
+	metrics.EmitBinlogBacklogGauges(
+		mgtr.migrationContext.Metrics,
+		snap.applyEventsBacklog,
+		snap.applyEventsCapacity,
+	)
+	isThrottled, _, _ := mgtr.migrationContext.IsThrottled()
+	metrics.EmitLagGauges(
+		mgtr.migrationContext.Metrics,
+		snap.replicationLagSeconds,
+		snap.heartbeatLagSeconds,
+		isThrottled,
+	)
+}
+
+// reportStatus samples progress, emits metrics, and optionally prints status output.
+func (mgtr *Migrator) reportStatus(rule PrintStatusRule, writers ...io.Writer) {
+	snap := mgtr.sampleMigrationProgress()
+	mgtr.emitProgressMetrics(snap)
+	mgtr.printStatus(rule, snap, writers...)
+}
+
+// initiateStatus sets and activates the reportStatus() ticker.
 func (mgtr *Migrator) initiateStatus() {
-	mgtr.printStatus(ForcePrintStatusAndHintRule)
+	mgtr.reportStatus(ForcePrintStatusAndHintRule)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var previousCount int64
@@ -1177,7 +1256,7 @@ func (mgtr *Migrator) initiateStatus() {
 		if atomic.LoadInt64(&mgtr.finishedMigrating) > 0 {
 			return
 		}
-		go mgtr.printStatus(HeuristicPrintStatusRule)
+		go mgtr.reportStatus(HeuristicPrintStatusRule)
 		totalCopied := atomic.LoadInt64(&mgtr.migrationContext.TotalRowsCopied)
 		if previousCount > 0 {
 			copiedThisLoop := totalCopied - previousCount
@@ -1372,55 +1451,35 @@ func (mgtr *Migrator) shouldPrintMigrationStatusHint(rule PrintStatusRule, elaps
 // `rule` indicates the type of output expected.
 // By default the status is written to standard output, but other writers can
 // be used as well.
-func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
+func (mgtr *Migrator) printStatus(rule PrintStatusRule, snap migrationProgressSnapshot, writers ...io.Writer) {
 	if rule == NoPrintStatusRule {
 		return
 	}
 	writers = append(writers, os.Stdout)
 
-	elapsedTime := mgtr.migrationContext.ElapsedTime()
-	elapsedSeconds := int64(elapsedTime.Seconds())
-	totalRowsCopied := mgtr.migrationContext.GetTotalRowsCopied()
-	rowsEstimate := atomic.LoadInt64(&mgtr.migrationContext.RowsEstimate) + atomic.LoadInt64(&mgtr.migrationContext.RowsDeltaEstimate)
-	if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
-		// Done copying rows. The totalRowsCopied value is the de-facto number of rows,
-		// and there is no further need to keep updating the value.
-		rowsEstimate = totalRowsCopied
-	}
-
-	// we take the opportunity to update migration context with progressPct
-	progressPct := mgtr.getProgressPercent(rowsEstimate)
-	mgtr.migrationContext.SetProgressPct(progressPct)
-
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
-	if mgtr.shouldPrintMigrationStatusHint(rule, elapsedSeconds) {
+	if mgtr.shouldPrintMigrationStatusHint(rule, snap.elapsedSeconds) {
 		mgtr.printMigrationStatusHint(writers...)
 	}
 
-	// Get state + ETA
-	state, eta, etaDuration := mgtr.getMigrationStateAndETA(rowsEstimate)
-	mgtr.migrationContext.SetETADuration(etaDuration)
-
-	if !mgtr.shouldPrintStatus(rule, elapsedSeconds, etaDuration) {
+	if !mgtr.shouldPrintStatus(rule, snap.elapsedSeconds, snap.etaDuration) {
 		return
 	}
 
-	currentBinlogCoordinates := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
-
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
-		totalRowsCopied, rowsEstimate, progressPct,
-		atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
-		len(mgtr.applyEventsQueue), cap(mgtr.applyEventsQueue),
-		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(mgtr.migrationContext.ElapsedRowCopyTime()),
-		currentBinlogCoordinates.DisplayString(),
-		mgtr.migrationContext.GetCurrentLagDuration().Seconds(),
-		mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds(),
-		state,
-		eta,
+		snap.totalRowsCopied, snap.rowsEstimate, snap.progressPct,
+		snap.dmlApplied,
+		snap.applyEventsBacklog, snap.applyEventsCapacity,
+		base.PrettifyDurationOutput(snap.elapsedTime), base.PrettifyDurationOutput(snap.elapsedRowCopyTime),
+		snap.streamerBinlogPosition,
+		snap.replicationLagSeconds,
+		snap.heartbeatLagSeconds,
+		snap.state,
+		snap.eta,
 	)
 	mgtr.applier.WriteChangelog(
 		fmt.Sprintf("copy iteration %d at %d", mgtr.migrationContext.GetIteration(), time.Now().Unix()),
-		state,
+		snap.state,
 	)
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
@@ -1434,7 +1493,7 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	mgtr.migrationContext.Log.Info(strings.Replace(status, "%", "%%", 1))
 
 	hooksStatusIntervalSec := mgtr.migrationContext.HooksStatusIntervalSec
-	if hooksStatusIntervalSec > 0 && elapsedSeconds%hooksStatusIntervalSec == 0 {
+	if hooksStatusIntervalSec > 0 && snap.elapsedSeconds%hooksStatusIntervalSec == 0 {
 		mgtr.hooksExecutor.OnStatus(status)
 	}
 }
@@ -1754,7 +1813,9 @@ func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 			return chk, err
 		}
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-		time.Sleep(500 * time.Millisecond)
+		sleepDuration := 500 * time.Millisecond
+		metrics.RecordSleep(mgtr.migrationContext.Metrics, "replica_wait", sleepDuration)
+		time.Sleep(sleepDuration)
 	}
 }
 
@@ -1859,7 +1920,12 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 							copyRowsDuration := time.Since(copyRowsStartTime)
 							sleepTimeNanosecondFloat64 := niceRatio * float64(copyRowsDuration.Nanoseconds())
 							sleepTime := time.Duration(int64(sleepTimeNanosecondFloat64)) * time.Nanosecond
-							time.Sleep(sleepTime)
+							if sleepTime > 0 {
+								if sleepTime >= time.Millisecond {
+									metrics.RecordSleep(mgtr.migrationContext.Metrics, "chunk_throttle", sleepTime)
+								}
+								time.Sleep(sleepTime)
+							}
 						}
 					}
 				default:
