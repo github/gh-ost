@@ -12,7 +12,6 @@ import (
 // GTIDBinlogCoordinates describe binary log coordinates in MySQL GTID format.
 type GTIDBinlogCoordinates struct {
 	GTIDSet *gomysql.MysqlGTIDSet
-	UUIDSet *gomysql.UUIDSet
 }
 
 // NewGTIDBinlogCoordinates parses a MySQL GTID set into a *GTIDBinlogCoordinates struct.
@@ -25,9 +24,6 @@ func NewGTIDBinlogCoordinates(gtidSet string) (*GTIDBinlogCoordinates, error) {
 
 // DisplayString returns a user-friendly string representation of these current UUID set or the full GTID set.
 func (coord *GTIDBinlogCoordinates) DisplayString() string {
-	if coord.UUIDSet != nil {
-		return coord.UUIDSet.String()
-	}
 	return coord.String()
 }
 
@@ -79,9 +75,6 @@ func (coord *GTIDBinlogCoordinates) Clone() BinlogCoordinates {
 	out := &GTIDBinlogCoordinates{}
 	if coord.GTIDSet != nil {
 		out.GTIDSet = coord.GTIDSet.Clone().(*gomysql.MysqlGTIDSet)
-	}
-	if coord.UUIDSet != nil {
-		out.UUIDSet = coord.UUIDSet.Clone()
 	}
 	return out
 }

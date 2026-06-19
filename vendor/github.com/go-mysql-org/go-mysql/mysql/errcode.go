@@ -1,5 +1,6 @@
 package mysql
 
+//nolint:revive // MySQL error code names mirror the upstream server protocol and are intentionally preserved
 const (
 	ER_ERROR_FIRST                                                      = 1000
 	ER_HASHCHK                                                          = 1000

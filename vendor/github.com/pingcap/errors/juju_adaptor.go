@@ -76,6 +76,11 @@ func NewNoStackErrorf(format string, args ...interface{}) error {
 }
 
 // SuspendStack suspends stack generate for error.
+// Deprecated, it's semantic is to clear the stack inside, we still allow upper
+// layer to add stack again by using Trace.
+// Sometimes we have very deep calling stack, the lower layer calls SuspendStack,
+// but the upper layer want to add stack to it, if we disable adding stack permanently
+// for an error, it's very hard to diagnose certain issues.
 func SuspendStack(err error) error {
 	if err == nil {
 		return err

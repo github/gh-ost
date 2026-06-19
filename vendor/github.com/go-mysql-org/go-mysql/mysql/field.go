@@ -57,78 +57,78 @@ func (f *Field) Parse(p FieldData) (err error) {
 
 	var n int
 	pos := 0
-	//skip catelog, always def
+	// skip catelog, always def
 	n, err = SkipLengthEncodedString(p)
 	if err != nil {
 		return err
 	}
 	pos += n
 
-	//schema
+	// schema
 	f.Schema, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
 		return err
 	}
 	pos += n
 
-	//table
+	// table
 	f.Table, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
 		return err
 	}
 	pos += n
 
-	//org_table
+	// org_table
 	f.OrgTable, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
 		return err
 	}
 	pos += n
 
-	//name
+	// name
 	f.Name, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
 		return err
 	}
 	pos += n
 
-	//org_name
+	// org_name
 	f.OrgName, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
 		return err
 	}
 	pos += n
 
-	//skip oc
-	pos += 1
+	// skip oc
+	pos++
 
-	//charset
+	// charset
 	f.Charset = binary.LittleEndian.Uint16(p[pos:])
 	pos += 2
 
-	//column length
+	// column length
 	f.ColumnLength = binary.LittleEndian.Uint32(p[pos:])
 	pos += 4
 
-	//type
+	// type
 	f.Type = p[pos]
 	pos++
 
-	//flag
+	// flag
 	f.Flag = binary.LittleEndian.Uint16(p[pos:])
 	pos += 2
 
-	//decimals 1
+	// decimals 1
 	f.Decimal = p[pos]
 	pos++
 
-	//filter [0x00][0x00]
+	// filter [0x00][0x00]
 	pos += 2
 
 	f.DefaultValue = nil
-	//if more data, command was field list
+	// if more data, command was field list
 	if len(p) > pos {
-		//length of default value lenenc-int
+		// length of default value lenenc-int
 		f.DefaultValueLength, _, n = LengthEncodedInt(p[pos:])
 		pos += n
 
@@ -137,7 +137,7 @@ func (f *Field) Parse(p FieldData) (err error) {
 			return err
 		}
 
-		//default value string[$len]
+		// default value string[$len]
 		f.DefaultValue = p[pos:(pos + int(f.DefaultValueLength))]
 	}
 
@@ -207,7 +207,7 @@ func (fv *FieldValue) AsString() []byte {
 	return fv.str
 }
 
-func (fv *FieldValue) Value() interface{} {
+func (fv *FieldValue) Value() any {
 	switch fv.Type {
 	case FieldValueTypeUnsigned:
 		return fv.AsUint64()

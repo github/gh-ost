@@ -25,9 +25,8 @@ func (p Position) Compare(o Position) int {
 		return 1
 	} else if p.Pos < o.Pos {
 		return -1
-	} else {
-		return 0
 	}
+	return 0
 }
 
 func (p Position) String() string {
@@ -81,7 +80,6 @@ func CompareBinlogFileName(a, b string) int {
 		return 1
 	} else if aSeq < bSeq {
 		return -1
-	} else {
-		return 0
 	}
+	return 0
 }

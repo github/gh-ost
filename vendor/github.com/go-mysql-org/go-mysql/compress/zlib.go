@@ -11,19 +11,13 @@ import (
 const DefaultCompressionLevel = 6
 
 var (
-	zlibReaderPool *sync.Pool
-	zlibWriterPool sync.Pool
-)
-
-func init() {
-	zlibReaderPool = &sync.Pool{
-		New: func() interface{} {
+	zlibReaderPool = sync.Pool{
+		New: func() any {
 			return nil
 		},
 	}
-
 	zlibWriterPool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			w, err := zlib.NewWriterLevel(new(bytes.Buffer), DefaultCompressionLevel)
 			if err != nil {
 				panic(err)
@@ -31,10 +25,12 @@ func init() {
 			return w
 		},
 	}
-}
+)
 
-var _ io.WriteCloser = zlibWriter{}
-var _ io.ReadCloser = zlibReader{}
+var (
+	_ io.WriteCloser = zlibWriter{}
+	_ io.ReadCloser  = zlibReader{}
+)
 
 type zlibWriter struct {
 	w *zlib.Writer

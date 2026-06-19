@@ -8,10 +8,10 @@ func (c *Conn) writeCommand(command byte) error {
 	c.ResetSequence()
 
 	return c.WritePacket([]byte{
-		0x01, //1 bytes long
+		0x01, // 1 bytes long
 		0x00,
 		0x00,
-		0x00, //sequence
+		0x00, // sequence
 		command,
 	})
 }
@@ -41,10 +41,10 @@ func (c *Conn) writeCommandUint32(command byte, arg uint32) error {
 
 	buf := utils.ByteSliceGet(9)
 
-	buf.B[0] = 0x05 //5 bytes long
+	buf.B[0] = 0x05 // 5 bytes long
 	buf.B[1] = 0x00
 	buf.B[2] = 0x00
-	buf.B[3] = 0x00 //sequence
+	buf.B[3] = 0x00 // sequence
 
 	buf.B[4] = command
 

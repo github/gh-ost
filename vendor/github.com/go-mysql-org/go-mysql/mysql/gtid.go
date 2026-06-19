@@ -17,6 +17,9 @@ type GTIDSet interface {
 	Update(GTIDStr string) error
 
 	Clone() GTIDSet
+
+	// IsEmpty returns true if the given set is empty and false otherwise.
+	IsEmpty() bool
 }
 
 func ParseGTIDSet(flavor string, s string) (GTIDSet, error) {

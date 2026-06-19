@@ -2,84 +2,84 @@
 //
 // The traditional error handling idiom in Go is roughly akin to
 //
-//     if err != nil {
-//             return err
-//     }
+//	if err != nil {
+//	        return err
+//	}
 //
 // which applied recursively up the call stack results in error reports
 // without context or debugging information. The errors package allows
 // programmers to add context to the failure path in their code in a way
 // that does not destroy the original value of the error.
 //
-// Adding context to an error
+// # Adding context to an error
 //
 // The errors.Annotate function returns a new error that adds context to the
 // original error by recording a stack trace at the point Annotate is called,
 // and the supplied message. For example
 //
-//     _, err := ioutil.ReadAll(r)
-//     if err != nil {
-//             return errors.Annotate(err, "read failed")
-//     }
+//	_, err := ioutil.ReadAll(r)
+//	if err != nil {
+//	        return errors.Annotate(err, "read failed")
+//	}
 //
 // If additional control is required the errors.AddStack and errors.WithMessage
 // functions destructure errors.Annotate into its component operations of annotating
 // an error with a stack trace and an a message, respectively.
 //
-// Retrieving the cause of an error
+// # Retrieving the cause of an error
 //
 // Using errors.Annotate constructs a stack of errors, adding context to the
 // preceding error. Depending on the nature of the error it may be necessary
 // to reverse the operation of errors.Annotate to retrieve the original error
 // for inspection. Any error value which implements this interface
 //
-//     type causer interface {
-//             Cause() error
-//     }
+//	type causer interface {
+//	        Cause() error
+//	}
 //
 // can be inspected by errors.Cause. errors.Cause will recursively retrieve
 // the topmost error which does not implement causer, which is assumed to be
 // the original cause. For example:
 //
-//     switch err := errors.Cause(err).(type) {
-//     case *MyError:
-//             // handle specifically
-//     default:
-//             // unknown error
-//     }
+//	switch err := errors.Cause(err).(type) {
+//	case *MyError:
+//	        // handle specifically
+//	default:
+//	        // unknown error
+//	}
 //
 // causer interface is not exported by this package, but is considered a part
 // of stable public API.
 // errors.Unwrap is also available: this will retrieve the next error in the chain.
 //
-// Formatted printing of errors
+// # Formatted printing of errors
 //
 // All error values returned from this package implement fmt.Formatter and can
 // be formatted by the fmt package. The following verbs are supported
 //
-//     %s    print the error. If the error has a Cause it will be
-//           printed recursively
-//     %v    see %s
-//     %+v   extended format. Each Frame of the error's StackTrace will
-//           be printed in detail.
+//	%s    print the error. If the error has a Cause it will be
+//	      printed recursively
+//	%v    see %s
+//	%+v   extended format. Each Frame of the error's StackTrace will
+//	      be printed in detail.
 //
-// Retrieving the stack trace of an error or wrapper
+// # Retrieving the stack trace of an error or wrapper
 //
 // New, Errorf, Annotate, and Annotatef record a stack trace at the point they are invoked.
 // This information can be retrieved with the StackTracer interface that returns
 // a StackTrace. Where errors.StackTrace is defined as
 //
-//     type StackTrace []Frame
+//	type StackTrace []Frame
 //
 // The Frame type represents a call site in the stack trace. Frame supports
 // the fmt.Formatter interface that can be used for printing information about
 // the stack trace of this error. For example:
 //
-//     if stacked := errors.GetStackTracer(err); stacked != nil {
-//             for _, f := range stacked.StackTrace() {
-//                     fmt.Printf("%+s:%d\n", f, f)
-//             }
-//     }
+//	if stacked := errors.GetStackTracer(err); stacked != nil {
+//	        for _, f := range stacked.StackTrace() {
+//	                fmt.Printf("%+s:%d\n", f, f)
+//	        }
+//	}
 //
 // See the documentation for Frame.Format for more details.
 //
@@ -90,6 +90,12 @@ import (
 	"fmt"
 	"io"
 )
+
+// represent an error carries with message
+type messenger interface {
+	// GetSelfMsg get its own message, the message of its cause error is NOT included.
+	GetSelfMsg() string
+}
 
 // New returns an error with the supplied message.
 // New also records the stack trace at the point it was called.
@@ -122,7 +128,11 @@ func HasStack(err error) bool {
 	if errWithStack, ok := err.(StackTraceAware); ok {
 		return errWithStack.HasStack()
 	}
-	return GetStackTracer(err) != nil
+	// Error.FastGenXXX or call SuspendStack directly will make an empty stack trace,
+	// which should be considered as no stack trace, to allow upper layer code to
+	// add stack trace with Trace.
+	stackTracer := GetStackTracer(err)
+	return stackTracer != nil && !stackTracer.Empty()
 }
 
 // fundamental is an error that has a message and a stack, but no caller.
@@ -131,7 +141,11 @@ type fundamental struct {
 	*stack
 }
 
+var _ messenger = (*fundamental)(nil)
+
 func (f *fundamental) Error() string { return f.msg }
+
+func (f *fundamental) GetSelfMsg() string { return f.msg }
 
 func (f *fundamental) Format(s fmt.State, verb rune) {
 	switch verb {
@@ -168,10 +182,14 @@ func WithStack(err error) error {
 // AddStack is similar to WithStack.
 // However, it will first check with HasStack to see if a stack trace already exists in the causer chain before creating another one.
 func AddStack(err error) error {
-	if HasStack(err) {
+	if err == nil || HasStack(err) {
 		return err
 	}
-	return WithStack(err)
+
+	return &withStack{
+		err,
+		callers(),
+	}
 }
 
 type withStack struct {
@@ -179,7 +197,15 @@ type withStack struct {
 	*stack
 }
 
+var _ messenger = (*withStack)(nil)
+
 func (w *withStack) Cause() error { return w.error }
+
+func (w *withStack) GetSelfMsg() string {
+	// it doesn't have its own message, but we still need impl it to avoid calling
+	// err.Error() for its cause
+	return ""
+}
 
 // Unwrap provides compatibility for Go 1.13 error chains.
 func (w *withStack) Unwrap() error { return w.error }
@@ -263,8 +289,12 @@ type withMessage struct {
 	causeHasStack bool
 }
 
+var _ messenger = (*withMessage)(nil)
+
 func (w *withMessage) Error() string { return w.msg + ": " + w.cause.Error() }
 func (w *withMessage) Cause() error  { return w.cause }
+
+func (w *withMessage) GetSelfMsg() string { return w.msg }
 
 // Unwrap provides compatibility for Go 1.13 error chains.
 func (w *withMessage) Unwrap() error  { return w.cause }
@@ -290,9 +320,9 @@ func (w *withMessage) Format(s fmt.State, verb rune) {
 // An error value has a cause if it implements the following
 // interface:
 //
-//     type causer interface {
-//            Cause() error
-//     }
+//	type causer interface {
+//	       Cause() error
+//	}
 //
 // If the error does not implement Cause, the original error will
 // be returned. If the error is nil, nil will be returned without further
@@ -329,4 +359,34 @@ func Find(origErr error, test func(error) bool) error {
 		return false
 	})
 	return foundErr
+}
+
+// GetErrStackMsg get the concat error message the whole error stack.
+// it's different from err.Error(), as pingcap/errors.Error will prepend the error
+// code in the result of err.Error(), like below:
+//
+//	[types:1292]Truncated incorrect
+//
+// and when there are multiple errors.Error in the chain, the err.Error() will
+// return like this:
+//
+//	[Lightning:Restore:ErrEncodeKV]encode kv error ... : [types:1292]Truncated incorrect DOUBLE value: 'a'"
+//
+// But sometimes we only want a single error code with pure message part.
+func GetErrStackMsg(err error) string {
+	if err == nil {
+		return ""
+	}
+	m, ok := err.(messenger)
+	if ok {
+		msg := m.GetSelfMsg()
+		causeMsg := GetErrStackMsg(Unwrap(err))
+		if msg == "" {
+			msg = causeMsg
+		} else if causeMsg != "" {
+			msg = msg + ": " + causeMsg
+		}
+		return msg
+	}
+	return err.Error()
 }

@@ -2,9 +2,10 @@ package client
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"math"
 	"math/rand"
+	"net"
 	"sync"
 	"time"
 
@@ -26,10 +27,10 @@ Usage:
 type (
 	Timestamp int64
 
-	LogFunc func(format string, args ...interface{})
+	LogFunc func(format string, args ...any)
 
 	Pool struct {
-		logFunc          LogFunc
+		logger           *slog.Logger
 		minAlive         int
 		maxAlive         int
 		maxIdle          int
@@ -109,7 +110,7 @@ func NewPoolWithOptions(
 	}
 
 	pool := &Pool{
-		logFunc:  po.logFunc,
+		logger:   po.logger,
 		minAlive: po.minAlive,
 		maxAlive: po.maxAlive,
 		maxIdle:  po.maxIdle,
@@ -118,7 +119,7 @@ func NewPoolWithOptions(
 		idlePingTimeout:  Timestamp(math.Ceil(MaxIdleTimeoutWithoutPing.Seconds())),
 
 		connect: func() (*Conn, error) {
-			return Connect(addr, user, password, dbName, po.connOptions...)
+			return ConnectWithDialer(context.Background(), "", addr, user, password, dbName, po.dialer, po.connOptions...)
 		},
 
 		readyConnection: make(chan Connection),
@@ -159,7 +160,7 @@ func NewPoolWithOptions(
 //
 // Deprecated: use NewPoolWithOptions
 func NewPool(
-	logFunc LogFunc,
+	logger *slog.Logger,
 	minAlive int,
 	maxAlive int,
 	maxIdle int,
@@ -174,12 +175,12 @@ func NewPool(
 		user,
 		password,
 		dbName,
-		WithLogFunc(logFunc),
+		WithLogger(logger),
 		WithPoolLimits(minAlive, maxAlive, maxIdle),
 		WithConnOptions(options...),
 	)
-	if err != nil {
-		pool.logFunc(`Pool: NewPool: %s`, err.Error())
+	if err != nil && logger != nil {
+		logger.Error("Pool: NewPool", slog.Any("error", err))
 	}
 
 	return pool
@@ -312,7 +313,9 @@ func (pool *Pool) newConnectionProducer() {
 				pool.synchro.stats.TotalCount-- // Bad luck, should try again
 				pool.synchro.Unlock()
 
-				pool.logFunc("Cannot establish new db connection: %s", err.Error())
+				if pool.logger != nil {
+					pool.logger.Error("Pool: cannot establish new db connection", slog.Any("error", err))
+				}
 
 				timer := time.NewTimer(
 					time.Duration(10+rand.Intn(90)) * time.Millisecond,
@@ -439,7 +442,7 @@ func (pool *Pool) recheckConnections(connections []Connection) {
 
 	var wg sync.WaitGroup
 	wg.Add(workerCnt)
-	for worker := 0; worker < workerCnt; worker++ {
+	for range workerCnt {
 		go func() {
 			defer wg.Done()
 			for connection := range queue {
@@ -460,21 +463,21 @@ func (pool *Pool) spawnConnectionsIfNeeded() bool {
 	pool.synchro.Lock()
 	totalCount := pool.synchro.stats.TotalCount
 	idleCount := len(pool.synchro.idleConnections)
-	needSpanNew := pool.minAlive - totalCount
+	needSpawnNew := pool.minAlive - totalCount
 	pool.synchro.Unlock()
 
-	if needSpanNew <= 0 {
+	if needSpawnNew <= 0 {
 		return false
 	}
 
 	// Не хватает соединений, нужно создать еще
 
-	if needSpanNew > MaxNewConnectionAtOnce {
-		needSpanNew = MaxNewConnectionAtOnce
+	if needSpawnNew > MaxNewConnectionAtOnce {
+		needSpawnNew = MaxNewConnectionAtOnce
 	}
 
-	pool.logFunc(`Pool: Setup %d new connections (total: %d idle: %d)...`, needSpanNew, totalCount, idleCount)
-	pool.startNewConnections(needSpanNew)
+	pool.logger.Info("Pool: Setup new connections", slog.Int("new", needSpawnNew), slog.Int("total", totalCount), slog.Int("idle", idleCount))
+	pool.startNewConnections(needSpawnNew)
 
 	return true
 }
@@ -502,11 +505,9 @@ func (pool *Pool) closeIdleConnectionsIfCan() {
 		return
 	}
 
-	closeFromIdx := idleCnt - canCloseCnt
-	if closeFromIdx < 0 {
+	closeFromIdx := max(idleCnt-canCloseCnt,
 		// If there are enough requests in the "flight" now, then we can close all unnecessary
-		closeFromIdx = 0
-	}
+		0)
 
 	toClose := append([]Connection{}, pool.synchro.idleConnections[closeFromIdx:]...)
 
@@ -517,7 +518,7 @@ func (pool *Pool) closeIdleConnectionsIfCan() {
 
 	pool.synchro.Unlock()
 
-	pool.logFunc(`Pool: Close %d idle connections (in fly %d)`, len(toClose), inFly)
+	pool.logger.Info("Pool: close idle connections", slog.Int("closed", len(toClose)), slog.Int("inFly", inFly))
 	for _, connection := range toClose {
 		pool.closeConn(connection.conn)
 	}
@@ -532,17 +533,17 @@ func (pool *Pool) closeConn(conn *Conn) {
 }
 
 func (pool *Pool) startNewConnections(count int) {
-	pool.logFunc(`Pool: Setup %d new connections (minimal pool size)...`, count)
+	pool.logger.Info("Pool: Setup new connections (minimal pool size)", slog.Int("count", count))
 
 	connections := make([]Connection, 0, count)
-	for i := 0; i < count; i++ {
+	for range count {
 		if conn, err := pool.createNewConnection(); err == nil {
 			pool.synchro.Lock()
 			pool.synchro.stats.TotalCount++
 			pool.synchro.Unlock()
 			connections = append(connections, conn)
 		} else {
-			pool.logFunc(`Pool: createNewConnection: %s`, err)
+			pool.logger.Warn("Pool: createNewConnection failed", slog.Any("error", err))
 		}
 	}
 
@@ -558,7 +559,7 @@ func (pool *Pool) ping(conn *Conn) error {
 	_ = conn.SetDeadline(deadline)
 	err := conn.Ping()
 	if err != nil {
-		pool.logFunc(`Pool: ping query fail: %s`, err.Error())
+		pool.logger.Error("Pool: ping query fail", slog.Any("error", err))
 	} else {
 		_ = conn.SetDeadline(time.Time{})
 	}
@@ -569,9 +570,9 @@ func (pool *Pool) ping(conn *Conn) error {
 // So before call Close, Call PutConn to put all connections that in use back to connection pool first.
 func (pool *Pool) Close() {
 	pool.cancel()
-	//wait newConnectionProducer exit.
+	// wait newConnectionProducer exit.
 	pool.wg.Wait()
-	//close idle connections
+	// close idle connections
 	pool.synchro.Lock()
 	for _, connection := range pool.synchro.idleConnections {
 		pool.synchro.stats.TotalCount--
@@ -604,10 +605,12 @@ func (pool *Pool) checkConnection(ctx context.Context) error {
 
 // getDefaultPoolOptions returns pool config for low load services
 func getDefaultPoolOptions() poolOptions {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	return poolOptions{
-		logFunc:  log.Printf,
+		logger:   slog.Default(),
 		minAlive: 1,
 		maxAlive: 10,
 		maxIdle:  2,
+		dialer:   dialer.DialContext,
 	}
 }

@@ -1,12 +1,13 @@
 package client
 
 import (
+	"log/slog"
 	"time"
 )
 
 type (
 	poolOptions struct {
-		logFunc LogFunc
+		logger *slog.Logger
 
 		minAlive int
 		maxAlive int
@@ -16,6 +17,8 @@ type (
 		user     string
 		password string
 		dbName   string
+
+		dialer Dialer
 
 		connOptions []Option
 
@@ -40,9 +43,9 @@ func WithPoolLimits(minAlive, maxAlive, maxIdle int) PoolOption {
 	}
 }
 
-func WithLogFunc(f LogFunc) PoolOption {
+func WithLogger(logger *slog.Logger) PoolOption {
 	return func(o *poolOptions) {
-		o.logFunc = f
+		o.logger = logger
 	}
 }
 
@@ -56,5 +59,11 @@ func WithConnOptions(options ...Option) PoolOption {
 func WithNewPoolPingTimeout(timeout time.Duration) PoolOption {
 	return func(o *poolOptions) {
 		o.newPoolPingTimeout = timeout
+	}
+}
+
+func WithDialer(dialer Dialer) PoolOption {
+	return func(o *poolOptions) {
+		o.dialer = dialer
 	}
 }
