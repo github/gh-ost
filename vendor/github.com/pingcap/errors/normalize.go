@@ -42,6 +42,15 @@ type ErrCodeText string
 type ErrorID string
 type RFCErrorCode string
 
+// HackedStr can provide a stable string snapshot for unsafe/ephemeral string sources.
+// The method name intentionally uses FreezeStr instead of Clone so normal clone-style
+// types are not accidentally treated as error-format arguments.
+// During error construction, arguments implementing this interface are replaced
+// with FreezeStr() so deferred error formatting does not observe later mutations.
+type HackedStr interface {
+	FreezeStr() string
+}
+
 // Error is the 'prototype' of a type of errors.
 // Use DefineError to make a *Error:
 // var ErrUnavailable = errors.Normalize("Region %d is unavailable", errors.RFCCodeText("Unavailable"))
@@ -81,6 +90,8 @@ type Error struct {
 	file  string
 	line  int
 }
+
+var _ messenger = (*Error)(nil)
 
 // Code returns the numeric code of this error.
 // ID() will return textual error if there it is,
@@ -127,10 +138,6 @@ func (e *Error) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	describe := e.codeText
-	if len(describe) == 0 {
-		describe = ErrCodeText(strconv.Itoa(int(e.code)))
-	}
 	if e.cause != nil {
 		return fmt.Sprintf("[%s]%s: %s", e.RFCCode(), e.GetMsg(), e.cause.Error())
 	}
@@ -142,6 +149,28 @@ func (e *Error) GetMsg() string {
 		return fmt.Sprintf(e.message, e.args...)
 	}
 	return e.message
+}
+
+func freezeHackedStringArgs(args []interface{}) []interface{} {
+	// This helper intentionally mutates the input slice in place.
+	// It is only used inside error-construction paths where args are internal and should
+	// not be reused by callers after passing into Gen*/FastGen* APIs.
+	for i := range args {
+		hackedArg, ok := args[i].(HackedStr)
+		if !ok {
+			continue
+		}
+		// TiDB may pass unsafe zero-copy strings (for example from chunk buffers) as error args.
+		// Error message rendering is deferred until GetMsg/Error, so without freezing here we may
+		// observe later writes and print a different value than the one used when creating the error.
+		// Freezing in this central path keeps the copy cost only on error construction.
+		args[i] = hackedArg.FreezeStr()
+	}
+	return args
+}
+
+func (e *Error) GetSelfMsg() string {
+	return e.GetMsg()
 }
 
 func (e *Error) fillLineAndFile(skip int) {
@@ -161,7 +190,7 @@ func (e *Error) GenWithStack(format string, args ...interface{}) error {
 	// TODO: RedactErrorArg
 	err := *e
 	err.message = format
-	err.args = args
+	err.args = freezeHackedStringArgs(args)
 	err.fillLineAndFile(1)
 	return AddStack(&err)
 }
@@ -170,7 +199,7 @@ func (e *Error) GenWithStack(format string, args ...interface{}) error {
 func (e *Error) GenWithStackByArgs(args ...interface{}) error {
 	RedactErrorArg(args, e.redactArgsPos)
 	err := *e
-	err.args = args
+	err.args = freezeHackedStringArgs(args)
 	err.fillLineAndFile(1)
 	return AddStack(&err)
 }
@@ -181,7 +210,7 @@ func (e *Error) FastGen(format string, args ...interface{}) error {
 	// TODO: RedactErrorArg
 	err := *e
 	err.message = format
-	err.args = args
+	err.args = freezeHackedStringArgs(args)
 	return SuspendStack(&err)
 }
 
@@ -190,7 +219,7 @@ func (e *Error) FastGen(format string, args ...interface{}) error {
 func (e *Error) FastGenByArgs(args ...interface{}) error {
 	RedactErrorArg(args, e.redactArgsPos)
 	err := *e
-	err.args = args
+	err.args = freezeHackedStringArgs(args)
 	return SuspendStack(&err)
 }
 
@@ -311,7 +340,7 @@ func (e *Error) FastGenWithCause(args ...interface{}) error {
 	if e.cause != nil {
 		err.message = e.cause.Error()
 	}
-	err.args = args
+	err.args = freezeHackedStringArgs(args)
 	return SuspendStack(&err)
 }
 
@@ -320,7 +349,7 @@ func (e *Error) GenWithStackByCause(args ...interface{}) error {
 	if e.cause != nil {
 		err.message = e.cause.Error()
 	}
-	err.args = args
+	err.args = freezeHackedStringArgs(args)
 	err.fillLineAndFile(1)
 	return AddStack(&err)
 }

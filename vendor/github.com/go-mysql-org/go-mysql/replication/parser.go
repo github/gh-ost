@@ -15,10 +15,8 @@ import (
 	"github.com/go-mysql-org/go-mysql/utils"
 )
 
-var (
-	// ErrChecksumMismatch indicates binlog checksum mismatch.
-	ErrChecksumMismatch = errors.New("binlog checksum mismatch, data may be corrupted")
-)
+// ErrChecksumMismatch indicates binlog checksum mismatch.
+var ErrChecksumMismatch = errors.New("binlog checksum mismatch, data may be corrupted")
 
 type BinlogParser struct {
 	// "mysql" or "mariadb", if not set, use "mysql" by default
@@ -35,11 +33,14 @@ type BinlogParser struct {
 	timestampStringLocation *time.Location
 
 	// used to start/stop processing
-	stopProcessing uint32
+	stopProcessing atomic.Bool
 
-	useDecimal          bool
-	ignoreJSONDecodeErr bool
-	verifyChecksum      bool
+	useDecimal               bool
+	useFloatWithTrailingZero bool
+	ignoreJSONDecodeErr      bool
+	verifyChecksum           bool
+
+	payloadDecoderConcurrency int
 
 	rowsEventDecodeFunc func(*RowsEvent, []byte) error
 
@@ -55,11 +56,11 @@ func NewBinlogParser() *BinlogParser {
 }
 
 func (p *BinlogParser) Stop() {
-	atomic.StoreUint32(&p.stopProcessing, 1)
+	p.stopProcessing.Store(true)
 }
 
 func (p *BinlogParser) Resume() {
-	atomic.StoreUint32(&p.stopProcessing, 0)
+	p.stopProcessing.Store(false)
 }
 
 func (p *BinlogParser) Reset() {
@@ -167,11 +168,7 @@ func (p *BinlogParser) parseSingleEvent(r io.Reader, onEvent OnEventFunc) (bool,
 }
 
 func (p *BinlogParser) ParseReader(r io.Reader, onEvent OnEventFunc) error {
-	for {
-		if atomic.LoadUint32(&p.stopProcessing) == 1 {
-			break
-		}
-
+	for !p.stopProcessing.Load() {
 		done, err := p.parseSingleEvent(r, onEvent)
 		if err != nil {
 			if err == errMissingTableMapEvent {
@@ -204,6 +201,10 @@ func (p *BinlogParser) SetUseDecimal(useDecimal bool) {
 	p.useDecimal = useDecimal
 }
 
+func (p *BinlogParser) SetUseFloatWithTrailingZero(useFloatWithTrailingZero bool) {
+	p.useFloatWithTrailingZero = useFloatWithTrailingZero
+}
+
 func (p *BinlogParser) SetIgnoreJSONDecodeError(ignoreJSONDecodeErr bool) {
 	p.ignoreJSONDecodeErr = ignoreJSONDecodeErr
 }
@@ -214,6 +215,10 @@ func (p *BinlogParser) SetVerifyChecksum(verify bool) {
 
 func (p *BinlogParser) SetFlavor(flavor string) {
 	p.flavor = flavor
+}
+
+func (p *BinlogParser) SetPayloadDecoderConcurrency(concurrency int) {
+	p.payloadDecoderConcurrency = concurrency
 }
 
 func (p *BinlogParser) SetRowsEventDecodeFunc(rowsEventDecodeFunc func(*RowsEvent, []byte) error) {
@@ -244,7 +249,7 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 		if p.format != nil && p.format.ChecksumAlgorithm == BINLOG_CHECKSUM_ALG_CRC32 {
 			err := p.verifyCrc32Checksum(rawData)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed checksum for %v, log pos %d: %v", h.EventType, h.LogPos, err)
 			}
 			data = data[0 : len(data)-BinlogChecksumLength]
 		}
@@ -293,6 +298,8 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 				e = &GTIDEvent{}
 			case ANONYMOUS_GTID_EVENT:
 				e = &GTIDEvent{}
+			case GTID_TAGGED_LOG_EVENT:
+				e = &GtidTaggedLogEvent{}
 			case BEGIN_LOAD_QUERY_EVENT:
 				e = &BeginLoadQueryEvent{}
 			case EXECUTE_LOAD_QUERY_EVENT:
@@ -313,6 +320,10 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 				e = &IntVarEvent{}
 			case TRANSACTION_PAYLOAD_EVENT:
 				e = p.newTransactionPayloadEvent()
+			case HEARTBEAT_EVENT:
+				e = &HeartbeatEvent{Version: 1}
+			case HEARTBEAT_LOG_EVENT_V2:
+				e = &HeartbeatEvent{Version: 2}
 			default:
 				e = &GenericEvent{}
 			}
@@ -327,6 +338,16 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 	} else {
 		err = e.Decode(data)
 	}
+
+	if fde, ok := e.(*FormatDescriptionEvent); ok {
+		if fde.ChecksumAlgorithm == BINLOG_CHECKSUM_ALG_CRC32 {
+			err := p.verifyCrc32Checksum(rawData)
+			if err != nil {
+				return nil, fmt.Errorf("failed checksum for %v, log pos %d: %v", h.EventType, h.LogPos, err)
+			}
+		}
+	}
+
 	if err != nil {
 		return nil, &EventError{h, err.Error(), data}
 	}
@@ -355,7 +376,6 @@ func (p *BinlogParser) Parse(data []byte) (*BinlogEvent, error) {
 	rawData := data
 
 	h, err := p.parseHeader(data)
-
 	if err != nil {
 		return nil, err
 	}
@@ -411,6 +431,7 @@ func (p *BinlogParser) newRowsEvent(h *EventHeader) *RowsEvent {
 	e.parseTime = p.parseTime
 	e.timestampStringLocation = p.timestampStringLocation
 	e.useDecimal = p.useDecimal
+	e.useFloatWithTrailingZero = p.useFloatWithTrailingZero
 	e.ignoreJSONDecodeErr = p.ignoreJSONDecodeErr
 
 	switch h.EventType {
@@ -455,6 +476,7 @@ func (p *BinlogParser) newRowsEvent(h *EventHeader) *RowsEvent {
 func (p *BinlogParser) newTransactionPayloadEvent() *TransactionPayloadEvent {
 	e := &TransactionPayloadEvent{}
 	e.format = *p.format
+	e.concurrency = p.payloadDecoderConcurrency
 
 	return e
 }
