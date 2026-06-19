@@ -24,7 +24,7 @@ func (e *MyError) Error() string {
 }
 
 // NewDefaultError: default mysql error, must adapt errname message format
-func NewDefaultError(errCode uint16, args ...interface{}) *MyError {
+func NewDefaultError(errCode uint16, args ...any) *MyError {
 	e := new(MyError)
 	e.Code = errCode
 
@@ -62,5 +62,5 @@ func ErrorCode(errMsg string) (code int) {
 	var tmpStr string
 	// golang scanf doesn't support %*,so I used a temporary variable
 	_, _ = fmt.Sscanf(errMsg, "%s%d", &tmpStr, &code)
-	return
+	return code
 }

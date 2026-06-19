@@ -1,5 +1,6 @@
 package mysql
 
+//nolint:revive // exported MySQL SQLSTATE constant kept for backward compatibility
 const (
 	DEFAULT_MYSQL_STATE = "HY000"
 )

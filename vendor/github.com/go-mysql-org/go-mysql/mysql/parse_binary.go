@@ -8,6 +8,7 @@ import (
 func ParseBinaryInt8(data []byte) int8 {
 	return int8(data[0])
 }
+
 func ParseBinaryUint8(data []byte) uint8 {
 	return data[0]
 }
@@ -15,6 +16,7 @@ func ParseBinaryUint8(data []byte) uint8 {
 func ParseBinaryInt16(data []byte) int16 {
 	return int16(binary.LittleEndian.Uint16(data))
 }
+
 func ParseBinaryUint16(data []byte) uint16 {
 	return binary.LittleEndian.Uint16(data)
 }
@@ -26,6 +28,7 @@ func ParseBinaryInt24(data []byte) int32 {
 	}
 	return int32(u32)
 }
+
 func ParseBinaryUint24(data []byte) uint32 {
 	return uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16
 }
@@ -33,6 +36,7 @@ func ParseBinaryUint24(data []byte) uint32 {
 func ParseBinaryInt32(data []byte) int32 {
 	return int32(binary.LittleEndian.Uint32(data))
 }
+
 func ParseBinaryUint32(data []byte) uint32 {
 	return binary.LittleEndian.Uint32(data)
 }
@@ -40,6 +44,7 @@ func ParseBinaryUint32(data []byte) uint32 {
 func ParseBinaryInt64(data []byte) int64 {
 	return int64(binary.LittleEndian.Uint64(data))
 }
+
 func ParseBinaryUint64(data []byte) uint64 {
 	return binary.LittleEndian.Uint64(data)
 }

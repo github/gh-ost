@@ -2,20 +2,24 @@ package mysql
 
 import (
 	"bytes"
+	"cmp"
 	"compress/zlib"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha512"
+	"crypto/subtle"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	mrand "math/rand"
 	"runtime"
+	"strconv"
 	"strings"
-	"time"
 
-	"github.com/Masterminds/semver"
+	"filippo.io/edwards25519"
 	"github.com/go-mysql-org/go-mysql/utils"
 	"github.com/pingcap/errors"
 )
@@ -26,7 +30,7 @@ func Pstack() string {
 	return string(buf[0:n])
 }
 
-func CalcPassword(scramble, password []byte) []byte {
+func CalcNativePassword(scramble, password []byte) []byte {
 	if len(password) == 0 {
 		return nil
 	}
@@ -36,27 +40,92 @@ func CalcPassword(scramble, password []byte) []byte {
 	crypt.Write(password)
 	stage1 := crypt.Sum(nil)
 
-	// scrambleHash = SHA1(scramble + SHA1(stage1Hash))
-	// inner Hash
+	// stage2Hash = SHA1(stage1Hash)
 	crypt.Reset()
 	crypt.Write(stage1)
-	hash := crypt.Sum(nil)
+	stage2 := crypt.Sum(nil)
 
-	// outer Hash
+	// scrambleHash = SHA1(scramble + stage2Hash)
 	crypt.Reset()
 	crypt.Write(scramble)
-	crypt.Write(hash)
-	scramble = crypt.Sum(nil)
+	crypt.Write(stage2)
+	scrambleHash := crypt.Sum(nil)
 
 	// token = scrambleHash XOR stage1Hash
-	for i := range scramble {
-		scramble[i] ^= stage1[i]
+	return Xor(scrambleHash, stage1)
+}
+
+// Xor returns a new slice with hash1 XOR hash2, wrapping hash2 if hash1 is longer.
+func Xor(hash1 []byte, hash2 []byte) []byte {
+	result := make([]byte, len(hash1))
+	for i := range hash1 {
+		result[i] = hash1[i] ^ hash2[i%len(hash2)]
 	}
-	return scramble
+	return result
+}
+
+// hash_stage1 = xor(reply, sha1(public_seed, hash_stage2))
+func stage1FromReply(scramble []byte, seed []byte, stage2 []byte) []byte {
+	crypt := sha1.New()
+	crypt.Write(seed)
+	crypt.Write(stage2)
+	seededHash := crypt.Sum(nil)
+
+	return Xor(scramble, seededHash)
+}
+
+// DecodePasswordHex decodes the standard format used by MySQL
+// Password hashes in the 4.1 format always begin with a * character
+// see https://dev.mysql.com/doc/mysql-security-excerpt/5.7/en/password-hashing.html
+// ref vitess.io/vitess/go/mysql/auth_server.go
+func DecodePasswordHex(hexEncodedPassword string) ([]byte, error) {
+	if hexEncodedPassword[0] == '*' {
+		hexEncodedPassword = hexEncodedPassword[1:]
+	}
+	return hex.DecodeString(hexEncodedPassword)
+}
+
+// EncodePasswordHex encodes to the standard format used by MySQL
+// adds the optionally leading * to the hashed password
+func EncodePasswordHex(passwordHash []byte) string {
+	hexstr := strings.ToUpper(hex.EncodeToString(passwordHash))
+	return "*" + hexstr
+}
+
+// NativePasswordHash = sha1(sha1(password))
+func NativePasswordHash(password []byte) []byte {
+	if len(password) == 0 {
+		return nil
+	}
+
+	// stage1Hash = SHA1(password)
+	crypt := sha1.New()
+	crypt.Write(password)
+	stage1 := crypt.Sum(nil)
+
+	// stage2Hash = SHA1(stage1Hash)
+	crypt.Reset()
+	crypt.Write(stage1)
+	return crypt.Sum(stage1[:0])
+}
+
+func CompareNativePassword(reply []byte, stored []byte, seed []byte) bool {
+	if len(stored) == 0 {
+		return false
+	}
+
+	// hash_stage1 = xor(reply, sha1(public_seed, hash_stage2))
+	stage1 := stage1FromReply(reply, seed, stored)
+	// andidate_hash2 = sha1(hash_stage1)
+	stage2 := sha1.Sum(stage1)
+
+	// check(candidate_hash2 == hash_stage2)
+	// use ConstantTimeCompare to mitigate timing based attacks
+	return subtle.ConstantTimeCompare(stage2[:], stored) == 1
 }
 
 // CalcCachingSha2Password: Hash password using MySQL 8+ method (SHA256)
-func CalcCachingSha2Password(scramble []byte, password string) []byte {
+func CalcCachingSha2Password(scramble []byte, password []byte) []byte {
 	if len(password) == 0 {
 		return nil
 	}
@@ -64,7 +133,7 @@ func CalcCachingSha2Password(scramble []byte, password string) []byte {
 	// XOR(SHA256(password), SHA256(SHA256(SHA256(password)), scramble))
 
 	crypt := sha256.New()
-	crypt.Write([]byte(password))
+	crypt.Write(password)
 	message1 := crypt.Sum(nil)
 
 	crypt.Reset()
@@ -76,11 +145,45 @@ func CalcCachingSha2Password(scramble []byte, password string) []byte {
 	crypt.Write(scramble)
 	message2 := crypt.Sum(nil)
 
-	for i := range message1 {
-		message1[i] ^= message2[i]
+	return Xor(message1, message2)
+}
+
+// Taken from https://github.com/go-sql-driver/mysql/pull/1518
+func CalcEd25519Password(scramble []byte, password string) ([]byte, error) {
+	// Derived from https://github.com/MariaDB/server/blob/d8e6bb00888b1f82c031938f4c8ac5d97f6874c3/plugin/auth_ed25519/ref10/sign.c
+	// Code style is from https://cs.opensource.google/go/go/+/refs/tags/go1.21.5:src/crypto/ed25519/ed25519.go;l=207
+	h := sha512.Sum512([]byte(password))
+
+	s, err := edwards25519.NewScalar().SetBytesWithClamping(h[:32])
+	if err != nil {
+		return nil, err
+	}
+	A := (&edwards25519.Point{}).ScalarBaseMult(s)
+
+	mh := sha512.New()
+	mh.Write(h[32:])
+	mh.Write(scramble)
+	messageDigest := mh.Sum(nil)
+	r, err := edwards25519.NewScalar().SetUniformBytes(messageDigest)
+	if err != nil {
+		return nil, err
 	}
 
-	return message1
+	R := (&edwards25519.Point{}).ScalarBaseMult(r)
+
+	kh := sha512.New()
+	kh.Write(R.Bytes())
+	kh.Write(A.Bytes())
+	kh.Write(scramble)
+	hramDigest := kh.Sum(nil)
+	k, err := edwards25519.NewScalar().SetUniformBytes(hramDigest)
+	if err != nil {
+		return nil, err
+	}
+
+	S := k.MultiplyAdd(k, s, r)
+
+	return append(R.Bytes(), S.Bytes()...), nil
 }
 
 func EncryptPassword(password string, seed []byte, pub *rsa.PublicKey) ([]byte, error) {
@@ -92,6 +195,90 @@ func EncryptPassword(password string, seed []byte, pub *rsa.PublicKey) ([]byte, 
 	}
 	sha1v := sha1.New()
 	return rsa.EncryptOAEP(sha1v, rand.Reader, pub, plain, nil)
+}
+
+//nolint:revive // exported auth constants kept for backward compatibility
+const (
+	SALT_LENGTH                = 16
+	ITERATION_MULTIPLIER       = 1000
+	SHA256_PASSWORD_ITERATIONS = 5
+)
+
+// generateUserSalt generate salt of given length for sha256_password hash
+func generateUserSalt(length int) ([]byte, error) {
+	// Generate a random salt of the given length
+	// Implement this function for your project
+	salt := make([]byte, length)
+	_, err := rand.Read(salt)
+	if err != nil {
+		return []byte(""), err
+	}
+
+	// Restrict to 7-bit to avoid multi-byte UTF-8
+	for i := range salt {
+		salt[i] = salt[i] &^ 128
+		for salt[i] == 36 || salt[i] == 0 { // '$' or NUL
+			newval := make([]byte, 1)
+			_, err := rand.Read(newval)
+			if err != nil {
+				return []byte(""), err
+			}
+			salt[i] = newval[0] &^ 128
+		}
+	}
+	return salt, nil
+}
+
+// hashCrypt256 salt and hash a password the given number of iterations
+func hashCrypt256(source, salt string, iterations uint64) (string, error) {
+	actualIterations := iterations * ITERATION_MULTIPLIER
+	hashInput := []byte(source + salt)
+	var hash [32]byte
+	for range actualIterations {
+		hash = sha256.Sum256(hashInput)
+		hashInput = hash[:]
+	}
+
+	hashHex := hex.EncodeToString(hash[:])
+	digest := fmt.Sprintf("$%d$%s$%s", iterations, salt, hashHex)
+	return digest, nil
+}
+
+// Check256HashingPassword compares a password to a hash for sha256_password
+// rather than trying to recreate just the hash we recreate the full hash
+// and use that for comparison
+func Check256HashingPassword(pwhash []byte, password string) (bool, error) {
+	pwHashParts := bytes.Split(pwhash, []byte("$"))
+	if len(pwHashParts) != 4 {
+		return false, errors.New("failed to decode hash parts")
+	}
+
+	iterationsPart := pwHashParts[1]
+	if len(iterationsPart) == 0 {
+		return false, errors.New("iterations part is empty")
+	}
+
+	iterations, err := strconv.ParseUint(string(iterationsPart), 10, 64)
+	if err != nil {
+		return false, errors.New("failed to decode iterations")
+	}
+	salt := pwHashParts[2][:SALT_LENGTH]
+
+	newHash, err := hashCrypt256(password, string(salt), iterations)
+	if err != nil {
+		return false, err
+	}
+
+	return subtle.ConstantTimeCompare(pwhash, []byte(newHash)) == 1, nil
+}
+
+// NewSha256PasswordHash creates a new password hash for sha256_password
+func NewSha256PasswordHash(pwd string) (string, error) {
+	salt, err := generateUserSalt(SALT_LENGTH)
+	if err != nil {
+		return "", err
+	}
+	return hashCrypt256(pwd, string(salt), SHA256_PASSWORD_ITERATIONS)
 }
 
 func DecompressMariadbData(data []byte) ([]byte, error) {
@@ -130,20 +317,16 @@ func AppendLengthEncodedInteger(b []byte, n uint64) []byte {
 
 func RandomBuf(size int) []byte {
 	buf := make([]byte, size)
-	// When this project supports golang 1.20 as a minimum, then this mrand.New(...)
-	// line can be eliminated and the random number can be generated by simply
-	// calling mrand.Intn()
-	random := mrand.New(mrand.NewSource(time.Now().UTC().UnixNano()))
-	min, max := 30, 127
-	for i := 0; i < size; i++ {
-		buf[i] = byte(min + random.Intn(max-min))
+	minVal, maxVal := 30, 127
+	for i := range size {
+		buf[i] = byte(minVal + mrand.Intn(maxVal-minVal))
 	}
 	return buf
 }
 
 // FixedLengthInt: little endian
 func FixedLengthInt(buf []byte) uint64 {
-	var num uint64 = 0
+	var num uint64
 	for i, b := range buf {
 		num |= uint64(b) << (uint(i) * 8)
 	}
@@ -152,7 +335,7 @@ func FixedLengthInt(buf []byte) uint64 {
 
 // BFixedLengthInt: big endian
 func BFixedLengthInt(buf []byte) uint64 {
-	var num uint64 = 0
+	var num uint64
 	for i, b := range buf {
 		num |= uint64(b) << (uint(len(buf)-i-1) * 8)
 	}
@@ -204,8 +387,10 @@ func PutLengthEncodedInt(n uint64) []byte {
 		// handles case n <= 0xffffffffffffffff
 		// using 'default' instead of 'case' to avoid static analysis error
 		// SA4003: every value of type uint64 is <= math.MaxUint64
-		return []byte{0xfe, byte(n), byte(n >> 8), byte(n >> 16), byte(n >> 24),
-			byte(n >> 32), byte(n >> 40), byte(n >> 48), byte(n >> 56)}
+		return []byte{
+			0xfe, byte(n), byte(n >> 8), byte(n >> 16), byte(n >> 24),
+			byte(n >> 32), byte(n >> 40), byte(n >> 48), byte(n >> 56),
+		}
 	}
 }
 
@@ -285,10 +470,10 @@ func FormatBinaryDate(n int, data []byte) ([]byte, error) {
 	case 0:
 		return []byte("0000-00-00"), nil
 	case 4:
-		return []byte(fmt.Sprintf("%04d-%02d-%02d",
+		return fmt.Appendf(nil, "%04d-%02d-%02d",
 			binary.LittleEndian.Uint16(data[:2]),
 			data[2],
-			data[3])), nil
+			data[3]), nil
 	default:
 		return nil, errors.Errorf("invalid date packet length %d", n)
 	}
@@ -299,21 +484,21 @@ func FormatBinaryDateTime(n int, data []byte) ([]byte, error) {
 	case 0:
 		return []byte("0000-00-00 00:00:00"), nil
 	case 4:
-		return []byte(fmt.Sprintf("%04d-%02d-%02d 00:00:00",
+		return fmt.Appendf(nil, "%04d-%02d-%02d 00:00:00",
 			binary.LittleEndian.Uint16(data[:2]),
 			data[2],
-			data[3])), nil
+			data[3]), nil
 	case 7:
-		return []byte(fmt.Sprintf(
+		return fmt.Appendf(nil,
 			"%04d-%02d-%02d %02d:%02d:%02d",
 			binary.LittleEndian.Uint16(data[:2]),
 			data[2],
 			data[3],
 			data[4],
 			data[5],
-			data[6])), nil
+			data[6]), nil
 	case 11:
-		return []byte(fmt.Sprintf(
+		return fmt.Appendf(nil,
 			"%04d-%02d-%02d %02d:%02d:%02d.%06d",
 			binary.LittleEndian.Uint16(data[:2]),
 			data[2],
@@ -321,7 +506,7 @@ func FormatBinaryDateTime(n int, data []byte) ([]byte, error) {
 			data[4],
 			data[5],
 			data[6],
-			binary.LittleEndian.Uint32(data[7:11]))), nil
+			binary.LittleEndian.Uint32(data[7:11])), nil
 	default:
 		return nil, errors.Errorf("invalid datetime packet length %d", n)
 	}
@@ -340,22 +525,22 @@ func FormatBinaryTime(n int, data []byte) ([]byte, error) {
 	var bytes []byte
 	switch n {
 	case 8:
-		bytes = []byte(fmt.Sprintf(
+		bytes = fmt.Appendf(nil,
 			"%c%02d:%02d:%02d",
 			sign,
 			uint16(data[1])*24+uint16(data[5]),
 			data[6],
 			data[7],
-		))
+		)
 	case 12:
-		bytes = []byte(fmt.Sprintf(
+		bytes = fmt.Appendf(nil,
 			"%c%02d:%02d:%02d.%06d",
 			sign,
 			uint16(data[1])*24+uint16(data[5]),
 			data[6],
 			data[7],
 			binary.LittleEndian.Uint32(data[8:12]),
-		))
+		)
 	default:
 		return nil, errors.Errorf("invalid time packet length %d", n)
 	}
@@ -389,9 +574,8 @@ func Escape(sql string) string {
 func GetNetProto(addr string) string {
 	if strings.Contains(addr, "/") {
 		return "unix"
-	} else {
-		return "tcp"
 	}
+	return "tcp"
 }
 
 // ErrorEqual returns a boolean indicating whether err1 is equal to err2.
@@ -410,21 +594,46 @@ func ErrorEqual(err1, err2 error) bool {
 	return e1.Error() == e2.Error()
 }
 
+func compareSubVersion(typ, a, b, aFull, bFull string) (int, error) {
+	if a == "" || b == "" {
+		return 0, nil
+	}
+
+	var aNum, bNum int
+	var err error
+
+	if aNum, err = strconv.Atoi(a); err != nil {
+		return 0, fmt.Errorf("cannot parse %s version %s of %s", typ, a, aFull)
+	}
+	if bNum, err = strconv.Atoi(b); err != nil {
+		return 0, fmt.Errorf("cannot parse %s version %s of %s", typ, b, bFull)
+	}
+
+	return cmp.Compare(aNum, bNum), nil
+}
+
+// Compares version triplet strings, ignoring anything past `-` in version.
+// A version string like 8.0 will compare as if third triplet were a wildcard.
+// A version string like 8 will compare as if second & third triplets were wildcards.
 func CompareServerVersions(a, b string) (int, error) {
-	var (
-		aVer, bVer *semver.Version
-		err        error
-	)
+	aNumbers, _, _ := strings.Cut(a, "-")
+	bNumbers, _, _ := strings.Cut(b, "-")
 
-	if aVer, err = semver.NewVersion(a); err != nil {
-		return 0, fmt.Errorf("cannot parse %q as semver: %w", a, err)
+	aMajor, aRest, _ := strings.Cut(aNumbers, ".")
+	bMajor, bRest, _ := strings.Cut(bNumbers, ".")
+
+	if majorCompare, err := compareSubVersion("major", aMajor, bMajor, a, b); err != nil || majorCompare != 0 {
+		return majorCompare, err
 	}
 
-	if bVer, err = semver.NewVersion(b); err != nil {
-		return 0, fmt.Errorf("cannot parse %q as semver: %w", b, err)
+	aMinor, aPatch, _ := strings.Cut(aRest, ".")
+	bMinor, bPatch, _ := strings.Cut(bRest, ".")
+
+	if minorCompare, err := compareSubVersion("minor", aMinor, bMinor, a, b); err != nil || minorCompare != 0 {
+		return minorCompare, err
 	}
 
-	return aVer.Compare(bVer), nil
+	return compareSubVersion("patch", aPatch, bPatch, a, b)
 }
 
 var encodeRef = map[byte]byte{
@@ -443,9 +652,7 @@ func init() {
 	for i := range EncodeMap {
 		EncodeMap[i] = DONTESCAPE
 	}
-	for i := range EncodeMap {
-		if to, ok := encodeRef[byte(i)]; ok {
-			EncodeMap[byte(i)] = to
-		}
+	for k, v := range encodeRef {
+		EncodeMap[k] = v
 	}
 }

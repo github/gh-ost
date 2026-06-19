@@ -12,9 +12,8 @@ type RowData []byte
 func (p RowData) Parse(f []*Field, binary bool, dst []FieldValue) ([]FieldValue, error) {
 	if binary {
 		return p.ParseBinary(f, dst)
-	} else {
-		return p.ParseText(f, dst)
 	}
+	return p.ParseText(f, dst)
 }
 
 func (p RowData) ParseText(f []*Field, dst []FieldValue) ([]FieldValue, error) {
@@ -173,10 +172,10 @@ func (p RowData) ParseBinary(f []*Field, dst []FieldValue) ([]FieldValue, error)
 			pos += 8
 			continue
 
-		case MYSQL_TYPE_DECIMAL, MYSQL_TYPE_NEWDECIMAL, MYSQL_TYPE_VARCHAR,
-			MYSQL_TYPE_BIT, MYSQL_TYPE_ENUM, MYSQL_TYPE_SET, MYSQL_TYPE_TINY_BLOB,
-			MYSQL_TYPE_MEDIUM_BLOB, MYSQL_TYPE_LONG_BLOB, MYSQL_TYPE_BLOB,
-			MYSQL_TYPE_VAR_STRING, MYSQL_TYPE_STRING, MYSQL_TYPE_GEOMETRY, MYSQL_TYPE_JSON:
+		case MYSQL_TYPE_DECIMAL, MYSQL_TYPE_NEWDECIMAL, MYSQL_TYPE_VARCHAR, MYSQL_TYPE_BIT,
+			MYSQL_TYPE_ENUM, MYSQL_TYPE_SET, MYSQL_TYPE_TINY_BLOB, MYSQL_TYPE_MEDIUM_BLOB,
+			MYSQL_TYPE_LONG_BLOB, MYSQL_TYPE_BLOB, MYSQL_TYPE_VAR_STRING, MYSQL_TYPE_STRING,
+			MYSQL_TYPE_VECTOR, MYSQL_TYPE_GEOMETRY, MYSQL_TYPE_JSON:
 			v, isNull, n, err = LengthEncodedString(p[pos:])
 			pos += n
 			if err != nil {
@@ -187,10 +186,9 @@ func (p RowData) ParseBinary(f []*Field, dst []FieldValue) ([]FieldValue, error)
 				data[i].Type = FieldValueTypeString
 				data[i].str = append(data[i].str[:0], v...)
 				continue
-			} else {
-				data[i].Type = FieldValueTypeNull
-				continue
 			}
+			data[i].Type = FieldValueTypeNull
+			continue
 
 		case MYSQL_TYPE_DATE, MYSQL_TYPE_NEWDATE:
 			var num uint64
