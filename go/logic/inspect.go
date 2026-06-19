@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
@@ -677,13 +678,16 @@ func (isp *Inspector) CountTableRows(ctx context.Context) error {
 
 	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.migrationContext.OriginalTableName))
 	var rowsEstimate int64
+	queryStartTime := time.Now()
 	if err := conn.QueryRowContext(ctx, query).Scan(&rowsEstimate); err != nil {
+		metrics.RecordQueryDuration(isp.migrationContext.Metrics, "source", "row_count", time.Since(queryStartTime), err)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			isp.migrationContext.Log.Infof("exact row count cancelled (%s), likely because I'm about to cut over. I'm going to kill that query.", ctx.Err())
 			return mysql.Kill(isp.db, connectionID)
 		}
 		return err
 	}
+	metrics.RecordQueryDuration(isp.migrationContext.Metrics, "source", "row_count", time.Since(queryStartTime), nil)
 
 	// row count query finished. nil out the cancel func, so the main migration thread
 	// doesn't bother calling it after row copy is done.

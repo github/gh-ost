@@ -29,6 +29,7 @@ import (
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/testcontainers/testcontainers-go"
@@ -194,6 +195,81 @@ func TestMigratorOnChangelogEvent(t *testing.T) {
 	})
 }
 
+// Regression: heartbeats must not advance applier.CurrentCoordinates past
+// DMLs still sitting in applyEventsQueue. If they do, checkpointLoop will
+// persist a GTID set that includes un-applied transactions, and resume via
+// StartSyncGTID will skip them (the server treats them as already-seen).
+func TestMigratorHeartbeatDoesNotAdvancePastUnappliedDML(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrationContext.UseGTIDs = true
+	migrator := NewMigrator(migrationContext, "test")
+	migrator.applier = NewApplier(migrationContext)
+
+	const srcUUID = "00000000-0000-0000-0000-000000000001"
+
+	// A DML on the original table at GTID :100 is observed and enqueued, but
+	// not yet applied.
+	dmlCoords, err := mysql.NewGTIDBinlogCoordinates(srcUUID + ":1-100")
+	require.NoError(t, err)
+	migrator.applyEventsQueue <- newApplyEventStructByDML(&binlog.BinlogEntry{
+		DmlEvent: &binlog.BinlogDMLEvent{
+			DatabaseName: "test",
+			TableName:    migrationContext.OriginalTableName,
+			DML:          binlog.UpdateDML,
+		},
+		Coordinates: dmlCoords,
+	})
+	require.Equal(t, 1, len(migrator.applyEventsQueue),
+		"DML must be sitting un-applied in the queue")
+
+	// A heartbeat row is then written; its GTID set includes the un-applied
+	// DML plus a few additional transactions.
+	heartbeatCoords, err := mysql.NewGTIDBinlogCoordinates(srcUUID + ":1-105")
+	require.NoError(t, err)
+	heartbeatColumnValues := sql.ToColumnValues([]interface{}{
+		123,
+		time.Now().Unix(),
+		"heartbeat",
+		time.Now().Format(time.RFC3339Nano),
+	})
+	require.NoError(t, migrator.onChangelogHeartbeatEvent(&binlog.BinlogEntry{
+		DmlEvent: &binlog.BinlogDMLEvent{
+			DatabaseName:    "test",
+			DML:             binlog.InsertDML,
+			NewColumnValues: heartbeatColumnValues,
+		},
+		Coordinates: heartbeatCoords,
+	}))
+
+	// The DML is still un-applied; the heartbeat's coords-bump sentinel has
+	// been enqueued behind it.
+	require.Equal(t, 2, len(migrator.applyEventsQueue),
+		"queue must hold the un-applied DML and the heartbeat sentinel; "+
+			"this test does not drain the queue")
+
+	// Invariant: CurrentCoordinates must NOT have advanced past the queued DML.
+	currentCoords := migrator.applier.CurrentCoordinates
+	require.False(t, currentCoords != nil && dmlCoords.SmallerThanOrEquals(currentCoords),
+		"CurrentCoordinates must not cover the un-applied DML at %s (got %v)",
+		dmlCoords.DisplayString(), currentCoords)
+
+	// Consequence: the checkpoint gate in Migrator.Checkpoint must NOT fire
+	// for streamer coords that include the un-applied DML.
+	require.False(t, currentCoords != nil && heartbeatCoords.SmallerThanOrEquals(currentCoords),
+		"checkpoint gate must not fire while DML at %s is un-applied",
+		dmlCoords.DisplayString())
+
+	// Ordering: the DML must come first, then the heartbeat sentinel. If a
+	// future change ever wraps the heartbeat enqueue in `go func()`, this
+	// invariant breaks and the bug returns.
+	firstQueued := <-migrator.applyEventsQueue
+	secondQueued := <-migrator.applyEventsQueue
+	require.NotNil(t, firstQueued.dmlEvent, "first queued event must be the DML")
+	require.Nil(t, firstQueued.writeFunc, "first queued event must not be a sentinel")
+	require.Nil(t, secondQueued.dmlEvent, "second queued event must not be a DML")
+	require.NotNil(t, secondQueued.writeFunc, "second queued event must be the heartbeat sentinel")
+}
+
 func TestMigratorValidateStatement(t *testing.T) {
 	t.Run("add-column", func(t *testing.T) {
 		migrationContext := base.NewMigrationContext()
@@ -330,6 +406,202 @@ func TestMigratorGetMigrationStateAndETA(t *testing.T) {
 		require.Equal(t, "due", eta)
 		require.Equal(t, "0s", etaDuration.String())
 	}
+}
+
+type progressGaugeSpy struct {
+	names  []string
+	values []float64
+	tags   [][]string
+}
+
+func (s *progressGaugeSpy) Gauge(name string, value float64, tags ...string) {
+	s.names = append(s.names, name)
+	s.values = append(s.values, value)
+	s.tags = append(s.tags, append([]string(nil), tags...))
+}
+
+func (s *progressGaugeSpy) Count(_ string, _ int64, _ ...string)       {}
+func (s *progressGaugeSpy) Histogram(_ string, _ float64, _ ...string) {}
+
+type cutOverMetricsSpy struct {
+	countNames     []string
+	countTags      [][]string
+	histogramNames []string
+	histogramTags  [][]string
+}
+
+func (s *cutOverMetricsSpy) Gauge(_ string, _ float64, _ ...string) {}
+
+func (s *cutOverMetricsSpy) Count(name string, _ int64, tags ...string) {
+	s.countNames = append(s.countNames, name)
+	s.countTags = append(s.countTags, append([]string(nil), tags...))
+}
+
+func (s *cutOverMetricsSpy) Histogram(name string, _ float64, tags ...string) {
+	s.histogramNames = append(s.histogramNames, name)
+	s.histogramTags = append(s.histogramTags, append([]string(nil), tags...))
+}
+
+func TestCutOverOperationWithMetricsRetryThenSuccess(t *testing.T) {
+	spy := &cutOverMetricsSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	migrator := NewMigrator(ctx, "test")
+
+	attempts := 0
+	retrier := func(operation func() error, _ ...bool) error {
+		for {
+			err := operation()
+			if err == nil {
+				return nil
+			}
+			if attempts >= 2 {
+				return err
+			}
+		}
+	}
+	operation := func() error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("transient cutover failure")
+		}
+		return nil
+	}
+
+	require.NoError(t, migrator.cutOverOperationWithMetrics(retrier, operation))
+	assert.Equal(t, []string{"cut_over.attempts_total", "cut_over.attempts_total"}, spy.countNames)
+	assert.Equal(t, [][]string{{"outcome:" + metrics.CutOverOutcomeRetry}, {"outcome:" + metrics.CutOverOutcomeSuccess}}, spy.countTags)
+	assert.Equal(t, []string{"cut_over.total_duration_milliseconds"}, spy.histogramNames)
+	assert.Equal(t, [][]string{{"outcome:" + metrics.CutOverOutcomeSuccess}}, spy.histogramTags)
+}
+
+func TestCutOverOperationWithMetricsAbort(t *testing.T) {
+	spy := &cutOverMetricsSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	migrator := NewMigrator(ctx, "test")
+	cutOverErr := errors.New("cutover failed")
+
+	retrier := func(operation func() error, _ ...bool) error {
+		return operation()
+	}
+	operation := func() error {
+		return cutOverErr
+	}
+
+	require.ErrorIs(t, migrator.cutOverOperationWithMetrics(retrier, operation), cutOverErr)
+	assert.Equal(t, []string{"cut_over.attempts_total", "cut_over.attempts_total"}, spy.countNames)
+	assert.Equal(t, [][]string{{"outcome:" + metrics.CutOverOutcomeRetry}, {"outcome:" + metrics.CutOverOutcomeAbort}}, spy.countTags)
+	assert.Equal(t, []string{"cut_over.total_duration_milliseconds"}, spy.histogramNames)
+	assert.Equal(t, [][]string{{"outcome:" + metrics.CutOverOutcomeAbort}}, spy.histogramTags)
+}
+
+func TestReportStatusEmitsProgressGaugesEveryTick(t *testing.T) {
+	spy := &progressGaugeSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	atomic.StoreInt64(&ctx.TotalRowsCopied, 1000)
+	atomic.StoreInt64(&ctx.RowsEstimate, 5000)
+	atomic.StoreInt64(&ctx.TotalDMLEventsApplied, 42)
+
+	migrator := NewMigrator(ctx, "test")
+	migrator.reportStatus(NoPrintStatusRule, io.Discard)
+	require.Len(t, spy.names, 8)
+	assert.Equal(t, []string{
+		"row_copy.rows_copied",
+		"row_copy.rows_estimate",
+		"dml.events_applied",
+		"binlog.backlog_size",
+		"binlog.backlog_capacity",
+		"binlog.backlog_utilization",
+		"lag.replication_seconds",
+		"lag.heartbeat_seconds",
+	}, spy.names)
+	assert.Equal(t, []float64{1000, 5000, 42, 0, float64(cap(migrator.applyEventsQueue)), 0}, spy.values[:6])
+	assert.InDelta(t, 20.0, ctx.GetProgressPct(), 0.01)
+
+	spy.names = nil
+	spy.values = nil
+	atomic.StoreInt64(&ctx.TotalDMLEventsApplied, 100)
+	migrator.reportStatus(NoPrintStatusRule, io.Discard)
+	require.Len(t, spy.names, 8)
+	assert.Equal(t, []float64{1000, 5000, 100, 0, float64(cap(migrator.applyEventsQueue)), 0}, spy.values[:6])
+}
+
+func TestReportStatusEmitsBinlogBacklogGauges(t *testing.T) {
+	spy := &progressGaugeSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+
+	migrator := NewMigrator(ctx, "test")
+	migrator.applyEventsQueue <- newApplyEventStructByDML(&binlog.BinlogEntry{
+		DmlEvent: &binlog.BinlogDMLEvent{DML: binlog.InsertDML},
+	})
+	migrator.applyEventsQueue <- newApplyEventStructByDML(&binlog.BinlogEntry{
+		DmlEvent: &binlog.BinlogDMLEvent{DML: binlog.InsertDML},
+	})
+
+	migrator.reportStatus(NoPrintStatusRule, io.Discard)
+
+	capacity := float64(cap(migrator.applyEventsQueue))
+	require.Len(t, spy.names, 8)
+	assert.Equal(t, float64(2), spy.values[3])
+	assert.Equal(t, capacity, spy.values[4])
+	assert.InDelta(t, 2/capacity, spy.values[5], 1e-9)
+}
+
+func TestReportStatusEmitsGaugesWhenRowCopyComplete(t *testing.T) {
+	spy := &progressGaugeSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	atomic.StoreInt64(&ctx.TotalRowsCopied, 5000)
+	atomic.StoreInt64(&ctx.RowsEstimate, 10000)
+
+	migrator := NewMigrator(ctx, "test")
+	atomic.StoreInt64(&migrator.rowCopyCompleteFlag, 1)
+	migrator.reportStatus(NoPrintStatusRule, io.Discard)
+
+	require.Len(t, spy.names, 8)
+	assert.Equal(t, float64(5000), spy.values[0])
+	assert.Equal(t, float64(5000), spy.values[1], "rows_estimate tracks rows_copied when row copy is complete")
+}
+
+func TestReportStatusEmitsGaugesWhenPrintSuppressed(t *testing.T) {
+	spy := &progressGaugeSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	ctx.StartTime = time.Now().Add(-99 * time.Second)
+	atomic.StoreInt64(&ctx.TotalRowsCopied, 1000)
+	atomic.StoreInt64(&ctx.RowsEstimate, 5000)
+	atomic.StoreInt64(&ctx.EtaRowsPerSecond, 1)
+
+	migrator := NewMigrator(ctx, "test")
+	snap := migrator.migrationProgressSnapshot()
+	_, _, etaDuration := migrator.getMigrationStateAndETA(snap.rowsEstimate)
+	require.False(t, migrator.shouldPrintStatus(HeuristicPrintStatusRule, snap.elapsedSeconds, etaDuration))
+
+	migrator.reportStatus(HeuristicPrintStatusRule, io.Discard)
+	require.Len(t, spy.names, 8)
+	assert.Equal(t, []float64{1000, 5000, 0, 0, float64(cap(migrator.applyEventsQueue)), 0}, spy.values[:6])
+}
+
+func TestReportStatusEmitsLagGaugesWhenThrottled(t *testing.T) {
+	spy := &progressGaugeSpy{}
+	ctx := base.NewMigrationContext()
+	ctx.Metrics = spy
+	ctx.SetThrottled(true, "max-lag-millis", base.NoThrottleReasonHint)
+	atomic.StoreInt64(&ctx.CurrentLag, int64(5*time.Second))
+	ctx.SetLastHeartbeatOnChangelogTime(time.Now().Add(-4 * time.Second))
+
+	migrator := NewMigrator(ctx, "test")
+	migrator.reportStatus(NoPrintStatusRule, io.Discard)
+
+	require.GreaterOrEqual(t, len(spy.names), 8)
+	assert.Equal(t, "lag.replication_seconds", spy.names[6])
+	assert.Equal(t, "lag.heartbeat_seconds", spy.names[7])
+	require.Len(t, spy.tags[6], 1)
+	assert.Equal(t, "throttled:true", spy.tags[6][0])
+	assert.Equal(t, "throttled:true", spy.tags[7][0])
 }
 
 func TestMigratorShouldPrintStatus(t *testing.T) {
@@ -600,6 +872,7 @@ func (suite *MigratorTestSuite) TestCopierIntPK() {
 
 	migrator := NewMigrator(migrationContext, "0.0.0")
 	suite.Require().NoError(migrator.initiateApplier())
+	defer migrator.applier.Teardown()
 	suite.Require().NoError(migrator.applier.prepareQueries())
 	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues())
 
@@ -671,6 +944,7 @@ func (suite *MigratorTestSuite) TestCopierCompositePK() {
 
 	migrator := NewMigrator(migrationContext, "0.0.0")
 	suite.Require().NoError(migrator.initiateApplier())
+	defer migrator.applier.Teardown()
 	suite.Require().NoError(migrator.applier.prepareQueries())
 	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues())
 
