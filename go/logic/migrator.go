@@ -1774,10 +1774,12 @@ func (mgtr *Migrator) setupMoveTablesSourcePrimary(dbVersion string) error {
 	if err != nil {
 		return err
 	}
+	// Assign before the writability check so teardown() reclaims the pool even if
+	// the gate rejects a read_only host.
+	mgtr.sourcePrimaryDB = db
 	if err := assertConnectionWritable(db, cfg.Key, "source primary"); err != nil {
 		return err
 	}
-	mgtr.sourcePrimaryDB = db
 	mgtr.migrationContext.Log.Infof("Move-tables source primary is %+v; source reads use %+v",
 		cfg.Key, mgtr.migrationContext.InspectorConnectionConfig.Key)
 	return nil
