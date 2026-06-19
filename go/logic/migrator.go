@@ -959,6 +959,10 @@ func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) err
 	if chk == nil || !chk.MoveTablesCutOverStarted || chk.MoveTablesCutOverDrainGTID == nil || chk.MoveTablesCutOverDrainGTID.IsEmpty() {
 		return errors.New("checkpoint does not contain move-tables cutover resume state")
 	}
+	// The checkpoint proves the source RENAME already happened in a prior run, so
+	// `__del` exists on the source. Mark it so a failed resume emits the rollback
+	// hint.
+	atomic.StoreInt64(&mgtr.migrationContext.MoveTablesSourceRenamedFlag, 1)
 	if chk.LastTrxCoords != nil && !chk.LastTrxCoords.IsEmpty() {
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
 		mgtr.applier.CurrentCoordinates = chk.LastTrxCoords.Clone()
@@ -1010,6 +1014,17 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	// After this point, we'll need to teardown anything that's been started
 	// so we don't leave things hanging around
 	defer mgtr.teardown()
+
+	// If the run fails after the source RENAME, the source `__del` table is the
+	// rollback handle. Emit a clear rollback hint on any error return once the
+	// rename has happened. finalCleanup errors are
+	// swallowed below (they return nil), so this never fires on a successful
+	// cutover whose only failure was post-success cleanup.
+	defer func() {
+		if err != nil && atomic.LoadInt64(&mgtr.migrationContext.MoveTablesSourceRenamedFlag) > 0 {
+			mgtr.logMoveTablesRollbackHint()
+		}
+	}()
 
 	if mgtr.migrationContext.Checkpoint && mgtr.migrationContext.Resume {
 		mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.MoveTables.ConnectionConfig
@@ -1278,6 +1293,10 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	if _, err := pinnedConn.ExecContext(cutOverCtx, renameQuery); err != nil {
 		return fmt.Errorf("RENAME failed: %w", err)
 	}
+	// The source `__del` table now exists and is the rollback handle. Mark the
+	// rename as done so any later failure emits the rollback hint (and never
+	// drops `__del`).
+	atomic.StoreInt64(&mgtr.migrationContext.MoveTablesSourceRenamedFlag, 1)
 
 	// ----- T2: capture @@gtid_executed on the SAME connection as T1 -----
 	// @@GLOBAL scope is explicit so the intent is unambiguous in the SQL itself.
@@ -2507,36 +2526,28 @@ func (mgtr *Migrator) executeDMLWriteFuncs() error {
 func (mgtr *Migrator) finalCleanup() error {
 	atomic.StoreInt64(&mgtr.migrationContext.CleanupImminentFlag, 1)
 
-	mgtr.migrationContext.Log.Infof("Writing changelog state: %+v", Migrated)
-	if _, err := mgtr.applier.WriteChangelogState(string(Migrated)); err != nil {
-		return err
-	}
+	if !mgtr.migrationContext.IsMoveTablesMode() {
+		mgtr.migrationContext.Log.Infof("Writing changelog state: %+v", Migrated)
+		if _, err := mgtr.applier.WriteChangelogState(string(Migrated)); err != nil {
+			return err
+		}
 
-	if mgtr.migrationContext.Noop {
-		if createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.GetGhostTableName()); err == nil {
-			mgtr.migrationContext.Log.Infof("New table structure follows")
-			fmt.Println(createTableStatement)
-		} else if !mgtr.migrationContext.IsMoveTablesMode() {
-			mgtr.migrationContext.Log.Errore(fmt.Errorf("error showing create table: %w", err))
+		if mgtr.migrationContext.Noop {
+			if createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.GetGhostTableName()); err == nil {
+				mgtr.migrationContext.Log.Infof("New table structure follows")
+				fmt.Println(createTableStatement)
+			} else {
+				mgtr.migrationContext.Log.Errore(fmt.Errorf("error showing create table: %w", err))
+			}
 		}
 	}
+
 	if err := mgtr.eventsStreamer.Close(); err != nil {
 		mgtr.migrationContext.Log.Errore(err)
 	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
-		if mgtr.migrationContext.Checkpoint {
-			if mgtr.migrationContext.OkToDropTable {
-				if err := mgtr.retryOperation(mgtr.applier.DropCheckpointTable); err != nil {
-					return err
-				}
-			} else if !mgtr.migrationContext.Noop {
-				mgtr.migrationContext.Log.Infof("Am not dropping checkpoint table without `--ok-to-drop-table`. To drop the checkpoint table, issue:")
-				mgtr.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()), sql.EscapeName(mgtr.migrationContext.GetCheckpointTableName()))
-			}
-		}
-		// for move-tables mode, we're done at this point
-		return nil
+		return mgtr.moveTablesFinalCleanup()
 	}
 
 	if err := mgtr.retryOperation(mgtr.applier.DropChangelogTable); err != nil {
@@ -2564,6 +2575,71 @@ func (mgtr *Migrator) finalCleanup() error {
 	}
 
 	return nil
+}
+
+// moveTablesFinalCleanup handles artifact cleanup after a successful move-tables
+// run. A successful run leaves two artifacts behind:
+// the source `__del` table (the post-cutover rollback handle) and the target
+// checkpoint table. There are no `_ghc`/`__gho` tables in move-tables mode.
+//
+// This runs only on the success path; on failure `__del` is never dropped and
+// survives as the rollback handle (see logMoveTablesRollbackHint).
+func (mgtr *Migrator) moveTablesFinalCleanup() error {
+	sourceDatabaseName := mgtr.migrationContext.DatabaseName
+	delTableName := mgtr.migrationContext.GetOldTableName()
+	targetDatabaseName := mgtr.migrationContext.GetTargetDatabaseName()
+	checkpointTableName := mgtr.migrationContext.GetCheckpointTableName()
+
+	if mgtr.migrationContext.OkToDropTable {
+		// The source `__del` rollback handle only exists after a real cutover,
+		// never in Noop runs. The streamer owns the live source connection in
+		// both the normal and cutover-resume paths (its `db` handle uses the
+		// source config and Close() above only closed the binlog reader), so the
+		// source-side drop goes through it.
+		if !mgtr.migrationContext.Noop {
+			if err := mgtr.retryOperation(mgtr.eventsStreamer.DropSourceOldTable); err != nil {
+				return err
+			}
+		}
+		if mgtr.migrationContext.Checkpoint {
+			if err := mgtr.retryOperation(mgtr.applier.DropCheckpointTable); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if mgtr.migrationContext.Noop {
+		return nil
+	}
+
+	// --ok-to-drop-table not set: log the artifacts left behind and the exact
+	// commands to drop them.
+	mgtr.migrationContext.Log.Infof("Am not dropping move-tables artifacts without `--ok-to-drop-table`. The following are left behind:")
+	mgtr.migrationContext.Log.Infof("- source rollback handle %s.%s. To drop it, issue:", sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName))
+	mgtr.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName))
+	if mgtr.migrationContext.Checkpoint {
+		mgtr.migrationContext.Log.Infof("- target checkpoint table %s.%s. To drop it, issue:", sql.EscapeName(targetDatabaseName), sql.EscapeName(checkpointTableName))
+		mgtr.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(targetDatabaseName), sql.EscapeName(checkpointTableName))
+	}
+	return nil
+}
+
+// logMoveTablesRollbackHint prints a clear rollback hint after a failed
+// move-tables run in which the source RENAME already happened. The source
+// `__del` table is intentionally left in place as the rollback handle
+// and the operator rolls the source back by renaming
+// `__del` to the original table name. We do NOT drop `__del` on a failure path.
+func (mgtr *Migrator) logMoveTablesRollbackHint() {
+	sourceDatabaseName := mgtr.migrationContext.DatabaseName
+	originalTableName := mgtr.migrationContext.OriginalTableName
+	delTableName := mgtr.migrationContext.GetOldTableName()
+	mgtr.migrationContext.Log.Infof("move-tables run failed after the source rename; leaving %s.%s in place as the rollback handle.",
+		sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName))
+	mgtr.migrationContext.Log.Infof("To roll back the source table, issue:")
+	mgtr.migrationContext.Log.Infof("-- rename table %s.%s to %s.%s",
+		sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName),
+		sql.EscapeName(sourceDatabaseName), sql.EscapeName(originalTableName))
 }
 
 func (mgtr *Migrator) teardown() {

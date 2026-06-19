@@ -15,6 +15,7 @@ import (
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
+	"github.com/github/gh-ost/go/sql"
 
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/openark/golib/sqlutils"
@@ -237,6 +238,32 @@ func (es *EventsStreamer) Close() (err error) {
 	err = es.binlogReader.Close()
 	es.migrationContext.Log.Infof("Closed streamer connection. err=%+v", err)
 	return err
+}
+
+// DropSourceOldTable drops the source "__del" table in move-tables mode. The
+// __del table is the post-cutover rollback handle on the source cluster; it is
+// only dropped after a successful run when --ok-to-drop-table is set.
+// The applier's dropTable targets the move-tables target cluster,
+// so the source-side drop is owned by the streamer: its `db`
+// handle uses InspectorConnectionConfig (the source) and stays open in both the
+// normal and the cutover-resume paths (Close() only closes the binlog reader,
+// not `db`).
+func (es *EventsStreamer) DropSourceOldTable() error {
+	databaseName := es.migrationContext.DatabaseName
+	tableName := es.migrationContext.GetOldTableName()
+	query := fmt.Sprintf(`drop /* gh-ost */ table if exists %s.%s`,
+		sql.EscapeName(databaseName),
+		sql.EscapeName(tableName),
+	)
+	es.migrationContext.Log.Infof("Dropping source table %s.%s",
+		sql.EscapeName(databaseName),
+		sql.EscapeName(tableName),
+	)
+	if _, err := sqlutils.ExecNoPrepare(es.db, query); err != nil {
+		return err
+	}
+	es.migrationContext.Log.Infof("Source table dropped")
+	return nil
 }
 
 func (es *EventsStreamer) Teardown() {
