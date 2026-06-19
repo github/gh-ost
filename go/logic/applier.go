@@ -198,15 +198,6 @@ func (apl *Applier) InitDBConnections() (err error) {
 			return err
 		}
 	}
-	if apl.moveTablesConnectionConfig != nil {
-		moveTablesURI := apl.moveTablesConnectionConfig.GetDBUri(apl.migrationContext.GetTargetDatabaseName()) + "&multiStatements=true"
-		if apl.moveTablesTargetDB, _, err = mysql.GetDB(apl.migrationContext.Uuid, moveTablesURI); err != nil {
-			return err
-		}
-		if _, err := base.ValidateConnection(apl.moveTablesTargetDB, apl.moveTablesConnectionConfig, apl.migrationContext, apl.name); err != nil {
-			return err
-		}
-	}
 	apl.migrationContext.Log.Infof("Applier initiated on %+v, version %+v", apl.connectionConfig.ImpliedKey, apl.migrationContext.ApplierMySQLVersion)
 	return nil
 }
