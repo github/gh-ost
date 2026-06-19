@@ -7,10 +7,6 @@
 # Usage: localtests/test/sh [filter]
 # By default, runs all move-tables tests. Given filter, will only run tests matching given regep
 
-# TODO(chriskirkland):
-# - (nice-to-have) remove trailing newline requirement for tables.txt
-# - ...
-
 repo_root=$(git rev-parse --show-toplevel)
 script_path="$repo_root/script/move-tables"
 tests_path=$(dirname $0)/move-tables
@@ -400,12 +396,6 @@ test_single() {
         mysql-exec target replica --default-character-set=utf8mb4 $database -e "set @@global.sql_mode='${original_sql_mode}'"
     fi
 
-    # TODO(chriskirkland): use this reset schemas and/or ACLs/permissions on each cluster?
-    if [ -f $tests_path/$test_name/destroy.sql ]; then
-        mysql-exec source primary --default-character-set=utf8mb4 $database <$tests_path/$test_name/destroy.sql
-        mysql-exec target primary --default-character-set=utf8mb4 $database <$tests_path/$test_name/destroy.sql
-    fi
-
     # Validate expected failure or success
     if ! validate_expected_failure; then
         return 1
@@ -420,8 +410,9 @@ test_single() {
     for table_name in "${tables_to_migrate[@]}"; do
         echo "⚙️ Validating table: $table_name"
 
-        # Validate that the structure of the table matches on the source and target clusters
-        mysql-exec source replica --default-character-set=utf8mb4 $database -e "show create table _${table_name}_del\G" -ss >$orig_structure_output_file
+        # Validate that the structure of the table matches on the source and target clusters (accounting for table rename on source)
+        mysql-exec source replica --default-character-set=utf8mb4 $database -e "show create table _${table_name}_del\G" -ss | sed -e "s/_${table_name}_del/${table_name}/g" >$orig_structure_output_file
+        sed -i "s/_${table_name}_del/${table_name}/g"  $orig_structure_output_file
         mysql-exec target replica --default-character-set=utf8mb4 $database -e "show create table ${table_name}\G" -ss >$ghost_structure_output_file
 
         if ! diff $orig_structure_output_file $ghost_structure_output_file > /dev/null 2>&1 ; then
