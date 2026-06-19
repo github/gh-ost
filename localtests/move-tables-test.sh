@@ -102,15 +102,15 @@ verify_master_and_replica() {
     echo "Gracefully sleeping for 3 seconds while replica is setting up..."
     sleep 3
 
-    if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ]; then
+    if [ "$(mysql-exec $cluster replica -e "select 1" -ss)" != "1" ]; then
         echo "Cannot verify gh-ost-test-mysql-replica"
         exit 1
     fi
-    if [ "$(gh-ost-test-mysql-replica -e "select @@global.binlog_format" -ss)" != "ROW" ]; then
+    if [ "$(mysql-exec $cluster replica -e "select @@global.binlog_format" -ss)" != "ROW" ]; then
         echo "Expecting test replica to have binlog_format=ROW"
         exit 1
     fi
-    read replica_host replica_port <<<$(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
+    read replica_host replica_port <<<$(mysql-exec $cluster replica -e "select @@hostname, @@port" -ss)
     [ "$replica_host" == "$(hostname)" ] && replica_host="127.0.0.1"
     echo "# replica verified at $replica_host:$replica_port"
 
@@ -180,7 +180,7 @@ build_ghost_command() {
     #
     # expected $1 to be a comma-separated list of tables to move
     cmd="GOTRACEBACK=crash $ghost_binary \
-    --move-tables="$1" \
+    --move-tables=$1 \
     --user=root \
     --password=opensesame \
     --host=$source_replica_host \
@@ -256,7 +256,7 @@ test_single() {
     # Read the list of tables to migrate from the test's tables.txt
     if [ ! -f $tests_path/$test_name/tables.txt ]; then
         echo "🐛 ERROR: $tests_path/$test_name/tables.txt not found"
-s       return 1
+        return 1
     fi
     echo "----"
     cat $tests_path/$test_name/tables.txt
@@ -424,7 +424,7 @@ s       return 1
         mysql-exec source replica --default-character-set=utf8mb4 $database -e "show create table _${table_name}_del\G" -ss >$orig_structure_output_file
         mysql-exec target replica --default-character-set=utf8mb4 $database -e "show create table ${table_name}\G" -ss >$ghost_structure_output_file
 
-        if $(diff $orig_structure_output_file $ghost_structure_output_file > /dev/null 2>&1); then
+        if ! diff $orig_structure_output_file $ghost_structure_output_file > /dev/null 2>&1 ; then
             echo "ERROR $test_name: structure mismatch on table $table_name"
             echo "---"
             diff $orig_structure_output_file $ghost_structure_output_file
