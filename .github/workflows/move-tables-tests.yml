@@ -1,0 +1,46 @@
+name: move-tables tests
+permissions:
+  contents: read
+
+on: [pull_request]
+
+jobs:
+  docker-tests:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          # - 'mysql/mysql-server:5.7.41' # metadata locks not supported by default? (https://github.com/github/gh-ost/actions/runs/27841216224/job/82401716601?pr=1714)
+          - 'mysql:8.0.41'
+          - 'mysql:8.4.3'
+          - 'percona/percona-server:8.0.41-32'
+    env:
+      TEST_MYSQL_IMAGE: ${{ matrix.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: script/docker-gh-ost-move-tables-tests up
+
+      - name: Run tests
+        run: script/docker-gh-ost-move-tables-tests run
+
+      - name: Set artifact name
+        if: failure()
+        run: |
+          ARTIFACT_NAME=$(echo "${{ matrix.image }}" | tr '/:' '-')
+          echo "ARTIFACT_NAME=test-move-tables-logs-${ARTIFACT_NAME}" >> $GITHUB_ENV
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: /tmp/gh-ost-test.*
+          retention-days: 7
+
+      - name: Teardown environment
+        if: always()
+        run: script/docker-gh-ost-move-tables-tests down

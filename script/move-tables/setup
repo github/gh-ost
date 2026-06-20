@@ -11,7 +11,7 @@ set -e
 
 GH_OST_ROOT=$(git rev-parse --show-toplevel)
 SCRIPT_PATH="${GH_OST_ROOT}/script/move-tables"
-DATABASE_NAME="gh_ost_test_db"
+DATABASE_NAME="test"
 
 poll_mysql() {
     CTR=0
@@ -155,7 +155,7 @@ setup() {
     echo "OK"
 
     echo -n "Seeding data in source cluster..."
-    exec-mysql-source-primary -D $DATABASE_NAME < "$GH_OST_ROOT/localtests/move-tables/create.sql"
+    exec-mysql-source-primary -D $DATABASE_NAME < "$GH_OST_ROOT/localtests/move-tables/single/create.sql"
     echo "OK"
 }
 
