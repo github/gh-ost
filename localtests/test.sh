@@ -79,9 +79,6 @@ verify_master_and_replica() {
     echo "gtid_mode on master is ${current_gtid_mode} with enforce_gtid_consistency=${current_enforce_gtid_consistency}"
     echo "server_uuid on master is ${current_master_server_uuid}, replica is ${current_replica_server_uuid}"
 
-    echo "Gracefully sleeping for 3 seconds while replica is setting up..."
-    sleep 3
-
     if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ]; then
         echo "Cannot verify gh-ost-test-mysql-replica"
         exit 1
@@ -93,6 +90,19 @@ verify_master_and_replica() {
     read replica_host replica_port <<<$(gh-ost-test-mysql-replica -e "select @@hostname, @@port" -ss)
     [ "$replica_host" == "$(hostname)" ] && replica_host="127.0.0.1"
     echo "# replica verified at $replica_host:$replica_port"
+
+    # Detect the server version once; no need to re-query it per test.
+    # Cache replica_terminology and seconds_behind_source values to avoid later checks.
+    mysql_version="$(gh-ost-test-mysql-replica -s -s -e "select @@version")"
+    mysql_version_comment="$(gh-ost-test-mysql-master -s -s -e "select @@version_comment")"
+    if [[ $mysql_version =~ "8.4" ]]; then
+        replica_terminology="replica"
+        seconds_behind_source="Seconds_Behind_Source"
+    else
+        replica_terminology="slave"
+        seconds_behind_source="Seconds_Behind_Master"
+    fi
+    echo "# detected version ${mysql_version} (${mysql_version_comment}); using '${replica_terminology}' terminology"
 
     if [ "$docker" = true ]; then
         master_host="0.0.0.0"
@@ -113,27 +123,35 @@ echo_dot() {
     echo -n "."
 }
 
-start_replication() {
-    mysql_version="$(gh-ost-test-mysql-replica -e "select @@version")"
-    if [[ $mysql_version =~ "8.4" ]]; then
-        seconds_behind_source="Seconds_Behind_Source"
-        replica_terminology="replica"
+# Block until the replica has applied everything committed on the master so far.
+# Used after seeding a test's schema/data on the master so gh-ost (which
+# inspects the replica) never sees a stale table. Returns immediately when
+# there is no lag; waits up to 10s otherwise.
+# Relies on GTID (gtid_mode=ON); falls back to a short sleep if GTID is unavailable.
+wait_replica_caught_up() {
+    local master_gtid
+    master_gtid="$(gh-ost-test-mysql-master -s -s -e "select @@global.gtid_executed" 2>/dev/null)"
+    if [ -n "$master_gtid" ]; then
+        gh-ost-test-mysql-replica -s -s -e "do WAIT_FOR_EXECUTED_GTID_SET('${master_gtid}', 10)" >/dev/null 2>&1
     else
-        seconds_behind_source="Seconds_Behind_Master"
-        replica_terminology="slave"
+        sleep 1
     fi
+}
+
+start_replication() {
+    # replica_terminology / seconds_behind_source are detected once in verify_master_and_replica.
     gh-ost-test-mysql-replica -e "stop $replica_terminology; start $replica_terminology;"
 
     num_attempts=0
     while gh-ost-test-mysql-replica -e "show $replica_terminology status\G" | grep $seconds_behind_source | grep -q NULL; do
         ((num_attempts = num_attempts + 1))
-        if [ $num_attempts -gt 10 ]; then
+        if [ $num_attempts -gt 50 ]; then
             echo
             echo "ERROR replication failure"
             exit 1
         fi
         echo_dot
-        sleep 1
+        sleep 0.2
     done
 }
 
@@ -156,7 +174,7 @@ build_ghost_command() {
     --skip-metadata-lock-check \
     --initially-drop-old-table \
     --initially-drop-ghost-table \
-    --throttle-query='select timestampdiff(second, min(last_update), now()) < 5 from _${table_name}_ghc' \
+    --throttle-query='select timestampdiff(second, min(last_update), now()) < ${THROTTLE_SECONDS:-2} from _${table_name}_ghc' \
     --throttle-flag-file=$throttle_flag_file \
     --serve-socket-file=/tmp/gh-ost.test.sock \
     --initially-drop-socket-file \
@@ -255,8 +273,6 @@ test_single() {
 
     if [ -f $tests_path/$test_name/ignore_versions ]; then
         ignore_versions=$(cat $tests_path/$test_name/ignore_versions)
-        mysql_version=$(gh-ost-test-mysql-master -s -s -e "select @@version")
-        mysql_version_comment=$(gh-ost-test-mysql-master -s -s -e "select @@version_comment")
         if echo "$mysql_version" | egrep -q "^${ignore_versions}"; then
             echo -n "Skipping: $test_name"
             return 0
@@ -322,9 +338,9 @@ test_single() {
     if [ -f $tests_path/$test_name/order_by ]; then
         order_by="order by $(cat $tests_path/$test_name/order_by)"
     fi
-    # graceful sleep for replica to catch up
+
     echo_dot
-    sleep 1
+    wait_replica_caught_up
 
     table_name="gh_ost_test"
     ghost_table_name="_gh_ost_test_gho"
@@ -473,7 +489,11 @@ build_binary() {
 test_all() {
     build_binary
     test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | sort)
-    while read -r test_dir; do
+    # Read the test list on FD 3, not stdin: the mysql wrappers may run
+    # `docker exec -i`, which attaches and drains stdin. On stdin (FD 0) the
+    # first such call inside the loop would swallow the remaining test-dir
+    # lines, ending the loop after a single test.
+    while read -r test_dir <&3; do
         test_name=$(basename "$test_dir")
         local test_start_time=$(date +%s)
         if ! test_single "$test_name"; then
@@ -489,13 +509,10 @@ test_all() {
             echo
             echo "+ pass (${test_duration}s)"
         fi
-        mysql_version="$(gh-ost-test-mysql-replica -e "select @@version")"
-        replica_terminology="slave"
-        if [[ $mysql_version =~ "8.4" ]]; then
-            replica_terminology="replica"
-        fi
-        gh-ost-test-mysql-replica -e "start $replica_terminology"
-    done <<<"$test_dirs"
+        # No need to restart replication here: each test stops it
+        # (gh-ost --test-on-replica) and start_replication restarts it at the
+        # next test's start.
+    done 3<<<"$test_dirs"
 }
 
 verify_master_and_replica

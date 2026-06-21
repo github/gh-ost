@@ -1,0 +1,4 @@
+[mysqld]
+gtid-mode=ON
+enforce-gtid-consistency=ON
+character-set-server=utf8mb4

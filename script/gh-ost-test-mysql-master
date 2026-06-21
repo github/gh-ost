@@ -1,6 +1,16 @@
 #!/bin/bash
 #
 # This executes a command on the mysql-primary docker container created
-# from localtests/docker-compose.yml. It's used by localtests/test.sh.
-
-MYSQL_PWD=opensesame mysql -uroot -h0.0.0.0 -P3307 "$@"
+# from script/docker-compose.yml. It's used by localtests/test.sh.
+#
+# Prefer the host's native mysql client over the published port (faster:
+# ~0.03s/call vs ~0.08s for docker exec). Fall back to `docker exec` when no
+# client is on PATH. Set GH_OST_TEST_USE_DOCKER=1 to force docker exec.
+#
+# -h 127.0.0.1 forces a TCP connection instead of the unix socket.
+if [[ -z "${GH_OST_TEST_USE_DOCKER:-}" ]] && command -v mysql >/dev/null 2>&1; then
+    MYSQL_PWD=opensesame mysql -uroot -h 127.0.0.1 -P 3307 "$@"
+else
+    # -i forwards stdin so callers can pipe SQL in (e.g. < create.sql).
+    docker exec -i -e MYSQL_PWD=opensesame mysql-primary mysql -uroot -h 127.0.0.1 "$@"
+fi

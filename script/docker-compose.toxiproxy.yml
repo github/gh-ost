@@ -1,0 +1,7 @@
+services:
+  mysql-toxiproxy:
+    image: "ghcr.io/shopify/toxiproxy:latest"
+    container_name: mysql-toxiproxy
+    ports:
+      - '8474:8474'
+      - '23308:23308'
