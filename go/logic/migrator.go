@@ -7,6 +7,7 @@ package logic
 
 import (
 	"context"
+	gosql "database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -90,6 +91,12 @@ type Migrator struct {
 	throttler        *Throttler
 	hooksExecutor    base.Hooks
 	migrationContext *base.MigrationContext
+
+	// sourcePrimaryDB is the writable source-cluster primary handle used only for
+	// move-tables cutover writes (the RENAME + drain-GTID capture) and the source
+	// `__del` DROP. Source reads use the inspector/streamer connections, which may
+	// point at a read replica. nil outside move-tables mode.
+	sourcePrimaryDB *gosql.DB
 
 	firstThrottlingCollected   chan bool
 	ghostTableMigrated         chan bool
@@ -900,6 +907,14 @@ func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) 
 	defer cancel()
 	ticker := time.NewTicker(moveTablesCutOverDrainPollInterval)
 	defer ticker.Stop()
+	// fallbackStreak counts consecutive polls where the streamer-frontier fallback
+	// held. Requiring two consecutive observations closes the sub-µs window between
+	// `eventStruct := <-applyEventsQueue` in executeWriteFuncs and the in-flight
+	// increment inside onApplyEventStruct: across a full poll interval a popped-but-
+	// unapplied event is either applied (advancing applierCoords, so the normal path
+	// handles it) or still in flight (applyInFlight>0 resets the streak).
+	fallbackStreak := 0
+	const fallbackStreakRequired = 2
 	for {
 		if err := mgtr.checkAbort(); err != nil {
 			return err
@@ -933,9 +948,17 @@ func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) 
 		}
 		// Fallback for non-DML tail: GTID can advance due to unrelated/non-row events,
 		// so applier may stop moving while streamer has already crossed drain.
+		// Debounced across consecutive polls so the receive-vs-in-flight window
+		// cannot trigger a premature completion (see fallbackStreak above).
 		if applyInFlight == 0 && moveTablesDrainProvenByStreamerProgress(drainGTID, streamerCoords, applyBacklog, streamerBacklog) {
-			mgtr.migrationContext.Log.Infof("T3: drain complete via streamer frontier (non-DML tail after T2)")
-			return nil
+			fallbackStreak++
+			if fallbackStreak >= fallbackStreakRequired {
+				mgtr.migrationContext.Log.Infof("T3: drain complete via streamer frontier (non-DML tail after T2)")
+				return nil
+			}
+			mgtr.migrationContext.Log.Debugf("T3: streamer frontier reached, debouncing (%d/%d)", fallbackStreak, fallbackStreakRequired)
+		} else {
+			fallbackStreak = 0
 		}
 		if drainReached {
 			mgtr.migrationContext.Log.Debugf("T3: drain GTID reached but backlog remains (apply=%d, streamer=%d, in_flight=%d)", applyBacklog, streamerBacklog, applyInFlight)
@@ -1049,6 +1072,14 @@ func (mgtr *Migrator) MoveTables() (err error) {
 				return err
 			}
 			if err := mgtr.initiateStreaming(); err != nil {
+				return err
+			}
+			// The cutover-resume path skips initiateInspector, so set up the
+			// source-primary connection here. It is needed by finalCleanup to drop
+			// the source `__del` rollback handle on a writable primary; the streamer
+			// connection may be a read replica. Uses the streamer's source version
+			// for replica-status terminology.
+			if err := mgtr.setupMoveTablesSourcePrimary(mgtr.eventsStreamer.dbVersion); err != nil {
 				return err
 			}
 			if err := mgtr.applier.prepareQueries(); err != nil {
@@ -1267,45 +1298,82 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		return fmt.Errorf("on-before-cut-over hook failed: %w", err)
 	}
 
-	// ----- T1 + T2: RENAME then capture @@gtid_executed on the same connection -----
-	// Pin both operations to a single *sql.Conn so MySQL's within-session
-	// ordering guarantee makes it impossible for T2 to observe a state that
-	// pre-dates T1's commit. Using mgtr.inspector.db directly would let the
-	// pool schedule T1 and T2 on different underlying TCP connections (or, with
-	// a proxy, different servers), breaking the happens-before relationship.
+	// ----- T1 + T2: RENAME then capture @@gtid_executed in ONE round trip -----
+	// A single multi-statement query (RENAME ...; SELECT @@global.gtid_executed)
+	// collapses the two operations into one server round trip, so there is no
+	// client-side or pool-scheduling gap between them: database/sql runs both
+	// statements on the same pooled connection, and the server executes them in
+	// order. The captured GTID is therefore the source executed set immediately
+	// after — and causally after — the rename commit, and a client-side crash can
+	// no longer land between the rename and the capture. The source-primary DSN
+	// sets multiStatements=true (see setupMoveTablesSourcePrimary).
 	//
-	// No retry on the RENAME: it is not idempotent — a partial success leaves
-	// the table already renamed and a retry would fail. The operator re-runs
-	// the whole hook chain on failure.
+	// We use the dedicated source-primary handle (NOT mgtr.inspector.db): the
+	// inspector may be a read replica, while the RENAME must run on a writable
+	// primary.
+	//
+	// No retry on the RENAME: it is not idempotent — a partial success leaves the
+	// table already renamed and a retry would fail. The operator re-runs the whole
+	// hook chain on failure.
 	cutOverCtx := mgtr.migrationContext.GetContext()
-	pinnedConn, err := mgtr.inspector.db.Conn(cutOverCtx)
-	if err != nil {
-		return fmt.Errorf("failed to pin connection for T1/T2: %w", err)
+	if mgtr.sourcePrimaryDB == nil {
+		return errors.New("source primary connection not initialized; cannot perform move-tables cutover")
 	}
-	defer pinnedConn.Close()
 
 	sourceDB := mgtr.migrationContext.DatabaseName
 	sourceTable := mgtr.migrationContext.OriginalTableName
 	delTable := mgtr.migrationContext.GetOldTableName()
-	renameQuery := fmt.Sprintf("RENAME TABLE %s.%s TO %s.%s",
+	renameAndCaptureQuery := fmt.Sprintf("rename /* gh-ost */ table %s.%s to %s.%s;\nselect @@global.gtid_executed",
 		sql.EscapeName(sourceDB), sql.EscapeName(sourceTable),
 		sql.EscapeName(sourceDB), sql.EscapeName(delTable))
-	mgtr.migrationContext.Log.Infof("T1: renaming source table: %s", renameQuery)
-	if _, err := pinnedConn.ExecContext(cutOverCtx, renameQuery); err != nil {
-		return fmt.Errorf("RENAME failed: %w", err)
-	}
-	// The source `__del` table now exists and is the rollback handle. Mark the
-	// rename as done so any later failure emits the rollback hint (and never
-	// drops `__del`).
-	atomic.StoreInt64(&mgtr.migrationContext.MoveTablesSourceRenamedFlag, 1)
+	mgtr.migrationContext.Log.Infof("T1+T2: renaming source table and capturing drain GTID: %s", renameAndCaptureQuery)
 
-	// ----- T2: capture @@gtid_executed on the SAME connection as T1 -----
 	// @@GLOBAL scope is explicit so the intent is unambiguous in the SQL itself.
 	// Design: https://github.com/github/gh-ost-tablemove-poc/blob/9dc6df75c4c88ff473906a497836c7518f5614ec/design/coop_cutover.md#32-correctness-verification-for-p4
-	var drainGTIDStr string
-	if err := pinnedConn.QueryRowContext(cutOverCtx, "select @@global.gtid_executed").Scan(&drainGTIDStr); err != nil {
-		return fmt.Errorf("drain GTID capture failed: %w", err)
+	drainGTIDStr, err := func() (string, error) {
+		rows, err := mgtr.sourcePrimaryDB.QueryContext(cutOverCtx, renameAndCaptureQuery)
+		if err != nil {
+			// The error surfaces from the first statement (RENAME); the table was
+			// NOT renamed, so do not set the rollback flag.
+			return "", err
+		}
+		defer rows.Close()
+		// QueryContext returned without error, meaning the RENAME committed on the
+		// source primary. The source `__del` table now exists and is the rollback
+		// handle; mark the rename as done so any later failure emits the rollback
+		// hint (and never drops `__del`).
+		atomic.StoreInt64(&mgtr.migrationContext.MoveTablesSourceRenamedFlag, 1)
+
+		// The RENAME produces no row-bearing result set. Advance to the SELECT's
+		// result set if the driver left us on the column-less RENAME result.
+		cols, err := rows.Columns()
+		if err != nil {
+			return "", err
+		}
+		if len(cols) == 0 {
+			if !rows.NextResultSet() {
+				if err := rows.Err(); err != nil {
+					return "", err
+				}
+				return "", errors.New("expected result set for @@global.gtid_executed after RENAME")
+			}
+		}
+		if !rows.Next() {
+			if err := rows.Err(); err != nil {
+				return "", err
+			}
+			return "", errors.New("no row returned for @@global.gtid_executed")
+		}
+		var gtid string
+		if err := rows.Scan(&gtid); err != nil {
+			return "", err
+		}
+		return gtid, nil
+	}()
+	if err != nil {
+		return fmt.Errorf("source RENAME + drain GTID capture failed: %w", err)
 	}
+
 	drainGTID, err := mysql.NewGTIDBinlogCoordinates(drainGTIDStr)
 	if err != nil {
 		return fmt.Errorf("drain GTID parse failed: %w", err)
@@ -1661,6 +1729,126 @@ func (mgtr *Migrator) initiateServer() (err error) {
 	return nil
 }
 
+// assertConnectionWritable fails fast if the given connection points at a
+// read_only server. Move-tables writes (target table create + INSERTs,
+// checkpoint management, the source RENAME + `__del` DROP) all require writable
+// primaries; catching this at startup turns a confusing mid-run failure into a
+// clear message. super_read_only implies read_only, so a single check covers both.
+func assertConnectionWritable(db *gosql.DB, key mysql.InstanceKey, role string) error {
+	var readOnly bool
+	if err := db.QueryRow(`select /* gh-ost */ @@global.read_only`).Scan(&readOnly); err != nil {
+		return fmt.Errorf("failed to check read_only on move-tables %s %+v: %w", role, key, err)
+	}
+	if readOnly {
+		return fmt.Errorf("move-tables %s %+v is read_only; it must be a writable primary", role, key)
+	}
+	return nil
+}
+
+// resolveSourcePrimaryConnectionConfig determines the writable source-cluster
+// primary for move-tables cutover writes. It reuses the standard gh-ost master
+// detection (walking SHOW SLAVE STATUS from the inspector connection), so when
+// the source --host is a replica we find its primary, and when --host is itself
+// the primary detection returns the inspector config unchanged (graceful
+// fallback, no replica required). --assume-master-host forces the primary,
+// mirroring the standard non-move-tables path.
+func (mgtr *Migrator) resolveSourcePrimaryConnectionConfig(dbVersion string) (*mysql.ConnectionConfig, error) {
+	if mgtr.migrationContext.AssumeMasterHostname != "" {
+		key, err := mysql.ParseInstanceKey(mgtr.migrationContext.AssumeMasterHostname)
+		if err != nil {
+			return nil, err
+		}
+		cfg := mgtr.migrationContext.InspectorConnectionConfig.DuplicateCredentials(*key)
+		if mgtr.migrationContext.CliMasterUser != "" {
+			cfg.User = mgtr.migrationContext.CliMasterUser
+		}
+		if mgtr.migrationContext.CliMasterPassword != "" {
+			cfg.Password = mgtr.migrationContext.CliMasterPassword
+		}
+		if err := cfg.RegisterTLSConfig(); err != nil {
+			return nil, err
+		}
+		return cfg, nil
+	}
+	visitedKeys := mysql.NewInstanceKeyMap()
+	return mysql.GetMasterConnectionConfigSafe(dbVersion, mgtr.migrationContext.InspectorConnectionConfig, visitedKeys, mgtr.migrationContext.AllowedMasterMaster)
+}
+
+// setupMoveTablesSourcePrimary resolves the source primary connection config,
+// opens its DB handle, and asserts it is writable. It is called from
+// initiateInspector (normal path) and from the cutover-resume path (which skips
+// the inspector); both supply the source MySQL version used for replica-status
+// terminology. Safe to call once per run.
+func (mgtr *Migrator) setupMoveTablesSourcePrimary(dbVersion string) error {
+	cfg, err := mgtr.resolveSourcePrimaryConnectionConfig(dbVersion)
+	if err != nil {
+		return fmt.Errorf("failed to resolve move-tables source primary: %w", err)
+	}
+	mgtr.migrationContext.MoveTables.SourcePrimaryConnectionConfig = cfg
+
+	uri := cfg.GetDBUri(mgtr.migrationContext.DatabaseName) + "&multiStatements=true"
+	db, _, err := mysql.GetDB(mgtr.migrationContext.Uuid, uri)
+	if err != nil {
+		return err
+	}
+	// Assign before the writability check so teardown() reclaims the pool even if
+	// the gate rejects a read_only host.
+	mgtr.sourcePrimaryDB = db
+	if err := assertConnectionWritable(db, cfg.Key, "source primary"); err != nil {
+		return err
+	}
+	mgtr.migrationContext.Log.Infof("Move-tables source primary is %+v; source reads use %+v",
+		cfg.Key, mgtr.migrationContext.InspectorConnectionConfig.Key)
+	return nil
+}
+
+// validateMoveTablesSourceReadHost stops a move-tables run early when the source
+// --host is the cluster primary. The read path (schema inspection, the full row
+// copy, and binlog streaming) all run on --host; pointing it at the primary puts
+// the copy load on the primary, which is exactly what move-tables aims to avoid.
+// We detect this by comparing the resolved source primary against the inspector
+// key — when --host is the primary, master detection returns the inspector
+// config unchanged, so the keys match. The operator can repoint --host at a
+// replica or explicitly opt in with --allow-on-source-primary.
+func (mgtr *Migrator) validateMoveTablesSourceReadHost() error {
+	if mgtr.migrationContext.MoveTables.AllowOnSourcePrimary {
+		return nil
+	}
+	spc := mgtr.migrationContext.MoveTables.SourcePrimaryConnectionConfig
+	if spc == nil {
+		return nil
+	}
+	if !spc.Key.Equals(&mgtr.migrationContext.InspectorConnectionConfig.Key) {
+		return nil
+	}
+	return fmt.Errorf("move-tables source --host %+v is the cluster primary; reading the full table copy from the primary is the load move-tables is meant to avoid. Point --host at a replica so reads come off the primary, or pass --allow-on-source-primary to proceed against the primary anyway", spc.Key)
+}
+
+// dropSourceOldTable drops the source `__del` rollback handle on the source
+// primary. The inspector/streamer source connections may be a read replica, so
+// the drop cannot go through them; it must use the writable source-primary handle.
+func (mgtr *Migrator) dropSourceOldTable() error {
+	if mgtr.sourcePrimaryDB == nil {
+		return errors.New("source primary connection not initialized; cannot drop source __del table")
+	}
+	databaseName := mgtr.migrationContext.DatabaseName
+	tableName := mgtr.migrationContext.GetOldTableName()
+	query := fmt.Sprintf(`drop /* gh-ost */ table if exists %s.%s`,
+		sql.EscapeName(databaseName),
+		sql.EscapeName(tableName),
+	)
+	mgtr.migrationContext.Log.Infof("Dropping source table %s.%s on primary %+v",
+		sql.EscapeName(databaseName),
+		sql.EscapeName(tableName),
+		mgtr.migrationContext.MoveTables.SourcePrimaryConnectionConfig.Key,
+	)
+	if _, err := mgtr.sourcePrimaryDB.Exec(query); err != nil {
+		return err
+	}
+	mgtr.migrationContext.Log.Infof("Source table dropped")
+	return nil
+}
+
 // initiateInspector connects, validates and inspects the "inspector" server.
 // The "inspector" server is typically a replica; it is where we issue some
 // queries such as:
@@ -1683,6 +1871,17 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 	// Let's get master connection config
 	if mgtr.migrationContext.IsMoveTablesMode() {
 		mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.MoveTables.ConnectionConfig
+		// The source --host (inspector) is used for all reads and may be a read
+		// replica. Detect and connect the source-cluster primary, which the cutover
+		// RENAME, drain-GTID capture, and source `__del` DROP run against.
+		if err := mgtr.setupMoveTablesSourcePrimary(mgtr.inspector.dbVersion); err != nil {
+			return err
+		}
+		// Guard the read path: if --host turned out to be the primary itself, stop
+		// early rather than silently copying the whole table off the primary.
+		if err := mgtr.validateMoveTablesSourceReadHost(); err != nil {
+			return err
+		}
 	} else if mgtr.migrationContext.AssumeMasterHostname == "" {
 		// No forced master host; detect master
 		if mgtr.migrationContext.ApplierConnectionConfig, err = mgtr.inspector.getMasterConnectionConfig(); err != nil {
@@ -2593,12 +2792,11 @@ func (mgtr *Migrator) moveTablesFinalCleanup() error {
 
 	if mgtr.migrationContext.OkToDropTable {
 		// The source `__del` rollback handle only exists after a real cutover,
-		// never in Noop runs. The streamer owns the live source connection in
-		// both the normal and cutover-resume paths (its `db` handle uses the
-		// source config and Close() above only closed the binlog reader), so the
-		// source-side drop goes through it.
+		// never in Noop runs. It must be dropped on the source primary: the
+		// inspector/streamer source connections may point at a read replica, so the
+		// drop goes through the dedicated source-primary handle.
 		if !mgtr.migrationContext.Noop {
-			if err := mgtr.retryOperation(mgtr.eventsStreamer.DropSourceOldTable); err != nil {
+			if err := mgtr.retryOperation(mgtr.dropSourceOldTable); err != nil {
 				return err
 			}
 		}
@@ -2664,5 +2862,10 @@ func (mgtr *Migrator) teardown() {
 	if mgtr.throttler != nil {
 		mgtr.migrationContext.Log.Infof("Tearing down throttler")
 		mgtr.throttler.Teardown()
+	}
+
+	if mgtr.sourcePrimaryDB != nil {
+		mgtr.migrationContext.Log.Infof("Tearing down source primary connection")
+		mgtr.sourcePrimaryDB.Close()
 	}
 }
