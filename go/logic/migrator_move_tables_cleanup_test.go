@@ -55,7 +55,7 @@ func TestMoveTablesFinalCleanup_EmitsOperatorCommands(t *testing.T) {
 
 	require.True(t, logger.has("-- drop table `source_db`.`_t_del`"),
 		"must emit the command to drop the source rollback handle")
-	require.True(t, logger.has("-- drop table `target_db`.`_t_ghk`"),
+	require.True(t, logger.has(fmt.Sprintf("-- drop table `target_db`.`%s`", m.migrationContext.GetCheckpointTableName())),
 		"must emit the command to drop the target checkpoint table")
 }
 

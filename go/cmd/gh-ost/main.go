@@ -435,7 +435,14 @@ func main() {
 		migrationContext.Log.Fatale(err)
 	}
 	if migrationContext.ServeSocketFile == "" {
-		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
+		if migrationContext.IsMoveTablesMode() {
+			// OriginalTableName is not set until MoveTables() runs and there is no
+			// single "primary" table, so name the socket from the set-derived run
+			// token (avoids an empty path component like /tmp/gh-ost.test..sock).
+			migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.movetables-%s.sock", migrationContext.DatabaseName, migrationContext.MoveTablesRunToken())
+		} else {
+			migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
+		}
 	}
 	if *askPass {
 		fmt.Println("Password:")

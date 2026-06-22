@@ -7,10 +7,13 @@ package base
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -173,6 +176,39 @@ func (mt *MoveTable) RecordLastIterationRange() {
 		mt.LastIterationRangeMinValues = mt.MigrationIterationRangeMinValues.Clone()
 		mt.LastIterationRangeMaxValues = mt.MigrationIterationRangeMaxValues.Clone()
 	}
+}
+
+// GetLastIterationRange returns clones of the last successfully-copied chunk
+// range for checkpointing. Either value may be nil if no chunk has completed.
+func (mt *MoveTable) GetLastIterationRange() (minValues, maxValues *sql.ColumnValues) {
+	mt.rangeMutex.Lock()
+	defer mt.rangeMutex.Unlock()
+	if mt.LastIterationRangeMinValues != nil {
+		minValues = mt.LastIterationRangeMinValues.Clone()
+	}
+	if mt.LastIterationRangeMaxValues != nil {
+		maxValues = mt.LastIterationRangeMaxValues.Clone()
+	}
+	return minValues, maxValues
+}
+
+// GetRowsCopied returns the number of rows copied for this table.
+func (mt *MoveTable) GetRowsCopied() int64 {
+	return atomic.LoadInt64(&mt.RowsCopied)
+}
+
+// RestoreFromCheckpoint rehydrates this table's row-copy state from a resumed
+// checkpoint: the next chunk starts at the last-copied range, and the iteration
+// counter and rows-copied total are restored.
+func (mt *MoveTable) RestoreFromCheckpoint(rangeMin, rangeMax *sql.ColumnValues, iteration, rowsCopied int64) {
+	mt.rangeMutex.Lock()
+	mt.MigrationIterationRangeMinValues = rangeMin
+	mt.MigrationIterationRangeMaxValues = rangeMax
+	mt.LastIterationRangeMinValues = rangeMin
+	mt.LastIterationRangeMaxValues = rangeMax
+	mt.rangeMutex.Unlock()
+	atomic.StoreInt64(&mt.Iteration, iteration)
+	atomic.StoreInt64(&mt.RowsCopied, rowsCopied)
 }
 
 // MigrationContext has the general, global state of migration. It is used by
@@ -529,12 +565,10 @@ func (mctx *MigrationContext) GetGhostTableName() string {
 	}
 }
 
-// GetTargetTableName generates the name of the target table, based on original table name and
-// the migration context (i.e. move-tables mode).
+// GetTargetTableName generates the name of the target table. In move-tables mode
+// each table keeps its own name on the target, so there is no single target
+// table name; per-table code uses MoveTable.TargetTableName instead.
 func (mctx *MigrationContext) GetTargetTableName() string {
-	if mctx.IsMoveTablesMode() {
-		return mctx.MoveTables.TableNames[0]
-	}
 	return mctx.GetGhostTableName()
 }
 
@@ -601,9 +635,13 @@ func (mctx *MigrationContext) GetChangelogTableName() string {
 func (mctx *MigrationContext) GetCheckpointTableName() string {
 	if mctx.ForceTmpTableName != "" {
 		return getSafeTableName(mctx.ForceTmpTableName, "ghk")
-	} else {
-		return getSafeTableName(mctx.OriginalTableName, "ghk")
 	}
+	if mctx.IsMoveTablesMode() {
+		// One checkpoint table per run, named from the set-derived run token so it
+		// does not depend on any single migrated table and is stable across resume.
+		return getSafeTableName("gho_"+mctx.MoveTablesRunToken(), "ghk")
+	}
+	return getSafeTableName(mctx.OriginalTableName, "ghk")
 }
 
 // GetVoluntaryLockName returns a name of a voluntary lock to be used throughout
@@ -1350,15 +1388,26 @@ func (mctx *MigrationContext) OrderedMoveTables() []*MoveTable {
 	return tables
 }
 
-// MoveTablePrimaryName returns the first table in --move-tables order. Several
-// run-wide artifacts (checkpoint table name, changelog/old-table naming) are
-// derived from a single "primary" table to keep one set of housekeeping objects
-// per run; the primary is simply the first listed table.
-func (mctx *MigrationContext) MoveTablePrimaryName() string {
-	if len(mctx.MoveTables.TableNames) == 0 {
+// MoveTablesRunToken returns a short, stable identifier for a move-tables run,
+// derived from the (sorted) set of migrated table names. It is:
+//   - deterministic: the same table set always yields the same token, so a
+//     resumed run finds the same run-wide artifacts (e.g. the checkpoint table).
+//   - order-independent: --move-tables=a,b and --move-tables=b,a match.
+//   - fixed-length: independent of how many tables are moved (so it never blows
+//     past identifier length limits the way a concatenation of names would).
+//
+// It is used to name run-wide singular artifacts (checkpoint table, applier
+// advisory lock, serve socket) so they never depend on any single migrated
+// table name. Returns "" outside move-tables mode.
+func (mctx *MigrationContext) MoveTablesRunToken() string {
+	if !mctx.IsMoveTablesMode() {
 		return ""
 	}
-	return mctx.MoveTables.TableNames[0]
+	names := append([]string(nil), mctx.MoveTables.TableNames...)
+	sort.Strings(names)
+	// NUL separator: table names cannot contain it, so the join is unambiguous.
+	sum := sha256.Sum256([]byte(strings.Join(names, "\x00")))
+	return hex.EncodeToString(sum[:6]) // 12 hex chars / 48 bits
 }
 
 // AllMoveTablesRowCopyComplete reports whether every migrated table has finished
