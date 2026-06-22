@@ -183,10 +183,7 @@ build_ghost_command() {
     move_tables_arg=$(IFS=, ; echo "${tables_to_migrate[*]}")
 
     # NOTE(chriskirkland): fully qualified package name + failpoint name
-    FAILPOINT="github.com/github/gh-ost/go/logic/panic-on-row-copy=return(true)"
-    cmd="GOTRACEBACK=crash \
-    GO_FAILPOINTS='github.com/github/gh-ost/go/logic/panic-on-row-copy=return(true)' \
-    $ghost_binary \
+    cmd="GOTRACEBACK=crash GO_FAILPOINTS=\"github.com/github/gh-ost/go/base/panic-on-row-copy=return(true)\" $ghost_binary \
     --move-tables=$move_tables_arg \
     --user=root \
     --password=opensesame \
@@ -464,27 +461,29 @@ test_single() {
     done
 }
 
-install_failpoint() {
-    pushd $repo_root/../..
-
-    if [ ! -d "pingcap/failpoint" ]; then
+enable_failpoint() {
+    mkdir -p $repo_root/tools/bin
+    if [ ! -f $repo_root/tools/bin/failpoint-ctl  ]; then
         echo "⚙️ Installing failpoint"
-        mkdir -p pingcap/failpoint
-        git clone https://github.com/pingcap/failpoint.git pingcap/failpoint
-        cd pingcap/failpoint
-        make
-    else
-        bin/failpoint-ctl disable
+        GOBIN=$repo_root/tools/bin go install github.com/pingcap/failpoint/failpoint-ctl@v0.0.0-20220801062533-2eaa32854a6c
     fi
 
     echo "⚙️ Enabling failpoint"
-    bin/failpoint-ctl enable
+    $repo_root/tools/bin/failpoint-ctl enable go
 
     echo "✅ Successfully enabled failpoint"
-    popd
+}
+
+disable_failpoint() {
+    echo "⚙️ Disabling failpoint"
+    $repo_root/tools/bin/failpoint-ctl disable go
+
+    echo "✅ Successfully disabled failpoint"
 }
 
 build_binary() {
+    enable_failpoint
+
     echo "Building"
     rm -f $default_ghost_binary
     [ "$ghost_binary" == "" ] && ghost_binary="$default_ghost_binary"
@@ -499,10 +498,11 @@ build_binary() {
         echo "Build failure"
         exit 1
     fi
+
+    disable_failpoint
 }
 
 test_all() {
-    install_failpoint
     build_binary
     test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | sort)
     while read -r test_dir; do

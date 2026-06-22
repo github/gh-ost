@@ -1156,11 +1156,10 @@ func SendWithContext[T any](ctx context.Context, ch chan<- T, val T) error {
 
 func (mctx *MigrationContext) NewFailPoint(name string) {
 	if mctx.UnsafeFailPointsEnabled {
-		mctx.Log.Debugf("Injecting fail point: %s", name)
+		mctx.Log.Debugf("[TEST] Injecting fail point: '%s'", name)
 
-		failpoint.Inject(name, func(val failpoint.Value) {
-			mctx.Log.Debugf("Encountered fail point: %s", name)
-			panic(fmt.Sprintf("encountered fail point: '%s'", name))
+		failpoint.Inject(name, func(_ failpoint.Value) {
+			panic(fmt.Sprintf("[TEST] Encountered fail point: '%s'", name))
 		})
 	}
 }
