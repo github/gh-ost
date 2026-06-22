@@ -259,6 +259,34 @@ func (suite *EventsStreamerTestSuite) TestStreamEventsAutomaticallyReconnects() 
 	suite.Require().Len(dmlEvents, 3)
 }
 
+func TestEventsStreamerShouldDecodeRowsEvent(t *testing.T) {
+	streamer := NewEventsStreamer(newTestMigrationContext())
+
+	if streamer.shouldDecodeRowsEvent(testMysqlDatabase, testMysqlTableName) {
+		t.Fatalf("expected no table match before any listeners are registered")
+	}
+
+	err := streamer.AddListener(false, testMysqlDatabase, testMysqlTableName, func(event *binlog.BinlogEntry) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected AddListener error: %+v", err)
+	}
+
+	if !streamer.shouldDecodeRowsEvent(testMysqlDatabase, testMysqlTableName) {
+		t.Fatalf("expected registered table to be decoded")
+	}
+	if !streamer.shouldDecodeRowsEvent("TEST", "TESTING") {
+		t.Fatalf("expected table matching to be case-insensitive")
+	}
+	if streamer.shouldDecodeRowsEvent(testMysqlDatabase, "other_table") {
+		t.Fatalf("expected unregistered table to be skipped")
+	}
+	if streamer.shouldDecodeRowsEvent("other_database", testMysqlTableName) {
+		t.Fatalf("expected unregistered database to be skipped")
+	}
+}
+
 func TestEventsStreamer(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping events streamer test suite in short mode")
