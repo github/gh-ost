@@ -221,7 +221,13 @@ func NewHooksExecutor(migrationContext *base.MigrationContext) *HooksExecutor {
 func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []string {
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("GH_OST_DATABASE_NAME=%s", he.migrationContext.DatabaseName))
-	env = append(env, fmt.Sprintf("GH_OST_TABLE_NAME=%s", he.migrationContext.OriginalTableName))
+	tableNameEnv := he.migrationContext.OriginalTableName
+	if he.migrationContext.IsMoveTablesMode() {
+		// No representative table: report the full migrated set (target names equal
+		// source names in move-tables mode).
+		tableNameEnv = strings.Join(he.migrationContext.MoveTables.TableNames, ",")
+	}
+	env = append(env, fmt.Sprintf("GH_OST_TABLE_NAME=%s", tableNameEnv))
 	env = append(env, fmt.Sprintf("GH_OST_GHOST_TABLE_NAME=%s", he.migrationContext.GetGhostTableName()))
 	env = append(env, fmt.Sprintf("GH_OST_OLD_TABLE_NAME=%s", he.migrationContext.GetOldTableName()))
 	env = append(env, fmt.Sprintf("GH_OST_DDL=%s", he.migrationContext.AlterStatement))
@@ -256,12 +262,16 @@ func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []s
 	env = append(env, fmt.Sprintf("GH_OST_REVERT=%t", he.migrationContext.Revert))
 	env = append(env, fmt.Sprintf("GH_OST_MOVE_TABLES=%t", he.migrationContext.IsMoveTablesMode()))
 	if he.migrationContext.IsMoveTablesMode() {
-		// Comma-joined list of all migrated tables (§2.4). GH_OST_TABLE_NAME stays
-		// the primary table for backward compatibility.
+		// Comma-joined list of all migrated tables (§2.4).
 		env = append(env, fmt.Sprintf("GH_OST_TABLES=%s", strings.Join(he.migrationContext.MoveTables.TableNames, ",")))
 	}
 	env = append(env, fmt.Sprintf("GH_OST_TARGET_DATABASE_NAME=%s", he.migrationContext.GetTargetDatabaseName()))
-	env = append(env, fmt.Sprintf("GH_OST_TARGET_TABLE_NAME=%s", he.migrationContext.GetTargetTableName()))
+	targetTableNameEnv := he.migrationContext.GetTargetTableName()
+	if he.migrationContext.IsMoveTablesMode() {
+		// Target tables keep their source names; there is no single ghost table.
+		targetTableNameEnv = strings.Join(he.migrationContext.MoveTables.TableNames, ",")
+	}
+	env = append(env, fmt.Sprintf("GH_OST_TARGET_TABLE_NAME=%s", targetTableNameEnv))
 
 	env = append(env, extraVariables...)
 	return env
