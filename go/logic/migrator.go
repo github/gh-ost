@@ -1385,6 +1385,9 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		}
 	}
 
+	mgtr.migrationContext.NewFailPoint("panic-before-drain-completion", base.WithFailPointWait(2*time.Second))
+
+	// ------ T3: draining applier to drain GTID -----------
 	if err := mgtr.drainMoveTablesCutOver(drainGTID); err != nil {
 		return err
 	}

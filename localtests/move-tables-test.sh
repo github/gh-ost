@@ -206,6 +206,7 @@ build_ghost_command() {
     --checkpoint \
     --postpone-cut-over-flag-file=$postpone_cutover_flag_file \
     --unsafe-fail-points-enabled \
+    --checkpoint-seconds=1 \
     --execute ${extra_args[@]}"
 
     if [ -n "$GO_FAILPOINTS" ]; then

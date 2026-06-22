@@ -1,7 +1,8 @@
 
 #!/bin/bash
 # Custom test: 
-# - panic during row copy stage, prior to cutover
+# - panic after RENAME (T1) and prior to drain completion (T3), prior to cutover completion
+# - validate RENAME and source writes are not possible
 # - resume and complete the migration
 
 database=test
@@ -12,13 +13,20 @@ rm $ghost_binary
 build_binary
 
 ######################################################################################################
-### Run #1: Should panic after first row copy and migration will not complete
+### Run #1: Should panic after RENAME (T1) and before drain completion (T3)
 ######################################################################################################
 
 echo  "⚙️ Starting migration with failpoint (run #1)..."
 
 # Build the gh-ost command using the framework function
-GO_FAILPOINTS="github.com/github/gh-ost/go/base/panic-after-row-copy=return(true)" build_ghost_command
+GO_FAILPOINTS="github.com/github/gh-ost/go/base/panic-before-drain-completion=return(true)" build_ghost_command
+
+# queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
+(
+    sleep 2; 
+    echo "⏩ Sending unpostpone cutover"
+    rm $postpone_cutover_flag_file &> /dev/null;
+) &
 
 # Run the gh-ost command, expecting panic on the failpoint the first time
 echo_dot
@@ -39,28 +47,34 @@ echo -e "\n\n\n\n\n"
 
 echo  "⚙️ Validating checkpointed state on unexpected exit..."
 
-# checkpoint file exists on target and is non-empty
-mysql-exec target primary $database -sNe "SELECT 1 FROM _${table_name}_ghk LIMIT 1;"
-if [ $? -gt 0 ]; then
-    echo "ERROR: Checkpoint file is empty or does not exist."
+# Table was renamed on source
+mysql-exec source primary $database -sNe "SELECT 1 FROM ${table_name} LIMIT 1;"
+if [ $? -eq 0 ]; then
+    echo "ERROR: Table '${table_name}' exists on source but show have been renamed."
     return 1
 fi
 
-# original table still exists on source
-mysql-exec source replica $database -sNe "SELECT 1 FROM ${table_name} LIMIT 1;"
+mysql-exec source primary $database -sNe "SELECT 1 FROM _${table_name}_del LIMIT 1;"
 if [ $? -gt 0 ]; then
-    echo "ERROR: Table '${table_name}' does not exist on the source cluster."
+    echo "ERROR: Renamed table '_${table_name}_del' does not exist on source."
     return 1
 fi
 
-# original table exists on the target
-mysql-exec target replica $database -sNe "SELECT 1 FROM ${table_name} LIMIT 1;"
-if [ $? -gt 0 ]; then
-    echo "ERROR: Table '${table_name}' does not exist on the target cluster."
+# Table not writeable on source 
+mysql-exec target source $database -sNe "INSERT INTO ${table_name} VALUES (NULL, 1021, 2001, 2400001, 201, 1700000041, 1700000041);"
+if [ $? -eq 0 ]; then
+    echo "ERROR: Table '${table_name}' was writeable on source but should not be!."
     return 1
 fi
 
-echo  "✅ Validating checkpointed state on unexpected exit..."
+# Table still exists on target
+mysql-exec target primary $database -sNe "SELECT 1 FROM ${table_name} LIMIT 1;"
+if [ $? -gt 0 ]; then
+    echo "ERROR: Table '${table_name}' does not exist on target."
+    return 1
+fi
+
+echo  "✅ Validated checkpointed state on unexpected exit..."
 
 echo -e "\n\n\n\n\n"
 
