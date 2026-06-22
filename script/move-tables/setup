@@ -60,8 +60,36 @@ exec-mysql-target-replica() {
     fi
 }
 
+# gh-ost runs on the host, outside the docker network, but source replication
+# advertises the primary by its compose service name (mysql-source-primary:3307),
+# which the host cannot resolve. Map the service names to loopback so gh-ost's
+# auto-detected source primary resolves; published ports are 1:1 so the port
+# already matches. Idempotent (guarded by a marker) and best-effort: a failure
+# here is non-fatal, since operators can add the entries manually or pass
+# --assume-master-host=mysql-source-primary:3307.
+ensure_host_aliases() {
+    local marker="# gh-ost move-tables local aliases"
+    local entry="127.0.0.1 mysql-source-primary mysql-source-replica mysql-target-primary mysql-target-replica $marker"
+    if grep -qF "$marker" /etc/hosts 2>/dev/null; then
+        return 0
+    fi
+    echo -n "Adding move-tables host aliases to /etc/hosts (may prompt for sudo)..."
+    if printf '%s\n' "$entry" | sudo tee -a /etc/hosts >/dev/null 2>&1; then
+        echo "OK"
+    else
+        echo "SKIPPED"
+        echo "  Could not write /etc/hosts. gh-ost auto-detects the source primary as"
+        echo "  'mysql-source-primary:3307', which the host must resolve. Either add this line"
+        echo "  to /etc/hosts manually:"
+        echo "    $entry"
+        echo "  or run gh-ost with --assume-master-host=mysql-source-primary:3307"
+    fi
+}
+
 setup() {
     [ -z "$TEST_MYSQL_IMAGE" ] && TEST_MYSQL_IMAGE="mysql:8.0.41"
+
+    ensure_host_aliases
 
     echo "Starting MySQL $TEST_MYSQL_IMAGE containers (2 clusters)..."
     compose_file="$GH_OST_ROOT/localtests/docker-compose-move-tables.yml"

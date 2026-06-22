@@ -181,6 +181,7 @@ build_ghost_command() {
     --password=opensesame \
     --host=$source_replica_host \
     --port=$source_replica_port \
+    --assume-master-host=${source_master_host}:${source_master_port} \
     --database=$database \
     --target-user=root \
     --target-password=opensesame \
