@@ -1405,6 +1405,8 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
 	mgtr.migrationContext.Log.Debugf("T4: CutOverCompleteFlag set")
 
+	mgtr.migrationContext.NewFailPoint("panic-before-on-success-hook", base.WithFailPointWait(2*time.Second))
+
 	// ----- T5: on-success hook -----
 	// Hook unlocks user_rw@target via db-user-management and flips the
 	// write_cutover? feature flag. Standard env vars only — GH_OST_DRAIN_GTID +

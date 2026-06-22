@@ -1,8 +1,9 @@
 
 #!/bin/bash
-# Custom test: 
-# - panic after RENAME (T1) and prior to drain completion (T3), prior to cutover completion
+# Custom test:
+# - panic after drain (T4) and prior to on-success (T5), prior to cutover completion
 # - validate RENAME and source writes are not possible
+# - validate contents of source and target are the same
 # - resume and complete the migration
 
 database=test
@@ -13,19 +14,27 @@ rm $ghost_binary
 build_binary
 
 ######################################################################################################
-### Run #1: Should panic after RENAME (T1) and before drain completion (T3)
+### Run #1: Should panic after drain (T4) and before on-success (T5)
 ######################################################################################################
 
 echo  "⚙️ Starting migration with failpoint (run #1)..."
 
 # Build the gh-ost command using the framework function
-GO_FAILPOINTS="github.com/github/gh-ost/go/base/panic-before-drain-completion=return(true)" build_ghost_command
+GO_FAILPOINTS="github.com/github/gh-ost/go/base/panic-before-on-success-hook=return(true)" build_ghost_command
 
 # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
 (
-    sleep 2; 
+    sleep 2;
     echo "⏩ Sending unpostpone cutover"
     rm $postpone_cutover_flag_file &> /dev/null;
+) &
+
+# drive some concurrent writes to the table to exercise queue drain (T3/T4)
+(
+    DATABASE=test script/move-tables/insert-source-primary-loop 100 0.1 10 &>/dev/null &
+    writes_pid=$!
+    sleep 3
+    kill $writes_pid
 ) &
 
 # Run the gh-ost command, expecting panic on the failpoint the first time
@@ -60,7 +69,7 @@ if [ $? -gt 0 ]; then
     return 1
 fi
 
-# Table not writeable on source 
+# Table not writeable on source
 mysql-exec target source $database -sNe "INSERT INTO ${table_name} VALUES (NULL, 1021, 2001, 2400001, 201, 1700000041, 1700000041);"
 if [ $? -eq 0 ]; then
     echo "ERROR: Table '${table_name}' was writeable on source but should not be!."
@@ -71,6 +80,20 @@ fi
 mysql-exec target primary $database -sNe "SELECT 1 FROM ${table_name} LIMIT 1;"
 if [ $? -gt 0 ]; then
     echo "ERROR: Table '${table_name}' does not exist on target."
+    return 1
+fi
+
+# contents of table on source and target are the same
+source_contents_file=/tmp/gh-ost-test.resume-panic-before-on-success-hook-source_contents.txt
+target_contents_file=/tmp/gh-ost-test.resume-panic-before-on-success-hook-target_contents.txt
+mysql-exec source primary $database -sNe "SELECT * FROM _${table_name}_del;" > $source_contents_file
+mysql-exec target primary $database -sNe "SELECT * FROM ${table_name};" > $target_contents_file
+
+if ! diff $source_contents_file $target_contents_file; then
+    echo "ERROR: Contents of table '${table_name}' are not the same on source and target."
+    echo "---- DIFF -----"
+    diff --side-by-side $source_contents_file $target_contents_file
+    echo "---------------"
     return 1
 fi
 
@@ -90,7 +113,7 @@ cmd="$cmd --resume"
 
 # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
 (
-    sleep 2; 
+    sleep 2;
     echo "⏩ Sending unpostpone cutover"
     rm $postpone_cutover_flag_file &> /dev/null;
 ) &

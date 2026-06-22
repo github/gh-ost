@@ -1,6 +1,6 @@
 
 #!/bin/bash
-# Custom test: 
+# Custom test:
 # - panic during row copy stage, prior to cutover
 # - resume and complete the migration
 
@@ -76,7 +76,7 @@ cmd="$cmd --resume"
 
 # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
 (
-    sleep 2; 
+    sleep 2;
     echo "⏩ Sending unpostpone cutover"
     rm $postpone_cutover_flag_file &> /dev/null;
 ) &

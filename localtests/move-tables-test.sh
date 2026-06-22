@@ -365,7 +365,7 @@ test_single() {
 
     else
 
-        # kick off the on_test script for the test. this enables arbitrary custom logic 
+        # kick off the on_test script for the test. this enables arbitrary custom logic
         # concurrent with the gh-ost process. this enables additional scenarios like
         # streaming of writes prior to the write cutover.
         #
@@ -378,7 +378,7 @@ test_single() {
 
         # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
         (
-            sleep 1; 
+            sleep 1;
             echo "⏩ Sending unpostpone cutover"
             rm $postpone_cutover_flag_file &> /dev/null;
         ) &
