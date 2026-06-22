@@ -961,6 +961,14 @@ func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) 
 	defer cancel()
 	ticker := time.NewTicker(moveTablesCutOverDrainPollInterval)
 	defer ticker.Stop()
+	// fallbackStreak counts consecutive polls where the streamer-frontier fallback
+	// held. Requiring two consecutive observations closes the sub-µs window between
+	// `eventStruct := <-applyEventsQueue` in executeWriteFuncs and the in-flight
+	// increment inside onApplyEventStruct: across a full poll interval a popped-but-
+	// unapplied event is either applied (advancing applierCoords, so the normal path
+	// handles it) or still in flight (applyInFlight>0 resets the streak).
+	fallbackStreak := 0
+	const fallbackStreakRequired = 2
 	for {
 		if err := mgtr.checkAbort(); err != nil {
 			return err
@@ -994,9 +1002,17 @@ func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) 
 		}
 		// Fallback for non-DML tail: GTID can advance due to unrelated/non-row events,
 		// so applier may stop moving while streamer has already crossed drain.
+		// Debounced across consecutive polls so the receive-vs-in-flight window
+		// cannot trigger a premature completion (see fallbackStreak above).
 		if applyInFlight == 0 && moveTablesDrainProvenByStreamerProgress(drainGTID, streamerCoords, applyBacklog, streamerBacklog) {
-			mgtr.migrationContext.Log.Infof("T3: drain complete via streamer frontier (non-DML tail after T2)")
-			return nil
+			fallbackStreak++
+			if fallbackStreak >= fallbackStreakRequired {
+				mgtr.migrationContext.Log.Infof("T3: drain complete via streamer frontier (non-DML tail after T2)")
+				return nil
+			}
+			mgtr.migrationContext.Log.Debugf("T3: streamer frontier reached, debouncing (%d/%d)", fallbackStreak, fallbackStreakRequired)
+		} else {
+			fallbackStreak = 0
 		}
 		if drainReached {
 			mgtr.migrationContext.Log.Debugf("T3: drain GTID reached but backlog remains (apply=%d, streamer=%d, in_flight=%d)", applyBacklog, streamerBacklog, applyInFlight)
@@ -1041,6 +1057,7 @@ func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) err
 	}
 	atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
 	mgtr.migrationContext.Log.Debugf("T4: CutOverCompleteFlag set")
+	mgtr.migrationContext.MoveTables.DrainGTID = chk.MoveTablesCutOverDrainGTID
 	if err := mgtr.hooksExecutor.OnSuccess(false); err != nil {
 		return fmt.Errorf("on-success hook failed: %w", err)
 	}
