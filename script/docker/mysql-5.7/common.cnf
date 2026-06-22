@@ -1,0 +1,10 @@
+[mysqld]
+gtid-mode=ON
+enforce-gtid-consistency=ON
+character-set-server=utf8mb4
+# MySQL 5.7 has the binary log off by default and gtid-mode=ON additionally
+# requires log-bin + log-slave-updates (8.0 enables all of these for free).
+# gh-ost tails ROW events from the replica's own binlog under --test-on-replica.
+log-bin=mysql-bin
+binlog-format=ROW
+log-slave-updates=ON
