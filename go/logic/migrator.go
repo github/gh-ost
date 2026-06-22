@@ -2035,20 +2035,52 @@ func (mgtr *Migrator) initiateStatus() {
 // migration, and as response to the "status" interactive command.
 func (mgtr *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
-	fmt.Fprintf(w, "# Migrating %s.%s; Target table is %s.%s\n",
-		sql.EscapeName(mgtr.migrationContext.DatabaseName),
-		sql.EscapeName(mgtr.migrationContext.OriginalTableName),
-		sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()),
-		sql.EscapeName(mgtr.migrationContext.GetTargetTableName()),
-	)
-	fmt.Fprintf(w, "# Migrating %+v; inspecting %+v; executing on %+v\n",
-		*mgtr.applier.connectionConfig.ImpliedKey,
-		*mgtr.inspector.connectionConfig.ImpliedKey,
-		mgtr.migrationContext.Hostname,
-	)
-	fmt.Fprintf(w, "# Migration started at %+v\n",
-		mgtr.migrationContext.StartTime.Format(time.RubyDate),
-	)
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		// In move-tables mode there may be several migrated tables; list each
+		// source -> target mapping rather than a single primary table (§2.3).
+		// Table names match on source and target; only the database may differ.
+		sourceDatabaseName := mgtr.migrationContext.DatabaseName
+		targetDatabaseName := mgtr.migrationContext.GetTargetDatabaseName()
+		fmt.Fprintf(w, "# Moving %d table(s) from %s to %s:\n",
+			len(mgtr.migrationContext.MoveTables.TableNames),
+			sql.EscapeName(sourceDatabaseName),
+			sql.EscapeName(targetDatabaseName),
+		)
+		for _, tableName := range mgtr.migrationContext.MoveTables.TableNames {
+			fmt.Fprintf(w, "#   - %s.%s -> %s.%s\n",
+				sql.EscapeName(sourceDatabaseName), sql.EscapeName(tableName),
+				sql.EscapeName(targetDatabaseName), sql.EscapeName(tableName),
+			)
+		}
+
+		// In move-tables mode the applier writes the target cluster and the
+		// inspector reads the source cluster, so label them as such rather than
+		// reusing the single-server "migrating/inspecting" phrasing.
+		fmt.Fprintf(w, "# Applying on target %+v; reading source %+v; executing on %+v\n",
+			*mgtr.applier.connectionConfig.ImpliedKey,
+			*mgtr.inspector.connectionConfig.ImpliedKey,
+			mgtr.migrationContext.Hostname,
+		)
+		fmt.Fprintf(w, "# Move started at %+v\n",
+			mgtr.migrationContext.StartTime.Format(time.RubyDate),
+		)
+	} else {
+		fmt.Fprintf(w, "# Migrating %s.%s; Target table is %s.%s\n",
+			sql.EscapeName(mgtr.migrationContext.DatabaseName),
+			sql.EscapeName(mgtr.migrationContext.OriginalTableName),
+			sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()),
+			sql.EscapeName(mgtr.migrationContext.GetTargetTableName()),
+		)
+		fmt.Fprintf(w, "# Migrating %+v; inspecting %+v; executing on %+v\n",
+			*mgtr.applier.connectionConfig.ImpliedKey,
+			*mgtr.inspector.connectionConfig.ImpliedKey,
+			mgtr.migrationContext.Hostname,
+		)
+		fmt.Fprintf(w, "# Migration started at %+v\n",
+			mgtr.migrationContext.StartTime.Format(time.RubyDate),
+		)
+	}
+
 	maxLoad := mgtr.migrationContext.GetMaxLoad()
 	criticalLoad := mgtr.migrationContext.GetCriticalLoad()
 	fmt.Fprintf(w, "# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f\n",
