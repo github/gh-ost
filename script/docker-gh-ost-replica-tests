@@ -110,16 +110,30 @@ compose_setup() {
     # Per-version config lives in docker/<flavor>-<major.minor> (e.g. mysql-8.0)
     # Derive <flavor> from the image repo basename and <major.minor> from the tag,
     # so registry/repo prefixes like percona/percona-server:8.0.41-32 resolve correctly.
-    local repo tag flavor major_minor
+    local repo tag flavor major_minor major
     repo="${TEST_MYSQL_IMAGE%%:*}"
     tag="${TEST_MYSQL_IMAGE##*:}"
     flavor="${repo##*/}"
     major_minor="$(echo "$tag" | cut -d. -f1-2)"
-    export CONF_PATH="$compose_path/docker/${flavor}-${major_minor}"
-    if [[ ! -d "$CONF_PATH" ]]; then
-        echo "No config dir for image '$TEST_MYSQL_IMAGE' (expected $CONF_PATH)" >&2
-        exit 1
+    major="$(echo "$tag" | cut -d. -f1)"
+
+    # Resolve by specificity: exact <flavor>-<major.minor>, then <flavor>-<major>,
+    # then bare <flavor>. Versions that share one config (e.g. all MariaDB) live
+    # in a single docker/<flavor> dir; a version (or major line) needing
+    # different config overrides it by adding its own more-specific dir.
+    local candidate
+    CONF_PATH=""
+    for candidate in "${flavor}-${major_minor}" "${flavor}-${major}" "${flavor}"; do
+      if [[ -d "$compose_path/docker/$candidate" ]]; then
+        CONF_PATH="$compose_path/docker/$candidate"
+        break
+      fi
+    done
+    if [[ -z "$CONF_PATH" ]]; then
+      echo "No config dir for image '$TEST_MYSQL_IMAGE' (looked for docker/${flavor}-${major_minor}, docker/${flavor}-${major}, docker/${flavor})" >&2
+      exit 1
     fi
+    export CONF_PATH
 
     # Per-flavor knobs, with defaults. Each flavor dir may override these in an
     # optional flavor.env (e.g. Percona reads config from /etc/my.cnf.d).

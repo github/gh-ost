@@ -12,7 +12,9 @@ services:
       - $CONF_PATH/create_user.sql:/docker-entrypoint-initdb.d/create_user.sql:ro
       - $CONF_PATH/common.cnf:$MYSQL_CONFD/common.cnf:ro
     healthcheck:
-      test: "mysql -h 127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD -e 'select 1;' || exit 1"
+      # Client binary differs per flavor: MariaDB 11.x dropped the mysql-named
+      # symlinks, so its flavor.env sets MYSQL_CLIENT=mariadb.
+      test: "${MYSQL_CLIENT:-mysql} -h 127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD -e 'select 1;' || exit 1"
       interval: 5s
       # Generous first-boot window: emulated amd64 5.7 on arm64 can take 60s+ to
       # init a fresh datadir. Health failures during start_period don't count, so

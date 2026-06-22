@@ -244,7 +244,8 @@ func (isp *Inspector) validateGrants() error {
 			if strings.Contains(grant, `SUPER`) && strings.Contains(grant, ` ON *.*`) {
 				foundSuper = true
 			}
-			if strings.Contains(grant, `REPLICATION CLIENT`) && strings.Contains(grant, ` ON *.*`) {
+			// MariaDB renamed REPLICATION CLIENT to BINLOG MONITOR (10.5+); accept either.
+			if (strings.Contains(grant, `REPLICATION CLIENT`) || strings.Contains(grant, `BINLOG MONITOR`)) && strings.Contains(grant, ` ON *.*`) {
 				foundReplicationClient = true
 			}
 			if strings.Contains(grant, `REPLICATION SLAVE`) && strings.Contains(grant, ` ON *.*`) {
