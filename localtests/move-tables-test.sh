@@ -38,6 +38,7 @@ original_sql_mode=
 current_gtid_mode=
 test_timeout=120
 test_failure_log_tail_lines=50
+tables_to_migrate=()
 
 OPTIND=1
 while getopts "b:s:dg" OPTION; do
@@ -177,8 +178,16 @@ build_ghost_command() {
     # Build gh-ost command with all standard options
     #
     # expected $1 to be a comma-separated list of tables to move
-    cmd="GOTRACEBACK=crash $ghost_binary \
-    --move-tables=$1 \
+
+    # build comma-separated list of tables to move
+    move_tables_arg=$(IFS=, ; echo "${tables_to_migrate[*]}")
+
+    # NOTE(chriskirkland): fully qualified package name + failpoint name
+    FAILPOINT="github.com/github/gh-ost/go/logic/panic-on-row-copy=return(true)"
+    cmd="GOTRACEBACK=crash \
+    GO_FAILPOINTS='github.com/github/gh-ost/go/logic/panic-on-row-copy=return(true)' \
+    $ghost_binary \
+    --move-tables=$move_tables_arg \
     --user=root \
     --password=opensesame \
     --host=$source_replica_host \
@@ -199,6 +208,7 @@ build_ghost_command() {
     --stack \
     --checkpoint \
     --postpone-cut-over-flag-file=$postpone_cutover_flag_file \
+    --unsafe-fail-points-enabled \
     --execute ${extra_args[@]}"
 }
 
@@ -371,8 +381,7 @@ test_single() {
     ) &
 
     # Build and execute gh-ost command
-    move_tables_arg=$(IFS=, ; echo "${tables_to_migrate[*]}")
-    build_ghost_command "$move_tables_arg"
+    build_ghost_command
     echo_dot
     echo $cmd >$exec_command_file
     echo_dot

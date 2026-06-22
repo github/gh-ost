@@ -29,6 +29,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/sqlutils"
+	"github.com/pingcap/failpoint"
 )
 
 const (
@@ -1451,6 +1452,17 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 // ApplyIterationMoveTableCopyQueries issues a SELECT query on the original table and an INSERT query on the target table,
 // copying a chunk of rows. It is used when `--move-tables` is specified, instead of ApplyIterationInsertQuery.
 func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+	//apl.migrationContext.NewFailPoint("panic-on-row-copy")
+	if apl.migrationContext.UnsafeFailPointsEnabled {
+		name := "panic-on-row-copy"
+		apl.migrationContext.Log.Debugf("Injecting fail point: %s", name)
+
+		failpoint.Inject(name, func(val failpoint.Value) {
+			apl.migrationContext.Log.Debugf("Encountered fail point: %s", name)
+			panic(fmt.Sprintf("encountered fail point: '%s'", name))
+		})
+	}
+
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&apl.migrationContext.ChunkSize)
 	if sourceDB == nil {

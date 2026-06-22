@@ -21,8 +21,6 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-
-	"github.com/pingcap/failpoint"
 )
 
 var (
@@ -2869,15 +2867,5 @@ func (mgtr *Migrator) teardown() {
 	if mgtr.sourcePrimaryDB != nil {
 		mgtr.migrationContext.Log.Infof("Tearing down source primary connection")
 		mgtr.sourcePrimaryDB.Close()
-	}
-}
-
-func (mgtr *Migrator) newFailPoint(name string) {
-	if mgtr.migrationContext.UnsafeFailPointsEnabled {
-		mgtr.migrationContext.Log.Debugf("Injecting fail point: %s", name)
-
-		failpoint.Inject(name, func(val failpoint.Value) {
-			panic(fmt.Sprintf("encountered fail point: '%s'", name))
-		})
 	}
 }

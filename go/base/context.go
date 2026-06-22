@@ -22,9 +22,10 @@ import (
 	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/openark/golib/log"
 
 	"github.com/go-ini/ini"
+	"github.com/openark/golib/log"
+	"github.com/pingcap/failpoint"
 )
 
 // RowsEstimateMethod is the type of row number estimation
@@ -1150,5 +1151,16 @@ func SendWithContext[T any](ctx context.Context, ch chan<- T, val T) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (mctx *MigrationContext) NewFailPoint(name string) {
+	if mctx.UnsafeFailPointsEnabled {
+		mctx.Log.Debugf("Injecting fail point: %s", name)
+
+		failpoint.Inject(name, func(val failpoint.Value) {
+			mctx.Log.Debugf("Encountered fail point: %s", name)
+			panic(fmt.Sprintf("encountered fail point: '%s'", name))
+		})
 	}
 }
