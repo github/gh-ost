@@ -7,6 +7,8 @@
 # Usage: localtests/test/sh [filter]
 # By default, runs all move-tables tests. Given filter, will only run tests matching given regep
 
+set -x
+
 repo_root=$(git rev-parse --show-toplevel)
 script_path="$repo_root/script/move-tables"
 tests_path=$(dirname $0)/move-tables
@@ -453,6 +455,26 @@ test_single() {
     done
 }
 
+install_failpoint() {
+    pushd $repo_root/../..
+
+    if [ ! -d "pingcap/failpoint" ]; then
+        echo "⚙️ Installing failpoint"
+        mkdir -p pingcap/failpoint
+        git clone https://github.com/pingcap/failpoint.git pingcap/failpoint
+        cd pingcap/failpoint
+        make
+    else
+        bin/failpoint-ctl disable
+    fi
+
+    echo "⚙️ Enabling failpoint"
+    bin/failpoint-ctl enable
+
+    echo "✅ Successfully enabled failpoint"
+    popd
+}
+
 build_binary() {
     echo "Building"
     rm -f $default_ghost_binary
@@ -471,6 +493,7 @@ build_binary() {
 }
 
 test_all() {
+    install_failpoint
     build_binary
     test_dirs=$(find "$tests_path" -mindepth 1 -maxdepth 1 ! -path . -type d | grep "$test_pattern" | sort)
     while read -r test_dir; do

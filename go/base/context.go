@@ -305,6 +305,8 @@ type MigrationContext struct {
 		DrainGTID mysql.BinlogCoordinates // Source @@gtid_executed captured immediately after the source RENAME TABLE; the applier drains until it reaches this coordinate (move-tables only).
 	}
 
+	UnsafeFailPointsEnabled bool
+
 	Log Logger
 }
 
