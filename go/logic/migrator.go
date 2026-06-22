@@ -55,9 +55,10 @@ type lockProcessedStruct struct {
 }
 
 type applyEventStruct struct {
-	writeFunc *tableWriteFunc
-	dmlEvent  *binlog.BinlogDMLEvent
-	coords    mysql.BinlogCoordinates
+	writeFunc      *tableWriteFunc
+	dmlEvent       *binlog.BinlogDMLEvent
+	coords         mysql.BinlogCoordinates
+	eventTimestamp time.Time
 }
 
 func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
@@ -66,7 +67,7 @@ func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
 }
 
 func newApplyEventStructByDML(dmlEntry *binlog.BinlogEntry) *applyEventStruct {
-	result := &applyEventStruct{dmlEvent: dmlEntry.DmlEvent, coords: dmlEntry.Coordinates}
+	result := &applyEventStruct{dmlEvent: dmlEntry.DmlEvent, coords: dmlEntry.Coordinates, eventTimestamp: dmlEntry.Timestamp}
 	return result
 }
 
@@ -2281,14 +2282,28 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 
 	currentBinlogCoordinates := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
+	// Lag reporting differs by mode. Standard mode reports the inspected replica
+	// "Lag" (changelog heartbeat) plus "HeartbeatLag". Move-tables mode has no
+	// changelog heartbeat, and the source-side replication "Lag" is meaningless
+	// (writes go to the target, so migration-induced replica lag appears on target
+	// replicas and is handled separately by throttling). The "Lag" field is
+	// therefore dropped and writer lag (now - last applied binlog event timestamp)
+	// is reported as "WriterLag" instead.
+	lagStatus := fmt.Sprintf("Lag: %.2fs, HeartbeatLag: %.2fs",
+		mgtr.migrationContext.GetCurrentLagDuration().Seconds(),
+		mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds(),
+	)
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		lagStatus = fmt.Sprintf("WriterLag: %.2fs", mgtr.migrationContext.GetBinlogWriterLag().Seconds())
+	}
+
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; %s, State: %s; ETA: %s",
 		totalRowsCopied, rowsEstimate, progressPct,
 		atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
 		len(mgtr.applyEventsQueue), cap(mgtr.applyEventsQueue),
 		base.PrettifyDurationOutput(elapsedTime), base.PrettifyDurationOutput(mgtr.migrationContext.ElapsedRowCopyTime()),
 		currentBinlogCoordinates.DisplayString(),
-		mgtr.migrationContext.GetCurrentLagDuration().Seconds(),
-		mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds(),
+		lagStatus,
 		state,
 		eta,
 	)
@@ -2373,6 +2388,24 @@ func (mgtr *Migrator) initiateStreaming() error {
 			mgtr.migrationContext.SetRecentBinlogCoordinates(mgtr.eventsStreamer.GetCurrentBinlogCoordinates())
 		}
 	}()
+
+	// In move-tables mode there is no changelog heartbeat. Writer lag is derived
+	// from binlog-header timestamps of applied events; when the streamer has been
+	// silent for the heartbeat interval, treat that silence as "caught up" and bump
+	// the last-applied timestamp to now so lag does not climb forever while idle.
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		go func() {
+			interval := time.Duration(mgtr.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for range ticker.C {
+				if atomic.LoadInt64(&mgtr.finishedMigrating) > 0 {
+					return
+				}
+				mgtr.migrationContext.BumpBinlogWriterLagIfIdle(interval)
+			}
+		}()
+	}
 	return nil
 }
 
@@ -2384,6 +2417,11 @@ func (mgtr *Migrator) initiateStreaming() error {
 // applier routes DML to the right per-table query builders by table name.
 func (mgtr *Migrator) addDMLEventsListener() error {
 	enqueue := func(dmlEntry *binlog.BinlogEntry) error {
+		// Record that the streamer just delivered an event for a moved table, so
+		// the idle-bump rule can tell "falling behind" from "source is quiet".
+		if mgtr.migrationContext.IsMoveTablesMode() {
+			mgtr.migrationContext.MarkBinlogEventStreamed()
+		}
 		// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits.
 		// This is critical because this callback blocks the event streamer.
 		return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, newApplyEventStructByDML(dmlEntry))
@@ -2753,6 +2791,7 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 	if eventStruct.dmlEvent != nil {
 		dmlEvents := [](*binlog.BinlogDMLEvent){}
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
+		lastEventTimestamp := eventStruct.eventTimestamp
 		var nonDmlStructToApply *applyEventStruct
 
 		availableEvents := len(mgtr.applyEventsQueue)
@@ -2770,6 +2809,7 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 				break
 			}
 			dmlEvents = append(dmlEvents, additionalStruct.dmlEvent)
+			lastEventTimestamp = additionalStruct.eventTimestamp
 		}
 		// Create a task to apply the DML event; this will be execute by executeWriteFuncs()
 		var applyEventFunc tableWriteFunc = func() error {
@@ -2782,6 +2822,12 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
 		mgtr.applier.CurrentCoordinates = eventStruct.coords
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
+
+		// In move-tables mode there is no changelog heartbeat; writer lag is derived
+		// from the binlog-header timestamp of the last event we just applied.
+		if mgtr.migrationContext.IsMoveTablesMode() && !lastEventTimestamp.IsZero() {
+			mgtr.migrationContext.UpdateLastAppliedBinlogEventTime(lastEventTimestamp)
+		}
 
 		if nonDmlStructToApply != nil {
 			// We pulled DML events from the queue, and then we hit a non-DML event. Wait!

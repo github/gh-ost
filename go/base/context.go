@@ -277,31 +277,38 @@ type MigrationContext struct {
 	CutOverType                  CutOver
 	ReplicaServerId              uint
 
-	Hostname                               string
-	AssumeMasterHostname                   string
-	ApplierTimeZone                        string
-	ApplierWaitTimeout                     int64
-	TableEngine                            string
-	RowsEstimate                           int64
-	RowsDeltaEstimate                      int64
-	UsedRowsEstimateMethod                 RowsEstimateMethod
-	HasSuperPrivilege                      bool
-	OriginalBinlogFormat                   string
-	OriginalBinlogRowImage                 string
-	InspectorConnectionConfig              *mysql.ConnectionConfig
-	InspectorMySQLVersion                  string
-	ApplierConnectionConfig                *mysql.ConnectionConfig
-	ApplierMySQLVersion                    string
-	StartTime                              time.Time
-	RowCopyStartTime                       time.Time
-	RowCopyEndTime                         time.Time
-	LockTablesStartTime                    time.Time
-	RenameTablesStartTime                  time.Time
-	RenameTablesEndTime                    time.Time
-	pointOfInterestTime                    time.Time
-	pointOfInterestTimeMutex               *sync.Mutex
-	lastHeartbeatOnChangelogTime           time.Time
-	lastHeartbeatOnChangelogMutex          *sync.Mutex
+	Hostname                      string
+	AssumeMasterHostname          string
+	ApplierTimeZone               string
+	ApplierWaitTimeout            int64
+	TableEngine                   string
+	RowsEstimate                  int64
+	RowsDeltaEstimate             int64
+	UsedRowsEstimateMethod        RowsEstimateMethod
+	HasSuperPrivilege             bool
+	OriginalBinlogFormat          string
+	OriginalBinlogRowImage        string
+	InspectorConnectionConfig     *mysql.ConnectionConfig
+	InspectorMySQLVersion         string
+	ApplierConnectionConfig       *mysql.ConnectionConfig
+	ApplierMySQLVersion           string
+	StartTime                     time.Time
+	RowCopyStartTime              time.Time
+	RowCopyEndTime                time.Time
+	LockTablesStartTime           time.Time
+	RenameTablesStartTime         time.Time
+	RenameTablesEndTime           time.Time
+	pointOfInterestTime           time.Time
+	pointOfInterestTimeMutex      *sync.Mutex
+	lastHeartbeatOnChangelogTime  time.Time
+	lastHeartbeatOnChangelogMutex *sync.Mutex
+	// lastAppliedBinlogEventTime is the binlog-header timestamp of the last event
+	// applied to the target in move-tables mode. lastBinlogEventStreamedTime is the
+	// wall-clock time the streamer last delivered an event for the moved table.
+	// Together they drive the move-tables writer-lag metric (see GetBinlogWriterLag).
+	lastAppliedBinlogEventTime             time.Time
+	lastBinlogEventStreamedTime            time.Time
+	binlogWriterLagMutex                   *sync.Mutex
 	CurrentLag                             int64
 	currentProgress                        uint64
 	etaNanoseonds                          int64
@@ -461,6 +468,7 @@ func NewMigrationContext() *MigrationContext {
 		configMutex:                         &sync.Mutex{},
 		pointOfInterestTimeMutex:            &sync.Mutex{},
 		lastHeartbeatOnChangelogMutex:       &sync.Mutex{},
+		binlogWriterLagMutex:                &sync.Mutex{},
 		ColumnRenameMap:                     make(map[string]string),
 		PanicAbort:                          make(chan error),
 		ctx:                                 ctx,
@@ -855,6 +863,54 @@ func (mctx *MigrationContext) GetLastHeartbeatOnChangelogTime() time.Time {
 	defer mctx.lastHeartbeatOnChangelogMutex.Unlock()
 
 	return mctx.lastHeartbeatOnChangelogTime
+}
+
+// UpdateLastAppliedBinlogEventTime records the binlog-header timestamp of the
+// last event successfully applied to the target. Used by move-tables mode to
+// derive writer lag.
+func (mctx *MigrationContext) UpdateLastAppliedBinlogEventTime(t time.Time) {
+	mctx.binlogWriterLagMutex.Lock()
+	defer mctx.binlogWriterLagMutex.Unlock()
+
+	mctx.lastAppliedBinlogEventTime = t
+}
+
+// MarkBinlogEventStreamed records that the streamer just delivered an event for
+// the moved table. Used to distinguish "falling behind" from "source is idle".
+func (mctx *MigrationContext) MarkBinlogEventStreamed() {
+	mctx.binlogWriterLagMutex.Lock()
+	defer mctx.binlogWriterLagMutex.Unlock()
+
+	mctx.lastBinlogEventStreamedTime = time.Now()
+}
+
+// BumpBinlogWriterLagIfIdle treats prolonged streamer silence as "caught up":
+// if no event has been streamed for the moved table within idleThreshold, the
+// last-applied timestamp is advanced to now so writer lag does not climb forever
+// while the source is quiet.
+func (mctx *MigrationContext) BumpBinlogWriterLagIfIdle(idleThreshold time.Duration) {
+	mctx.binlogWriterLagMutex.Lock()
+	defer mctx.binlogWriterLagMutex.Unlock()
+
+	if mctx.lastBinlogEventStreamedTime.IsZero() || time.Since(mctx.lastBinlogEventStreamedTime) >= idleThreshold {
+		mctx.lastAppliedBinlogEventTime = time.Now()
+	}
+}
+
+// GetBinlogWriterLag returns now - last applied event timestamp, the move-tables
+// writer lag. It returns 0 before any event has been applied.
+func (mctx *MigrationContext) GetBinlogWriterLag() time.Duration {
+	mctx.binlogWriterLagMutex.Lock()
+	defer mctx.binlogWriterLagMutex.Unlock()
+
+	if mctx.lastAppliedBinlogEventTime.IsZero() {
+		return 0
+	}
+	lag := time.Since(mctx.lastAppliedBinlogEventTime)
+	if lag < 0 {
+		return 0
+	}
+	return lag
 }
 
 func (mctx *MigrationContext) SetHeartbeatIntervalMilliseconds(heartbeatIntervalMilliseconds int64) {

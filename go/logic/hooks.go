@@ -236,7 +236,17 @@ func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []s
 	env = append(env, fmt.Sprintf("GH_OST_EXECUTING_HOST=%s", he.migrationContext.Hostname))
 	env = append(env, fmt.Sprintf("GH_OST_TARGET_HOST=%s", he.migrationContext.GetTargetHostname()))
 	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_LAG=%f", he.migrationContext.GetCurrentLagDuration().Seconds()))
-	env = append(env, fmt.Sprintf("GH_OST_HEARTBEAT_LAG=%f", he.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds()))
+	// In move-tables mode there is no changelog heartbeat; writer lag (now - last
+	// applied binlog event timestamp) replaces the heartbeat-derived lag. Re-point
+	// GH_OST_HEARTBEAT_LAG at it so existing hooks keep seeing a meaningful value,
+	// and also expose it explicitly as GH_OST_BINLOG_WRITER_LAG_SECONDS.
+	heartbeatLagSeconds := he.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds()
+	binlogWriterLagSeconds := he.migrationContext.GetBinlogWriterLag().Seconds()
+	if he.migrationContext.IsMoveTablesMode() {
+		heartbeatLagSeconds = binlogWriterLagSeconds
+	}
+	env = append(env, fmt.Sprintf("GH_OST_HEARTBEAT_LAG=%f", heartbeatLagSeconds))
+	env = append(env, fmt.Sprintf("GH_OST_BINLOG_WRITER_LAG_SECONDS=%f", binlogWriterLagSeconds))
 	env = append(env, fmt.Sprintf("GH_OST_PROGRESS=%f", he.migrationContext.GetProgressPct()))
 	env = append(env, fmt.Sprintf("GH_OST_ETA_SECONDS=%d", he.migrationContext.GetETASeconds()))
 	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT=%s", he.migrationContext.HooksHintMessage))
