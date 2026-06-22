@@ -387,10 +387,17 @@ func main() {
 			migrationContext.MoveTables.TableNames[i] = strings.TrimSpace(migrationContext.MoveTables.TableNames[i])
 		}
 		migrationContext.MoveTables.TableNames = slices.DeleteFunc(migrationContext.MoveTables.TableNames, func(s string) bool { return s == "" })
-		if len(migrationContext.MoveTables.TableNames) > 1 {
-			// Future version will support moving multiple tables at the same time.
-			// For now, we only support moving a single table at a time.
-			log.Fatal("--move-tables currently supports only a single table")
+		if len(migrationContext.MoveTables.TableNames) == 0 {
+			log.Fatal("--move-tables requires at least one table")
+		}
+		// Reject duplicate table names: a table listed twice would register two
+		// listeners and two row-copy loops for the same data.
+		seenMoveTables := make(map[string]bool, len(migrationContext.MoveTables.TableNames))
+		for _, tableName := range migrationContext.MoveTables.TableNames {
+			if seenMoveTables[tableName] {
+				log.Fatalf("--move-tables lists table %q more than once", tableName)
+			}
+			seenMoveTables[tableName] = true
 		}
 		if migrationContext.MoveTables.TargetDatabase == "" {
 			migrationContext.MoveTables.TargetDatabase = migrationContext.DatabaseName

@@ -150,7 +150,7 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 		return err
 	}
 	sharedUniqueKeys := isp.getSharedUniqueKeys(isp.migrationContext.OriginalTableUniqueKeys, isp.migrationContext.GhostTableUniqueKeys)
-	isp.migrationContext.UniqueKey = isp.selectUniqueKey(sharedUniqueKeys)
+	isp.migrationContext.UniqueKey = isp.selectUniqueKey(isp.originalTableName(), sharedUniqueKeys)
 	if isp.migrationContext.UniqueKey == nil {
 		return fmt.Errorf("no shared unique key can be found after ALTER! Bailing out")
 	}
@@ -201,9 +201,9 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 	return nil
 }
 
-func (isp *Inspector) selectUniqueKey(candidateKeys []*sql.UniqueKey) *sql.UniqueKey {
+func (isp *Inspector) selectUniqueKey(tableName string, candidateKeys []*sql.UniqueKey) *sql.UniqueKey {
 	for i, candidateKey := range candidateKeys {
-		isp.applyColumnTypes(isp.migrationContext.DatabaseName, isp.originalTableName(), &candidateKey.Columns)
+		isp.applyColumnTypes(isp.migrationContext.DatabaseName, tableName, &candidateKey.Columns)
 		uniqueKeyIsValid := true
 		for _, column := range candidateKey.Columns.Columns() {
 			switch column.Type {
@@ -509,6 +509,10 @@ func (isp *Inspector) validateTable() error {
 
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
 func (isp *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error {
+	return isp.validateTableForeignKeysFor(isp.originalTableName(), allowChildForeignKeys)
+}
+
+func (isp *Inspector) validateTableForeignKeysFor(tableName string, allowChildForeignKeys bool) error {
 	if isp.migrationContext.SkipForeignKeyChecks {
 		isp.migrationContext.Log.Warning("--skip-foreign-key-checks provided: will not check for foreign keys")
 		return nil
@@ -534,26 +538,26 @@ func (isp *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error
 		return nil
 	},
 		isp.migrationContext.DatabaseName,
-		isp.originalTableName(),
+		tableName,
 		isp.migrationContext.DatabaseName,
-		isp.originalTableName(),
+		tableName,
 		isp.migrationContext.DatabaseName,
-		isp.originalTableName(),
+		tableName,
 		isp.migrationContext.DatabaseName,
-		isp.originalTableName(),
+		tableName,
 	)
 	if err != nil {
 		return err
 	}
 	if numParentForeignKeys > 0 {
-		return isp.migrationContext.Log.Errorf("found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
+		return isp.migrationContext.Log.Errorf("found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
 	}
 	if numChildForeignKeys > 0 {
 		if allowChildForeignKeys {
 			isp.migrationContext.Log.Debugf("Foreign keys found and will be dropped, as per given --discard-foreign-keys flag")
 			return nil
 		}
-		return isp.migrationContext.Log.Errorf("found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
+		return isp.migrationContext.Log.Errorf("found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
 	}
 	isp.migrationContext.Log.Debugf("Validated no foreign keys exist on table")
 	return nil
@@ -666,6 +670,52 @@ func (isp *Inspector) estimateTableRowsViaExplain() error {
 	}
 	isp.migrationContext.Log.Infof("Estimated number of rows via EXPLAIN: %d", isp.migrationContext.RowsEstimate)
 	return nil
+}
+
+// estimateTableRows estimates the number of rows in the given source table via
+// EXPLAIN, returning the estimate rather than mutating shared context state. It
+// is used to estimate each migrated table independently in move-tables mode.
+func (isp *Inspector) estimateTableRows(tableName string) (int64, error) {
+	query := fmt.Sprintf(`explain select /* gh-ost */ * from %s.%s where 1=1`,
+		sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
+	var rowsEstimate int64
+	outputFound := false
+	err := sqlutils.QueryRowsMap(isp.db, query, func(rowMap sqlutils.RowMap) error {
+		rowsEstimate = rowMap.GetInt64("rows")
+		outputFound = true
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if !outputFound {
+		return 0, isp.migrationContext.Log.Errorf("cannot run EXPLAIN on %s.%s!",
+			sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
+	}
+	return rowsEstimate, nil
+}
+
+// InspectMoveTable inspects a single source table for move-tables mode and
+// returns its columns, virtual columns, chosen unique key, and row estimate.
+// Unlike InspectOriginalTable it does not mutate shared migration context
+// fields, so each migrated table can be inspected independently into its own
+// per-table container.
+func (isp *Inspector) InspectMoveTable(tableName string) (columns *sql.ColumnList, virtualColumns *sql.ColumnList, uniqueKeys [](*sql.UniqueKey), uniqueKey *sql.UniqueKey, rowsEstimate int64, err error) {
+	columns, virtualColumns, uniqueKeys, err = isp.InspectTableColumnsAndUniqueKeys(tableName)
+	if err != nil {
+		return nil, nil, nil, nil, 0, err
+	}
+	uniqueKey = isp.selectUniqueKey(tableName, uniqueKeys)
+	if uniqueKey == nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("no valid PRIMARY nor UNIQUE key found for table %s.%s; Bailing out",
+			sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
+	}
+	rowsEstimate, err = isp.estimateTableRows(tableName)
+	if err != nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("failed to estimate rows for table %s.%s: %w",
+			sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName), err)
+	}
+	return columns, virtualColumns, uniqueKeys, uniqueKey, rowsEstimate, nil
 }
 
 // CountTableRows counts exact number of rows on the original table

@@ -75,6 +75,106 @@ func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleRea
 	}
 }
 
+// MoveTable holds the per-table runtime state for a single table within a
+// move-tables run. In move-tables mode the surrounding plumbing (one binlog
+// stream, one applier connection, one throttler, one hooks executor) stays
+// singular, but every migrated table carries its own schema, unique key,
+// iteration progress, and counters keyed by table name.
+//
+// The range/iteration fields are guarded by the per-table rangeMutex. The
+// applier-wide "current applied source coordinates" mutex stays single — there
+// is one applied stream feeding all tables.
+type MoveTable struct {
+	// Identity.
+	SourceDatabaseName string
+	SourceTableName    string
+	TargetDatabaseName string
+	TargetTableName    string
+
+	// CreateTableStatement is the captured `SHOW CREATE TABLE` from the source,
+	// used to (re)create the table on the target.
+	CreateTableStatement string
+
+	// Schema, captured from the source (or from the target, on resume). In
+	// move-tables mode source and target schemas match, so the shared columns are
+	// identical to the original columns.
+	OriginalTableColumns        *sql.ColumnList
+	OriginalTableVirtualColumns *sql.ColumnList
+	OriginalTableUniqueKeys     [](*sql.UniqueKey)
+	UniqueKey                   *sql.UniqueKey
+	SharedColumns               *sql.ColumnList
+	MappedSharedColumns         *sql.ColumnList
+
+	// RowsEstimate is the estimated row count for this table.
+	RowsEstimate int64
+
+	// Iteration / range state. Guarded by rangeMutex (except Iteration, which is
+	// accessed atomically so status readers don't need the lock).
+	MigrationRangeMinValues          *sql.ColumnValues
+	MigrationRangeMaxValues          *sql.ColumnValues
+	MigrationIterationRangeMinValues *sql.ColumnValues
+	MigrationIterationRangeMaxValues *sql.ColumnValues
+	Iteration                        int64
+
+	// LastIterationRange* record the last successfully-copied chunk range, used
+	// for checkpointing. Guarded by rangeMutex.
+	LastIterationRangeMinValues *sql.ColumnValues
+	LastIterationRangeMaxValues *sql.ColumnValues
+
+	// RowsCopied is the number of rows copied for this table (accessed atomically).
+	RowsCopied int64
+
+	// rowCopyComplete is set (1) once this table's row copy finishes. The
+	// on-row-copy-complete hook and the cutover only proceed once every table is
+	// complete. Accessed atomically.
+	rowCopyComplete int64
+
+	// rangeMutex guards this table's range/iteration fields.
+	rangeMutex sync.Mutex
+}
+
+// GetIteration returns the table's current iteration counter.
+func (mt *MoveTable) GetIteration() int64 {
+	return atomic.LoadInt64(&mt.Iteration)
+}
+
+// IncrementIteration advances the table's iteration counter by one.
+func (mt *MoveTable) IncrementIteration() {
+	atomic.AddInt64(&mt.Iteration, 1)
+}
+
+// SetNextIterationRangeMinValues advances the iteration window: the next chunk's
+// min becomes the previous chunk's max (or the table min for the first chunk).
+func (mt *MoveTable) SetNextIterationRangeMinValues() {
+	mt.rangeMutex.Lock()
+	defer mt.rangeMutex.Unlock()
+	mt.MigrationIterationRangeMinValues = mt.MigrationIterationRangeMaxValues
+	if mt.MigrationIterationRangeMinValues == nil {
+		mt.MigrationIterationRangeMinValues = mt.MigrationRangeMinValues
+	}
+}
+
+// IsRowCopyComplete reports whether this table has finished its row copy.
+func (mt *MoveTable) IsRowCopyComplete() bool {
+	return atomic.LoadInt64(&mt.rowCopyComplete) > 0
+}
+
+// SetRowCopyComplete marks this table's row copy as finished.
+func (mt *MoveTable) SetRowCopyComplete() {
+	atomic.StoreInt64(&mt.rowCopyComplete, 1)
+}
+
+// RecordLastIterationRange stores the last successfully-copied chunk range for
+// checkpointing.
+func (mt *MoveTable) RecordLastIterationRange() {
+	mt.rangeMutex.Lock()
+	defer mt.rangeMutex.Unlock()
+	if mt.MigrationIterationRangeMinValues != nil && mt.MigrationIterationRangeMaxValues != nil {
+		mt.LastIterationRangeMinValues = mt.MigrationIterationRangeMinValues.Clone()
+		mt.LastIterationRangeMaxValues = mt.MigrationIterationRangeMaxValues.Clone()
+	}
+}
+
 // MigrationContext has the general, global state of migration. It is used by
 // all components throughout the migration process.
 type MigrationContext struct {
@@ -277,12 +377,15 @@ type MigrationContext struct {
 
 	// move tables:
 	MoveTables struct {
-		TableNames     []string // List of table names to be moved.
-		TargetHost     string   // Target hostname for the move. This must be a primary/writable host.
-		TargetPort     int      // Target MySQL port for the move.
-		TargetUser     string   // Target username for the move. If not specified, it will default to the source user.
-		TargetPass     string   // Target password for the move. If not specified, it will default to the source password.
-		TargetDatabase string   // Target database name for the move. If not specified, it will default to the source database name.
+		TableNames []string // Ordered list of table names to be moved (order from --move-tables). Iteration is deterministic over this slice, never over the Tables map.
+		// Tables holds the per-table runtime state, keyed by source table name.
+		// Populated by InitMoveTableContainers() once per-table schema is known.
+		Tables         map[string]*MoveTable
+		TargetHost     string // Target hostname for the move. This must be a primary/writable host.
+		TargetPort     int    // Target MySQL port for the move.
+		TargetUser     string // Target username for the move. If not specified, it will default to the source user.
+		TargetPass     string // Target password for the move. If not specified, it will default to the source password.
+		TargetDatabase string // Target database name for the move. If not specified, it will default to the source database name.
 
 		// AllowOnSourcePrimary opts in to running the move-tables read path (schema
 		// inspection, the full row copy, binlog streaming) directly against the
@@ -449,6 +552,23 @@ func (mctx *MigrationContext) GetOldTableName() string {
 	if mctx.Revert {
 		suffix = "rev_del"
 	}
+	if mctx.TimestampOldTable {
+		t := mctx.StartTime
+		timestamp := fmt.Sprintf("%d%02d%02d%02d%02d%02d",
+			t.Year(), t.Month(), t.Day(),
+			t.Hour(), t.Minute(), t.Second())
+		return getSafeTableName(tableName, fmt.Sprintf("%s_%s", timestamp, suffix))
+	}
+	return getSafeTableName(tableName, suffix)
+}
+
+// MoveTableDelName returns the `_<table>_del` rollback-handle table name for a
+// specific migrated table in move-tables mode. It mirrors GetOldTableName but
+// for an explicit table name, so a multi-table cutover can rename every source
+// table in one atomic RENAME. Revert is disallowed in move-tables mode, so the
+// suffix is always "del".
+func (mctx *MigrationContext) MoveTableDelName(tableName string) string {
+	suffix := "del"
 	if mctx.TimestampOldTable {
 		t := mctx.StartTime
 		timestamp := fmt.Sprintf("%d%02d%02d%02d%02d%02d",
@@ -1128,6 +1248,73 @@ func (mctx *MigrationContext) CancelContext() {
 // IsMoveTablesMode returns true if gh-ost should be used for moving tables instead of running a schema migration.
 func (mctx *MigrationContext) IsMoveTablesMode() bool {
 	return len(mctx.MoveTables.TableNames) > 0
+}
+
+// InitMoveTableContainers builds (or rebuilds) the per-table runtime containers
+// from the ordered MoveTables.TableNames list. It is idempotent: tables already
+// present in the map keep their existing container so callers may invoke it
+// after partially populating state. Source and target table names match in
+// move-tables mode; only the database may differ.
+func (mctx *MigrationContext) InitMoveTableContainers() {
+	if mctx.MoveTables.Tables == nil {
+		mctx.MoveTables.Tables = make(map[string]*MoveTable, len(mctx.MoveTables.TableNames))
+	}
+	for _, tableName := range mctx.MoveTables.TableNames {
+		if _, ok := mctx.MoveTables.Tables[tableName]; ok {
+			continue
+		}
+		mctx.MoveTables.Tables[tableName] = &MoveTable{
+			SourceDatabaseName: mctx.DatabaseName,
+			SourceTableName:    tableName,
+			TargetDatabaseName: mctx.GetTargetDatabaseName(),
+			TargetTableName:    tableName,
+		}
+	}
+}
+
+// GetMoveTable returns the per-table container for the given source table name,
+// or nil if it has not been initialized.
+func (mctx *MigrationContext) GetMoveTable(tableName string) *MoveTable {
+	if mctx.MoveTables.Tables == nil {
+		return nil
+	}
+	return mctx.MoveTables.Tables[tableName]
+}
+
+// OrderedMoveTables returns the per-table containers in --move-tables order.
+// Iteration must always use this deterministic order, never the Tables map's
+// (random) iteration order.
+func (mctx *MigrationContext) OrderedMoveTables() []*MoveTable {
+	tables := make([]*MoveTable, 0, len(mctx.MoveTables.TableNames))
+	for _, tableName := range mctx.MoveTables.TableNames {
+		if mt := mctx.GetMoveTable(tableName); mt != nil {
+			tables = append(tables, mt)
+		}
+	}
+	return tables
+}
+
+// MoveTablePrimaryName returns the first table in --move-tables order. Several
+// run-wide artifacts (checkpoint table name, changelog/old-table naming) are
+// derived from a single "primary" table to keep one set of housekeeping objects
+// per run; the primary is simply the first listed table.
+func (mctx *MigrationContext) MoveTablePrimaryName() string {
+	if len(mctx.MoveTables.TableNames) == 0 {
+		return ""
+	}
+	return mctx.MoveTables.TableNames[0]
+}
+
+// AllMoveTablesRowCopyComplete reports whether every migrated table has finished
+// its row copy. The on-row-copy-complete hook and the cutover only proceed once
+// this is true.
+func (mctx *MigrationContext) AllMoveTablesRowCopyComplete() bool {
+	for _, mt := range mctx.OrderedMoveTables() {
+		if !mt.IsRowCopyComplete() {
+			return false
+		}
+	}
+	return true
 }
 
 // SendWithContext attempts to send a value to a channel, but returns early

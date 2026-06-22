@@ -97,6 +97,26 @@ type Applier struct {
 	moveTablesCopySelectFirstQueryBuilder *sql.MoveTableCopySelectQueryBuilder
 	moveTablesCopySelectNextQueryBuilder  *sql.MoveTableCopySelectQueryBuilder
 	moveTablesCopyInsertQueryBuilder      *sql.MoveTableCopyInsertQueryBuilder
+
+	// moveTablesBuilders holds the per-table query builders, keyed by source
+	// table name. In move-tables mode there is one entry per migrated table; DML
+	// is routed to the right set at apply time using the TableName already on each
+	// binlog DML event. Empty in standard (single-table) mode.
+	moveTablesBuilders map[string]*moveTableBuilders
+}
+
+// moveTableBuilders holds the query builders and schema needed to copy and apply
+// DML for a single migrated table in move-tables mode. One instance exists per
+// table; the applier selects the right instance by source table name.
+type moveTableBuilders struct {
+	uniqueKey                   *sql.UniqueKey
+	originalTableColumns        *sql.ColumnList
+	dmlDeleteQueryBuilder       *sql.DMLDeleteQueryBuilder
+	dmlInsertQueryBuilder       *sql.DMLInsertQueryBuilder
+	dmlUpdateQueryBuilder       *sql.DMLUpdateQueryBuilder
+	copySelectFirstQueryBuilder *sql.MoveTableCopySelectQueryBuilder
+	copySelectNextQueryBuilder  *sql.MoveTableCopySelectQueryBuilder
+	copyInsertQueryBuilder      *sql.MoveTableCopyInsertQueryBuilder
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -144,8 +164,15 @@ func (apl *Applier) checkpointRangeColumnNames() (minColumnNames []string, maxCo
 // hence the optional table name prefix. Metacharacters in table/index names are escaped to avoid
 // regex syntax errors.
 func (apl *Applier) compileMigrationKeyWarningRegex() (*regexp.Regexp, error) {
-	escapedTable := regexp.QuoteMeta(apl.migrationContext.GetTargetTableName())
-	escapedKey := regexp.QuoteMeta(apl.migrationContext.UniqueKey.NameInGhostTable)
+	return compileKeyWarningRegex(apl.migrationContext.GetTargetTableName(), apl.migrationContext.UniqueKey.NameInGhostTable)
+}
+
+// compileKeyWarningRegex compiles the duplicate-key warning regex for a specific
+// target table + unique key name. In move-tables mode each table has its own
+// unique key, so the duplicate-key filter must be compiled per table.
+func compileKeyWarningRegex(targetTableName, uniqueKeyName string) (*regexp.Regexp, error) {
+	escapedTable := regexp.QuoteMeta(targetTableName)
+	escapedKey := regexp.QuoteMeta(uniqueKeyName)
 	migrationUniqueKeyPattern := fmt.Sprintf(`for key '(%s\.)?%s'`, escapedTable, escapedKey)
 	migrationKeyRegex, err := regexp.Compile(migrationUniqueKeyPattern)
 	if err != nil {
@@ -394,32 +421,83 @@ func (apl *Applier) prepareQueries() (err error) {
 		}
 	}
 	if apl.migrationContext.IsMoveTablesMode() {
-		if apl.moveTablesCopySelectFirstQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
-			apl.migrationContext.DatabaseName,
-			apl.originalTableName(),
-			apl.migrationContext.OriginalTableColumns,
-			apl.migrationContext.UniqueKey.Name,
-			&apl.migrationContext.UniqueKey.Columns,
-			true, // <-- include start range values for first select query
-		); err != nil {
-			return err
+		// Build one set of query builders per migrated table. DML is routed to the
+		// right set at apply time by source table name (§2.1). The top-level DML
+		// builders above remain bound to the primary table for backward-compat with
+		// the single-table paths (checkpoint, status), but binlog DML application
+		// goes through moveTablesBuilders.
+		apl.moveTablesBuilders = make(map[string]*moveTableBuilders, len(apl.migrationContext.MoveTables.TableNames))
+		for _, mt := range apl.migrationContext.OrderedMoveTables() {
+			if mt.UniqueKey == nil {
+				return fmt.Errorf("move-table %s.%s has no unique key; cannot prepare queries", mt.SourceDatabaseName, mt.SourceTableName)
+			}
+			b := &moveTableBuilders{
+				uniqueKey:            mt.UniqueKey,
+				originalTableColumns: mt.OriginalTableColumns,
+			}
+			if b.dmlDeleteQueryBuilder, err = sql.NewDMLDeleteQueryBuilder(
+				mt.TargetDatabaseName,
+				mt.TargetTableName,
+				mt.OriginalTableColumns,
+				&mt.UniqueKey.Columns,
+			); err != nil {
+				return err
+			}
+			if b.dmlInsertQueryBuilder, err = sql.NewDMLInsertQueryBuilder(
+				mt.TargetDatabaseName,
+				mt.TargetTableName,
+				mt.OriginalTableColumns,
+				mt.SharedColumns,
+				mt.MappedSharedColumns,
+			); err != nil {
+				return err
+			}
+			if b.dmlUpdateQueryBuilder, err = sql.NewDMLUpdateQueryBuilder(
+				mt.TargetDatabaseName,
+				mt.TargetTableName,
+				mt.OriginalTableColumns,
+				mt.SharedColumns,
+				mt.MappedSharedColumns,
+				&mt.UniqueKey.Columns,
+			); err != nil {
+				return err
+			}
+			if b.copySelectFirstQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
+				mt.SourceDatabaseName,
+				mt.SourceTableName,
+				mt.OriginalTableColumns,
+				mt.UniqueKey.Name,
+				&mt.UniqueKey.Columns,
+				true, // <-- include start range values for first select query
+			); err != nil {
+				return err
+			}
+			if b.copySelectNextQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
+				mt.SourceDatabaseName,
+				mt.SourceTableName,
+				mt.OriginalTableColumns,
+				mt.UniqueKey.Name,
+				&mt.UniqueKey.Columns,
+				false,
+			); err != nil {
+				return err
+			}
+			if b.copyInsertQueryBuilder, err = sql.NewMoveTableCopyInsertQueryBuilder(
+				mt.TargetDatabaseName,
+				mt.TargetTableName,
+				mt.OriginalTableColumns,
+			); err != nil {
+				return err
+			}
+			apl.moveTablesBuilders[mt.SourceTableName] = b
 		}
-		if apl.moveTablesCopySelectNextQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
-			apl.migrationContext.DatabaseName,
-			apl.originalTableName(),
-			apl.migrationContext.OriginalTableColumns,
-			apl.migrationContext.UniqueKey.Name,
-			&apl.migrationContext.UniqueKey.Columns,
-			false,
-		); err != nil {
-			return err
-		}
-		if apl.moveTablesCopyInsertQueryBuilder, err = sql.NewMoveTableCopyInsertQueryBuilder(
-			targetDatabaseName,
-			targetTableName,
-			apl.migrationContext.OriginalTableColumns,
-		); err != nil {
-			return err
+		// Keep the legacy single-table builders pointing at the primary table for
+		// any single-table code path that still reads them directly.
+		primary := apl.moveTablesBuilders[apl.migrationContext.MoveTablePrimaryName()]
+		if primary != nil {
+			apl.moveTablesCopySelectFirstQueryBuilder = primary.copySelectFirstQueryBuilder
+			apl.moveTablesCopySelectNextQueryBuilder = primary.copySelectNextQueryBuilder
+			apl.moveTablesCopyInsertQueryBuilder = primary.copyInsertQueryBuilder
 		}
 	}
 	return nil
@@ -683,7 +761,16 @@ func (apl *Applier) CreateTargetTable(createStatement string) error {
 	if !apl.migrationContext.IsMoveTablesMode() {
 		return errors.New("CreateTargetTable is only available in MoveTables mode")
 	}
-	targetTableName := apl.originalTableName()
+	return apl.CreateTargetTableForName(apl.originalTableName(), createStatement)
+}
+
+// CreateTargetTableForName creates the named target table on the target host
+// from the given CREATE statement. In multi-table move-tables mode it is called
+// once per migrated table.
+func (apl *Applier) CreateTargetTableForName(targetTableName, createStatement string) error {
+	if !apl.migrationContext.IsMoveTablesMode() {
+		return errors.New("CreateTargetTableForName is only available in MoveTables mode")
+	}
 	targetDatabase := apl.migrationContext.GetTargetDatabaseName()
 
 	// Explicit pre-check: abort before any data is copied if the target table
@@ -1353,8 +1440,120 @@ func (apl *Applier) CalculateNextIterationRangeEndValues(db *gosql.DB) (hasFurth
 	return hasFurtherRange, nil
 }
 
-// ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
-// data actually gets copied from original table.
+// ReadMoveTableMigrationRangeValues reads the min/max unique-key values for a
+// single migrated table into its per-table container. It is the move-tables
+// analogue of ReadMigrationRangeValues; each table has its own range.
+func (apl *Applier) ReadMoveTableMigrationRangeValues(db *gosql.DB, mt *base.MoveTable) error {
+	if db == nil {
+		db = apl.db
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	minQuery, err := sql.BuildUniqueKeyMinValuesPreparedQuery(mt.SourceDatabaseName, mt.SourceTableName, mt.UniqueKey)
+	if err != nil {
+		return err
+	}
+	minRows, err := tx.Query(minQuery)
+	if err != nil {
+		return err
+	}
+	for minRows.Next() {
+		mt.MigrationRangeMinValues = sql.NewColumnValues(mt.UniqueKey.Len())
+		if err = minRows.Scan(mt.MigrationRangeMinValues.ValuesPointers...); err != nil {
+			minRows.Close()
+			return err
+		}
+	}
+	if err = minRows.Err(); err != nil {
+		minRows.Close()
+		return err
+	}
+	minRows.Close()
+
+	maxQuery, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(mt.SourceDatabaseName, mt.SourceTableName, mt.UniqueKey)
+	if err != nil {
+		return err
+	}
+	maxRows, err := tx.Query(maxQuery)
+	if err != nil {
+		return err
+	}
+	for maxRows.Next() {
+		mt.MigrationRangeMaxValues = sql.NewColumnValues(mt.UniqueKey.Len())
+		if err = maxRows.Scan(mt.MigrationRangeMaxValues.ValuesPointers...); err != nil {
+			maxRows.Close()
+			return err
+		}
+	}
+	if err = maxRows.Err(); err != nil {
+		maxRows.Close()
+		return err
+	}
+	maxRows.Close()
+
+	apl.migrationContext.Log.Infof("Move-table %s.%s migration range: [%s]..[%s]",
+		mt.SourceDatabaseName, mt.SourceTableName, mt.MigrationRangeMinValues, mt.MigrationRangeMaxValues)
+	return tx.Commit()
+}
+
+// CalculateMoveTableNextIterationRangeEndValues computes the next chunk's
+// range-end for a single migrated table, storing it in the table's container.
+// It returns false when the table has no further range to iterate (row copy
+// complete for that table). It is the move-tables analogue of
+// CalculateNextIterationRangeEndValues.
+func (apl *Applier) CalculateMoveTableNextIterationRangeEndValues(db *gosql.DB, mt *base.MoveTable) (hasFurtherRange bool, err error) {
+	if db == nil {
+		db = apl.db
+	}
+	for i := 0; i < 2; i++ {
+		buildFunc := sql.BuildUniqueKeyRangeEndPreparedQueryViaOffset
+		if i == 1 {
+			buildFunc = sql.BuildUniqueKeyRangeEndPreparedQueryViaTemptable
+		}
+		query, explodedArgs, err := buildFunc(
+			mt.SourceDatabaseName,
+			mt.SourceTableName,
+			&mt.UniqueKey.Columns,
+			mt.MigrationIterationRangeMinValues.AbstractValues(),
+			mt.MigrationRangeMaxValues.AbstractValues(),
+			atomic.LoadInt64(&apl.migrationContext.ChunkSize),
+			mt.GetIteration() == 0,
+			fmt.Sprintf("iteration:%d", mt.GetIteration()),
+		)
+		if err != nil {
+			return hasFurtherRange, err
+		}
+
+		rows, err := db.Query(query, explodedArgs...)
+		if err != nil {
+			return hasFurtherRange, err
+		}
+		iterationRangeMaxValues := sql.NewColumnValues(mt.UniqueKey.Len())
+		for rows.Next() {
+			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
+				rows.Close()
+				return hasFurtherRange, err
+			}
+			hasFurtherRange = true
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return hasFurtherRange, err
+		}
+		rows.Close()
+		if hasFurtherRange {
+			mt.MigrationIterationRangeMaxValues = iterationRangeMaxValues
+			return hasFurtherRange, nil
+		}
+	}
+	apl.migrationContext.Log.Debugf("Move-table %s.%s iteration complete: no further range", mt.SourceDatabaseName, mt.SourceTableName)
+	return hasFurtherRange, nil
+}
+
 func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&apl.migrationContext.ChunkSize)
@@ -1450,28 +1649,31 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 
 // ApplyIterationMoveTableCopyQueries issues a SELECT query on the original table and an INSERT query on the target table,
 // copying a chunk of rows. It is used when `--move-tables` is specified, instead of ApplyIterationInsertQuery.
-func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB, mt *base.MoveTable) (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&apl.migrationContext.ChunkSize)
 	if sourceDB == nil {
 		return chunkSize, rowsAffected, duration, errors.New("source DB is required for move-tables copy")
 	}
+	if mt == nil {
+		return chunkSize, rowsAffected, duration, errors.New("move-table container is required for move-tables copy")
+	}
+	builders := apl.moveTablesBuilders[mt.SourceTableName]
+	if builders == nil {
+		return chunkSize, rowsAffected, duration, fmt.Errorf("no query builders registered for move-table %s.%s", mt.SourceDatabaseName, mt.SourceTableName)
+	}
 
 	// First, select data from the source database:
 	rows, err := func() ([]*sql.ColumnValues, error) {
 		var qb *sql.MoveTableCopySelectQueryBuilder
-		apl.migrationContext.Log.Debugf("Building SELECT query for move-tables; first: %v; rest: %v",
-			apl.moveTablesCopySelectFirstQueryBuilder,
-			apl.moveTablesCopySelectNextQueryBuilder)
-
-		if apl.migrationContext.GetIteration() == 0 {
-			qb = apl.moveTablesCopySelectFirstQueryBuilder
+		if mt.GetIteration() == 0 {
+			qb = builders.copySelectFirstQueryBuilder
 		} else {
-			qb = apl.moveTablesCopySelectNextQueryBuilder
+			qb = builders.copySelectNextQueryBuilder
 		}
 		query, explodedArgs, err := qb.BuildQuery(
-			apl.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
-			apl.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
+			mt.MigrationIterationRangeMinValues.AbstractValues(),
+			mt.MigrationIterationRangeMaxValues.AbstractValues(),
 		)
 		if err != nil {
 			return nil, err
@@ -1483,7 +1685,7 @@ func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chun
 		defer sqlRows.Close()
 		chunkRows := make([]*sql.ColumnValues, 0, chunkSize)
 		for sqlRows.Next() {
-			row := sql.NewColumnValues(apl.migrationContext.SharedColumns.Len())
+			row := sql.NewColumnValues(mt.SharedColumns.Len())
 			err := sqlRows.Scan(row.ValuesPointers...)
 			if err != nil {
 				return nil, err
@@ -1507,7 +1709,7 @@ func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chun
 
 	// Then, insert data into the destination database:
 	sqlResult, err := func() (gosql.Result, error) {
-		query, explodedArgs, err := apl.moveTablesCopyInsertQueryBuilder.BuildQuery(rows)
+		query, explodedArgs, err := builders.copyInsertQueryBuilder.BuildQuery(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -1538,7 +1740,7 @@ func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chun
 			if err = rows.Err(); err != nil {
 				return nil, err
 			}
-			migrationKeyRegex, err := apl.compileMigrationKeyWarningRegex()
+			migrationKeyRegex, err := compileKeyWarningRegex(mt.TargetTableName, mt.UniqueKey.NameInGhostTable)
 			if err != nil {
 				return nil, err
 			}
@@ -1569,10 +1771,11 @@ func (apl *Applier) ApplyIterationMoveTableCopyQueries(sourceDB *gosql.DB) (chun
 	rowsAffected, _ = sqlResult.RowsAffected()
 	duration = time.Since(startTime)
 	apl.migrationContext.Log.Debugf(
-		"Issued SELECT+INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
-		apl.migrationContext.MigrationIterationRangeMinValues,
-		apl.migrationContext.MigrationIterationRangeMaxValues,
-		apl.migrationContext.GetIteration(),
+		"Issued SELECT+INSERT on %s.%s range: [%s]..[%s]; iteration: %d; chunk-size: %d",
+		mt.SourceDatabaseName, mt.SourceTableName,
+		mt.MigrationIterationRangeMinValues,
+		mt.MigrationIterationRangeMaxValues,
+		mt.GetIteration(),
 		chunkSize,
 	)
 
@@ -2049,9 +2252,9 @@ func (apl *Applier) ShowStatusVariable(variableName string) (result int64, err e
 // updateModifiesUniqueKeyColumns checks whether a UPDATE DML event actually
 // modifies values of the migration's unique key (the iterated key). This will call
 // for special handling.
-func (apl *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEvent) (modifiedColumn string, isModified bool) {
-	for _, column := range apl.migrationContext.UniqueKey.Columns.Columns() {
-		tableOrdinal := apl.migrationContext.OriginalTableColumns.Ordinals[column.Name]
+func (apl *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEvent, uniqueKey *sql.UniqueKey, originalTableColumns *sql.ColumnList) (modifiedColumn string, isModified bool) {
+	for _, column := range uniqueKey.Columns.Columns() {
+		tableOrdinal := originalTableColumns.Ordinals[column.Name]
 		whereColumnValue := dmlEvent.WhereColumnValues.AbstractValues()[tableOrdinal]
 		newColumnValue := dmlEvent.NewColumnValues.AbstractValues()[tableOrdinal]
 
@@ -2065,20 +2268,41 @@ func (apl *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEve
 // buildDMLEventQuery creates a query to operate on the ghost table, based on an intercepted binlog
 // event entry on the original table.
 func (apl *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBuildResult {
+	// Resolve the query builders + schema for the table this event targets. In
+	// move-tables mode the set is selected by source table name (one binlog
+	// stream feeds every table; routing happens here, §2.1). In standard mode
+	// there is a single set on the applier.
+	deleteBuilder := apl.dmlDeleteQueryBuilder
+	insertBuilder := apl.dmlInsertQueryBuilder
+	updateBuilder := apl.dmlUpdateQueryBuilder
+	uniqueKey := apl.migrationContext.UniqueKey
+	originalTableColumns := apl.migrationContext.OriginalTableColumns
+	if apl.migrationContext.IsMoveTablesMode() {
+		b := apl.moveTablesBuilders[dmlEvent.TableName]
+		if b == nil {
+			return []*dmlBuildResult{newDmlBuildResultError(fmt.Errorf("no query builder registered for move-table %s.%s", dmlEvent.DatabaseName, dmlEvent.TableName))}
+		}
+		deleteBuilder = b.dmlDeleteQueryBuilder
+		insertBuilder = b.dmlInsertQueryBuilder
+		updateBuilder = b.dmlUpdateQueryBuilder
+		uniqueKey = b.uniqueKey
+		originalTableColumns = b.originalTableColumns
+	}
+
 	switch dmlEvent.DML {
 	case binlog.DeleteDML:
 		{
-			query, uniqueKeyArgs, err := apl.dmlDeleteQueryBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
+			query, uniqueKeyArgs, err := deleteBuilder.BuildQuery(dmlEvent.WhereColumnValues.AbstractValues())
 			return []*dmlBuildResult{newDmlBuildResult(query, uniqueKeyArgs, -1, err)}
 		}
 	case binlog.InsertDML:
 		{
-			query, sharedArgs, err := apl.dmlInsertQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
+			query, sharedArgs, err := insertBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues())
 			return []*dmlBuildResult{newDmlBuildResult(query, sharedArgs, 1, err)}
 		}
 	case binlog.UpdateDML:
 		{
-			if _, isModified := apl.updateModifiesUniqueKeyColumns(dmlEvent); isModified {
+			if _, isModified := apl.updateModifiesUniqueKeyColumns(dmlEvent, uniqueKey, originalTableColumns); isModified {
 				results := make([]*dmlBuildResult, 0, 2)
 				dmlEvent.DML = binlog.DeleteDML
 				results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
@@ -2086,7 +2310,7 @@ func (apl *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBu
 				results = append(results, apl.buildDMLEventQuery(dmlEvent)...)
 				return results
 			}
-			query, updateArgs, err := apl.dmlUpdateQueryBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
+			query, updateArgs, err := updateBuilder.BuildQuery(dmlEvent.NewColumnValues.AbstractValues(), dmlEvent.WhereColumnValues.AbstractValues())
 			args := sqlutils.Args()
 			args = append(args, updateArgs...)
 			return []*dmlBuildResult{newDmlBuildResult(query, args, 0, err)}
