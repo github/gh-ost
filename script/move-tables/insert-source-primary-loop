@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Continuously insert new rows into gh_ost_test on source primary.
+# Continuously insert new rows into BOTH move-tables fixtures (gh_ost_test and
+# gh_ost_test_other) on the source primary, so a multi-table move-tables run sees
+# live DML on every migrated table.
 # Usage:
-#   script/move-tables/insert-source-primary-loop [start_column1] [sleep_seconds] [rows_per_batch]
+#   script/move-tables/insert-source-primary-loop [start_id] [sleep_seconds] [rows_per_batch]
 # Example:
 #   script/move-tables/insert-source-primary-loop 100000 0.2 1
 # Fast example:
@@ -13,34 +15,44 @@ start_i="${1:-100000}"
 delay="${2:-0.2}"
 rows_per_batch="${3:-1}"
 i="$start_i"
-DATABASE="${DATABASE:-gh_ost_test_db}
+# Match the database created/seeded by script/move-tables/setup.
+DATABASE="${DATABASE:-test}"
 
 echo "Starting continuous inserts on source primary. Press Ctrl+C to stop."
-echo "start_column1=$start_i sleep_seconds=$delay rows_per_batch=$rows_per_batch"
+echo "start_id=$start_i sleep_seconds=$delay rows_per_batch=$rows_per_batch database=$DATABASE"
 
 trap 'echo; echo "Stopped."; exit 0' INT TERM
 
 while true; do
   ts="$(date +%s)"
-  values=""
+  test_values=""
+  other_values=""
   batch_start="$i"
 
   for ((n=0; n<rows_per_batch; n++)); do
     current_i=$((i + n))
-    row="($current_i, $((current_i % 65535)), $((current_i % 16777215)), $((current_i % 255)), $ts, $((ts + 1)))"
-    if [[ -n "$values" ]]; then
-      values+=" , "
+    # gh_ost_test: id is AUTO_INCREMENT, so we supply column1..column6 only.
+    test_row="($current_i, $((current_i % 65535)), $((current_i % 16777215)), $((current_i % 255)), $ts, $((ts + 1)))"
+    # gh_ost_test_other: uid is an explicit (non-auto) PK and name is UNIQUE, so
+    # derive both from current_i to stay collision-free with the seed data.
+    other_row="($current_i, 'row_$current_i', $((current_i % 100000)).50, FROM_UNIXTIME($ts))"
+    if [[ -n "$test_values" ]]; then
+      test_values+=" , "
+      other_values+=" , "
     fi
-    values+="$row"
+    test_values+="$test_row"
+    other_values+="$other_row"
   done
 
-  script/move-tables/mysql-source-primary -D $DATABASE -e "
+  script/move-tables/mysql-source-primary -D "$DATABASE" -e "
     INSERT INTO gh_ost_test (column1, column2, column3, column4, column5, column6)
-    VALUES $values;
+    VALUES $test_values;
+    INSERT INTO gh_ost_test_other (uid, name, amount, created_at)
+    VALUES $other_values;
   "
 
   i=$((i + rows_per_batch))
-  echo "inserted rows: column1=${batch_start}..$((i - 1)) ts=$ts"
+  echo "inserted rows: id=${batch_start}..$((i - 1)) ts=$ts (gh_ost_test + gh_ost_test_other)"
 
   if [[ "$delay" != "0" && "$delay" != "0.0" ]]; then
     sleep "$delay"

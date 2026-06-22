@@ -155,7 +155,7 @@ setup() {
     echo "OK"
 
     echo -n "Seeding data in source cluster..."
-    exec-mysql-source-primary -D $DATABASE_NAME < "$GH_OST_ROOT/localtests/move-tables/single/create.sql"
+    exec-mysql-source-primary -D $DATABASE_NAME < "$GH_OST_ROOT/localtests/move-tables/multi/create.sql"
     echo "OK"
 }
 

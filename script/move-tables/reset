@@ -4,14 +4,33 @@ set -euo pipefail
 
 GH_OST_ROOT=$(git rev-parse --show-toplevel)
 SCRIPT_PATH="${GH_OST_ROOT}/script/move-tables"
-DATABASE_NAME="${GH_OST_TEST_DB:-gh_ost_test_db}"
+# Match the database that `setup` creates and seeds (override with GH_OST_TEST_DB).
+DATABASE_NAME="${GH_OST_TEST_DB:-test}"
 
-# Reset source table state regardless of whether cutover renamed it.
-${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS _gh_ost_test_del, gh_ost_test;"
+# The tables seeded by setup (and listed in localtests/move-tables/multi/tables.txt).
+# Keep this in sync with that fixture.
+TABLES=(gh_ost_test gh_ost_test_other)
+# The checkpoint table is named after the first (primary) migrated table: _<table>_ghk.
+PRIMARY_TABLE="${TABLES[0]}"
+
+# Reset source table state regardless of whether a cutover renamed the originals
+# to their `_<table>_del` rollback handles.
+source_drop=""
+for t in "${TABLES[@]}"; do
+    source_drop+="_${t}_del, ${t}, "
+done
+source_drop="${source_drop%, }"
+${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS ${source_drop};"
 
 # Recreate and seed source table data, same fixture as setup uses.
-${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/create.sql"
+${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/multi/create.sql"
 
-${SCRIPT_PATH}/mysql-target-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS gh_ost_test, _gh_ost_test_ghk;"
+# Drop the moved tables and the checkpoint table on the target cluster.
+target_drop=""
+for t in "${TABLES[@]}"; do
+    target_drop+="${t}, "
+done
+target_drop+="_${PRIMARY_TABLE}_ghk"
+${SCRIPT_PATH}/mysql-target-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS ${target_drop};"
 
-echo "Reset source and target tables in ${DATABASE_NAME}"
+echo "Reset source and target tables (${TABLES[*]}) in ${DATABASE_NAME}"

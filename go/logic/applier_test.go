@@ -84,7 +84,7 @@ func TestApplierUpdateModifiesUniqueKeyColumns(t *testing.T) {
 			DML:               binlog.UpdateDML,
 			NewColumnValues:   columnValues,
 			WhereColumnValues: columnValues,
-		})
+		}, migrationContext.UniqueKey, migrationContext.OriginalTableColumns)
 		require.Equal(t, "", modifiedColumn)
 		require.False(t, isModified)
 	})
@@ -95,7 +95,7 @@ func TestApplierUpdateModifiesUniqueKeyColumns(t *testing.T) {
 			DML:               binlog.UpdateDML,
 			NewColumnValues:   sql.ToColumnValues([]interface{}{123456, 24}),
 			WhereColumnValues: columnValues,
-		})
+		}, migrationContext.UniqueKey, migrationContext.OriginalTableColumns)
 		require.Equal(t, "item_id", modifiedColumn)
 		require.True(t, isModified)
 	})
@@ -2112,6 +2112,15 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
 	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
+	// Populate the per-table container the move-tables copy path operates on.
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = migrationContext.OriginalTableColumns
+	mt.SharedColumns = migrationContext.SharedColumns
+	mt.MappedSharedColumns = migrationContext.MappedSharedColumns
+	mt.UniqueKey = migrationContext.UniqueKey
+
 	applier := NewApplier(migrationContext)
 	applier.prepareQueries()
 	defer applier.Teardown()
@@ -2122,15 +2131,15 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	err = applier.CreateChangelogTable()
 	suite.Require().NoError(err)
 
-	err = applier.ReadMigrationRangeValues(nil)
+	err = applier.ReadMoveTableMigrationRangeValues(nil, mt)
 	suite.Require().NoError(err)
 
-	migrationContext.SetNextIterationRangeMinValues()
-	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues(nil)
+	mt.SetNextIterationRangeMinValues()
+	hasFurtherRange, err := applier.CalculateMoveTableNextIterationRangeEndValues(applier.db, mt)
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
 
-	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db)
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db, mt)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(3), rowsAffected)
 	suite.Require().Equal(int64(1000), chunkSize)
@@ -2195,6 +2204,15 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesNoRows() {
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
 	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
+	// Populate the per-table container the move-tables copy path operates on.
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = migrationContext.OriginalTableColumns
+	mt.SharedColumns = migrationContext.SharedColumns
+	mt.MappedSharedColumns = migrationContext.MappedSharedColumns
+	mt.UniqueKey = migrationContext.UniqueKey
+
 	applier := NewApplier(migrationContext)
 	applier.prepareQueries()
 	defer applier.Teardown()
@@ -2204,10 +2222,10 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesNoRows() {
 
 	// Point the iteration range at a key range that contains no rows so the
 	// SELECT returns an empty result set and the INSERT is skipped.
-	migrationContext.MigrationIterationRangeMinValues = sql.ToColumnValues([]interface{}{100})
-	migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{200})
+	mt.MigrationIterationRangeMinValues = sql.ToColumnValues([]interface{}{100})
+	mt.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{200})
 
-	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db)
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db, mt)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(0), rowsAffected)
 	suite.Require().Equal(int64(1000), chunkSize)
