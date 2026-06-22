@@ -195,6 +195,7 @@ func main() {
 	flag.StringVar(&migrationContext.MoveTables.TargetUser, "target-user", "", "Target MySQL username for --move-tables mode. If not provided, uses the same user as the source connection")
 	flag.StringVar(&migrationContext.MoveTables.TargetPass, "target-password", "", "Target MySQL password for --move-tables mode. If not provided, uses the same password as the source connection")
 	flag.StringVar(&migrationContext.MoveTables.TargetDatabase, "target-database", "", "Target MySQL database name for --move-tables mode. If not provided, uses the same database name as the source connection")
+	flag.BoolVar(&migrationContext.MoveTables.AllowOnSourcePrimary, "allow-on-source-primary", false, "allow --move-tables to read (schema, row copy, binlog) from the source cluster's primary. By default gh-ost stops if --host is the primary; prefer pointing --host at a replica to spare the primary the copy load.")
 
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Parse()

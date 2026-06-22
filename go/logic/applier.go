@@ -197,6 +197,13 @@ func (apl *Applier) InitDBConnections() (err error) {
 		if _, err := base.ValidateConnection(apl.moveTablesTargetDB, apl.moveTablesConnectionConfig, apl.migrationContext, apl.name); err != nil {
 			return err
 		}
+		// Fail fast if the move-tables target is not a writable primary. All target
+		// work (table create, row-copy INSERT, checkpoint writes, checkpoint DROP)
+		// requires a writable host; catching read_only here turns a confusing
+		// mid-run write failure into a clear startup error.
+		if err := assertConnectionWritable(apl.moveTablesTargetDB, apl.moveTablesConnectionConfig.Key, "target"); err != nil {
+			return err
+		}
 	}
 	apl.migrationContext.Log.Infof("Applier initiated on %+v, version %+v", apl.connectionConfig.ImpliedKey, apl.migrationContext.ApplierMySQLVersion)
 	return nil
