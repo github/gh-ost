@@ -4,13 +4,13 @@ set -euo pipefail
 
 GH_OST_ROOT=$(git rev-parse --show-toplevel)
 SCRIPT_PATH="${GH_OST_ROOT}/script/move-tables"
-DATABASE_NAME="${GH_OST_TEST_DB:-gh_ost_test_db}"
+DATABASE_NAME="${GH_OST_TEST_DB:-test}"
 
 # Reset source table state regardless of whether cutover renamed it.
 ${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS _gh_ost_test_del, gh_ost_test;"
 
 # Recreate and seed source table data, same fixture as setup uses.
-${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/create.sql"
+${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/single/create.sql"
 
 ${SCRIPT_PATH}/mysql-target-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS gh_ost_test, _gh_ost_test_ghk;"
 
