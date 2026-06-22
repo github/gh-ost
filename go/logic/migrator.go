@@ -980,6 +980,7 @@ func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) err
 	}
 	atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
 	mgtr.migrationContext.Log.Debugf("T4: CutOverCompleteFlag set")
+	mgtr.migrationContext.MoveTables.DrainGTID = chk.MoveTablesCutOverDrainGTID
 	if err := mgtr.hooksExecutor.OnSuccess(false); err != nil {
 		return fmt.Errorf("on-success hook failed: %w", err)
 	}
