@@ -7,9 +7,11 @@ SCRIPT_PATH="${GH_OST_ROOT}/script/move-tables"
 # Match the database that `setup` creates and seeds (override with GH_OST_TEST_DB).
 DATABASE_NAME="${GH_OST_TEST_DB:-test}"
 
-# The tables seeded by setup (and listed in localtests/move-tables/multi/tables.txt).
-# Keep this in sync with that fixture.
-TABLES=(gh_ost_test gh_ost_test_other)
+# The canonical superset of tables seeded by setup (and listed in
+# localtests/move-tables/three/tables.txt). The manual harness always
+# sets up / cleans up all of them, regardless of how many you actually move,
+# so reset works the same no matter which scenario you just ran.
+TABLES=(gh_ost_test gh_ost_test_other gh_ost_test_third)
 # The checkpoint table is named after the first (primary) migrated table: _<table>_ghk.
 PRIMARY_TABLE="${TABLES[0]}"
 
@@ -23,7 +25,7 @@ source_drop="${source_drop%, }"
 ${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS ${source_drop};"
 
 # Recreate and seed source table data, same fixture as setup uses.
-${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/multi/create.sql"
+${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/three/create.sql"
 
 # Drop the moved tables and the checkpoint table on the target cluster.
 target_drop=""
