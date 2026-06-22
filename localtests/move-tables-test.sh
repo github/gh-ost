@@ -183,7 +183,7 @@ build_ghost_command() {
     move_tables_arg=$(IFS=, ; echo "${tables_to_migrate[*]}")
 
     # NOTE(chriskirkland): fully qualified package name + failpoint name
-    cmd="GOTRACEBACK=crash GO_FAILPOINTS=\"github.com/github/gh-ost/go/base/panic-on-row-copy=return(true)\" $ghost_binary \
+    cmd="GOTRACEBACK=crash $ghost_binary \
     --move-tables=$move_tables_arg \
     --user=root \
     --password=opensesame \
@@ -207,6 +207,10 @@ build_ghost_command() {
     --postpone-cut-over-flag-file=$postpone_cutover_flag_file \
     --unsafe-fail-points-enabled \
     --execute ${extra_args[@]}"
+
+    if [ -n "$GO_FAILPOINTS" ]; then
+        cmd="GO_FAILPOINTS=\"$GO_FAILPOINTS\" $cmd --unsafe-fail-points-enabled"
+    fi
 }
 
 print_log_excerpt() {
@@ -357,45 +361,47 @@ test_single() {
         wait $test_pid 2>/dev/null
         execution_result=$?
         return $execution_result
-    fi
 
-    # kick off the on_test script for the test. this enables arbitrary custom logic 
-    # concurrent with the gh-ost process. this enables additional scenarios like
-    # streaming of writes prior to the write cutover.
-    #
-    # IMPORTANT: The on-test script is executed in the background and will be killed as soon
-    # as the gh-ost process terminates.
-    if [ -f $tests_path/$test_name/on_test.sh ]; then
-        $tests_path/$test_name/on_test.sh &> /dev/null &
-        on_test_pid=$!
-    fi
+    else
 
-    # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
-    (
-        sleep 1; 
-        echo "⏩ Sending unpostpone cutover"
-        rm $postpone_cutover_flag_file &> /dev/null;
-    ) &
+        # kick off the on_test script for the test. this enables arbitrary custom logic 
+        # concurrent with the gh-ost process. this enables additional scenarios like
+        # streaming of writes prior to the write cutover.
+        #
+        # IMPORTANT: The on-test script is executed in the background and will be killed as soon
+        # as the gh-ost process terminates.
+        if [ -f $tests_path/$test_name/on_test.sh ]; then
+            $tests_path/$test_name/on_test.sh &> /dev/null &
+            on_test_pid=$!
+        fi
 
-    # Build and execute gh-ost command
-    build_ghost_command
-    echo_dot
-    echo $cmd >$exec_command_file
-    echo_dot
-    timeout $test_timeout bash $exec_command_file >$test_logfile 2>&1
+        # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
+        (
+            sleep 1; 
+            echo "⏩ Sending unpostpone cutover"
+            rm $postpone_cutover_flag_file &> /dev/null;
+        ) &
 
-    execution_result=$?
+        # Build and execute gh-ost command
+        build_ghost_command
+        echo_dot
+        echo $cmd >$exec_command_file
+        echo_dot
+        timeout $test_timeout bash $exec_command_file >$test_logfile 2>&1
 
-    if [ -n "$on_test_pid" ]; then
-        kill -KILL $on_test_pid &>/dev/null
-    fi
+        execution_result=$?
 
-    # Check for timeout (exit code 124)
-    if [ $execution_result -eq 124 ]; then
-        echo
-        echo "ERROR $test_name execution timed out"
-        print_log_excerpt
-        return 1
+        if [ -n "$on_test_pid" ]; then
+            kill -KILL $on_test_pid &>/dev/null
+        fi
+
+        # Check for timeout (exit code 124)
+        if [ $execution_result -eq 124 ]; then
+            echo
+            echo "ERROR $test_name execution timed out"
+            print_log_excerpt
+            return 1
+        fi
     fi
 
     if [ -f $tests_path/$test_name/sql_mode ]; then

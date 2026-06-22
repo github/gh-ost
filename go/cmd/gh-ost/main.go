@@ -348,7 +348,9 @@ func main() {
 	if *storageEngine == "rocksdb" {
 		migrationContext.Log.Warning("RocksDB storage engine support is experimental")
 	}
-	if migrationContext.CheckpointIntervalSeconds < 10 {
+	// ignore low checkpoint intervals in unsafe mode as frequent checkpoints are required to reliably
+	// reduce test duration
+	if migrationContext.CheckpointIntervalSeconds < 10 && !migrationContext.UnsafeFailPointsEnabled {
 		migrationContext.Log.Fatalf("--checkpoint-seconds should be >=10")
 	}
 	if migrationContext.CountTableRows && migrationContext.PanicOnWarnings {

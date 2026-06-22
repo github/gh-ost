@@ -1154,11 +1154,33 @@ func SendWithContext[T any](ctx context.Context, ch chan<- T, val T) error {
 	}
 }
 
-func (mctx *MigrationContext) NewFailPoint(name string) {
+type failPointOpts struct {
+	wait time.Duration
+}
+
+type FailPointOpt func(*failPointOpts)
+
+// WithFailPointWait sets the time for a fail point to wait before exiting.
+func WithFailPointWait(wait time.Duration) FailPointOpt {
+	return func(opts *failPointOpts) {
+		opts.wait = wait
+	}
+}
+
+func (mctx *MigrationContext) NewFailPoint(name string, opts ...FailPointOpt) {
 	if mctx.UnsafeFailPointsEnabled {
 		mctx.Log.Debugf("[TEST] Injecting fail point: '%s'", name)
 
+		var fpo failPointOpts
+		for _, opt := range opts {
+			opt(&fpo)
+		}
+
 		failpoint.Inject(name, func(_ failpoint.Value) {
+			if fpo.wait > 0 {
+				<-time.After(fpo.wait)
+			}
+
 			panic(fmt.Sprintf("[TEST] Encountered fail point: '%s'", name))
 		})
 	}

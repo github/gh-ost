@@ -2471,6 +2471,8 @@ func (mgtr *Migrator) iterateChunks() error {
 			}
 			return terminateRowIteration(err)
 		}
+
+		mgtr.migrationContext.NewFailPoint("panic-after-row-copy", base.WithFailPointWait(2*time.Second))
 	}
 }
 
