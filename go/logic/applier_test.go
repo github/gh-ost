@@ -1279,9 +1279,9 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 	err = applier.ReadMigrationRangeValues(inspector.db)
 	suite.Require().NoError(err)
 
-	coords, err := mysql.NewGTIDBinlogCoordinates("00000000-0000-0000-0000-000000000001:1-10")
+	coords, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, "00000000-0000-0000-0000-000000000001:1-10")
 	suite.Require().NoError(err)
-	drainGTID, err := mysql.NewGTIDBinlogCoordinates("00000000-0000-0000-0000-000000000001:1-20")
+	drainGTID, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, "00000000-0000-0000-0000-000000000001:1-20")
 	suite.Require().NoError(err)
 
 	chk := &Checkpoint{
