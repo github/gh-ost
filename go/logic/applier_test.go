@@ -824,7 +824,7 @@ func (suite *ApplierTestSuite) TestCreateTargetTable_HappyPath() {
 	suite.Require().NoError(err)
 	suite.Require().Equal(0, count, "precondition: target table must not exist before CreateTargetTable")
 
-	err = applier.CreateTargetTable(sourceCreateDDL)
+	err = applier.CreateTargetTableForName(testMysqlTableName, sourceCreateDDL)
 	suite.Require().NoError(err)
 
 	var targetTableName, targetCreateDDL string
@@ -884,7 +884,7 @@ func (suite *ApplierTestSuite) TestCreateTargetTable_AbortsIfExists() {
 	err = suite.db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", getTestTableName())).Scan(&dummy, &sourceCreateDDL)
 	suite.Require().NoError(err)
 
-	err = applier.CreateTargetTable(sourceCreateDDL)
+	err = applier.CreateTargetTableForName(testMysqlTableName, sourceCreateDDL)
 	suite.Require().Error(err, "CreateTargetTable must return an error when target table already exists")
 	suite.Require().Contains(err.Error(), "already exists", "error message must mention 'already exists'")
 	suite.Require().Contains(err.Error(), testMysqlTableName, "error message must name the table")
@@ -1162,11 +1162,17 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 		Columns:          *sql.NewColumnList([]string{"id", "id2"}),
 	}
 
+	// Populate the per-table container the move-tables checkpoint path operates on.
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = migrationContext.OriginalTableColumns
+	mt.SharedColumns = migrationContext.SharedColumns
+	mt.MappedSharedColumns = migrationContext.MappedSharedColumns
+	mt.UniqueKey = migrationContext.UniqueKey
+
 	inspector := NewInspector(migrationContext)
 	suite.Require().NoError(inspector.InitDBConnections())
-
-	err = inspector.applyColumnTypes(testMysqlDatabase, testMysqlTableName, &migrationContext.UniqueKey.Columns)
-	suite.Require().NoError(err)
 
 	applier := NewApplier(migrationContext)
 
@@ -1179,7 +1185,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 	err = applier.prepareQueries()
 	suite.Require().NoError(err)
 
-	err = applier.ReadMigrationRangeValues(inspector.db)
+	err = applier.ReadMoveTableMigrationRangeValues(inspector.db, mt)
 	suite.Require().NoError(err)
 
 	coords, err := mysql.NewGTIDBinlogCoordinates("00000000-0000-0000-0000-000000000001:1-10")
@@ -1188,9 +1194,10 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 	suite.Require().NoError(err)
 
 	chk := &Checkpoint{
+		TableName:                  testMysqlTableName,
 		LastTrxCoords:              coords,
-		IterationRangeMin:          applier.migrationContext.MigrationRangeMinValues,
-		IterationRangeMax:          applier.migrationContext.MigrationRangeMaxValues,
+		IterationRangeMin:          mt.MigrationRangeMinValues,
+		IterationRangeMax:          mt.MigrationRangeMaxValues,
 		Iteration:                  3,
 		RowsCopied:                 1000,
 		DMLApplied:                 2000,
@@ -1198,12 +1205,13 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 		MoveTablesCutOverStarted:   true,
 		MoveTablesCutOverDrainGTID: drainGTID,
 	}
-	id, err := applier.WriteCheckpoint(chk)
+	err = applier.WriteMoveTableCheckpoints([]*Checkpoint{chk})
 	suite.Require().NoError(err)
-	suite.Require().Equal(int64(1), id)
 
-	gotChk, err := applier.ReadLastCheckpoint()
+	gotCheckpoints, err := applier.ReadMoveTableCheckpoints()
 	suite.Require().NoError(err)
+	gotChk := gotCheckpoints[testMysqlTableName]
+	suite.Require().NotNil(gotChk)
 
 	suite.Require().Equal(chk.Iteration, gotChk.Iteration)
 	suite.Require().Equal(chk.LastTrxCoords.String(), gotChk.LastTrxCoords.String())
@@ -1248,27 +1256,36 @@ func (suite *ApplierTestSuite) TestReadMoveTablesCutOverCheckpointIgnoresRowCopy
 		Columns:          *sql.NewColumnList([]string{"id"}),
 	}
 
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = migrationContext.OriginalTableColumns
+	mt.SharedColumns = migrationContext.SharedColumns
+	mt.MappedSharedColumns = migrationContext.MappedSharedColumns
+	mt.UniqueKey = migrationContext.UniqueKey
+
 	inspector := NewInspector(migrationContext)
 	suite.Require().NoError(inspector.InitDBConnections())
-	err = inspector.applyColumnTypes(testMysqlDatabase, testMysqlTableName, &migrationContext.UniqueKey.Columns)
-	suite.Require().NoError(err)
 
 	applier := NewApplier(migrationContext)
 	suite.Require().NoError(applier.InitDBConnections())
 	suite.Require().NoError(applier.CreateCheckpointTable())
 	suite.Require().NoError(applier.prepareQueries())
-	suite.Require().NoError(applier.ReadMigrationRangeValues(inspector.db))
+	suite.Require().NoError(applier.ReadMoveTableMigrationRangeValues(inspector.db, mt))
 
 	coords := mysql.NewFileBinlogCoordinates("mysql-bin.000003", int64(1234))
+	// A row-copy checkpoint: cutover has not started, so the cutover-resume read
+	// must ignore it.
 	chk := &Checkpoint{
+		TableName:         testMysqlTableName,
 		LastTrxCoords:     coords,
-		IterationRangeMin: applier.migrationContext.MigrationRangeMinValues,
-		IterationRangeMax: applier.migrationContext.MigrationRangeMaxValues,
+		IterationRangeMin: mt.MigrationRangeMinValues,
+		IterationRangeMax: mt.MigrationRangeMaxValues,
 		Iteration:         1,
 		RowsCopied:        3,
 		DMLApplied:        0,
 	}
-	_, err = applier.WriteCheckpoint(chk)
+	err = applier.WriteMoveTableCheckpoints([]*Checkpoint{chk})
 	suite.Require().NoError(err)
 
 	_, err = applier.ReadMoveTablesCutOverCheckpoint()

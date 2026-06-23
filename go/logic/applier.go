@@ -1150,8 +1150,12 @@ func (apl *Applier) WriteChangelogState(value string) (string, error) {
 }
 
 // WriteCheckpoint writes a standard-mode checkpoint row to the _ghk table. In
-// move-tables mode use WriteMoveTableCheckpoints instead.
+// move-tables mode use WriteMoveTableCheckpoints instead; calling this there is a
+// programmer error (the checkpoint schema and query builder are standard-only).
 func (apl *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
+	if apl.migrationContext.IsMoveTablesMode() {
+		panic("WriteCheckpoint() must not be called in move-tables mode; use WriteMoveTableCheckpoints")
+	}
 	var insertId int64
 	uniqueKeyArgs := sqlutils.Args(chk.IterationRangeMin.AbstractValues()...)
 	uniqueKeyArgs = append(uniqueKeyArgs, chk.IterationRangeMax.AbstractValues()...)
@@ -1296,8 +1300,12 @@ func (apl *Applier) parseCheckpointCoordinates(coordStr string) (mysql.BinlogCoo
 }
 
 // ReadLastCheckpoint reads the most recent standard-mode checkpoint row. In
-// move-tables mode use ReadMoveTableCheckpoints instead.
+// move-tables mode use ReadMoveTableCheckpoints instead; calling this there is a
+// programmer error (the checkpoint schema is standard-only).
 func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
+	if apl.migrationContext.IsMoveTablesMode() {
+		panic("ReadLastCheckpoint() must not be called in move-tables mode; use ReadMoveTableCheckpoints")
+	}
 	minColumnNames, maxColumnNames := apl.checkpointRangeColumnNames()
 	selectColumns := []string{
 		"gh_ost_chk_id",
