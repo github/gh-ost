@@ -7,12 +7,12 @@ script/move-tables/setup
 
 Verify data is present in the source cluster.
 ```bash
-script/move-tables/mysql-source-primary -D gh_ost_test_db -e "SELECT * FROM gh_ost_test;"
+script/move-tables/mysql-source-primary -D test -e "SELECT * FROM gh_ost_test;"
 ```
 
 Verify the empty database is present in the target cluster.
 ```bash
-script/move-tables/mysql-target-primary -D gh_ost_test_db -e "SHOW TABLES;"
+script/move-tables/mysql-target-primary -D test -e "SHOW TABLES;"
 ```
 
 ### Testing `gh-ost`
@@ -24,7 +24,7 @@ script/build --cli
 
 Run gh-ost to move tables:
 ```bash
-./script/build --cli; ./bin/gh-ost --move-tables=gh_ost_test --host=localhost --port=3308 --user root --password opensesame --database=gh_ost_test_db --target-host=localhost --target-port=3309 --target-user root --target-password opensesame --target-database=gh_ost_test_db --postpone-cut-over-flag-file=/tmp/ghost-move-tables.postpone.flag --execute --verbose --checkpoint --checkpoint-seconds 10 --initially-drop-socket-file
+./script/build --cli; ./bin/gh-ost --move-tables=gh_ost_test --host=localhost --port=3308 --user root --password opensesame --database=test --target-host=localhost --target-port=3309 --target-user root --target-password opensesame --target-database=test --postpone-cut-over-flag-file=/tmp/ghost-move-tables.postpone.flag --execute --verbose --checkpoint --checkpoint-seconds 10 --initially-drop-socket-file
 ```
 
 Start continuous inserts against the source.

@@ -13,7 +13,7 @@ start_i="${1:-100000}"
 delay="${2:-0.2}"
 rows_per_batch="${3:-1}"
 i="$start_i"
-DATABASE="${DATABASE:-gh_ost_test_db}"
+DATABASE="${DATABASE:-test}"
 
 echo "Starting continuous inserts on source primary. Press Ctrl+C to stop."
 echo "start_column1=$start_i sleep_seconds=$delay rows_per_batch=$rows_per_batch"
