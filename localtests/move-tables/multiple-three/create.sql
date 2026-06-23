@@ -5,7 +5,7 @@
 --
 -- These three tables are the canonical superset used by the manual harness
 -- (script/move-tables/setup, reset, insert-source-primary-loop). The `single`
--- and `multi` localtest fixtures move subsets of them.
+-- and `multiple-two` localtest fixtures move subsets of them.
 
 drop table if exists gh_ost_test;
 create table gh_ost_test (

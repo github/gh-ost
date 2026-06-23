@@ -8,7 +8,7 @@ SCRIPT_PATH="${GH_OST_ROOT}/script/move-tables"
 DATABASE_NAME="${GH_OST_TEST_DB:-test}"
 
 # The canonical superset of tables seeded by setup (and listed in
-# localtests/move-tables/three/tables.txt). The manual harness always
+# localtests/move-tables/multiple-three/tables.txt). The manual harness always
 # sets up / cleans up all of them, regardless of how many you actually move,
 # so reset works the same no matter which scenario you just ran.
 TABLES=(gh_ost_test gh_ost_test_other gh_ost_test_third)
@@ -23,7 +23,7 @@ source_drop="${source_drop%, }"
 ${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS ${source_drop};"
 
 # Recreate and seed source table data, same fixture as setup uses.
-${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/three/create.sql"
+${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/multiple-three/create.sql"
 
 # Drop the moved tables on the target cluster.
 target_drop=""

@@ -2,7 +2,7 @@
 
 Setup the multi-cluster topology and seed the data. This always seeds the same
 canonical **three** tables on the source — `gh_ost_test`, `gh_ost_test_other`,
-and `gh_ost_test_third` (see `localtests/move-tables/three/create.sql`) — into
+and `gh_ost_test_third` (see `localtests/move-tables/multiple-three/create.sql`) — into
 the `test` database. You then choose how many of them to move via `--move-tables`,
 so `setup`/`reset`/`teardown` behave identically regardless of which scenario you
 run.
