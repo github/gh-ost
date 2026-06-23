@@ -130,6 +130,9 @@ func (isp *Inspector) InspectOriginalTable() (err error) {
 }
 
 func (isp *Inspector) originalTableName() string {
+	if isp.migrationContext.IsMoveTablesMode() {
+		panic("inspector.originalTableName() must not be called in move-tables mode; inspect each table via its name (e.g. validateTableFor/InspectMoveTable)")
+	}
 	return isp.migrationContext.OriginalTableName
 }
 

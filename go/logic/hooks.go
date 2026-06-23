@@ -221,15 +221,32 @@ func NewHooksExecutor(migrationContext *base.MigrationContext) *HooksExecutor {
 func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []string {
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("GH_OST_DATABASE_NAME=%s", he.migrationContext.DatabaseName))
-	tableNameEnv := he.migrationContext.OriginalTableName
+
+	var tableNameEnv string
 	if he.migrationContext.IsMoveTablesMode() {
-		// No representative table: report the full migrated set (target names equal
-		// source names in move-tables mode).
 		tableNameEnv = strings.Join(he.migrationContext.MoveTables.TableNames, ",")
+	} else {
+		tableNameEnv = he.migrationContext.OriginalTableName
 	}
 	env = append(env, fmt.Sprintf("GH_OST_TABLE_NAME=%s", tableNameEnv))
-	env = append(env, fmt.Sprintf("GH_OST_GHOST_TABLE_NAME=%s", he.migrationContext.GetGhostTableName()))
-	env = append(env, fmt.Sprintf("GH_OST_OLD_TABLE_NAME=%s", he.migrationContext.GetOldTableName()))
+	var ghostTableNameEnv string
+	var oldTableNameEnv string
+	if he.migrationContext.IsMoveTablesMode() {
+		// No ghost or old tables in move-tables mode: the destination keeps each
+		// source table's name, and the rollback handles are the per-table
+		// `_<table>_del` tables produced by the atomic cutover RENAME.
+		ghostTableNameEnv = strings.Join(he.migrationContext.MoveTables.TableNames, ",")
+		delNames := make([]string, 0, len(he.migrationContext.MoveTables.TableNames))
+		for _, tableName := range he.migrationContext.MoveTables.TableNames {
+			delNames = append(delNames, he.migrationContext.MoveTableDelName(tableName))
+		}
+		oldTableNameEnv = strings.Join(delNames, ",")
+	} else {
+		ghostTableNameEnv = he.migrationContext.GetGhostTableName()
+		oldTableNameEnv = he.migrationContext.GetOldTableName()
+	}
+	env = append(env, fmt.Sprintf("GH_OST_GHOST_TABLE_NAME=%s", ghostTableNameEnv))
+	env = append(env, fmt.Sprintf("GH_OST_OLD_TABLE_NAME=%s", oldTableNameEnv))
 	env = append(env, fmt.Sprintf("GH_OST_DDL=%s", he.migrationContext.AlterStatement))
 	env = append(env, fmt.Sprintf("GH_OST_ELAPSED_SECONDS=%f", he.migrationContext.ElapsedTime().Seconds()))
 	env = append(env, fmt.Sprintf("GH_OST_ELAPSED_COPY_SECONDS=%f", he.migrationContext.ElapsedRowCopyTime().Seconds()))
@@ -266,13 +283,14 @@ func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []s
 		env = append(env, fmt.Sprintf("GH_OST_TABLES=%s", strings.Join(he.migrationContext.MoveTables.TableNames, ",")))
 	}
 	env = append(env, fmt.Sprintf("GH_OST_TARGET_DATABASE_NAME=%s", he.migrationContext.GetTargetDatabaseName()))
-	targetTableNameEnv := he.migrationContext.GetTargetTableName()
+
+	var targetTableNameEnv string
 	if he.migrationContext.IsMoveTablesMode() {
-		// Target tables keep their source names; there is no single ghost table.
 		targetTableNameEnv = strings.Join(he.migrationContext.MoveTables.TableNames, ",")
+	} else {
+		targetTableNameEnv = he.migrationContext.GetTargetTableName()
 	}
 	env = append(env, fmt.Sprintf("GH_OST_TARGET_TABLE_NAME=%s", targetTableNameEnv))
-
 	env = append(env, extraVariables...)
 	return env
 }

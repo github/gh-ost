@@ -192,6 +192,33 @@ func (srv *Server) onServerCommand(command string, writer *bufio.Writer) (err er
 	return srv.migrationContext.Log.Errore(err)
 }
 
+// commandArgMatchesMigration reports whether a table-name argument supplied with
+// an interactive command refers to this migration. The argument is optional and
+// acts as a courtesy safety check, so an operator who is connected to the wrong
+// gh-ost socket is rejected. In standard mode it must equal the single migrated
+// table; in move-tables mode it may be any one of the migrated tables.
+func (srv *Server) commandArgMatchesMigration(arg string) bool {
+	if srv.migrationContext.IsMoveTablesMode() {
+		for _, tableName := range srv.migrationContext.MoveTables.TableNames {
+			if arg == tableName {
+				return true
+			}
+		}
+		return false
+	}
+	return arg == srv.migrationContext.OriginalTableName
+}
+
+// migrationTargetDescription returns a human-readable description of the migrated
+// table(s), used in interactive-command messages. In move-tables mode it is the
+// comma-joined list of migrated tables; otherwise the single table name.
+func (srv *Server) migrationTargetDescription() string {
+	if srv.migrationContext.IsMoveTablesMode() {
+		return strings.Join(srv.migrationContext.MoveTables.TableNames, ",")
+	}
+	return srv.migrationContext.OriginalTableName
+}
+
 // applyServerCommand parses and executes commands by user
 func (srv *Server) applyServerCommand(command string, writer *bufio.Writer) (printStatusRule PrintStatusRule, err error) {
 	tokens := strings.SplitN(command, "=", 2)
@@ -387,9 +414,9 @@ help                                 # This message
 		}
 	case "throttle", "pause", "suspend":
 		{
-			if arg != "" && arg != srv.migrationContext.OriginalTableName {
+			if arg != "" && !srv.commandArgMatchesMigration(arg) {
 				// User explicitly provided table name. This is a courtesy protection mechanism
-				err := fmt.Errorf("user commanded 'throttle' on %s, but migrated table is %s; ignoring request", arg, srv.migrationContext.OriginalTableName)
+				err := fmt.Errorf("user commanded 'throttle' on %s, but migrated table is %s; ignoring request", arg, srv.migrationTargetDescription())
 				return NoPrintStatusRule, err
 			}
 			atomic.StoreInt64(&srv.migrationContext.ThrottleCommandedByUser, 1)
@@ -398,9 +425,9 @@ help                                 # This message
 		}
 	case "no-throttle", "unthrottle", "resume", "continue":
 		{
-			if arg != "" && arg != srv.migrationContext.OriginalTableName {
+			if arg != "" && !srv.commandArgMatchesMigration(arg) {
 				// User explicitly provided table name. This is a courtesy protection mechanism
-				err := fmt.Errorf("user commanded 'no-throttle' on %s, but migrated table is %s; ignoring request", arg, srv.migrationContext.OriginalTableName)
+				err := fmt.Errorf("user commanded 'no-throttle' on %s, but migrated table is %s; ignoring request", arg, srv.migrationTargetDescription())
 				return NoPrintStatusRule, err
 			}
 			atomic.StoreInt64(&srv.migrationContext.ThrottleCommandedByUser, 0)
@@ -425,9 +452,9 @@ help                                 # This message
 				err := fmt.Errorf("user commanded 'unpostpone' without specifying table name, but --force-named-cut-over is set")
 				return NoPrintStatusRule, err
 			}
-			if arg != "" && arg != srv.migrationContext.OriginalTableName {
+			if arg != "" && !srv.commandArgMatchesMigration(arg) {
 				// User explicitly provided table name. This is a courtesy protection mechanism
-				err := fmt.Errorf("user commanded 'unpostpone' on %s, but migrated table is %s; ignoring request", arg, srv.migrationContext.OriginalTableName)
+				err := fmt.Errorf("user commanded 'unpostpone' on %s, but migrated table is %s; ignoring request", arg, srv.migrationTargetDescription())
 				return NoPrintStatusRule, err
 			}
 			if atomic.LoadInt64(&srv.migrationContext.IsPostponingCutOver) > 0 {
@@ -444,9 +471,9 @@ help                                 # This message
 				err := fmt.Errorf("user commanded 'panic' without specifying table name, but --force-named-panic is set")
 				return NoPrintStatusRule, err
 			}
-			if arg != "" && arg != srv.migrationContext.OriginalTableName {
+			if arg != "" && !srv.commandArgMatchesMigration(arg) {
 				// User explicitly provided table name. This is a courtesy protection mechanism
-				err := fmt.Errorf("user commanded 'panic' on %s, but migrated table is %s; ignoring request", arg, srv.migrationContext.OriginalTableName)
+				err := fmt.Errorf("user commanded 'panic' on %s, but migrated table is %s; ignoring request", arg, srv.migrationTargetDescription())
 				return NoPrintStatusRule, err
 			}
 			err := fmt.Errorf("user commanded 'panic'. The migration will be aborted without cleanup. Please drop the gh-ost tables before trying again")

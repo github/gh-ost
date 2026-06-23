@@ -280,10 +280,15 @@ func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
 	// One advisory lock per run. In move-tables mode it is keyed on the
 	// set-derived run token (not any single table) so two processes moving the
 	// same set of tables collide, while a single-table run keeps its table-keyed
-	// lock name.
-	lockTable := apl.originalTableName()
+	// lock name. lockSubject is a human-readable description used in contention
+	// errors; neither branch consults the representative table accessor.
+	var lockTable, lockSubject string
 	if apl.migrationContext.IsMoveTablesMode() {
 		lockTable = "movetables." + apl.migrationContext.MoveTablesRunToken()
+		lockSubject = fmt.Sprintf("tables %v", apl.migrationContext.MoveTables.TableNames)
+	} else {
+		lockTable = apl.originalTableName()
+		lockSubject = fmt.Sprintf("`%s`.`%s`", apl.migrationContext.DatabaseName, apl.originalTableName())
 	}
 	lockName := buildMigrationLockName(apl.migrationContext.GetTargetDatabaseName(), lockTable)
 
@@ -322,11 +327,11 @@ func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
 		conn.Close()
 		lockDB.Close()
 		if holderID.Valid {
-			return fmt.Errorf("another gh-ost process is already migrating `%s`.`%s`: migration lock %s held by connection id %d",
-				apl.migrationContext.DatabaseName, apl.originalTableName(), lockName, holderID.Int64)
+			return fmt.Errorf("another gh-ost process is already migrating %s: migration lock %s held by connection id %d",
+				lockSubject, lockName, holderID.Int64)
 		}
-		return fmt.Errorf("another gh-ost process is already migrating `%s`.`%s`: migration lock %s is held",
-			apl.migrationContext.DatabaseName, apl.originalTableName(), lockName)
+		return fmt.Errorf("another gh-ost process is already migrating %s: migration lock %s is held",
+			lockSubject, lockName)
 	}
 
 	apl.migrationLockConn = conn
@@ -598,7 +603,14 @@ func (apl *Applier) tableExists(tableName string) (tableFound bool) {
 	return (m != nil)
 }
 
+// originalTableName returns the single migrated table. It is a representative
+// accessor that has no meaning in move-tables mode (every table is handled
+// through its own MoveTable container), so calling it there is a programmer
+// error and panics to fail fast rather than silently operate on the wrong table.
 func (apl *Applier) originalTableName() string {
+	if apl.migrationContext.IsMoveTablesMode() {
+		panic("applier.originalTableName() must not be called in move-tables mode; use the per-table MoveTable container instead")
+	}
 	return apl.migrationContext.OriginalTableName
 }
 

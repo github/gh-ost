@@ -481,19 +481,31 @@ func (suite *ApplierTestSuite) TestFinalCleanupMoveTablesMode_SkipsDrops() {
 }
 
 // initiateStreaming() requires a binlog-capable MySQL connection to call directly.
-// This test verifies IsMoveTablesMode() and that GetChangelogTableName() returns
-// a derivable name. A new streamer always starts with zero listeners; the real
-// proof that no changelog listener is registered comes from the full run not
-// failing on a nonexistent _ghc table.
+// This test verifies IsMoveTablesMode() and that no changelog table is referenced
+// in move-tables mode (§1.2): no `_ghc` table exists on the source or target
+// database. A new streamer always starts with zero listeners; the real proof that
+// no changelog listener is registered comes from the full run not failing on a
+// nonexistent _ghc table.
 func (suite *ApplierTestSuite) TestInitiateStreamingMoveTablesMode_NoChangelogListener() {
+	ctx := context.Background()
 	migrationContext := newTestMigrationContext()
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
 	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
 	suite.Require().True(migrationContext.IsMoveTablesMode())
 
-	changelogTableName := migrationContext.GetChangelogTableName()
-	suite.Require().NotEmpty(changelogTableName, "changelog table name should be derivable")
+	// In move-tables mode there is no changelog table. Verify none exists on
+	// either the source or target database (LIKE '%\_ghc' matches a literal
+	// trailing "_ghc").
+	for _, schema := range []string{testMysqlDatabase, testMysqlDatabaseOther} {
+		var count int
+		err := suite.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name LIKE '%\_ghc'`,
+			schema,
+		).Scan(&count)
+		suite.Require().NoError(err)
+		suite.Require().Equal(0, count, "no changelog (_ghc) table should exist in move-tables mode in schema %s", schema)
+	}
 
 	streamer := NewEventsStreamer(migrationContext)
 	suite.Require().Empty(streamer.listeners, "new streamer should have no listeners")

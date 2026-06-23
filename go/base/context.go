@@ -554,6 +554,9 @@ func getSafeTableName(baseName string, suffix string) string {
 // GetGhostTableName generates the name of ghost table, based on original table name
 // or a given table name
 func (mctx *MigrationContext) GetGhostTableName() string {
+	if mctx.IsMoveTablesMode() {
+		panic("GetGhostTableName() must not be called in move-tables mode; there is no ghost table (the target keeps each migrated table's name)")
+	}
 	if mctx.Revert {
 		// When reverting the "ghost" table is the _del table from the original migration.
 		return mctx.OldTableName
@@ -567,8 +570,12 @@ func (mctx *MigrationContext) GetGhostTableName() string {
 
 // GetTargetTableName generates the name of the target table. In move-tables mode
 // each table keeps its own name on the target, so there is no single target
-// table name; per-table code uses MoveTable.TargetTableName instead.
+// table name; per-table code uses MoveTable.TargetTableName instead, and calling
+// this is a programmer error that panics to fail fast.
 func (mctx *MigrationContext) GetTargetTableName() string {
+	if mctx.IsMoveTablesMode() {
+		panic("GetTargetTableName() must not be called in move-tables mode; use MoveTable.TargetTableName")
+	}
 	return mctx.GetGhostTableName()
 }
 
@@ -583,6 +590,9 @@ func (mctx *MigrationContext) GetTargetDatabaseName() string {
 
 // GetOldTableName generates the name of the "old" table, into which the original table is renamed.
 func (mctx *MigrationContext) GetOldTableName() string {
+	if mctx.IsMoveTablesMode() {
+		panic("GetOldTableName() must not be called in move-tables mode; use MoveTableDelName(tableName) for each migrated table's `_<table>_del` rollback handle")
+	}
 	var tableName string
 	if mctx.ForceTmpTableName != "" {
 		tableName = mctx.ForceTmpTableName
@@ -624,6 +634,9 @@ func (mctx *MigrationContext) MoveTableDelName(tableName string) string {
 // GetChangelogTableName generates the name of changelog table, based on original table name
 // or a given table name.
 func (mctx *MigrationContext) GetChangelogTableName() string {
+	if mctx.IsMoveTablesMode() {
+		panic("GetChangelogTableName() must not be called in move-tables mode; there is no changelog table (§1.2)")
+	}
 	if mctx.ForceTmpTableName != "" {
 		return getSafeTableName(mctx.ForceTmpTableName, "ghc")
 	} else {
@@ -642,12 +655,6 @@ func (mctx *MigrationContext) GetCheckpointTableName() string {
 		return getSafeTableName("gho_"+mctx.MoveTablesRunToken(), "ghk")
 	}
 	return getSafeTableName(mctx.OriginalTableName, "ghk")
-}
-
-// GetVoluntaryLockName returns a name of a voluntary lock to be used throughout
-// the swap-tables process.
-func (mctx *MigrationContext) GetVoluntaryLockName() string {
-	return fmt.Sprintf("%s.%s.lock", mctx.DatabaseName, mctx.OriginalTableName)
 }
 
 // RequiresBinlogFormatChange is `true` when the original binlog format isn't `ROW`
