@@ -39,8 +39,15 @@ echo -e "\n\n\n\n\n"
 
 echo  "⚙️ Validating checkpointed state on unexpected exit..."
 
-# checkpoint file exists on target and is non-empty
-mysql-exec target primary $database -sNe "SELECT 1 FROM _${table_name}_ghk LIMIT 1;"
+# checkpoint table exists on target. In move-tables mode the checkpoint table is
+# named from the run token (_gho_<token>_ghk), not from any single migrated
+# table, so we look it up by pattern rather than a static per-table name.
+checkpoint_table=$(mysql-exec target primary $database -sNe "SELECT table_name FROM information_schema.tables WHERE table_schema='${database}' AND table_name LIKE '\\_gho\\_%\\_ghk' LIMIT 1;")
+if [ -z "$checkpoint_table" ]; then
+    echo "ERROR: Checkpoint table does not exist."
+    return 1
+fi
+mysql-exec target primary $database -sNe "SELECT 1 FROM \`${checkpoint_table}\` LIMIT 1;"
 if [ $? -gt 0 ]; then
     echo "ERROR: Checkpoint file is empty or does not exist."
     return 1
