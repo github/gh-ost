@@ -210,7 +210,7 @@ build_ghost_command() {
     --execute ${extra_args[@]}"
 
     if [ -n "$GO_FAILPOINTS" ]; then
-        cmd="GO_FAILPOINTS=\"$GO_FAILPOINTS\" $cmd --unsafe-fail-points-enabled"
+        cmd="GO_FAILPOINTS=\"$GO_FAILPOINTS\" $cmd"
     fi
 }
 

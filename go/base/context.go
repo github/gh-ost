@@ -1169,18 +1169,16 @@ func WithFailPointWait(wait time.Duration) FailPointOpt {
 
 func (mctx *MigrationContext) NewFailPoint(name string, opts ...FailPointOpt) {
 	if mctx.UnsafeFailPointsEnabled {
-		mctx.Log.Debugf("[TEST] Injecting fail point: '%s'", name)
-
 		var fpo failPointOpts
 		for _, opt := range opts {
 			opt(&fpo)
 		}
 
 		failpoint.Inject(name, func(_ failpoint.Value) {
+			mctx.Log.Debugf("[TEST] Encountered fail point: '%s'", name)
 			if fpo.wait > 0 {
-				<-time.After(fpo.wait)
+				time.Sleep(fpo.wait)
 			}
-
 			panic(fmt.Sprintf("[TEST] Encountered fail point: '%s'", name))
 		})
 	}

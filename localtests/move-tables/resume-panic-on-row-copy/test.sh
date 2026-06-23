@@ -84,7 +84,7 @@ cmd="$cmd --resume"
 bash -c "$cmd" >>$test_logfile 2>&1
 ghost_result=$?
 
-if [ $ghost_result -neq 0 ]; then
+if [ $ghost_result -ne 0 ]; then
     echo "ERROR: gh-ost should have succeeded but did not. ($ghost_result)"
     return 1
 fi

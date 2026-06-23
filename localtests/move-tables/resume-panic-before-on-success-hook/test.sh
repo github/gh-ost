@@ -70,7 +70,7 @@ if [ $? -gt 0 ]; then
 fi
 
 # Table not writeable on source
-mysql-exec target source $database -sNe "INSERT INTO ${table_name} VALUES (NULL, 1021, 2001, 2400001, 201, 1700000041, 1700000041);"
+mysql-exec source primary $database -sNe "INSERT INTO ${table_name} VALUES (NULL, 1021, 2001, 2400001, 201, 1700000041, 1700000041);"
 if [ $? -eq 0 ]; then
     echo "ERROR: Table '${table_name}' was writeable on source but should not be!."
     return 1
@@ -121,7 +121,7 @@ cmd="$cmd --resume"
 bash -c "$cmd" >>$test_logfile 2>&1
 ghost_result=$?
 
-if [ $ghost_result -neq 0 ]; then
+if [ $ghost_result -ne 0 ]; then
     echo "ERROR: gh-ost should have succeeded but did not. ($ghost_result)"
     return 1
 fi
