@@ -22,9 +22,10 @@ import (
 	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/openark/golib/log"
 
 	"github.com/go-ini/ini"
+	"github.com/openark/golib/log"
+	"github.com/pingcap/failpoint"
 )
 
 // RowsEstimateMethod is the type of row number estimation
@@ -311,6 +312,8 @@ type MigrationContext struct {
 
 		DrainGTID mysql.BinlogCoordinates // Source @@gtid_executed captured immediately after the source RENAME TABLE; the applier drains until it reaches this coordinate (move-tables only).
 	}
+
+	UnsafeFailPointsEnabled bool
 
 	Log Logger
 }
@@ -1204,5 +1207,35 @@ func SendWithContext[T any](ctx context.Context, ch chan<- T, val T) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+type failPointOpts struct {
+	wait time.Duration
+}
+
+type FailPointOpt func(*failPointOpts)
+
+// WithFailPointWait sets the time for a fail point to wait before exiting.
+func WithFailPointWait(wait time.Duration) FailPointOpt {
+	return func(opts *failPointOpts) {
+		opts.wait = wait
+	}
+}
+
+func (mctx *MigrationContext) NewFailPoint(name string, opts ...FailPointOpt) {
+	if mctx.UnsafeFailPointsEnabled {
+		var fpo failPointOpts
+		for _, opt := range opts {
+			opt(&fpo)
+		}
+
+		failpoint.Inject(name, func(_ failpoint.Value) {
+			mctx.Log.Debugf("[TEST] Encountered fail point: '%s'", name)
+			if fpo.wait > 0 {
+				time.Sleep(fpo.wait)
+			}
+			panic(fmt.Sprintf("[TEST] Encountered fail point: '%s'", name))
+		})
 	}
 }

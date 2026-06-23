@@ -193,6 +193,9 @@ github.com/opencontainers/image-spec/specs-go/v1
 # github.com/pingcap/errors v0.11.5-0.20260310054046-9c8b3586e4b2
 ## explicit; go 1.14
 github.com/pingcap/errors
+# github.com/pingcap/failpoint v0.0.0-20260521055755-e7642935314f
+## explicit; go 1.18
+github.com/pingcap/failpoint
 # github.com/pingcap/log v1.1.1-0.20260227082333-572e590d08f1
 ## explicit; go 1.25
 github.com/pingcap/log

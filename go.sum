@@ -117,6 +117,8 @@ github.com/pingcap/errors v0.11.5-0.20240311024730-e056997136bb h1:3pSi4EDG6hg0o
 github.com/pingcap/errors v0.11.5-0.20240311024730-e056997136bb/go.mod h1:X2r9ueLEUZgtx2cIogM0v4Zj5uvvzhuuiu7Pn8HzMPg=
 github.com/pingcap/errors v0.11.5-0.20260310054046-9c8b3586e4b2 h1:cLgCk5mwDG9lDH+dPK8TmEliTjyGJwwKN0qevWAl8IY=
 github.com/pingcap/errors v0.11.5-0.20260310054046-9c8b3586e4b2/go.mod h1:ktAJCA9lxrHHjVyVl2pKJFvzBnq2eZbb+CUOjBRPlXo=
+github.com/pingcap/failpoint v0.0.0-20260521055755-e7642935314f h1:cDo4qNgaQc2POMWTXjNrMA7yySdIF/d1AaW8kOA7qOs=
+github.com/pingcap/failpoint v0.0.0-20260521055755-e7642935314f/go.mod h1:jimwlLpI/XtwQdlZML15HS+j4rirvwZM0GLY07wwgOo=
 github.com/pingcap/log v1.1.1-0.20230317032135-a0d097d16e22 h1:2SOzvGvE8beiC1Y4g9Onkvu6UmuBBOeWRGQEjJaT/JY=
 github.com/pingcap/log v1.1.1-0.20230317032135-a0d097d16e22/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoOSA4=
 github.com/pingcap/log v1.1.1-0.20260227082333-572e590d08f1 h1:A2bEfgSb7hLwR9mxDszgGKweF+xY9YoTDG+8RjdFjDE=
