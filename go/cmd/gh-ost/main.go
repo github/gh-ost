@@ -197,6 +197,9 @@ func main() {
 	flag.StringVar(&migrationContext.MoveTables.TargetDatabase, "target-database", "", "Target MySQL database name for --move-tables mode. If not provided, uses the same database name as the source connection")
 	flag.BoolVar(&migrationContext.MoveTables.AllowOnSourcePrimary, "allow-on-source-primary", false, "allow --move-tables to read (schema, row copy, binlog) from the source cluster's primary. By default gh-ost stops if --host is the primary; prefer pointing --host at a replica to spare the primary the copy load.")
 
+	// unsafe fail points, for integration testing purposes
+	flag.BoolVar(&migrationContext.UnsafeFailPointsEnabled, "unsafe-fail-points-enabled", false, "UNSAFE: Enable fail points for integration testing purposes. Do not use in production.")
+
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Parse()
 	cutOverLockTimeoutUserSpecified := false
@@ -345,7 +348,9 @@ func main() {
 	if *storageEngine == "rocksdb" {
 		migrationContext.Log.Warning("RocksDB storage engine support is experimental")
 	}
-	if migrationContext.CheckpointIntervalSeconds < 10 {
+	// ignore low checkpoint intervals in unsafe mode as frequent checkpoints are required to reliably
+	// reduce test duration
+	if migrationContext.CheckpointIntervalSeconds < 10 && !migrationContext.UnsafeFailPointsEnabled {
 		migrationContext.Log.Fatalf("--checkpoint-seconds should be >=10")
 	}
 	if migrationContext.CountTableRows && migrationContext.PanicOnWarnings {
