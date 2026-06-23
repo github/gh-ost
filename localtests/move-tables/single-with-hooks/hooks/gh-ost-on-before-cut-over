@@ -10,5 +10,5 @@ set -e
 
 assert_common_envs
 
-# touch file to mark completion of on-row-copy-complete hook
+# touch file to mark completion of on-before-cut-over hook
 touch /tmp/gh-ost-hooks/on-before-cut-over

@@ -13,14 +13,23 @@ table_name=gh_ost_test
 rm $ghost_binary
 build_binary
 
+# ensure hook files are executable
+chmod +x $tests_path/$test_name/hooks/*
+
+# clean up any existing test hook files
+rm -rf /tmp/gh-ost-hooks/
+mkdir -p /tmp/gh-ost-hooks/
+
 ######################################################################################################
 ### Run #1: Should panic after drain (T4) and before on-success (T5)
 ######################################################################################################
 
+
 echo  "⚙️ Starting migration with failpoint (run #1)..."
 
 # Build the gh-ost command using the framework function
-GO_FAILPOINTS="github.com/github/gh-ost/go/base/panic-before-on-success-hook=return(true)" build_ghost_command
+GO_FAILPOINTS="github.com/github/gh-ost/go/base/move-tables-panic-before-on-success-hook=return(true)" build_ghost_command
+cmd="$cmd --hooks-path=$tests_path/$test_name/hooks"
 
 # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
 (
@@ -84,8 +93,8 @@ if [ $? -gt 0 ]; then
 fi
 
 # contents of table on source and target are the same
-source_contents_file=/tmp/gh-ost-test.resume-panic-before-on-success-hook-source_contents.txt
-target_contents_file=/tmp/gh-ost-test.resume-panic-before-on-success-hook-target_contents.txt
+source_contents_file=/tmp/gh-ost-test.resume-move-tables-panic-before-on-success-hook-source_contents.txt
+target_contents_file=/tmp/gh-ost-test.resume-move-tables-panic-before-on-success-hook-target_contents.txt
 mysql-exec source primary $database -sNe "SELECT * FROM _${table_name}_del;" > $source_contents_file
 mysql-exec target primary $database -sNe "SELECT * FROM ${table_name};" > $target_contents_file
 
@@ -94,6 +103,12 @@ if ! diff $source_contents_file $target_contents_file; then
     echo "---- DIFF -----"
     diff --side-by-side $source_contents_file $target_contents_file
     echo "---------------"
+    return 1
+fi
+
+# validate on-success hook was not called
+if [ -f /tmp/gh-ost-hooks/on-success ]; then
+    echo "ERROR: on-success hook was called when it should not have been."
     return 1
 fi
 
@@ -109,7 +124,7 @@ echo  "⚙️ Resuming migration (run #2)..."
 
 # resume migration
 build_ghost_command
-cmd="$cmd --resume"
+cmd="$cmd --resume --hooks-path=$tests_path/$test_name/hooks"
 
 # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
 (
@@ -124,6 +139,11 @@ ghost_result=$?
 if [ $ghost_result -ne 0 ]; then
     echo "ERROR: gh-ost should have succeeded but did not. ($ghost_result)"
     return 1
+fi
+
+# validate on-success hook was was called
+if [ ! -f /tmp/gh-ost-hooks/on-success ]; then
+    echo "ERROR: on-success hook was not called when it should have been."
 fi
 
 echo -e "\n\n\n\n\n"
