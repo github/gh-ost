@@ -21,7 +21,7 @@ build_binary
 echo  "⚙️ Starting migration with failpoint (run #1)..."
 
 # Build the gh-ost command using the framework function
-GO_FAILPOINTS="github.com/github/gh-ost/go/base/panic-before-drain-completion=return(true)" build_ghost_command
+GO_FAILPOINTS="github.com/github/gh-ost/go/base/move-tables-panic-before-drain-completion=return(true)" build_ghost_command
 
 # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
 (
@@ -73,6 +73,19 @@ fi
 mysql-exec target primary $database -sNe "SELECT 1 FROM ${table_name} LIMIT 1;"
 if [ $? -gt 0 ]; then
     echo "ERROR: Table '${table_name}' does not exist on target."
+    return 1
+fi
+
+# validate last checkpoint (cutover started and drain GTID are set)
+cutover_started=$(mysql-exec target primary $database -Ne "SELECT gh_ost_move_tables_cutover_started FROM _${table_name}_ghk ORDER BY gh_ost_chk_id DESC LIMIT 1;")
+if [ "$cutover_started" != 1 ]; then
+    echo "ERROR: Expected cutover started to be set in last checkpoint."
+    return 1
+fi
+
+drain_gtid=$(mysql-exec target primary $database -Ne "SELECT gh_ost_move_tables_drain_gtid FROM _${table_name}_ghk ORDER BY gh_ost_chk_id DESC LIMIT 1;")
+if [ "$drain_gtid" == "" ]; then
+    echo "ERROR: Expected drain GTID to be set in last checkpoint."
     return 1
 fi
 

@@ -12,5 +12,5 @@ assert_common_envs
 
 assert_env_present "GH_OST_DRAIN_GTID"
 
-# touch file to mark completion of on-row-copy-complete hook
+# touch file to mark completion of on-success hook
 touch /tmp/gh-ost-hooks/on-success
