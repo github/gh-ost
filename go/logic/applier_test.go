@@ -1215,8 +1215,12 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 
 	suite.Require().Equal(chk.Iteration, gotChk.Iteration)
 	suite.Require().Equal(chk.LastTrxCoords.String(), gotChk.LastTrxCoords.String())
-	suite.Require().Equal(chk.IterationRangeMin.String(), gotChk.IterationRangeMin.String())
-	suite.Require().Equal(chk.IterationRangeMax.String(), gotChk.IterationRangeMax.String())
+	// The fresh read yields typed values (e.g. int -> "212") while the checkpoint
+	// round-trips them as []byte (-> hex "323132"). Both serialize identically and
+	// are used identically as prepared-statement args on resume, so compare the
+	// serialized (resumable) form rather than the typed String() rendering.
+	suite.Require().Equal(serializeRangeValues(chk.IterationRangeMin), serializeRangeValues(gotChk.IterationRangeMin))
+	suite.Require().Equal(serializeRangeValues(chk.IterationRangeMax), serializeRangeValues(gotChk.IterationRangeMax))
 	suite.Require().Equal(chk.RowsCopied, gotChk.RowsCopied)
 	suite.Require().Equal(chk.DMLApplied, gotChk.DMLApplied)
 	suite.Require().Equal(chk.IsCutover, gotChk.IsCutover)
@@ -2074,6 +2078,16 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueriesMoveTablesMode() {
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
 	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
+	// Populate the per-table container that prepareQueries/ApplyDMLEventQueries
+	// route DML through (there is no representative table in move-tables mode).
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = migrationContext.OriginalTableColumns
+	mt.SharedColumns = migrationContext.SharedColumns
+	mt.MappedSharedColumns = migrationContext.MappedSharedColumns
+	mt.UniqueKey = migrationContext.UniqueKey
+
 	applier := NewApplier(migrationContext)
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
@@ -2155,9 +2169,6 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	defer applier.Teardown()
 
 	err = applier.InitDBConnections()
-	suite.Require().NoError(err)
-
-	err = applier.CreateChangelogTable()
 	suite.Require().NoError(err)
 
 	err = applier.ReadMoveTableMigrationRangeValues(nil, mt)
