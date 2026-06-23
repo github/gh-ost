@@ -1626,47 +1626,44 @@ func (apl *Applier) ReadMoveTableMigrationRangeValues(db *gosql.DB, mt *base.Mov
 	if err != nil {
 		return err
 	}
-	minRows, err := tx.Query(minQuery)
-	if err != nil {
+	if mt.MigrationRangeMinValues, err = apl.scanMoveTableRangeBoundary(tx, minQuery, mt.UniqueKey.Len()); err != nil {
 		return err
 	}
-	for minRows.Next() {
-		mt.MigrationRangeMinValues = sql.NewColumnValues(mt.UniqueKey.Len())
-		if err = minRows.Scan(mt.MigrationRangeMinValues.ValuesPointers...); err != nil {
-			minRows.Close()
-			return err
-		}
-	}
-	if err = minRows.Err(); err != nil {
-		minRows.Close()
-		return err
-	}
-	minRows.Close()
 
 	maxQuery, err := sql.BuildUniqueKeyMaxValuesPreparedQuery(mt.SourceDatabaseName, mt.SourceTableName, mt.UniqueKey)
 	if err != nil {
 		return err
 	}
-	maxRows, err := tx.Query(maxQuery)
-	if err != nil {
+	if mt.MigrationRangeMaxValues, err = apl.scanMoveTableRangeBoundary(tx, maxQuery, mt.UniqueKey.Len()); err != nil {
 		return err
 	}
-	for maxRows.Next() {
-		mt.MigrationRangeMaxValues = sql.NewColumnValues(mt.UniqueKey.Len())
-		if err = maxRows.Scan(mt.MigrationRangeMaxValues.ValuesPointers...); err != nil {
-			maxRows.Close()
-			return err
-		}
-	}
-	if err = maxRows.Err(); err != nil {
-		maxRows.Close()
-		return err
-	}
-	maxRows.Close()
 
 	apl.migrationContext.Log.Infof("Move-table %s.%s migration range: [%s]..[%s]",
 		mt.SourceDatabaseName, mt.SourceTableName, mt.MigrationRangeMinValues, mt.MigrationRangeMaxValues)
 	return tx.Commit()
+}
+
+// scanMoveTableRangeBoundary runs a single min/max unique-key boundary query and
+// returns the scanned values (nil if the table is empty). The result set is
+// closed via defer, so each boundary query is fully closed before the next one
+// runs on the same transaction.
+func (apl *Applier) scanMoveTableRangeBoundary(tx *gosql.Tx, query string, keyLen int) (*sql.ColumnValues, error) {
+	rows, err := tx.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var values *sql.ColumnValues
+	for rows.Next() {
+		values = sql.NewColumnValues(keyLen)
+		if err := rows.Scan(values.ValuesPointers...); err != nil {
+			return nil, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
 }
 
 // CalculateMoveTableNextIterationRangeEndValues computes the next chunk's
@@ -1701,19 +1698,17 @@ func (apl *Applier) CalculateMoveTableNextIterationRangeEndValues(db *gosql.DB, 
 		if err != nil {
 			return hasFurtherRange, err
 		}
+		defer rows.Close()
 		iterationRangeMaxValues := sql.NewColumnValues(mt.UniqueKey.Len())
 		for rows.Next() {
 			if err = rows.Scan(iterationRangeMaxValues.ValuesPointers...); err != nil {
-				rows.Close()
 				return hasFurtherRange, err
 			}
 			hasFurtherRange = true
 		}
 		if err = rows.Err(); err != nil {
-			rows.Close()
 			return hasFurtherRange, err
 		}
-		rows.Close()
 		if hasFurtherRange {
 			mt.MigrationIterationRangeMaxValues = iterationRangeMaxValues
 			return hasFurtherRange, nil
