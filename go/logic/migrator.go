@@ -2750,7 +2750,13 @@ func (mgtr *Migrator) iterateChunksMoveTables() error {
 				return err
 			}
 			// Record this table's last successfully-copied range for checkpointing.
-			mt.RecordLastIterationRange()
+			// Skip the final completion-detection pass: it advanced the iteration min
+			// to the previous max without copying anything (and set rowCopyComplete),
+			// so recording here would overwrite the real [min..max] span of the last
+			// actual chunk with a degenerate [max..max].
+			if !mt.IsRowCopyComplete() {
+				mt.RecordLastIterationRange()
+			}
 			return nil
 		}
 		return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.copyRowsQueue, copyRowsFunc)
@@ -3006,6 +3012,13 @@ func (mgtr *Migrator) checkpointLoop() {
 			} else {
 				mgtr.migrationContext.Log.Errorf("error attempting checkpoint: %+v", err)
 			}
+		} else if mgtr.migrationContext.IsMoveTablesMode() {
+			// Move-tables writes one checkpoint row per table; the per-table range
+			// and iteration live in those rows (and the status output). The single
+			// run-wide summary line has no representative range, so report the
+			// aggregate progress instead of the (empty) single-table range fields.
+			mgtr.migrationContext.Log.Infof("checkpoint success at coords=%+v tables=%d rows_copied=%d dml_applied=%d",
+				chk.LastTrxCoords.DisplayString(), len(mgtr.migrationContext.MoveTables.TableNames), chk.RowsCopied, chk.DMLApplied)
 		} else {
 			mgtr.migrationContext.Log.Infof("checkpoint success at coords=%+v range_min=%+v range_max=%+v iteration=%d",
 				chk.LastTrxCoords.DisplayString(), chk.IterationRangeMin.String(), chk.IterationRangeMax.String(), chk.Iteration)
