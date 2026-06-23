@@ -7,8 +7,6 @@
 # Usage: localtests/test/sh [filter]
 # By default, runs all move-tables tests. Given filter, will only run tests matching given regep
 
-set -x
-
 repo_root=$(git rev-parse --show-toplevel)
 script_path="$repo_root/script/move-tables"
 tests_path=$(dirname $0)/move-tables
@@ -205,12 +203,11 @@ build_ghost_command() {
     --stack \
     --checkpoint \
     --postpone-cut-over-flag-file=$postpone_cutover_flag_file \
-    --unsafe-fail-points-enabled \
     --checkpoint-seconds=1 \
     --execute ${extra_args[@]}"
 
     if [ -n "$GO_FAILPOINTS" ]; then
-        cmd="GO_FAILPOINTS=\"$GO_FAILPOINTS\" $cmd"
+        cmd="GO_FAILPOINTS=\"$GO_FAILPOINTS\" $cmd --unsafe-fail-points-enabled"
     fi
 }
 
