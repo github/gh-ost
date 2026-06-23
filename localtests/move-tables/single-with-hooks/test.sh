@@ -1,8 +1,9 @@
 
 #!/bin/bash
 # Custom test:
-# - panic during row copy stage, prior to cutover
-# - resume and complete the migration
+#   Executes migration with custom hooks (on-row-copy-complete, on-before-cut-over, on-success)
+#   which are executed at different stages of the migration and validate the environment variables
+#   expected to be available to the respective hooks.
 
 database=test
 table_name=gh_ost_test

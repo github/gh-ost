@@ -104,7 +104,7 @@ echo -e "\n\n\n\n\n"
 
 echo  "⚙️ Validating checkpointed state after resumed migration..."
 
-# validate we processed a single row-copy chunk (10 rows) and there are 20 total to process
+# validate we processed the rest of the 20 rows to copy
 rows_copied=$(mysql-exec target primary $database -Ne "SELECT gh_ost_rows_copied FROM _${table_name}_ghk ORDER BY gh_ost_chk_id DESC LIMIT 1;")
 if [ $rows_copied -ne 20 ]; then
     echo "ERROR: Expected last checkpoint to show 20 rows copied."
