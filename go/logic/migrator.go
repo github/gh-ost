@@ -2775,6 +2775,10 @@ func (mgtr *Migrator) iterateChunksMoveTables() error {
 				}
 				return terminateRowIteration(err)
 			}
+			// Mirrors the standard iterateChunks failpoint: fires after a chunk is
+			// enqueued so resume tests can crash mid-copy (move-tables uses this
+			// loop, not iterateChunks, so the failpoint must live here too).
+			mgtr.migrationContext.NewFailPoint("panic-after-row-copy", base.WithFailPointWait(2*time.Second))
 			if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
 				return nil
 			}
