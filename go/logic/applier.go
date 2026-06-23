@@ -789,6 +789,19 @@ func (apl *Applier) CreateGhostTable() error {
 	return apl.createTargetTable(apl.migrationContext.GetGhostTableName())
 }
 
+// targetTableExists reports whether the named table already exists on the
+// move-tables target database.
+func (apl *Applier) targetTableExists(targetTableName string) (bool, error) {
+	var count int
+	if err := apl.moveTablesTargetDB.QueryRow(
+		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+		apl.migrationContext.GetTargetDatabaseName(), targetTableName,
+	).Scan(&count); err != nil {
+		return false, fmt.Errorf("failed to check for existing target table %s: %w", sql.EscapeName(targetTableName), err)
+	}
+	return count > 0, nil
+}
+
 // CreateTargetTableForName creates the named target table on the target host
 // from the given CREATE statement. In multi-table move-tables mode it is called
 // once per migrated table.
@@ -801,20 +814,42 @@ func (apl *Applier) CreateTargetTableForName(targetTableName, createStatement st
 	// Explicit pre-check: abort before any data is copied if the target table
 	// already exists. The CREATE TABLE would also fail (MySQL ERROR 1050), but
 	// this gives operators a clear gh-ost error message explaining what to do.
-	var count int
-	err := apl.moveTablesTargetDB.QueryRow(
-		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
-		targetDatabase, targetTableName,
-	).Scan(&count)
+	exists, err := apl.targetTableExists(targetTableName)
 	if err != nil {
-		return fmt.Errorf("failed to check for existing target table: %w", err)
+		return err
 	}
-	if count > 0 {
+	if exists {
 		return fmt.Errorf("target table %s.%s already exists on the target cluster. Aborting to prevent writing into a table with unrelated data. Drop the table manually if this is intentional",
 			sql.EscapeName(targetDatabase), sql.EscapeName(targetTableName))
 	}
 
 	return apl.createTargetTableFromStatement(targetTableName, createStatement)
+}
+
+// ValidateMoveTablesTargetsAbsent verifies that none of the migrated tables
+// already exist on the target cluster, before any of them are created. This
+// makes a collision abort cleanly up front rather than after partially creating
+// the earlier tables in the set.
+func (apl *Applier) ValidateMoveTablesTargetsAbsent() error {
+	if !apl.migrationContext.IsMoveTablesMode() {
+		return errors.New("ValidateMoveTablesTargetsAbsent is only available in MoveTables mode")
+	}
+	targetDatabase := apl.migrationContext.GetTargetDatabaseName()
+	var existing []string
+	for _, mt := range apl.migrationContext.OrderedMoveTables() {
+		exists, err := apl.targetTableExists(mt.TargetTableName)
+		if err != nil {
+			return err
+		}
+		if exists {
+			existing = append(existing, fmt.Sprintf("%s.%s", sql.EscapeName(targetDatabase), sql.EscapeName(mt.TargetTableName)))
+		}
+	}
+	if len(existing) > 0 {
+		return fmt.Errorf("the following target table(s) already exist on the target cluster: %s. Aborting before creating any tables to avoid leaving partial state; drop them manually if this is intentional",
+			strings.Join(existing, ", "))
+	}
+	return nil
 }
 
 // AlterGhost applies `alter` statement on ghost table

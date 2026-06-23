@@ -86,6 +86,9 @@ func (isp *Inspector) InitDBConnections() (err error) {
 }
 
 func (isp *Inspector) ValidateOriginalTable() (err error) {
+	if isp.migrationContext.IsMoveTablesMode() {
+		return errors.New("ValidateOriginalTable is not available in move-tables mode; each migrated table is validated individually via validateTableExistsAndNotView / validateTableForeignKeysFor / validateTableTriggersFor")
+	}
 	if err := isp.validateTable(); err != nil {
 		return err
 	}
@@ -118,6 +121,9 @@ func (isp *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (column
 }
 
 func (isp *Inspector) InspectOriginalTable() (err error) {
+	if isp.migrationContext.IsMoveTablesMode() {
+		return errors.New("InspectOriginalTable is not available in move-tables mode; use InspectMoveTable per table")
+	}
 	isp.migrationContext.OriginalTableColumns, isp.migrationContext.OriginalTableVirtualColumns, isp.migrationContext.OriginalTableUniqueKeys, err = isp.InspectTableColumnsAndUniqueKeys(isp.originalTableName())
 	if err != nil {
 		return err
@@ -741,6 +747,9 @@ func (isp *Inspector) InspectMoveTable(tableName string) (columns *sql.ColumnLis
 
 // CountTableRows counts exact number of rows on the original table
 func (isp *Inspector) CountTableRows(ctx context.Context) error {
+	if isp.migrationContext.IsMoveTablesMode() {
+		return errors.New("CountTableRows is not available in move-tables mode; use CountMoveTablesRows")
+	}
 	atomic.StoreInt64(&isp.migrationContext.CountingRowsFlag, 1)
 	defer atomic.StoreInt64(&isp.migrationContext.CountingRowsFlag, 0)
 
@@ -767,6 +776,9 @@ func (isp *Inspector) CountTableRows(ctx context.Context) error {
 // each table's count in its container and the sum as the run-wide estimate. It
 // is the move-tables equivalent of CountTableRows, with no representative table.
 func (isp *Inspector) CountMoveTablesRows(ctx context.Context) error {
+	if !isp.migrationContext.IsMoveTablesMode() {
+		return errors.New("CountMoveTablesRows is only available in move-tables mode; use CountTableRows")
+	}
 	atomic.StoreInt64(&isp.migrationContext.CountingRowsFlag, 1)
 	defer atomic.StoreInt64(&isp.migrationContext.CountingRowsFlag, 0)
 

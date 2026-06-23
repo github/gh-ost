@@ -2478,6 +2478,12 @@ func (mgtr *Migrator) initiateApplier() error {
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
 		if !mgtr.migrationContext.Resume {
+			// Fail early and cleanly: if any target table already exists, abort
+			// before creating any of them so we never leave a partially-created set
+			// on the target.
+			if err := mgtr.applier.ValidateMoveTablesTargetsAbsent(); err != nil {
+				return err
+			}
 			// Create every migrated table on the target from its captured CREATE
 			// statement (§2.1). Containers were populated by prepareMoveTablesCopyState.
 			for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
