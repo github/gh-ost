@@ -36,6 +36,7 @@ original_sql_mode=
 current_gtid_mode=
 test_timeout=120
 test_failure_log_tail_lines=50
+tables_to_migrate=()
 
 OPTIND=1
 while getopts "b:s:dg" OPTION; do
@@ -175,8 +176,13 @@ build_ghost_command() {
     # Build gh-ost command with all standard options
     #
     # expected $1 to be a comma-separated list of tables to move
+
+    # build comma-separated list of tables to move
+    move_tables_arg=$(IFS=, ; echo "${tables_to_migrate[*]}")
+
+    # NOTE(chriskirkland): fully qualified package name + failpoint name
     cmd="GOTRACEBACK=crash $ghost_binary \
-    --move-tables=$1 \
+    --move-tables=$move_tables_arg \
     --user=root \
     --password=opensesame \
     --host=$source_replica_host \
@@ -197,7 +203,13 @@ build_ghost_command() {
     --stack \
     --checkpoint \
     --postpone-cut-over-flag-file=$postpone_cutover_flag_file \
+    --checkpoint-seconds=1 \
+    --unsafe-fail-points-enabled \
     --execute ${extra_args[@]}"
+
+    if [ -n "$GO_FAILPOINTS" ]; then
+        cmd="GO_FAILPOINTS=\"$GO_FAILPOINTS\" $cmd"
+    fi
 }
 
 print_log_excerpt() {
@@ -348,46 +360,47 @@ test_single() {
         wait $test_pid 2>/dev/null
         execution_result=$?
         return $execution_result
-    fi
 
-    # kick off the on_test script for the test. this enables arbitrary custom logic 
-    # concurrent with the gh-ost process. this enables additional scenarios like
-    # streaming of writes prior to the write cutover.
-    #
-    # IMPORTANT: The on-test script is executed in the background and will be killed as soon
-    # as the gh-ost process terminates.
-    if [ -f $tests_path/$test_name/on_test.sh ]; then
-        $tests_path/$test_name/on_test.sh &> /dev/null &
-        on_test_pid=$!
-    fi
+    else
 
-    # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
-    (
-        sleep 1; 
-        echo "⏩ Sending unpostpone cutover"
-        rm $postpone_cutover_flag_file &> /dev/null;
-    ) &
+        # kick off the on_test script for the test. this enables arbitrary custom logic
+        # concurrent with the gh-ost process. this enables additional scenarios like
+        # streaming of writes prior to the write cutover.
+        #
+        # IMPORTANT: The on-test script is executed in the background and will be killed as soon
+        # as the gh-ost process terminates.
+        if [ -f $tests_path/$test_name/on_test.sh ]; then
+            $tests_path/$test_name/on_test.sh &> /dev/null &
+            on_test_pid=$!
+        fi
 
-    # Build and execute gh-ost command
-    move_tables_arg=$(IFS=, ; echo "${tables_to_migrate[*]}")
-    build_ghost_command "$move_tables_arg"
-    echo_dot
-    echo $cmd >$exec_command_file
-    echo_dot
-    timeout $test_timeout bash $exec_command_file >$test_logfile 2>&1
+        # queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
+        (
+            sleep 1;
+            echo "⏩ Sending unpostpone cutover"
+            rm $postpone_cutover_flag_file &> /dev/null;
+        ) &
 
-    execution_result=$?
+        # Build and execute gh-ost command
+        build_ghost_command
+        echo_dot
+        echo $cmd >$exec_command_file
+        echo_dot
+        timeout $test_timeout bash $exec_command_file >$test_logfile 2>&1
 
-    if [ -n "$on_test_pid" ]; then
-        kill -KILL $on_test_pid &>/dev/null
-    fi
+        execution_result=$?
 
-    # Check for timeout (exit code 124)
-    if [ $execution_result -eq 124 ]; then
-        echo
-        echo "ERROR $test_name execution timed out"
-        print_log_excerpt
-        return 1
+        if [ -n "$on_test_pid" ]; then
+            kill -KILL $on_test_pid &>/dev/null
+        fi
+
+        # Check for timeout (exit code 124)
+        if [ $execution_result -eq 124 ]; then
+            echo
+            echo "ERROR $test_name execution timed out"
+            print_log_excerpt
+            return 1
+        fi
     fi
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
@@ -453,7 +466,29 @@ test_single() {
     done
 }
 
+enable_failpoint() {
+    mkdir -p $repo_root/tools/bin
+    if [ ! -f $repo_root/tools/bin/failpoint-ctl  ]; then
+        echo "⚙️ Installing failpoint"
+        GOBIN=$repo_root/tools/bin go install github.com/pingcap/failpoint/failpoint-ctl@v0.0.0-20220801062533-2eaa32854a6c
+    fi
+
+    echo "⚙️ Enabling failpoint"
+    $repo_root/tools/bin/failpoint-ctl enable go
+
+    echo "✅ Successfully enabled failpoint"
+}
+
+disable_failpoint() {
+    echo "⚙️ Disabling failpoint"
+    $repo_root/tools/bin/failpoint-ctl disable go
+
+    echo "✅ Successfully disabled failpoint"
+}
+
 build_binary() {
+    enable_failpoint
+
     echo "Building"
     rm -f $default_ghost_binary
     [ "$ghost_binary" == "" ] && ghost_binary="$default_ghost_binary"
@@ -468,6 +503,8 @@ build_binary() {
         echo "Build failure"
         exit 1
     fi
+
+    disable_failpoint
 }
 
 test_all() {
