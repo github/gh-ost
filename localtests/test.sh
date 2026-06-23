@@ -95,7 +95,12 @@ verify_master_and_replica() {
     # Cache replica_terminology and seconds_behind_source values to avoid later checks.
     mysql_version="$(gh-ost-test-mysql-replica -s -s -e "select @@version")"
     mysql_version_comment="$(gh-ost-test-mysql-master -s -s -e "select @@version_comment")"
-    if [[ $mysql_version =~ "8.4" ]]; then
+    if [[ "$mysql_version" == *MariaDB* ]]; then
+        # MariaDB reports versions >= 10 but never adopted the replica/source
+        # terminology, so it keeps the legacy slave/Master wording.
+        replica_terminology="slave"
+        seconds_behind_source="Seconds_Behind_Master"
+    elif [[ $mysql_version =~ "8.4" ]]; then
         replica_terminology="replica"
         seconds_behind_source="Seconds_Behind_Source"
     else
@@ -129,13 +134,25 @@ echo_dot() {
 # there is no lag; waits up to 10s otherwise.
 # Relies on GTID (gtid_mode=ON); falls back to a short sleep if GTID is unavailable.
 wait_replica_caught_up() {
-    local master_gtid
-    master_gtid="$(gh-ost-test-mysql-master -s -s -e "select @@global.gtid_executed" 2>/dev/null)"
-    if [ -n "$master_gtid" ]; then
-        gh-ost-test-mysql-replica -s -s -e "do WAIT_FOR_EXECUTED_GTID_SET('${master_gtid}', 10)" >/dev/null 2>&1
+  if [[ "$mysql_version" == *MariaDB* ]]; then
+    # MariaDB has no gtid_executed / WAIT_FOR_EXECUTED_GTID_SET; use its own
+    # binlog GTID position and MASTER_GTID_WAIT.
+    local master_pos
+    master_pos="$(gh-ost-test-mysql-master -s -s -e "select @@global.gtid_binlog_pos")"
+    if [ -n "$master_pos" ]; then
+      gh-ost-test-mysql-replica -s -s -e "select master_gtid_wait('${master_pos}', 10)" >/dev/null 2>&1
     else
-        sleep 1
+      sleep 1
     fi
+    return
+  fi
+  local master_gtid
+  master_gtid="$(gh-ost-test-mysql-master -s -s -e "select @@global.gtid_executed" 2>/dev/null)"
+  if [ -n "$master_gtid" ]; then
+    gh-ost-test-mysql-replica -s -s -e "do WAIT_FOR_EXECUTED_GTID_SET('${master_gtid}', 10)" >/dev/null 2>&1
+  else
+    sleep 1
+  fi
 }
 
 start_replication() {
@@ -291,10 +308,16 @@ test_single() {
     if [ -f $tests_path/$test_name/gtid_mode ]; then
         target_gtid_mode=$(cat $tests_path/$test_name/gtid_mode)
         if [ "$current_gtid_mode" != "$target_gtid_mode" ]; then
-            echo "gtid_mode is ${current_gtid_mode}, expected ${target_gtid_mode}"
-            exit 1
-        fi
+            # MariaDB has no @@gtid_mode (reports "unsupported"); these tests
+      # target MySQL GTID behaviour, so skip rather than abort the run.
+      if [ "$current_gtid_mode" = "unsupported" ]; then
+        echo -n " skipping (gtid_mode unsupported)"
+        return 0
+      fi
+      echo "gtid_mode is ${current_gtid_mode}, expected ${target_gtid_mode}"
+      exit 1
     fi
+  fi
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
         gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"

@@ -174,7 +174,7 @@ func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
 	// Use a dedicated *sql.DB so the pinned connection does not consume a
 	// slot in apl.db's small pool (mysql.MaxDBPoolConnections).
 	lockURI := apl.connectionConfig.GetDBUri(apl.migrationContext.DatabaseName)
-	lockDB, err := gosql.Open("mysql", lockURI)
+	lockDB, err := mysql.OpenDB(lockURI)
 	if err != nil {
 		return fmt.Errorf("failed to open migration lock DB: %w", err)
 	}

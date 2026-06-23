@@ -1,6 +1,8 @@
 package mysql
 
 import (
+	"strings"
+
 	version "github.com/hashicorp/go-version"
 )
 
@@ -25,6 +27,13 @@ var MysqlReplicaTermMap = map[string]string{
 }
 
 func ReplicaTermFor(mysqlVersion string, term string) string {
+	// MariaDB reports versions >= 10, which compare greater than the 8.4
+	// cutoff, but it never adopted the new replica/source terminology. Keep
+	// the legacy terms for it.
+	if strings.Contains(strings.ToLower(mysqlVersion), "mariadb") {
+		return term
+	}
+
 	vs, err := version.NewVersion(mysqlVersion)
 	if err != nil {
 		// default to returning the same term if we cannot determine the version
