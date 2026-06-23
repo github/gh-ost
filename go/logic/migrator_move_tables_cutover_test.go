@@ -330,6 +330,11 @@ func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks base.Hooks, initialCoor
 	mc.ApplierConnectionConfig = connectionConfig
 	mc.InspectorConnectionConfig = connectionConfig
 	mc.MoveTables.SourcePrimaryConnectionConfig = connectionConfig
+	// Every consumer of buildMigrator is a move-tables cutover test, so put the
+	// migrator in move-tables mode with the canonical single table. The cutover
+	// path builds its atomic RENAME from MoveTables.TableNames; leaving it empty
+	// produces `rename table ;` (Error 1064).
+	mc.MoveTables.TableNames = []string{testMysqlTableName}
 	mc.SetConnectionConfig("innodb")
 	mc.Hooks = fakeHooks
 
@@ -360,8 +365,7 @@ func (s *MoveTablesCutOverSuite) TestDropMoveTablesSourceOldTablesUsesSourcePrim
 
 	var calls []string
 	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
-	m, mc := s.buildMigrator(fakeHooks, s.containingDrainGTID())
-	mc.MoveTables.TableNames = []string{testMysqlTableName}
+	m, _ := s.buildMigrator(fakeHooks, s.containingDrainGTID())
 
 	s.Require().NoError(m.dropMoveTablesSourceOldTables())
 
