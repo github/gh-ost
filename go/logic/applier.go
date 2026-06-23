@@ -789,18 +789,6 @@ func (apl *Applier) CreateGhostTable() error {
 	return apl.createTargetTable(apl.migrationContext.GetGhostTableName())
 }
 
-// CreateTargetTable creates the target table on the target host (for move-tables).
-// It aborts with an error if the target table already exists on the target cluster,
-// to prevent silently writing into a table that has unrelated data or a different
-// schema (move_table_mode.md §1.3: "Don't use IF NOT EXISTS for the target table.
-// An existing table is an error condition, not a no-op.").
-func (apl *Applier) CreateTargetTable(createStatement string) error {
-	if !apl.migrationContext.IsMoveTablesMode() {
-		return errors.New("CreateTargetTable is only available in MoveTables mode")
-	}
-	return apl.CreateTargetTableForName(apl.originalTableName(), createStatement)
-}
-
 // CreateTargetTableForName creates the named target table on the target host
 // from the given CREATE statement. In multi-table move-tables mode it is called
 // once per migrated table.
