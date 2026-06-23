@@ -1183,7 +1183,8 @@ func (mgtr *Migrator) MoveTables() (err error) {
 				// No checkpoint row for this table yet; it resumes from scratch.
 				continue
 			}
-			mt.RestoreFromCheckpoint(chk.IterationRangeMin, chk.IterationRangeMax, chk.Iteration, chk.RowsCopied)
+			// Run-wide state is replicated on every row; capture it regardless of
+			// whether this table had completed a chunk.
 			totalRowsCopied += chk.RowsCopied
 			if chk.DMLApplied > totalDMLApplied {
 				totalDMLApplied = chk.DMLApplied
@@ -1195,6 +1196,12 @@ func (mgtr *Migrator) MoveTables() (err error) {
 					resumeCoords = chk.LastTrxCoords
 				}
 			}
+			// Only restore the per-table iteration window if a chunk actually
+			// completed; an empty range means this table must start from its minimum.
+			if isEmptyRange(chk.IterationRangeMin) || isEmptyRange(chk.IterationRangeMax) {
+				continue
+			}
+			mt.RestoreFromCheckpoint(chk.IterationRangeMin, chk.IterationRangeMax, chk.Iteration, chk.RowsCopied)
 			mgtr.migrationContext.Log.Infof("Resuming move-table %s from checkpoint range_min=%+v range_max=%+v iteration=%d",
 				mt.SourceTableName, chk.IterationRangeMin.String(), chk.IterationRangeMax.String(), chk.Iteration)
 		}

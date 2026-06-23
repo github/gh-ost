@@ -961,7 +961,7 @@ func (apl *Applier) createMoveTablesCheckpointTable() error {
 	colDefs := []string{
 		"`gh_ost_chk_id` bigint auto_increment primary key",
 		"`gh_ost_chk_timestamp` bigint",
-		"`gh_ost_chk_table_name` varbinary(320)",
+		"`gh_ost_chk_table_name` varchar(320) charset utf8mb4 collate utf8mb4_bin",
 		"`gh_ost_chk_coords` text charset ascii",
 		"`gh_ost_chk_iteration` bigint",
 		"`gh_ost_rows_copied` bigint",

@@ -92,3 +92,23 @@ func deserializeRangeValues(s string, n int) *sql.ColumnValues {
 	}
 	return sql.ToColumnValues(abstract)
 }
+
+// isEmptyRange reports whether a deserialized range carries no usable boundary
+// (zero columns, or every column value nil). Such a range means the table had no
+// completed chunk when the checkpoint was written, so on resume it must start
+// from the table minimum rather than from this empty boundary.
+func isEmptyRange(cv *sql.ColumnValues) bool {
+	if cv == nil {
+		return true
+	}
+	vals := cv.AbstractValues()
+	if len(vals) == 0 {
+		return true
+	}
+	for _, v := range vals {
+		if v != nil {
+			return false
+		}
+	}
+	return true
+}

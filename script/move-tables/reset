@@ -12,8 +12,6 @@ DATABASE_NAME="${GH_OST_TEST_DB:-test}"
 # sets up / cleans up all of them, regardless of how many you actually move,
 # so reset works the same no matter which scenario you just ran.
 TABLES=(gh_ost_test gh_ost_test_other gh_ost_test_third)
-# The checkpoint table is named after the first (primary) migrated table: _<table>_ghk.
-PRIMARY_TABLE="${TABLES[0]}"
 
 # Reset source table state regardless of whether a cutover renamed the originals
 # to their `_<table>_del` rollback handles.
@@ -27,12 +25,21 @@ ${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXIS
 # Recreate and seed source table data, same fixture as setup uses.
 ${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/three/create.sql"
 
-# Drop the moved tables and the checkpoint table on the target cluster.
+# Drop the moved tables on the target cluster.
 target_drop=""
 for t in "${TABLES[@]}"; do
     target_drop+="${t}, "
 done
-target_drop+="_${PRIMARY_TABLE}_ghk"
+target_drop="${target_drop%, }"
 ${SCRIPT_PATH}/mysql-target-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS ${target_drop};"
+
+# The checkpoint table is named from the run token (_gho_<token>_ghk), which
+# depends on the exact set of moved tables, so we can't name it statically. Drop
+# any checkpoint tables that exist for this database.
+checkpoint_tables=$(${SCRIPT_PATH}/mysql-target-primary -N -B -D "${DATABASE_NAME}" -e \
+    "SELECT GROUP_CONCAT(CONCAT('\`', table_name, '\`')) FROM information_schema.tables WHERE table_schema='${DATABASE_NAME}' AND table_name LIKE '\\_gho\\_%\\_ghk';")
+if [[ -n "${checkpoint_tables}" && "${checkpoint_tables}" != "NULL" ]]; then
+    ${SCRIPT_PATH}/mysql-target-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS ${checkpoint_tables};"
+fi
 
 echo "Reset source and target tables (${TABLES[*]}) in ${DATABASE_NAME}"
