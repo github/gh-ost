@@ -1904,12 +1904,15 @@ func (mgtr *Migrator) validateMoveTablesSourceReadHost() error {
 	return fmt.Errorf("move-tables source --host %+v is the cluster primary; reading the full table copy from the primary is the load move-tables is meant to avoid. Point --host at a replica so reads come off the primary, or pass --allow-on-source-primary to proceed against the primary anyway", spc.Key)
 }
 
-// dropSourceOldTable drops the source `_<table>_del` rollback handle(s) on the
-// source primary. The inspector/streamer source connections may be a read
-// replica, so the drop cannot go through them; it must use the writable
-// source-primary handle. In multi-table mode every renamed source table's `_del`
-// handle is dropped.
-func (mgtr *Migrator) dropSourceOldTable() error {
+// dropMoveTablesSourceOldTables drops every source `_<table>_del` rollback
+// handle on the source primary. Move-tables only: each migrated table leaves a
+// `_del` handle behind after the atomic cutover RENAME, and there may be several.
+// The inspector/streamer source connections may be a read replica, so the drop
+// cannot go through them; it must use the writable source-primary handle.
+func (mgtr *Migrator) dropMoveTablesSourceOldTables() error {
+	if !mgtr.migrationContext.IsMoveTablesMode() {
+		return errors.New("dropMoveTablesSourceOldTables is only available in move-tables mode")
+	}
 	if mgtr.sourcePrimaryDB == nil {
 		return errors.New("source primary connection not initialized; cannot drop source __del table")
 	}
@@ -3164,7 +3167,7 @@ func (mgtr *Migrator) moveTablesFinalCleanup() error {
 		// inspector/streamer source connections may point at a read replica, so the
 		// drop goes through the dedicated source-primary handle.
 		if !mgtr.migrationContext.Noop {
-			if err := mgtr.retryOperation(mgtr.dropSourceOldTable); err != nil {
+			if err := mgtr.retryOperation(mgtr.dropMoveTablesSourceOldTables); err != nil {
 				return err
 			}
 		}

@@ -70,13 +70,13 @@ func TestLogMoveTablesRollbackHint_EmitsRenameCommand(t *testing.T) {
 		"must emit the rename command to roll the source table back")
 }
 
-// TestMoveTablesDropSourceOldTable_NilSourcePrimaryErrors verifies the source
+// TestDropMoveTablesSourceOldTables_NilSourcePrimaryErrors verifies the source
 // `__del` drop fails cleanly (rather than panicking) when the source-primary
 // connection was never initialized. The drop must never silently no-op.
-func TestMoveTablesDropSourceOldTable_NilSourcePrimaryErrors(t *testing.T) {
+func TestDropMoveTablesSourceOldTables_NilSourcePrimaryErrors(t *testing.T) {
 	m, _ := newCleanupTestMigrator()
 
-	err := m.dropSourceOldTable()
+	err := m.dropMoveTablesSourceOldTables()
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "source primary connection not initialized")
