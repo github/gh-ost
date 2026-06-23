@@ -1393,6 +1393,9 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		}
 	}
 
+	mgtr.migrationContext.NewFailPoint("move-tables-panic-before-drain-completion", base.WithFailPointWait(2*time.Second))
+
+	// ------ T3: draining applier to drain GTID -----------
 	if err := mgtr.drainMoveTablesCutOver(drainGTID); err != nil {
 		return err
 	}
@@ -1409,6 +1412,8 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// hangs after cutover because eventsStreamer.StreamEvents() never returns.
 	atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
 	mgtr.migrationContext.Log.Debugf("T4: CutOverCompleteFlag set")
+
+	mgtr.migrationContext.NewFailPoint("move-tables-panic-before-on-success-hook", base.WithFailPointWait(2*time.Second))
 
 	// ----- T5: on-success hook -----
 	// Hook unlocks user_rw@target via db-user-management and flips the
@@ -2594,6 +2599,8 @@ func (mgtr *Migrator) iterateChunks() error {
 			}
 			return terminateRowIteration(err)
 		}
+
+		mgtr.migrationContext.NewFailPoint("move-tables-panic-after-row-copy", base.WithFailPointWait(2*time.Second))
 	}
 }
 
