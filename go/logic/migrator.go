@@ -1901,10 +1901,6 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 // It gets the binlog coordinates of the last received trx and waits until the
 // applier reaches that trx. At that point it's safe to resume from these coordinates.
 func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
-	if mgtr.migrationContext.ParallelCopy {
-		return mgtr.CheckpointV2()
-	}
-
 	coords := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
 	mgtr.applier.LastIterationRangeMutex.Lock()
 	if mgtr.applier.LastIterationRangeMaxValues == nil || mgtr.applier.LastIterationRangeMinValues == nil {
@@ -1937,35 +1933,6 @@ func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 		metrics.RecordSleep(mgtr.migrationContext.Metrics, "replica_wait", sleepDuration)
 		time.Sleep(sleepDuration)
 	}
-}
-
-// CheckpointV2 writes a checkpoint using the applier's current coordinates directly.
-// Unlike Checkpoint, it does not wait for the applier to catch up to the streamer —
-// CurrentCoordinates is always safe because it is only advanced after
-// a DML has been fully applied. This avoids the fixed timeout in the polling loop
-// and ensures the checkpoint is always written, even under write pressure.
-func (mgtr *Migrator) CheckpointV2() (*Checkpoint, error) {
-	mgtr.applier.LastIterationRangeMutex.Lock()
-	if mgtr.applier.LastIterationRangeMaxValues == nil || mgtr.applier.LastIterationRangeMinValues == nil {
-		mgtr.applier.LastIterationRangeMutex.Unlock()
-		return nil, errors.New("iteration range is empty, not checkpointing")
-	}
-	mgtr.applier.CurrentCoordinatesMutex.Lock()
-	coords := mgtr.applier.CurrentCoordinates
-	mgtr.applier.CurrentCoordinatesMutex.Unlock()
-	chk := &Checkpoint{
-		Iteration:         mgtr.migrationContext.GetIteration(),
-		IterationRangeMin: mgtr.applier.LastIterationRangeMinValues.Clone(),
-		IterationRangeMax: mgtr.applier.LastIterationRangeMaxValues.Clone(),
-		LastTrxCoords:     coords,
-		RowsCopied:        atomic.LoadInt64(&mgtr.migrationContext.TotalRowsCopied),
-		DMLApplied:        atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
-	}
-	mgtr.applier.LastIterationRangeMutex.Unlock()
-
-	id, err := mgtr.applier.WriteCheckpoint(chk)
-	chk.Id = id
-	return chk, err
 }
 
 // CheckpointAfterCutOver writes a final checkpoint after the cutover completes successfully.
