@@ -296,16 +296,16 @@ type MigrationContext struct {
 	migrationLastInsertSQLWarningsMu sync.Mutex // unexported — only accessed via methods below
 }
 
-func (this *MigrationContext) SetLastInsertSQLWarnings(warnings []string) {
-	this.migrationLastInsertSQLWarningsMu.Lock()
-	defer this.migrationLastInsertSQLWarningsMu.Unlock()
-	this.MigrationLastInsertSQLWarnings = warnings
+func (mctx *MigrationContext) SetLastInsertSQLWarnings(warnings []string) {
+	mctx.migrationLastInsertSQLWarningsMu.Lock()
+	defer mctx.migrationLastInsertSQLWarningsMu.Unlock()
+	mctx.MigrationLastInsertSQLWarnings = warnings
 }
 
-func (this *MigrationContext) GetLastInsertSQLWarnings() []string {
-	this.migrationLastInsertSQLWarningsMu.Lock()
-	defer this.migrationLastInsertSQLWarningsMu.Unlock()
-	return this.MigrationLastInsertSQLWarnings
+func (mctx *MigrationContext) GetLastInsertSQLWarnings() []string {
+	mctx.migrationLastInsertSQLWarningsMu.Lock()
+	defer mctx.migrationLastInsertSQLWarningsMu.Unlock()
+	return mctx.MigrationLastInsertSQLWarnings
 }
 
 type Logger interface {
