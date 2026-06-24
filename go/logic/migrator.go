@@ -108,7 +108,7 @@ type Migrator struct {
 	// produced sequentially; the chunk INSERTs then run in parallel across workers.
 	// parallelCopyFrontierMutex guards parallelCopyPending/parallelCopyNextCommit, the
 	// iteration-keyed table that advances the checkpoint frontier only over a
-	// contiguous prefix of committed chunks (see advanceFrontier in parallel.go).
+	// contiguous prefix of committed chunks (see advanceFrontier in parallel_copy.go).
 	parallelCopySelectMutex   sync.Mutex
 	parallelCopyFrontierMutex sync.Mutex
 	parallelCopyPending       map[int64]*rangeResult
