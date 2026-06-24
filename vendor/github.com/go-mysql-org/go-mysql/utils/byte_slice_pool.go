@@ -6,13 +6,11 @@ type ByteSlice struct {
 	B []byte
 }
 
-var (
-	byteSlicePool = sync.Pool{
-		New: func() interface{} {
-			return new(ByteSlice)
-		},
-	}
-)
+var byteSlicePool = sync.Pool{
+	New: func() any {
+		return new(ByteSlice)
+	},
+}
 
 func ByteSliceGet(length int) *ByteSlice {
 	data := byteSlicePool.Get().(*ByteSlice)

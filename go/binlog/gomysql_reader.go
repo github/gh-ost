@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"context"
+
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	uuid "github.com/google/uuid"
@@ -189,8 +190,11 @@ func (gmr *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChan
 				gmr.currentCoordinates = gmr.LastTrxCoords.Clone()
 			}
 			coords := gmr.currentCoordinates.(*mysql.GTIDBinlogCoordinates)
-			trxGset := gomysql.NewUUIDSet(sid, gomysql.Interval{Start: event.GNO, Stop: event.GNO + 1})
-			coords.GTIDSet.AddSet(trxGset)
+			if coords.GTIDSet == nil {
+				gtidSet := gomysql.NewMysqlGTIDSet()
+				coords.GTIDSet = &gtidSet
+			}
+			coords.GTIDSet.AddGTID(sid, event.GNO)
 			gmr.currentCoordinatesMutex.Unlock()
 		case *replication.RotateEvent:
 			if gmr.migrationContext.UseGTIDs {
