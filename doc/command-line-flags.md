@@ -107,10 +107,10 @@ Controls how many rows `gh-ost` copies in each row-copy iteration. The default i
 Parallel copy requires checkpoints because parallel INSERTs can go out of sequential order and leave gaps in target table. gh-ost checkpoints are consistent and do not have gaps, so resuming from a checkpoint will make the target table consistent again.
 
 Consistency is ensured by using 
--INSERT IGNORE/SELECT FOR SHARE for row copy 
--DELETE/INSERT by DML applier when unique key change is detected
-Without all of those, consistency of parallel copy cannot be guaranteed (for example, row copy could insert row back after it was deleted).
-In existing serial mode, the problem is much easier because DML applier is never parallel with row copy.
+-INSERT IGNORE/SELECT FOR SHARE for row copy (current gh-ost behavior)
+-DELETE/INSERT by DML applier when unique key change is detected (current gh-ost behavior)
+-advanceFrontier call to ensure that checkpoints have no gaps (used by parallel-copy only)
+Without all of those, consistency of parallel copy cannot be guaranteed (for example, row copy could insert row back after it was deleted). In existing serial mode, the problem is much easier because DML applier is never parallel with row copy.
 
 ### parallel-copy-workers
 
