@@ -104,16 +104,16 @@ type Migrator struct {
 	finishedMigrating int64
 
 	// Parallel row-copy state (used only when --parallel-copy is enabled).
-	// parallelSelectMutex serializes the boundary-scan SELECTs so chunk ranges are
+	// parallelCopySelectMutex serializes the boundary-scan SELECTs so chunk ranges are
 	// produced sequentially; the chunk INSERTs then run in parallel across workers.
-	// parallelFrontierMutex guards parallelPending/parallelNextCommit, the
+	// parallelCopyFrontierMutex guards parallelCopyPending/parallelCopyNextCommit, the
 	// iteration-keyed table that advances the checkpoint frontier only over a
 	// contiguous prefix of committed chunks (see advanceFrontier in parallel.go).
-	parallelSelectMutex   sync.Mutex
-	parallelFrontierMutex sync.Mutex
-	parallelPending       map[int64]*rangeResult
-	parallelNextCommit    int64
-	parallelDispatchSeq   int64 // monotone dispatch counter; separate from Iteration so Iteration tracks commits
+	parallelCopySelectMutex   sync.Mutex
+	parallelCopyFrontierMutex sync.Mutex
+	parallelCopyPending       map[int64]*rangeResult
+	parallelCopyNextCommit    int64
+	parallelCopyDispatchSeq   int64 // monotone dispatch counter; separate from Iteration so Iteration tracks commits
 }
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
@@ -1814,30 +1814,30 @@ func (mgtr *Migrator) iterateChunks() error {
 // is called to signal the channel). Returns captured=false with non-nil err when the
 // range scan itself fails; the caller should propagate it to trigger a retry.
 func (mgtr *Migrator) captureParallelChunkRange(hasNoFurtherRangeFlag *int64, terminateRowIteration func(error) error) (iteration int64, rangeMin, rangeMax *sql.ColumnValues, captured bool, err error) {
-	mgtr.parallelSelectMutex.Lock()
+	mgtr.parallelCopySelectMutex.Lock()
 	if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(hasNoFurtherRangeFlag) == 1 {
-		mgtr.parallelSelectMutex.Unlock()
+		mgtr.parallelCopySelectMutex.Unlock()
 		return 0, nil, nil, false, nil
 	}
 	mgtr.migrationContext.SetNextIterationRangeMinValues()
 	hasFurtherRange, err := mgtr.applier.CalculateNextIterationRangeEndValues()
 	if err != nil {
-		mgtr.parallelSelectMutex.Unlock()
+		mgtr.parallelCopySelectMutex.Unlock()
 		return 0, nil, nil, false, err
 	}
 	if !hasFurtherRange {
 		atomic.StoreInt64(hasNoFurtherRangeFlag, 1)
-		mgtr.parallelSelectMutex.Unlock()
+		mgtr.parallelCopySelectMutex.Unlock()
 		return 0, nil, nil, false, terminateRowIteration(nil)
 	}
-	iteration = atomic.LoadInt64(&mgtr.parallelDispatchSeq)
+	iteration = atomic.LoadInt64(&mgtr.parallelCopyDispatchSeq)
 	rangeMin = mgtr.migrationContext.MigrationIterationRangeMinValues.Clone()
 	rangeMax = mgtr.migrationContext.MigrationIterationRangeMaxValues.Clone()
 	// Advance the dispatch counter under the lock so the next worker
 	// scans the next chunk. Iteration is advanced at commit time in
 	// advanceFrontier so it stays consistent with TotalRowsCopied.
-	atomic.AddInt64(&mgtr.parallelDispatchSeq, 1)
-	mgtr.parallelSelectMutex.Unlock()
+	atomic.AddInt64(&mgtr.parallelCopyDispatchSeq, 1)
+	mgtr.parallelCopySelectMutex.Unlock()
 	return iteration, rangeMin, rangeMax, true, nil
 }
 

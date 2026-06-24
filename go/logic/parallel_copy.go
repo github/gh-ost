@@ -135,11 +135,11 @@ func (mgtr *Migrator) copyRowsParallel() {
 // resetParallelState initializes the iteration-keyed pending table and the next-to-commit
 // cursor for a parallel row-copy.
 func (mgtr *Migrator) resetParallelState(firstIteration int64) {
-	mgtr.parallelFrontierMutex.Lock()
-	defer mgtr.parallelFrontierMutex.Unlock()
-	mgtr.parallelPending = make(map[int64]*rangeResult)
-	mgtr.parallelNextCommit = firstIteration
-	atomic.StoreInt64(&mgtr.parallelDispatchSeq, firstIteration)
+	mgtr.parallelCopyFrontierMutex.Lock()
+	defer mgtr.parallelCopyFrontierMutex.Unlock()
+	mgtr.parallelCopyPending = make(map[int64]*rangeResult)
+	mgtr.parallelCopyNextCommit = firstIteration
+	atomic.StoreInt64(&mgtr.parallelCopyDispatchSeq, firstIteration)
 }
 
 // advanceFrontier records a just-completed chunk INSERT (keyed by its iteration)
@@ -154,22 +154,22 @@ func (mgtr *Migrator) resetParallelState(firstIteration int64) {
 // un-written chunk, so a crash/resume can re-copy forward from the frontier without
 // leaving holes.
 func (mgtr *Migrator) advanceFrontier(iteration int64, rangeMin, rangeMax *sql.ColumnValues, rowsAffected int64) {
-	mgtr.parallelFrontierMutex.Lock()
-	defer mgtr.parallelFrontierMutex.Unlock()
+	mgtr.parallelCopyFrontierMutex.Lock()
+	defer mgtr.parallelCopyFrontierMutex.Unlock()
 
-	mgtr.parallelPending[iteration] = &rangeResult{
+	mgtr.parallelCopyPending[iteration] = &rangeResult{
 		rangeMin:     rangeMin,
 		rangeMax:     rangeMax,
 		rowsAffected: rowsAffected,
 	}
 
 	for {
-		result, ok := mgtr.parallelPending[mgtr.parallelNextCommit]
+		result, ok := mgtr.parallelCopyPending[mgtr.parallelCopyNextCommit]
 		if !ok {
 			break
 		}
-		delete(mgtr.parallelPending, mgtr.parallelNextCommit)
-		mgtr.parallelNextCommit++
+		delete(mgtr.parallelCopyPending, mgtr.parallelCopyNextCommit)
+		mgtr.parallelCopyNextCommit++
 		atomic.AddInt64(&mgtr.migrationContext.Iteration, 1)
 		atomic.AddInt64(&mgtr.migrationContext.TotalRowsCopied, result.rowsAffected)
 
