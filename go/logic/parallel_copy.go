@@ -87,11 +87,11 @@ func (mgtr *Migrator) copyRowsParallel() {
 			for {
 				select {
 				case copyRowsFunc := <-mgtr.copyRowsQueue:
-					// Throttle before issuing the chunk, mirroring executeWriteFuncs.
-					mgtr.throttler.throttle(nil)
 					// Parallel-copy lag throttle: back off before the global throttle
 					// kicks in, giving the binlog DML applier priority over row copy.
 					mgtr.throttleOnHeartbeatLag(ctx)
+					// Throttle before issuing the chunk, mirroring executeWriteFuncs.
+					mgtr.throttler.throttle(nil)
 					copyRowsStartTime := time.Now()
 					// Errors are routed to rowCopyComplete inside the closure (via
 					// terminateRowIteration); the ctx.Done() case below then unwinds us.
