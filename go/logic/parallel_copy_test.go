@@ -49,8 +49,8 @@ func TestFrontierInOrderCommit(t *testing.T) {
 
 	require.Equal(t, int64(60), mgtr.migrationContext.GetTotalRowsCopied())
 	require.Same(t, r2, mgtr.applier.LastIterationRangeMaxValues)
-	require.Equal(t, int64(3), mgtr.parallelNextCommit)
-	require.Empty(t, mgtr.parallelPending)
+	require.Equal(t, int64(3), mgtr.parallelCopyNextCommit)
+	require.Empty(t, mgtr.parallelCopyPending)
 }
 
 // TestFrontierOutOfOrderHoldAndRelease: a later chunk that finishes before its
@@ -63,21 +63,21 @@ func TestFrontierOutOfOrderHoldAndRelease(t *testing.T) {
 	mgtr.advanceFrontier(2, distinctRange(), r2, 30)
 	require.Equal(t, int64(0), mgtr.migrationContext.GetTotalRowsCopied())
 	require.Nil(t, mgtr.applier.LastIterationRangeMaxValues)
-	require.Equal(t, int64(0), mgtr.parallelNextCommit)
-	require.Len(t, mgtr.parallelPending, 1)
+	require.Equal(t, int64(0), mgtr.parallelCopyNextCommit)
+	require.Len(t, mgtr.parallelCopyPending, 1)
 
 	// iteration 0 commits only itself (1 still missing).
 	mgtr.advanceFrontier(0, distinctRange(), r0, 10)
 	require.Equal(t, int64(10), mgtr.migrationContext.GetTotalRowsCopied())
 	require.Same(t, r0, mgtr.applier.LastIterationRangeMaxValues)
-	require.Equal(t, int64(1), mgtr.parallelNextCommit)
+	require.Equal(t, int64(1), mgtr.parallelCopyNextCommit)
 
 	// iteration 1 fills the gap and releases 1 then 2.
 	mgtr.advanceFrontier(1, distinctRange(), r1, 20)
 	require.Equal(t, int64(60), mgtr.migrationContext.GetTotalRowsCopied())
 	require.Same(t, r2, mgtr.applier.LastIterationRangeMaxValues)
-	require.Equal(t, int64(3), mgtr.parallelNextCommit)
-	require.Empty(t, mgtr.parallelPending)
+	require.Equal(t, int64(3), mgtr.parallelCopyNextCommit)
+	require.Empty(t, mgtr.parallelCopyPending)
 }
 
 // TestFrontierGapSafety: with a gap open, the persisted frontier must never reflect
@@ -95,8 +95,8 @@ func TestFrontierGapSafety(t *testing.T) {
 	// Frontier and rows must still reflect only the contiguous prefix [0].
 	require.Equal(t, int64(10), mgtr.migrationContext.GetTotalRowsCopied())
 	require.Same(t, r0, mgtr.applier.LastIterationRangeMaxValues)
-	require.Equal(t, int64(1), mgtr.parallelNextCommit)
-	require.Len(t, mgtr.parallelPending, 3)
+	require.Equal(t, int64(1), mgtr.parallelCopyNextCommit)
+	require.Len(t, mgtr.parallelCopyPending, 3)
 }
 
 // TestFrontierResumeBase: when resuming, the next-commit cursor starts at the
@@ -106,7 +106,7 @@ func TestFrontierResumeBase(t *testing.T) {
 	r100, r101, r102 := distinctRange(), distinctRange(), distinctRange()
 
 	mgtr.advanceFrontier(100, distinctRange(), r100, 5)
-	require.Equal(t, int64(101), mgtr.parallelNextCommit)
+	require.Equal(t, int64(101), mgtr.parallelCopyNextCommit)
 	require.Same(t, r100, mgtr.applier.LastIterationRangeMaxValues)
 
 	// 102 out of order is held; 101 then releases 101 and 102.
@@ -116,6 +116,6 @@ func TestFrontierResumeBase(t *testing.T) {
 
 	require.Equal(t, int64(18), mgtr.migrationContext.GetTotalRowsCopied())
 	require.Same(t, r102, mgtr.applier.LastIterationRangeMaxValues)
-	require.Equal(t, int64(103), mgtr.parallelNextCommit)
-	require.Empty(t, mgtr.parallelPending)
+	require.Equal(t, int64(103), mgtr.parallelCopyNextCommit)
+	require.Empty(t, mgtr.parallelCopyPending)
 }
