@@ -3,7 +3,7 @@ create table gh_ost_test (
   id int auto_increment,
   a int not null,
   b int not null,
-  sum_ab int as (a + b) virtual not null,
+  sum_ab int as (a + b) virtual,
   primary key(id)
 ) auto_increment=1;
 

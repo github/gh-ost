@@ -1,0 +1,8 @@
+[mysqld]
+gtid-mode=ON
+enforce-gtid-consistency=ON
+character-set-server=utf8mb4
+# Use the legacy auth plugin (as on 5.7 and master) so clients connect over
+# plain TCP without TLS. 8.0 defaults to caching_sha2_password, which forces a
+# secure transport. Covers root too (created by the entrypoint).
+default-authentication-plugin=mysql_native_password

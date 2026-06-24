@@ -1,0 +1,10 @@
+[mysqld]
+character-set-server=utf8mb4
+# MariaDB ships the binary log off and binlog_format=MIXED by default; gh-ost
+# tails ROW events from the replica's own binlog under --test-on-replica, so
+# the replica needs log-bin + ROW + log-slave-updates. MariaDB tracks GTID
+# (gtid_binlog_pos) automatically once the binary log is on; it has no
+# gtid_mode/enforce_gtid_consistency knobs (those are MySQL-only).
+log-bin=mariadb-bin
+binlog-format=ROW
+log-slave-updates=ON

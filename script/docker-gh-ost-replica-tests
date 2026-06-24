@@ -12,8 +12,7 @@
 # Flags:
 #   -t      use a toxiproxy for replica connection to simulate dropped connections
 
-set -e
-toxiproxy=false
+set -euo pipefail
 
 GH_OST_ROOT=$(git rev-parse --show-toplevel)
 if [[ ":$PATH:" != *":$GH_OST_ROOT:"* ]]; then
@@ -35,22 +34,6 @@ poll_mysql() {
     return 0
 }
 
-mysql-source() {
-    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
-        gh-ost-test-mysql-master --ssl-mode=required "$@"
-    else
-        gh-ost-test-mysql-master "$@"
-    fi
-}
-
-mysql-replica() {
-    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
-        gh-ost-test-mysql-replica --ssl-mode=required "$@"
-    else
-        gh-ost-test-mysql-replica "$@"
-    fi
-}
-
 create_toxiproxy() {
     curl --fail -X POST http://localhost:8474/proxies \
         -H "Content-Type: application/json" \
@@ -68,54 +51,29 @@ create_toxiproxy() {
 }
 
 setup() {
-    [ -z "$TEST_MYSQL_IMAGE" ] && TEST_MYSQL_IMAGE="mysql:8.0.41"
-
-    echo "Starting MySQL $TEST_MYSQL_IMAGE containers..."
-    compose_file="$GH_OST_ROOT/localtests/docker-compose.yml"
-    MYSQL_SHA2_RSA_KEYS_FLAG=""
-    MYSQL_PASSWORD_HASHING_ALGORITHM="mysql_native_password"
-    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
-        MYSQL_PASSWORD_HASHING_ALGORITHM="caching_sha2_password"
-        MYSQL_SHA2_RSA_KEYS_FLAG="--caching-sha2-password-auto-generate-rsa-keys=ON"
-    fi
-    (TEST_MYSQL_IMAGE="$TEST_MYSQL_IMAGE" MYSQL_SHA2_RSA_KEYS_FLAG="$MYSQL_SHA2_RSA_KEYS_FLAG" envsubst <"$compose_file") >"$compose_file.tmp"
-
     if [ "$toxiproxy" = true ]; then
-        echo "Starting toxiproxy container..."
-        cat <<EOF >>"$compose_file.tmp"
-  mysql-toxiproxy:
-    image: "ghcr.io/shopify/toxiproxy:latest"
-    container_name: mysql-toxiproxy
-    ports:
-      - '8474:8474'
-      - '23308:23308'
-    expose:
-      - '23308'
-      - '8474'
-EOF
+      echo "Starting $TEST_MYSQL_IMAGE with toxiproxy..."
+    else
+      echo "Starting $TEST_MYSQL_IMAGE..."
     fi
 
-    docker compose -f "$compose_file.tmp" up -d --wait
+    # docker compose makes sure that both servers are
+    # - initialized with correct my.cnf and listening
+    # - have users with correct permissions created
+    docker compose up --wait
 
     echo "Waiting for MySQL..."
     poll_mysql "master" || exit 1
     poll_mysql "replica" || exit 1
 
-    echo -n "Setting up replication..."
-    mysql-source -e "create user if not exists 'repl'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'repl';"
-    mysql-source -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
-    mysql-source -e "create user if not exists 'gh-ost'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'gh-ost';"
-    mysql-source -e "grant all on *.* to 'gh-ost'@'%';"
-
-    sleep 1
-    if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
-        mysql-replica -e "change replication source to source_host='mysql-primary', source_port=3307, source_user='repl', source_password='repl', source_auto_position=1, source_ssl=1;"
-        mysql-replica -e "start replica;"
-    else
-        mysql-replica -e "change master to master_host='mysql-primary', master_port=3307, master_user='repl', master_password='repl', master_auto_position=1;"
-        mysql-replica -e "start slave;"
+    # Configure replication now that both servers are reachable,
+    # so the replica's IO thread connects on the first try.
+    echo "Starting replication..."
+    if ! gh-ost-test-mysql-replica < "$CONF_PATH/start_replication.sql"; then
+        echo " ❌ failed to start replication"
+        exit 1
     fi
-    echo "OK"
+    echo " ✔ replication OK"
 
     if [ "$toxiproxy" = true ]; then
         echo "Creating toxiproxy..."
@@ -124,30 +82,89 @@ EOF
     fi
 }
 
+status() {
+  docker compose ps
+}
+
 teardown() {
-    echo "Stopping containers..."
-    docker stop mysql-replica
-    docker stop mysql-primary
-    docker stop mysql-toxiproxy 2>/dev/null || true
-    echo "Removing containers..."
-    docker rm mysql-replica
-    docker rm mysql-primary
-    docker rm mysql-toxiproxy 2>/dev/null || true
+    echo "Stopping and deleting containers..."
+    # -v also removes the anonymous /var/lib/mysql data volumes
+    # (the image declares VOLUME). Without -v these just pile up
+    # as dangling ~200MB volumes across runs.
+    # --remove-orphans: in case previous run used toxiproxy, we want to tear it down too.
+    docker compose down -v --remove-orphans
+}
+
+compose_setup() {
+    # export TEST_MYSQL_IMAGE so it's parsed in docker-compose.yml
+    export TEST_MYSQL_IMAGE="${TEST_MYSQL_IMAGE:-mysql:8.0.41}"
+    [[ "${2:-}" == "-t" ]] && toxiproxy=true || toxiproxy=false
+
+    local compose_path="$GH_OST_ROOT/script"
+    # COMPOSE_FILE env var is recognised by docker compose and can contain multiple files
+    export COMPOSE_FILE="$compose_path/docker-compose.yml"
+    if [ "$toxiproxy" = true ]; then
+        COMPOSE_FILE="${COMPOSE_FILE}:$compose_path/docker-compose.toxiproxy.yml"
+    fi
+
+    # Per-version config lives in docker/<flavor>-<major.minor> (e.g. mysql-8.0)
+    # Derive <flavor> from the image repo basename and <major.minor> from the tag,
+    # so registry/repo prefixes like percona/percona-server:8.0.41-32 resolve correctly.
+    local repo tag flavor major_minor major
+    repo="${TEST_MYSQL_IMAGE%%:*}"
+    tag="${TEST_MYSQL_IMAGE##*:}"
+    flavor="${repo##*/}"
+    major_minor="$(echo "$tag" | cut -d. -f1-2)"
+    major="$(echo "$tag" | cut -d. -f1)"
+
+    # Resolve by specificity: exact <flavor>-<major.minor>, then <flavor>-<major>,
+    # then bare <flavor>. Versions that share one config (e.g. all MariaDB) live
+    # in a single docker/<flavor> dir; a version (or major line) needing
+    # different config overrides it by adding its own more-specific dir.
+    local candidate
+    CONF_PATH=""
+    for candidate in "${flavor}-${major_minor}" "${flavor}-${major}" "${flavor}"; do
+      if [[ -d "$compose_path/docker/$candidate" ]]; then
+        CONF_PATH="$compose_path/docker/$candidate"
+        break
+      fi
+    done
+    if [[ -z "$CONF_PATH" ]]; then
+      echo "No config dir for image '$TEST_MYSQL_IMAGE' (looked for docker/${flavor}-${major_minor}, docker/${flavor}-${major}, docker/${flavor})" >&2
+      exit 1
+    fi
+    export CONF_PATH
+
+    # Per-flavor knobs, with defaults. Each flavor dir may override these in an
+    # optional flavor.env (e.g. Percona reads config from /etc/my.cnf.d).
+    # Keeps this script flavor-agnostic.
+    export MYSQL_CONFD=/etc/mysql/conf.d   # where the server reads common.cnf
+    if [[ -f "$CONF_PATH/flavor.env" ]]; then
+        # shellcheck disable=SC1091
+        source "$CONF_PATH/flavor.env"
+    fi
+}
+
+usage() {
+    echo "Usage: $(basename "$0") up|down|status|run [-t]" >&2
+    exit 1
 }
 
 main() {
-    local cmd="$1"
-    local tflag=
-    if [[ "$2" == "-t" ]]; then
-        toxiproxy=true
-    fi
+    local cmd="${1:-}"
+    [[ -z "$cmd" ]] && usage
+    compose_setup "$@"
     if [[ "$cmd" == "up" ]]; then
         setup
     elif [[ "$cmd" == "down" ]]; then
         teardown
+    elif [[ "$cmd" == "status" ]]; then
+        status
     elif [[ "$cmd" == "run" ]]; then
         shift 1
         "$GH_OST_ROOT/localtests/test.sh" -d "$@"
+    else
+        usage
     fi
 }
 
