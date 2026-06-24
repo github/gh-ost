@@ -93,13 +93,24 @@ script/move-tables/teardown
 
 The same fixtures back the CI integration tests, run via
 `localtests/move-tables-test.sh [filter]`. Each test directory under
-`localtests/move-tables/` is self-contained (its own `create.sql` + `tables.txt`):
+`localtests/move-tables/` is self-contained (its own `create.sql` + `tables.txt`,
+plus an optional `on_test.sh` for concurrent workload or `test.sh` for a fully
+custom scenario):
 
-- `single` — moves 1 table (`gh_ost_test`)
-- `multi` — moves 2 tables (`gh_ost_test`, `gh_ost_test_other`)
-- `three` — moves 3 tables (`gh_ost_test`, `gh_ost_test_other`, `gh_ost_test_third`)
+- `single` — moves 1 table, idle source
+- `single-concurrent-writes` — moves 1 table with sustained DML during copy
+- `single-with-hooks` — moves 1 table and asserts the hook env vars
+- `multiple-two` — moves 2 tables, idle source
+- `multiple-three` — moves 3 tables, idle source
+- `multiple-three-concurrent-writes` — moves 3 tables with sustained DML on all three
+- `atomic-multi-table-cutover` — moves 2 tables while committing cross-table
+  transactions up to cutover; asserts the atomic multi-table RENAME leaves no
+  orphaned rows across the pair
+- `resume-panic-on-row-copy`, `resume-panic-before-drain-complete`,
+  `resume-panic-before-on-success-hook` — crash mid-run via a failpoint, then
+  `--resume` to completion
 
 Run a single scenario by name, e.g.:
 ```bash
-localtests/move-tables-test.sh three
+localtests/move-tables-test.sh multiple-three
 ```
