@@ -124,6 +124,11 @@ func (apl *Applier) InitDBConnections() (err error) {
 	if apl.db, _, err = mysql.GetDB(apl.migrationContext.Uuid, uriWithMulti); err != nil {
 		return err
 	}
+	if apl.migrationContext.ParallelCopy {
+		poolSize := int(apl.migrationContext.ParallelCopyWorkers) + base.ParallelCopyConnHeadroom
+		apl.db.SetMaxOpenConns(poolSize)
+		apl.db.SetMaxIdleConns(poolSize)
+	}
 	singletonApplierUri := fmt.Sprintf("%s&timeout=0", applierUri)
 	if apl.singletonDB, _, err = mysql.GetDB(apl.migrationContext.Uuid, singletonApplierUri); err != nil {
 		return err
@@ -1075,11 +1080,41 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 	return hasFurtherRange, nil
 }
 
+// iterationRange carries an explicit chunk range for ApplyIterationInsertQuery. It is
+// passed only by the --parallel-copy path; serial callers pass nothing and the shared
+// migrationContext.MigrationIterationRange* values are used instead.
+type iterationRange struct {
+	min               *sql.ColumnValues
+	max               *sql.ColumnValues
+	includeRangeStart bool
+}
+
 // ApplyIterationInsertQuery issues a chunk-INSERT query on the ghost table. It is where
 // data actually gets copied from original table.
-func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
+//
+// Serial callers invoke it with no argument: the chunk range comes from the shared
+// migrationContext.MigrationIterationRange* cursor.
+// The --parallel-copy path passes an explicit range (captured under the boundary-scan
+// mutex) so concurrent workers don't race on the shared cursor
+func (apl *Applier) ApplyIterationInsertQuery(parallelRange ...*iterationRange) (chunkSize int64, rowsAffected int64, duration time.Duration, err error) {
 	startTime := time.Now()
 	chunkSize = atomic.LoadInt64(&apl.migrationContext.ChunkSize)
+
+	parallel := len(parallelRange) > 0 && parallelRange[0] != nil
+	var rangeMin, rangeMax *sql.ColumnValues
+	var includeRangeStartValues bool
+	if parallel {
+		// Use the explicitly-passed range. The parallel INSERT runs unlocked and
+		// concurrently, so it must NOT read the shared MigrationIterationRange* cursor:
+		// another worker is mutating it under parallelSelectMutex.
+		rangeMin = parallelRange[0].min
+		rangeMax = parallelRange[0].max
+		includeRangeStartValues = parallelRange[0].includeRangeStart
+	} else {
+		rangeMin = apl.migrationContext.MigrationIterationRangeMinValues
+		rangeMax = apl.migrationContext.MigrationIterationRangeMaxValues
+		includeRangeStartValues = apl.migrationContext.GetIteration() == 0
+	}
 
 	query, explodedArgs, err := sql.BuildRangeInsertPreparedQuery(
 		apl.migrationContext.DatabaseName,
@@ -1089,9 +1124,9 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 		apl.migrationContext.MappedSharedColumns.Names(),
 		apl.migrationContext.UniqueKey.Name,
 		&apl.migrationContext.UniqueKey.Columns,
-		apl.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
-		apl.migrationContext.MigrationIterationRangeMaxValues.AbstractValues(),
-		apl.migrationContext.GetIteration() == 0,
+		rangeMin.AbstractValues(),
+		rangeMax.AbstractValues(),
+		includeRangeStartValues,
 		apl.migrationContext.IsTransactionalTable(),
 		// TODO: Don't hardcode this
 		strings.HasPrefix(apl.migrationContext.ApplierMySQLVersion, "8."),
@@ -1149,7 +1184,13 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 				}
 				sqlWarnings = append(sqlWarnings, fmt.Sprintf("%s: %s (%d)", level, message, code))
 			}
-			apl.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
+			if parallel {
+				if len(sqlWarnings) > 0 {
+					apl.migrationContext.SetLastInsertSQLWarnings(sqlWarnings)
+				}
+			} else {
+				apl.migrationContext.MigrationLastInsertSQLWarnings = sqlWarnings
+			}
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -1165,8 +1206,8 @@ func (apl *Applier) ApplyIterationInsertQuery() (chunkSize int64, rowsAffected i
 	duration = time.Since(startTime)
 	apl.migrationContext.Log.Debugf(
 		"Issued INSERT on range: [%s]..[%s]; iteration: %d; chunk-size: %d",
-		apl.migrationContext.MigrationIterationRangeMinValues,
-		apl.migrationContext.MigrationIterationRangeMaxValues,
+		rangeMin,
+		rangeMax,
 		apl.migrationContext.GetIteration(),
 		chunkSize)
 	return chunkSize, rowsAffected, duration, nil

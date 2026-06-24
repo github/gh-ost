@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -101,6 +102,18 @@ type Migrator struct {
 	applyEventsQueue chan *applyEventStruct
 
 	finishedMigrating int64
+
+	// Parallel row-copy state (used only when --parallel-copy is enabled).
+	// parallelSelectMutex serializes the boundary-scan SELECTs so chunk ranges are
+	// produced sequentially; the chunk INSERTs then run in parallel across workers.
+	// parallelFrontierMutex guards parallelPending/parallelNextCommit, the
+	// iteration-keyed table that advances the checkpoint frontier only over a
+	// contiguous prefix of committed chunks (see advanceFrontier in parallel.go).
+	parallelSelectMutex   sync.Mutex
+	parallelFrontierMutex sync.Mutex
+	parallelPending       map[int64]*rangeResult
+	parallelNextCommit    int64
+	parallelDispatchSeq   int64 // monotone dispatch counter; separate from Iteration so Iteration tracks commits
 }
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
@@ -619,13 +632,26 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.hooksExecutor.OnBeforeRowCopy(); err != nil {
 		return err
 	}
-	go func() {
-		if err := mgtr.executeWriteFuncs(); err != nil {
-			// Send error to PanicAbort to trigger abort
-			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
-		}
-	}()
-	go mgtr.iterateChunks()
+	if mgtr.migrationContext.ParallelCopy {
+		// Row copy is produced by iterateChunks and consumed in parallel by workers (copyRowsParallel).
+		// Binlog DML is applied single-threaded by executeDMLWriteFuncs.
+		// it must not also pull copy tasks (the workers own copyRowsQueue),
+		// hence executeDMLWriteFuncs rather than executeWriteFuncs here.
+		go func() {
+			if err := mgtr.executeDMLWriteFuncs(); err != nil {
+				_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+			}
+		}()
+		go mgtr.copyRowsParallel()
+	} else {
+		go func() {
+			if err := mgtr.executeWriteFuncs(); err != nil {
+				// Send error to PanicAbort to trigger abort
+				_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
+			}
+		}()
+		go mgtr.iterateChunks()
+	}
 	mgtr.migrationContext.MarkRowCopyStartTime()
 	go mgtr.initiateStatus()
 	if mgtr.migrationContext.Checkpoint {
@@ -1466,7 +1492,11 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, snap migrationProgressSn
 		return
 	}
 
-	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s",
+	throughputSuffix := ""
+	if mgtr.migrationContext.ParallelCopy {
+		throughputSuffix = fmt.Sprintf("; Throughput: %drows/sec", atomic.LoadInt64(&mgtr.migrationContext.EtaRowsPerSecond))
+	}
+	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s%s",
 		snap.totalRowsCopied, snap.rowsEstimate, snap.progressPct,
 		snap.dmlApplied,
 		snap.applyEventsBacklog, snap.applyEventsCapacity,
@@ -1476,6 +1506,7 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, snap migrationProgressSn
 		snap.heartbeatLagSeconds,
 		snap.state,
 		snap.eta,
+		throughputSuffix,
 	)
 	mgtr.applier.WriteChangelog(
 		fmt.Sprintf("copy iteration %d at %d", mgtr.migrationContext.GetIteration(), time.Now().Unix()),
@@ -1650,8 +1681,17 @@ func (mgtr *Migrator) iterateChunks() error {
 			// There's another such check down the line
 			return nil
 		}
+		// --parallel-copy state, captured once per copyRowsFunc invocation under
+		// parallelSelectMutex so the chunk INSERT (which runs unlocked, in parallel) uses
+		// a stable range even as other workers advance the shared cursor, and so a retry
+		// re-inserts the same chunk rather than re-scanning a new range.
+		var parallelIteration int64
+		var parallelRangeMin, parallelRangeMax *sql.ColumnValues
+		var parallelCaptured bool
 		copyRowsFunc := func() error {
-			mgtr.migrationContext.SetNextIterationRangeMinValues()
+			if !mgtr.migrationContext.ParallelCopy {
+				mgtr.migrationContext.SetNextIterationRangeMinValues()
+			}
 			// Copy task:
 			applyCopyRowsFunc := func() error {
 				if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
@@ -1660,14 +1700,28 @@ func (mgtr *Migrator) iterateChunks() error {
 					return nil
 				}
 
-				// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
-				hasFurtherRange, err := mgtr.applier.CalculateNextIterationRangeEndValues()
-				if err != nil {
-					return err // wrapping call will retry
-				}
-				if !hasFurtherRange {
-					atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
-					return terminateRowIteration(nil)
+				if mgtr.migrationContext.ParallelCopy {
+					// Serialize the boundary scan and capture this chunk's range once. A
+					// retry of this func (e.g. a transient INSERT error) then reuses the
+					// captured range instead of re-scanning, so the contiguous frontier in
+					// advanceFrontier is never left with an abandoned iteration.
+					if !parallelCaptured {
+						var stopErr error
+						parallelIteration, parallelRangeMin, parallelRangeMax, parallelCaptured, stopErr = mgtr.captureParallelChunkRange(&hasNoFurtherRangeFlag, terminateRowIteration)
+						if !parallelCaptured {
+							return stopErr
+						}
+					}
+				} else {
+					// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
+					hasFurtherRange, err := mgtr.applier.CalculateNextIterationRangeEndValues()
+					if err != nil {
+						return err // wrapping call will retry
+					}
+					if !hasFurtherRange {
+						atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
+						return terminateRowIteration(nil)
+					}
 				}
 				if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
 					// No need for more writes.
@@ -1680,41 +1734,69 @@ func (mgtr *Migrator) iterateChunks() error {
 					// _ghost_ table, which no longer exists. So, bothering error messages and all, but no damage.
 					return nil
 				}
-				_, rowsAffected, _, err := mgtr.applier.ApplyIterationInsertQuery()
+				var rowsAffected int64
+				var err error
+				if mgtr.migrationContext.ParallelCopy {
+					// Pass the captured range explicitly so the INSERT doesn't read the
+					// shared cursor; with --panic-on-warnings it returns warnings as an error.
+					_, rowsAffected, _, err = mgtr.applier.ApplyIterationInsertQuery(
+						&iterationRange{min: parallelRangeMin, max: parallelRangeMax, includeRangeStart: parallelIteration == 0},
+					)
+				} else {
+					_, rowsAffected, _, err = mgtr.applier.ApplyIterationInsertQuery()
+				}
 				if err != nil {
 					return err // wrapping call will retry
 				}
 
 				if mgtr.migrationContext.PanicOnWarnings {
-					if len(mgtr.migrationContext.MigrationLastInsertSQLWarnings) > 0 {
-						for _, warning := range mgtr.migrationContext.MigrationLastInsertSQLWarnings {
+					var warnings []string
+					if mgtr.migrationContext.ParallelCopy {
+						warnings = mgtr.migrationContext.GetLastInsertSQLWarnings()
+					} else {
+						warnings = mgtr.migrationContext.MigrationLastInsertSQLWarnings
+					}
+					if len(warnings) > 0 {
+						for _, warning := range warnings {
 							mgtr.migrationContext.Log.Infof("ApplyIterationInsertQuery has SQL warnings! %s", warning)
 						}
-						joinedWarnings := strings.Join(mgtr.migrationContext.MigrationLastInsertSQLWarnings, "; ")
+						joinedWarnings := strings.Join(warnings, "; ")
 						return terminateRowIteration(fmt.Errorf("ApplyIterationInsertQuery failed because of SQL warnings: [%s]", joinedWarnings))
 					}
 				}
 
-				atomic.AddInt64(&mgtr.migrationContext.TotalRowsCopied, rowsAffected)
-				atomic.AddInt64(&mgtr.migrationContext.Iteration, 1)
+				if mgtr.migrationContext.ParallelCopy {
+					// Fold the chunk into global state only once every earlier chunk is
+					// written, so the checkpoint frontier never skips a gap.
+					mgtr.advanceFrontier(parallelIteration, parallelRangeMin, parallelRangeMax, rowsAffected)
+				} else {
+					atomic.AddInt64(&mgtr.migrationContext.TotalRowsCopied, rowsAffected)
+					atomic.AddInt64(&mgtr.migrationContext.Iteration, 1)
+				}
 				return nil
 			}
 			if err := mgtr.retryBatchCopyWithHooks(applyCopyRowsFunc); err != nil {
 				return terminateRowIteration(err)
 			}
 
-			// record last successfully copied range
-			mgtr.applier.LastIterationRangeMutex.Lock()
-			if mgtr.migrationContext.MigrationIterationRangeMinValues != nil && mgtr.migrationContext.MigrationIterationRangeMaxValues != nil {
-				mgtr.applier.LastIterationRangeMinValues = mgtr.migrationContext.MigrationIterationRangeMinValues.Clone()
-				mgtr.applier.LastIterationRangeMaxValues = mgtr.migrationContext.MigrationIterationRangeMaxValues.Clone()
+			if !mgtr.migrationContext.ParallelCopy {
+				// record last successfully copied range (parallel records it in advanceFrontier)
+				mgtr.applier.LastIterationRangeMutex.Lock()
+				if mgtr.migrationContext.MigrationIterationRangeMinValues != nil && mgtr.migrationContext.MigrationIterationRangeMaxValues != nil {
+					mgtr.applier.LastIterationRangeMinValues = mgtr.migrationContext.MigrationIterationRangeMinValues.Clone()
+					mgtr.applier.LastIterationRangeMaxValues = mgtr.migrationContext.MigrationIterationRangeMaxValues.Clone()
+				}
+				mgtr.applier.LastIterationRangeMutex.Unlock()
 			}
-			mgtr.applier.LastIterationRangeMutex.Unlock()
 
 			return nil
 		}
-		// Enqueue copy operation; to be executed by executeWriteFuncs()
-		// Use helper to prevent deadlock if executeWriteFuncs exits
+
+		// Enqueue copy operation. In serial mode it is consumed by executeWriteFuncs(); in
+		// --parallel-copy mode it is consumed by one of the CopyWorkers workers started in
+		// copyRowsParallel(). The closure itself serializes its boundary SELECT under
+		// parallelSelectMutex, so the only thing parallelized is the chunk INSERT.
+		// Use helper to prevent deadlock if the consumer exits.
 		if err := base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.copyRowsQueue, copyRowsFunc); err != nil {
 			// Context cancelled, check for abort and exit
 			if abortErr := mgtr.checkAbort(); abortErr != nil {
@@ -1723,6 +1805,40 @@ func (mgtr *Migrator) iterateChunks() error {
 			return terminateRowIteration(err)
 		}
 	}
+}
+
+// captureParallelChunkRange acquires parallelSelectMutex, advances the shared scan
+// cursor, and captures the next chunk's range. Returns captured=true with the range
+// values on success. Returns captured=false with nil err when no further work is needed
+// (row copy already complete or table exhausted; in the latter case terminateRowIteration
+// is called to signal the channel). Returns captured=false with non-nil err when the
+// range scan itself fails; the caller should propagate it to trigger a retry.
+func (mgtr *Migrator) captureParallelChunkRange(hasNoFurtherRangeFlag *int64, terminateRowIteration func(error) error) (iteration int64, rangeMin, rangeMax *sql.ColumnValues, captured bool, err error) {
+	mgtr.parallelSelectMutex.Lock()
+	if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(hasNoFurtherRangeFlag) == 1 {
+		mgtr.parallelSelectMutex.Unlock()
+		return 0, nil, nil, false, nil
+	}
+	mgtr.migrationContext.SetNextIterationRangeMinValues()
+	hasFurtherRange, err := mgtr.applier.CalculateNextIterationRangeEndValues()
+	if err != nil {
+		mgtr.parallelSelectMutex.Unlock()
+		return 0, nil, nil, false, err
+	}
+	if !hasFurtherRange {
+		atomic.StoreInt64(hasNoFurtherRangeFlag, 1)
+		mgtr.parallelSelectMutex.Unlock()
+		return 0, nil, nil, false, terminateRowIteration(nil)
+	}
+	iteration = atomic.LoadInt64(&mgtr.parallelDispatchSeq)
+	rangeMin = mgtr.migrationContext.MigrationIterationRangeMinValues.Clone()
+	rangeMax = mgtr.migrationContext.MigrationIterationRangeMaxValues.Clone()
+	// Advance the dispatch counter under the lock so the next worker
+	// scans the next chunk. Iteration is advanced at commit time in
+	// advanceFrontier so it stays consistent with TotalRowsCopied.
+	atomic.AddInt64(&mgtr.parallelDispatchSeq, 1)
+	mgtr.parallelSelectMutex.Unlock()
+	return iteration, rangeMin, rangeMax, true, nil
 }
 
 func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
@@ -1785,6 +1901,10 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 // It gets the binlog coordinates of the last received trx and waits until the
 // applier reaches that trx. At that point it's safe to resume from these coordinates.
 func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
+	if mgtr.migrationContext.ParallelCopy {
+		return mgtr.CheckpointV2()
+	}
+
 	coords := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
 	mgtr.applier.LastIterationRangeMutex.Lock()
 	if mgtr.applier.LastIterationRangeMaxValues == nil || mgtr.applier.LastIterationRangeMinValues == nil {
@@ -1817,6 +1937,35 @@ func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 		metrics.RecordSleep(mgtr.migrationContext.Metrics, "replica_wait", sleepDuration)
 		time.Sleep(sleepDuration)
 	}
+}
+
+// CheckpointV2 writes a checkpoint using the applier's current coordinates directly.
+// Unlike Checkpoint, it does not wait for the applier to catch up to the streamer —
+// CurrentCoordinates is always safe because it is only advanced after
+// a DML has been fully applied. This avoids the fixed timeout in the polling loop
+// and ensures the checkpoint is always written, even under write pressure.
+func (mgtr *Migrator) CheckpointV2() (*Checkpoint, error) {
+	mgtr.applier.LastIterationRangeMutex.Lock()
+	if mgtr.applier.LastIterationRangeMaxValues == nil || mgtr.applier.LastIterationRangeMinValues == nil {
+		mgtr.applier.LastIterationRangeMutex.Unlock()
+		return nil, errors.New("iteration range is empty, not checkpointing")
+	}
+	mgtr.applier.CurrentCoordinatesMutex.Lock()
+	coords := mgtr.applier.CurrentCoordinates
+	mgtr.applier.CurrentCoordinatesMutex.Unlock()
+	chk := &Checkpoint{
+		Iteration:         mgtr.migrationContext.GetIteration(),
+		IterationRangeMin: mgtr.applier.LastIterationRangeMinValues.Clone(),
+		IterationRangeMax: mgtr.applier.LastIterationRangeMaxValues.Clone(),
+		LastTrxCoords:     coords,
+		RowsCopied:        atomic.LoadInt64(&mgtr.migrationContext.TotalRowsCopied),
+		DMLApplied:        atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
+	}
+	mgtr.applier.LastIterationRangeMutex.Unlock()
+
+	id, err := mgtr.applier.WriteCheckpoint(chk)
+	chk.Id = id
+	return chk, err
 }
 
 // CheckpointAfterCutOver writes a final checkpoint after the cutover completes successfully.

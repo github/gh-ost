@@ -164,6 +164,9 @@ func main() {
 	flag.BoolVar(&migrationContext.SkipPortValidation, "skip-port-validation", false, "Skip port validation for MySQL connections")
 	flag.BoolVar(&migrationContext.Checkpoint, "checkpoint", false, "Enable migration checkpoints")
 	flag.Int64Var(&migrationContext.CheckpointIntervalSeconds, "checkpoint-seconds", 300, "The number of seconds between checkpoints")
+	flag.BoolVar(&migrationContext.ParallelCopy, "parallel-copy", false, "Copy table rows using multiple parallel workers. Experimental; requires --checkpoint")
+	flag.Int64Var(&migrationContext.ParallelCopyWorkers, "parallel-copy-workers", 4, "Number of parallel row-copy workers when --parallel-copy is enabled (max 64; gains tend to plateau past ~16)")
+	flag.Int64Var(&migrationContext.ParallelCopyMaxHeartbeatLagThresholdMillies, "parallel-copy-max-heartbeatlag-millis", 10000, "When >0 and --parallel-copy is enabled, row-copy workers pause when gh-ost's own binlog applier lag exceeds this threshold (ms), giving the binlog applier priority. 0 disables this check.")
 	flag.BoolVar(&migrationContext.Resume, "resume", false, "Attempt to resume migration from checkpoint")
 	flag.BoolVar(&migrationContext.Revert, "revert", false, "Attempt to revert completed migration")
 	flag.StringVar(&migrationContext.OldTableName, "old-table", "", "The name of the old table when using --revert, e.g. '_mytable_del'")
@@ -335,6 +338,23 @@ func main() {
 	}
 	if migrationContext.CheckpointIntervalSeconds < 10 {
 		migrationContext.Log.Fatalf("--checkpoint-seconds should be >=10")
+	}
+	if migrationContext.ParallelCopy {
+		if !migrationContext.Checkpoint {
+			migrationContext.Log.Fatalf("--parallel-copy requires --checkpoint")
+		}
+		if migrationContext.ParallelCopyWorkers < 1 {
+			migrationContext.Log.Fatalf("--parallel-copy-workers should be >=1")
+		}
+		if migrationContext.ParallelCopyWorkers > base.MaxCopyWorkers {
+			migrationContext.Log.Fatalf("--parallel-copy-workers should be <=%d", base.MaxCopyWorkers)
+		}
+		if migrationContext.ParallelCopyWorkers > base.RecommendedMaxCopyWorkers {
+			migrationContext.Log.Warningf("--parallel-copy-workers=%d is high: throughput gains tend to plateau while load on the server grows. Consider <=%d.", migrationContext.ParallelCopyWorkers, base.RecommendedMaxCopyWorkers)
+		}
+		if migrationContext.ParallelCopyMaxHeartbeatLagThresholdMillies > 0 && migrationContext.ParallelCopyMaxHeartbeatLagThresholdMillies < 100 {
+			migrationContext.Log.Fatalf("--parallel-copy-max-heartbeatlag-millis should be >=100 or 0 (disabled)")
+		}
 	}
 	if migrationContext.CountTableRows && migrationContext.PanicOnWarnings {
 		migrationContext.Log.Warning("--exact-rowcount with --panic-on-warnings: row counts cannot be exact due to warning detection")
