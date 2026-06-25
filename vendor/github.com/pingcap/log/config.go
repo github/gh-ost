@@ -35,6 +35,15 @@ type FileLogConfig struct {
 	MaxDays int `toml:"max-days" json:"max-days"`
 	// Maximum number of old log files to retain.
 	MaxBackups int `toml:"max-backups" json:"max-backups"`
+	// Compression function for rotated files.
+	// Currently only `gzip` and empty are supported, empty means compression disabled.
+	Compression string `toml:"compression" json:"compression"`
+	// IsBuffered is true means use buffered logger.
+	IsBuffered bool `toml:"is-buffered" json:"is-buffered"`
+	// BufferSize is the size of the buffer.
+	BufferSize int `toml:"buffer-size" json:"buffer-size"`
+	// BufferFlushInterval is the interval of buffer flush.
+	BufferFlushInterval time.Duration `toml:"buffer-flush-interval" json:"buffer-flush-interval"`
 }
 
 // Config serializes log related config in toml/json.
@@ -77,9 +86,10 @@ type Config struct {
 
 // ZapProperties records some information about zap.
 type ZapProperties struct {
-	Core   zapcore.Core
-	Syncer zapcore.WriteSyncer
-	Level  zap.AtomicLevel
+	Core      zapcore.Core
+	Syncer    zapcore.WriteSyncer
+	ErrSyncer zapcore.WriteSyncer
+	Level     zap.AtomicLevel
 }
 
 func (cfg *Config) buildOptions(errSink zapcore.WriteSyncer) []zap.Option {
@@ -103,7 +113,7 @@ func (cfg *Config) buildOptions(errSink zapcore.WriteSyncer) []zap.Option {
 
 	if cfg.Sampling != nil {
 		opts = append(opts, zap.WrapCore(func(core zapcore.Core) zapcore.Core {
-			return zapcore.NewSampler(core, time.Second, int(cfg.Sampling.Initial), int(cfg.Sampling.Thereafter))
+			return zapcore.NewSamplerWithOptions(core, time.Second, int(cfg.Sampling.Initial), int(cfg.Sampling.Thereafter))
 		}))
 	}
 	return opts

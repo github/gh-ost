@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ['mysql/mysql-server:5.7.41','mysql:8.0.41','mysql:8.4.3','percona/percona-server:8.0.41-32']
+        image: ['mysql:5.7.41','mysql:8.0.41','mysql:8.4.3','percona/percona-server:8.0.41-32','mariadb:10.5.29','mariadb:10.6.27','mariadb:10.11.18','mariadb:11.4.12','mariadb:11.8.8']
     env:
       TEST_MYSQL_IMAGE: ${{ matrix.image }}
 

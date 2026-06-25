@@ -6,7 +6,9 @@
 package mysql
 
 import (
+	"context"
 	gosql "database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/github/gh-ost/go/sql"
 
+	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/log"
 	"github.com/openark/golib/sqlutils"
 )
@@ -48,6 +51,60 @@ func (rlg *ReplicationLagResult) HasLag() bool {
 var knownDBs map[string]*gosql.DB = make(map[string]*gosql.DB)
 var knownDBsMutex = &sync.Mutex{}
 
+// initConnector wraps a driver.Connector to run a fixed set of statements on
+// every newly established connection (e.g. setting the transaction isolation
+// level), which the DSN-param mechanism can't express portably.
+type initConnector struct {
+	driver.Connector
+	statements []string
+}
+
+func (c *initConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := c.Connector.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	execer, ok := conn.(driver.ExecerContext)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("mysql: driver connection does not implement driver.ExecerContext")
+	}
+	for _, stmt := range c.statements {
+		if _, err := execer.ExecContext(ctx, stmt, nil); err != nil {
+			conn.Close()
+			return nil, err
+		}
+	}
+	return conn, nil
+}
+
+// OpenDB opens a MySQL connection pool for the given DSN. A transaction_isolation
+// param is applied via the SQL-standard "SET SESSION TRANSACTION ISOLATION LEVEL"
+// statement on each new connection rather than being passed to the driver as a
+// system variable:
+// - "transaction_isolation" doesn't exist on MariaDB < 11.1, while
+// - "tx_isolation" doesn't exist on MySQL 8.0+ anymore, so no single variable name is portable.
+// The standard statement is accepted by every supported MySQL and MariaDB version.
+func OpenDB(mysql_uri string) (*gosql.DB, error) {
+	cfg, err := gomysql.ParseDSN(mysql_uri)
+	if err != nil {
+		return nil, err
+	}
+	var statements []string
+	if iso := strings.Trim(cfg.Params["transaction_isolation"], `"`); iso != "" {
+		delete(cfg.Params, "transaction_isolation")
+		statements = append(statements, "SET SESSION TRANSACTION ISOLATION LEVEL "+strings.ReplaceAll(iso, "-", " "))
+	}
+	connector, err := gomysql.NewConnector(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if len(statements) > 0 {
+		connector = &initConnector{Connector: connector, statements: statements}
+	}
+	return gosql.OpenDB(connector), nil
+}
+
 func GetDB(migrationUuid string, mysql_uri string) (db *gosql.DB, exists bool, err error) {
 	cacheKey := migrationUuid + ":" + mysql_uri
 
@@ -55,7 +112,7 @@ func GetDB(migrationUuid string, mysql_uri string) (db *gosql.DB, exists bool, e
 	defer knownDBsMutex.Unlock()
 
 	if db, exists = knownDBs[cacheKey]; !exists {
-		db, err = gosql.Open("mysql", mysql_uri)
+		db, err = OpenDB(mysql_uri)
 		if err != nil {
 			return nil, false, err
 		}
@@ -88,7 +145,7 @@ func GetReplicationLagFromSlaveStatus(dbVersion string, informationSchemaDb *gos
 func GetMasterKeyFromSlaveStatus(dbVersion string, connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
 	currentUri := connectionConfig.GetDBUri("information_schema")
 	// This function is only called once, okay to not have a cached connection pool
-	db, err := gosql.Open("mysql", currentUri)
+	db, err := OpenDB(currentUri)
 	if err != nil {
 		return nil, err
 	}
