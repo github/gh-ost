@@ -209,7 +209,7 @@ func TestMigratorHeartbeatDoesNotAdvancePastUnappliedDML(t *testing.T) {
 
 	// A DML on the original table at GTID :100 is observed and enqueued, but
 	// not yet applied.
-	dmlCoords, err := mysql.NewGTIDBinlogCoordinates(srcUUID + ":1-100")
+	dmlCoords, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, srcUUID+":1-100")
 	require.NoError(t, err)
 	migrator.applyEventsQueue <- newApplyEventStructByDML(&binlog.BinlogEntry{
 		DmlEvent: &binlog.BinlogDMLEvent{
@@ -224,7 +224,7 @@ func TestMigratorHeartbeatDoesNotAdvancePastUnappliedDML(t *testing.T) {
 
 	// A heartbeat row is then written; its GTID set includes the un-applied
 	// DML plus a few additional transactions.
-	heartbeatCoords, err := mysql.NewGTIDBinlogCoordinates(srcUUID + ":1-105")
+	heartbeatCoords, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, srcUUID+":1-105")
 	require.NoError(t, err)
 	heartbeatColumnValues := sql.ToColumnValues([]interface{}{
 		123,

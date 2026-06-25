@@ -218,7 +218,9 @@ Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
 
 ### gtid
 
-Add this flag to enable support for [MySQL replication GTIDs](https://dev.mysql.com/doc/refman/5.7/en/replication-gtids-concepts.html) for replication positioning. This requires `gtid_mode` and `enforce_gtid_consistency` to be set to `ON`.
+Add this flag to enable support for [MySQL replication GTIDs](https://dev.mysql.com/doc/refman/5.7/en/replication-gtids-concepts.html) for replication positioning. On MySQL this requires `gtid_mode` and `enforce_gtid_consistency` to be set to `ON`.
+
+[MariaDB GTIDs](https://mariadb.com/kb/en/gtid/) are also supported: gh-ost detects the server flavor automatically and uses the appropriate GTID dialect. MariaDB has no `gtid_mode`/`enforce_gtid_consistency` settings — GTIDs are always recorded when binary logging is enabled, so no extra configuration is required beyond `--gtid`.
 
 ### heartbeat-interval-millis
 
