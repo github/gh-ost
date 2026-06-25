@@ -3,8 +3,10 @@
 RELEASE_VERSION=
 buildpath=
 
+# Create a scratch tree to stage the package filesystem for fpm. It lives in the
+# system temp dir, not $buildpath, so it never lands among the release artifacts.
 function setuptree() {
-  b=$( mktemp -d $buildpath/gh-ostXXXXXX ) || return 1
+  b=$( mktemp -d ) || return 1
   mkdir -p $b/gh-ost
   mkdir -p $b/gh-ost/usr/bin
   echo $b
