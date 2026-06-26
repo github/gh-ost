@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
-# Continuously insert new rows into gh_ost_test on source primary.
+# Continuously insert new rows into whichever of the canonical move-tables
+# fixtures currently exist on the source primary (gh_ost_test, gh_ost_test_other,
+# gh_ost_test_third), so a move-tables run sees live DML on every migrated table.
+#
+# No arguments are required. Existing tables are detected at startup; the loop
+# only writes to the ones that are present, so it works for 1-, 2-, or 3-table
+# runs without changes. When a cutover renames the tables away, the next insert
+# fails and the loop stops cleanly (this is expected).
+#
 # Usage:
-#   script/move-tables/insert-source-primary-loop [start_column1] [sleep_seconds] [rows_per_batch]
+#   script/move-tables/insert-source-primary-loop [start_id] [sleep_seconds] [rows_per_batch]
 # Example:
-#   script/move-tables/insert-source-primary-loop 100000 0.2 1
+#   script/move-tables/insert-source-primary-loop
 # Fast example:
 #   script/move-tables/insert-source-primary-loop 100000 0 50
 
@@ -13,34 +21,95 @@ start_i="${1:-100000}"
 delay="${2:-0.2}"
 rows_per_batch="${3:-1}"
 i="$start_i"
+# Match the database created/seeded by script/move-tables/setup.
 DATABASE="${DATABASE:-test}"
 
+GH_OST_ROOT="$(git rev-parse --show-toplevel)"
+SCRIPT_PATH="${GH_OST_ROOT}/script/move-tables"
+
+# The canonical superset of move-tables fixtures.
+ALL_TABLES=(gh_ost_test gh_ost_test_other gh_ost_test_third)
+
+table_exists() {
+  local table="$1"
+  local count
+  count="$(${SCRIPT_PATH}/mysql-source-primary -N -s -D "$DATABASE" -e \
+    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DATABASE}' AND table_name='${table}'" 2>/dev/null || echo 0)"
+  [[ "$count" == "1" ]]
+}
+
+# Detect which fixtures exist so we only write to tables that are present.
+active_tables=()
+for t in "${ALL_TABLES[@]}"; do
+  if table_exists "$t"; then
+    active_tables+=("$t")
+  fi
+done
+
+if [[ ${#active_tables[@]} -eq 0 ]]; then
+  echo "No move-tables fixtures found in database '${DATABASE}'. Did you run script/move-tables/setup?"
+  exit 1
+fi
+
 echo "Starting continuous inserts on source primary. Press Ctrl+C to stop."
-echo "start_column1=$start_i sleep_seconds=$delay rows_per_batch=$rows_per_batch"
+echo "start_id=$start_i sleep_seconds=$delay rows_per_batch=$rows_per_batch database=$DATABASE"
+echo "inserting into: ${active_tables[*]}"
 
 trap 'echo; echo "Stopped."; exit 0' INT TERM
 
 while true; do
   ts="$(date +%s)"
-  values=""
+  declare -A values=()
   batch_start="$i"
 
-  for ((n=0; n<rows_per_batch; n++)); do
+  for ((n = 0; n < rows_per_batch; n++)); do
     current_i=$((i + n))
-    row="($current_i, $((current_i % 65535)), $((current_i % 16777215)), $((current_i % 255)), $ts, $((ts + 1)))"
-    if [[ -n "$values" ]]; then
-      values+=" , "
-    fi
-    values+="$row"
+    for t in "${active_tables[@]}"; do
+      case "$t" in
+      gh_ost_test)
+        # id is AUTO_INCREMENT, so we supply column1..column6 only.
+        row="($current_i, $((current_i % 65535)), $((current_i % 16777215)), $((current_i % 255)), $ts, $((ts + 1)))"
+        ;;
+      gh_ost_test_other)
+        # uid is an explicit (non-auto) PK and name is UNIQUE; derive both from
+        # current_i to stay collision-free with the seed data.
+        row="($current_i, 'row_$current_i', $((current_i % 100000)).50, FROM_UNIXTIME($ts))"
+        ;;
+      gh_ost_test_third)
+        # code is a varchar PK; updated_at uses its column default.
+        row="('code_$current_i', 'label_$current_i', $((current_i % 1000)).5)"
+        ;;
+      esac
+      if [[ -n "${values[$t]:-}" ]]; then
+        values[$t]+=" , "
+      fi
+      values[$t]+="$row"
+    done
   done
 
-  script/move-tables/mysql-source-primary -D $DATABASE -e "
-    INSERT INTO gh_ost_test (column1, column2, column3, column4, column5, column6)
-    VALUES $values;
-  "
+  query=""
+  for t in "${active_tables[@]}"; do
+    case "$t" in
+    gh_ost_test)
+      query+="INSERT INTO gh_ost_test (column1, column2, column3, column4, column5, column6) VALUES ${values[$t]};"$'\n'
+      ;;
+    gh_ost_test_other)
+      query+="INSERT INTO gh_ost_test_other (uid, name, amount, created_at) VALUES ${values[$t]};"$'\n'
+      ;;
+    gh_ost_test_third)
+      query+="INSERT INTO gh_ost_test_third (code, label, score) VALUES ${values[$t]};"$'\n'
+      ;;
+    esac
+  done
+
+  if ! ${SCRIPT_PATH}/mysql-source-primary -D "$DATABASE" -e "$query"; then
+    echo
+    echo "Insert failed (the tables were likely renamed at cutover). Stopping."
+    exit 0
+  fi
 
   i=$((i + rows_per_batch))
-  echo "inserted rows: column1=${batch_start}..$((i - 1)) ts=$ts"
+  echo "inserted rows: id=${batch_start}..$((i - 1)) ts=$ts (${active_tables[*]})"
 
   if [[ "$delay" != "0" && "$delay" != "0.0" ]]; then
     sleep "$delay"

@@ -392,10 +392,17 @@ func main() {
 			migrationContext.MoveTables.TableNames[i] = strings.TrimSpace(migrationContext.MoveTables.TableNames[i])
 		}
 		migrationContext.MoveTables.TableNames = slices.DeleteFunc(migrationContext.MoveTables.TableNames, func(s string) bool { return s == "" })
-		if len(migrationContext.MoveTables.TableNames) > 1 {
-			// Future version will support moving multiple tables at the same time.
-			// For now, we only support moving a single table at a time.
-			log.Fatal("--move-tables currently supports only a single table")
+		if len(migrationContext.MoveTables.TableNames) == 0 {
+			log.Fatal("--move-tables requires at least one table")
+		}
+		// Reject duplicate table names: a table listed twice would register two
+		// listeners and two row-copy loops for the same data.
+		seenMoveTables := make(map[string]bool, len(migrationContext.MoveTables.TableNames))
+		for _, tableName := range migrationContext.MoveTables.TableNames {
+			if seenMoveTables[tableName] {
+				log.Fatalf("--move-tables lists table %q more than once", tableName)
+			}
+			seenMoveTables[tableName] = true
 		}
 		if migrationContext.MoveTables.TargetDatabase == "" {
 			migrationContext.MoveTables.TargetDatabase = migrationContext.DatabaseName
@@ -433,7 +440,14 @@ func main() {
 		migrationContext.Log.Fatale(err)
 	}
 	if migrationContext.ServeSocketFile == "" {
-		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
+		if migrationContext.IsMoveTablesMode() {
+			// OriginalTableName is not set until MoveTables() runs and there is no
+			// single "primary" table, so name the socket from the set-derived run
+			// token (avoids an empty path component like /tmp/gh-ost.test..sock).
+			migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.movetables-%s.sock", migrationContext.DatabaseName, migrationContext.MoveTablesRunToken())
+		} else {
+			migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
+		}
 	}
 	if *askPass {
 		fmt.Println("Password:")

@@ -76,14 +76,22 @@ if [ $? -gt 0 ]; then
     return 1
 fi
 
-# validate last checkpoint (cutover started and drain GTID are set)
-cutover_started=$(mysql-exec target primary $database -Ne "SELECT gh_ost_move_tables_cutover_started FROM _${table_name}_ghk ORDER BY gh_ost_chk_id DESC LIMIT 1;")
+# validate last checkpoint (cutover started and drain GTID are set). The
+# checkpoint table is named from the run token (_gho_<token>_ghk), so look it up
+# by pattern rather than a static per-table name.
+checkpoint_table=$(mysql-exec target primary $database -sNe "SELECT table_name FROM information_schema.tables WHERE table_schema='${database}' AND table_name LIKE '\\_gho\\_%\\_ghk' LIMIT 1;")
+if [ -z "$checkpoint_table" ]; then
+    echo "ERROR: Checkpoint table does not exist."
+    return 1
+fi
+
+cutover_started=$(mysql-exec target primary $database -Ne "SELECT gh_ost_move_tables_cutover_started FROM \`${checkpoint_table}\` ORDER BY gh_ost_chk_id DESC LIMIT 1;")
 if [ "$cutover_started" != 1 ]; then
     echo "ERROR: Expected cutover started to be set in last checkpoint."
     return 1
 fi
 
-drain_gtid=$(mysql-exec target primary $database -Ne "SELECT gh_ost_move_tables_drain_gtid FROM _${table_name}_ghk ORDER BY gh_ost_chk_id DESC LIMIT 1;")
+drain_gtid=$(mysql-exec target primary $database -Ne "SELECT gh_ost_move_tables_drain_gtid FROM \`${checkpoint_table}\` ORDER BY gh_ost_chk_id DESC LIMIT 1;")
 if [ "$drain_gtid" == "" ]; then
     echo "ERROR: Expected drain GTID to be set in last checkpoint."
     return 1
