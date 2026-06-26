@@ -1,20 +1,19 @@
-FROM golang:1.25.9-bookworm
+FROM golang:1.25.9-bookworm AS build
 
-RUN apt-get update
-RUN apt-get install -y ruby ruby-dev rubygems build-essential
-RUN gem install fpm
-ENV GOPATH=/tmp/go
+# build.sh shells out to fpm to produce the .deb/.rpm packages. fpm is a Ruby
+# gem (needs ruby + ruby-dev + a C toolchain), and the rpm target needs
+# rpmbuild from the `rpm` package. Everything else build.sh uses (git, tar,
+# gcc, bash, ...) already ships in the golang:bookworm base image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ruby ruby-dev build-essential rpm \
+    && rm -rf /var/lib/apt/lists/* \
+    && gem install --no-document fpm
 
-RUN apt-get install -y curl
-RUN apt-get install -y rsync
-RUN apt-get install -y gcc
-RUN apt-get install -y g++
-RUN apt-get install -y bash
-RUN apt-get install -y git
-RUN apt-get install -y tar
-RUN apt-get install -y rpm
-
-RUN mkdir -p $GOPATH/src/github.com/github/gh-ost
-WORKDIR $GOPATH/src/github.com/github/gh-ost
+WORKDIR /gh-ost
 COPY . .
 RUN bash build.sh
+
+# Export-only stage: `docker build --target artifacts --output type=local,dest=...`
+# writes just the release assets to the host, no intermediate container needed.
+FROM scratch AS artifacts
+COPY --from=build /tmp/gh-ost-release/ /
