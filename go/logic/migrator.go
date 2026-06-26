@@ -2078,11 +2078,11 @@ func (mgtr *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 			mgtr.migrationContext.StartTime.Format(time.RubyDate),
 		)
 	} else {
-		fmt.Fprintf(w, "# Migrating %s.%s; Target table is %s.%s\n",
+		fmt.Fprintf(w, "# Migrating %s.%s; Ghost table is %s.%s\n",
 			sql.EscapeName(mgtr.migrationContext.DatabaseName),
 			sql.EscapeName(mgtr.migrationContext.OriginalTableName),
-			sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()),
-			sql.EscapeName(mgtr.migrationContext.GetTargetTableName()),
+			sql.EscapeName(mgtr.migrationContext.DatabaseName),
+			sql.EscapeName(mgtr.migrationContext.GetGhostTableName()),
 		)
 		fmt.Fprintf(w, "# Migrating %+v; inspecting %+v; executing on %+v\n",
 			*mgtr.applier.connectionConfig.ImpliedKey,

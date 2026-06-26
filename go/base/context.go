@@ -571,17 +571,6 @@ func (mctx *MigrationContext) GetGhostTableName() string {
 	}
 }
 
-// GetTargetTableName generates the name of the target table. In move-tables mode
-// each table keeps its own name on the target, so there is no single target
-// table name; per-table code uses MoveTable.TargetTableName instead, and calling
-// this is a programmer error that panics to fail fast.
-func (mctx *MigrationContext) GetTargetTableName() string {
-	if mctx.IsMoveTablesMode() {
-		panic("GetTargetTableName() must not be called in move-tables mode; use MoveTable.TargetTableName")
-	}
-	return mctx.GetGhostTableName()
-}
-
 // GetTargetDatabaseName fetches the name of the target database, which defaults to the original
 // database name unless we're in move-tables mode.
 func (mctx *MigrationContext) GetTargetDatabaseName() string {

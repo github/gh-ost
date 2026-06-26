@@ -164,7 +164,7 @@ func (apl *Applier) compileMigrationKeyWarningRegex() (*regexp.Regexp, error) {
 	if apl.migrationContext.IsMoveTablesMode() {
 		return apl.compileMoveTablesKeyWarningRegex()
 	}
-	return compileKeyWarningRegex(apl.migrationContext.GetTargetTableName(), apl.migrationContext.UniqueKey.NameInGhostTable)
+	return compileKeyWarningRegex(apl.migrationContext.GetGhostTableName(), apl.migrationContext.UniqueKey.NameInGhostTable)
 }
 
 // compileMoveTablesKeyWarningRegex builds one duplicate-key warning regex
@@ -422,7 +422,7 @@ func (apl *Applier) prepareQueries() (err error) {
 	targetDatabaseName := apl.migrationContext.GetTargetDatabaseName()
 
 	if !apl.migrationContext.IsMoveTablesMode() {
-		targetTableName := apl.migrationContext.GetTargetTableName()
+		targetTableName := apl.migrationContext.GetGhostTableName()
 		if apl.dmlDeleteQueryBuilder, err = sql.NewDMLDeleteQueryBuilder(
 			targetDatabaseName,
 			targetTableName,

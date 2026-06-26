@@ -288,7 +288,7 @@ func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []s
 	if he.migrationContext.IsMoveTablesMode() {
 		targetTableNameEnv = strings.Join(he.migrationContext.MoveTables.TableNames, ",")
 	} else {
-		targetTableNameEnv = he.migrationContext.GetTargetTableName()
+		targetTableNameEnv = he.migrationContext.GetGhostTableName()
 	}
 	env = append(env, fmt.Sprintf("GH_OST_TARGET_TABLE_NAME=%s", targetTableNameEnv))
 	env = append(env, extraVariables...)
