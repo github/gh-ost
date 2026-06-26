@@ -61,6 +61,44 @@ func TestGetTableNames(t *testing.T) {
 	}
 }
 
+func TestMoveTableDelName(t *testing.T) {
+	context := NewMigrationContext()
+	// Per-table `_<table>_del` rollback handle, independent of any other table.
+	require.Equal(t, "_some_table_del", context.MoveTableDelName("some_table"))
+	require.Equal(t, "_other_del", context.MoveTableDelName("other"))
+
+	// Honors --timestamp-old-table like the single-table GetOldTableName does.
+	context.TimestampOldTable = true
+	longForm := "Jan 2, 2006 at 3:04pm (MST)"
+	context.StartTime, _ = time.Parse(longForm, "Feb 3, 2013 at 7:54pm (PST)")
+	require.Equal(t, "_some_table_20130203195400_del", context.MoveTableDelName("some_table"))
+}
+
+func TestMoveTablesRunToken(t *testing.T) {
+	// Empty outside move-tables mode.
+	require.Equal(t, "", NewMigrationContext().MoveTablesRunToken())
+
+	context := NewMigrationContext()
+	context.MoveTables.TableNames = []string{"a", "b", "c"}
+	token := context.MoveTablesRunToken()
+	// Fixed length, lowercase hex (12 chars / 48 bits).
+	require.Len(t, token, 12)
+	require.Regexp(t, "^[0-9a-f]{12}$", token)
+	// Deterministic: the same set always yields the same token (so a resumed run
+	// finds the same run-wide artifacts).
+	require.Equal(t, token, context.MoveTablesRunToken())
+
+	// Order-independent: --move-tables=a,b,c and =c,b,a match.
+	reordered := NewMigrationContext()
+	reordered.MoveTables.TableNames = []string{"c", "b", "a"}
+	require.Equal(t, token, reordered.MoveTablesRunToken())
+
+	// A different set yields a different token.
+	different := NewMigrationContext()
+	different.MoveTables.TableNames = []string{"a", "b", "d"}
+	require.NotEqual(t, token, different.MoveTablesRunToken())
+}
+
 func TestGetTriggerNames(t *testing.T) {
 	{
 		context := NewMigrationContext()
