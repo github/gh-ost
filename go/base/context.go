@@ -55,6 +55,19 @@ const (
 	HTTPStatusOK       = 200
 	MaxEventsBatchSize = 1000
 	ETAUnknown         = math.MinInt64
+
+	// MaxCopyWorkers is the hard upper bound on --parallel-copy-workers. The applier
+	// connection pool is sized to CopyWorkers + ParallelCopyConnHeadroom, so this
+	// also bounds connection usage and prevents exhausting the server's
+	// max_connections.
+	MaxCopyWorkers = 64
+	// RecommendedMaxCopyWorkers is a soft threshold above which we warn: the
+	// throughput benefit of more workers plateaus while load keeps growing.
+	RecommendedMaxCopyWorkers = 16
+	// ParallelCopyConnHeadroom is the number of connections added to the applier
+	// pool on top of CopyWorkers, to cover the DML event applier goroutine
+	// the status logger, the heartbeat goroutine, and the checkpoint loop.
+	ParallelCopyConnHeadroom = 4
 )
 
 var (
@@ -161,6 +174,10 @@ type MigrationContext struct {
 	PanicOnWarnings                     bool
 	Checkpoint                          bool
 	CheckpointIntervalSeconds           int64
+
+	ParallelCopy                                bool
+	ParallelCopyWorkers                         int64
+	ParallelCopyMaxHeartbeatLagThresholdMillies int64
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -275,6 +292,20 @@ type MigrationContext struct {
 	IsOpenMetadataLockInstruments     bool
 
 	Log Logger
+
+	migrationLastInsertSQLWarningsMu sync.Mutex // unexported — only accessed via methods below
+}
+
+func (mctx *MigrationContext) SetLastInsertSQLWarnings(warnings []string) {
+	mctx.migrationLastInsertSQLWarningsMu.Lock()
+	defer mctx.migrationLastInsertSQLWarningsMu.Unlock()
+	mctx.MigrationLastInsertSQLWarnings = warnings
+}
+
+func (mctx *MigrationContext) GetLastInsertSQLWarnings() []string {
+	mctx.migrationLastInsertSQLWarningsMu.Lock()
+	defer mctx.migrationLastInsertSQLWarningsMu.Unlock()
+	return mctx.MigrationLastInsertSQLWarnings
 }
 
 type Logger interface {

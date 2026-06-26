@@ -100,6 +100,30 @@ See also: [`resuming-migrations`](resume.md)
 
 Controls how many rows `gh-ost` copies in each row-copy iteration. The default is `1000`; allowed range is `10` to `100000`.
 
+### parallel-copy
+
+`--parallel-copy` copies the table rows using multiple workers running concurrently. Binlog event application remains single-threaded, so event ordering is preserved. This is experimental and requires `--checkpoint`. Default is disabled.
+
+Parallel copy requires checkpoints because parallel INSERTs can go out of sequential order and leave gaps in target table. gh-ost checkpoints are consistent and do not have gaps, so resuming from a checkpoint will make the target table consistent again.
+
+Consistency is ensured by using 
+-INSERT IGNORE/SELECT FOR SHARE for row copy (current gh-ost behavior)
+-DELETE/INSERT by DML applier when unique key change is detected (current gh-ost behavior)
+-advanceFrontier call to ensure that checkpoints have no gaps (used by parallel-copy only)
+Without all of those, consistency of parallel copy cannot be guaranteed (for example, row copy could insert row back after it was deleted). In existing serial mode, the problem is much easier because DML applier is never parallel with row copy.
+
+### parallel-copy-workers
+
+`--parallel-copy-workers` sets the number of parallel row-copy workers used when `--parallel-copy` is enabled. Has no effect otherwise. Default is 4; maximum is 64. The applier connection pool is sized to `parallel-copy-workers + 4`. Throughput gains tend to plateau past ~16 workers — so prefer the smallest value that meets your needs.
+
+### parallel-copy-max-heartbeatlag-millis
+
+`--parallel-copy-max-heartbeatlag-millis` sets a heartbeat-lag threshold (in milliseconds) used to throttle row-copy workers when `--parallel-copy` is enabled. Requires `--parallel-copy`. Default is `10000` (10 seconds).
+
+gh-ost's heartbeat lag is used as a lightweight proxy for binlog applier lag. When heartbeat lag is below this threshold, all workers copy rows at full concurrency. When it exceeds the threshold, workers pause and yield, giving the binlog applier time to catch up. This preserves the same priority model as serial row-copy, where binlog event application is never starved by row-copy work. If the applier is consistently lagging, workers will spend most of their time paused and throughput approaches the serial baseline; when the table's DML rate is low and the applier is not lagging, all workers run freely and deliver the full benefit of parallelism.
+
+HeartbeatLag is also the primary signal used by the cut-over gate: gh-ost will not attempt the table swap until HeartbeatLag drops below both `--max-lag-millis` and `--cut-over-lock-timeout-seconds`. Using it here as the parallel-copy throttle signal is therefore consistent with the most safety-critical decision point in the migration.
+
 ### conf
 
 `--conf=/path/to/my.cnf`: file where credentials are specified. Should be in (or contain) the following format:
