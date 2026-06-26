@@ -178,6 +178,10 @@ func TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained(t *testing.T) {
 
 	require.Equal(t, int64(1), atomic.LoadInt64(&ctx.CutOverCompleteFlag),
 		"post-state: resume path must set CutOverCompleteFlag before exiting")
+	require.NotNil(t, ctx.MoveTables.DrainGTID,
+		"post-state: resume must set MoveTables.DrainGTID so the on-success hook gets GH_OST_DRAIN_GTID")
+	require.Equal(t, drainGTID.String(), ctx.MoveTables.DrainGTID.String(),
+		"post-state: MoveTables.DrainGTID must equal the checkpoint drain GTID")
 	require.Equal(t, []string{"fake:OnSuccess"}, calls,
 		"post-state: resume path should jump directly to T5 without rerunning T0/T1")
 	if m.applier.CurrentCoordinates != nil {
@@ -326,6 +330,11 @@ func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks base.Hooks, initialCoor
 	mc.ApplierConnectionConfig = connectionConfig
 	mc.InspectorConnectionConfig = connectionConfig
 	mc.MoveTables.SourcePrimaryConnectionConfig = connectionConfig
+	// Every consumer of buildMigrator is a move-tables cutover test, so put the
+	// migrator in move-tables mode with the canonical single table. The cutover
+	// path builds its atomic RENAME from MoveTables.TableNames; leaving it empty
+	// produces `rename table ;` (Error 1064).
+	mc.MoveTables.TableNames = []string{testMysqlTableName}
 	mc.SetConnectionConfig("innodb")
 	mc.Hooks = fakeHooks
 
@@ -345,11 +354,11 @@ func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks base.Hooks, initialCoor
 	return m, mc
 }
 
-// TestDropSourceOldTableUsesSourcePrimary verifies the source `__del` rollback
-// handle is dropped through the dedicated source-primary connection. In
+// TestDropMoveTablesSourceOldTablesUsesSourcePrimary verifies the source `__del`
+// rollback handle is dropped through the dedicated source-primary connection. In
 // production the inspector/streamer source connections may be a read replica, so
 // the drop must not route through them.
-func (s *MoveTablesCutOverSuite) TestDropSourceOldTableUsesSourcePrimary() {
+func (s *MoveTablesCutOverSuite) TestDropMoveTablesSourceOldTablesUsesSourcePrimary() {
 	ctx := context.Background()
 	_, err := s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestOldTableName()))
 	s.Require().NoError(err)
@@ -358,7 +367,7 @@ func (s *MoveTablesCutOverSuite) TestDropSourceOldTableUsesSourcePrimary() {
 	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
 	m, _ := s.buildMigrator(fakeHooks, s.containingDrainGTID())
 
-	s.Require().NoError(m.dropSourceOldTable())
+	s.Require().NoError(m.dropMoveTablesSourceOldTables())
 
 	var name string
 	err = s.db.QueryRow(fmt.Sprintf("SHOW TABLES IN %s LIKE '_%s_del'",

@@ -4,14 +4,42 @@ set -euo pipefail
 
 GH_OST_ROOT=$(git rev-parse --show-toplevel)
 SCRIPT_PATH="${GH_OST_ROOT}/script/move-tables"
+# Match the database that `setup` creates and seeds (override with GH_OST_TEST_DB).
 DATABASE_NAME="${GH_OST_TEST_DB:-test}"
 
-# Reset source table state regardless of whether cutover renamed it.
-${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS _gh_ost_test_del, gh_ost_test;"
+# The canonical superset of tables seeded by setup (and listed in
+# localtests/move-tables/multiple-three/tables.txt). The manual harness always
+# sets up / cleans up all of them, regardless of how many you actually move,
+# so reset works the same no matter which scenario you just ran.
+TABLES=(gh_ost_test gh_ost_test_other gh_ost_test_third)
+
+# Reset source table state regardless of whether a cutover renamed the originals
+# to their `_<table>_del` rollback handles.
+source_drop=""
+for t in "${TABLES[@]}"; do
+    source_drop+="_${t}_del, ${t}, "
+done
+source_drop="${source_drop%, }"
+${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS ${source_drop};"
 
 # Recreate and seed source table data, same fixture as setup uses.
-${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/single/create.sql"
+${SCRIPT_PATH}/mysql-source-primary -D "${DATABASE_NAME}" < "${GH_OST_ROOT}/localtests/move-tables/multiple-three/create.sql"
 
-${SCRIPT_PATH}/mysql-target-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS gh_ost_test, _gh_ost_test_ghk;"
+# Drop the moved tables on the target cluster.
+target_drop=""
+for t in "${TABLES[@]}"; do
+    target_drop+="${t}, "
+done
+target_drop="${target_drop%, }"
+${SCRIPT_PATH}/mysql-target-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS ${target_drop};"
 
-echo "Reset source and target tables in ${DATABASE_NAME}"
+# The checkpoint table is named from the run token (_gho_<token>_ghk), which
+# depends on the exact set of moved tables, so we can't name it statically. Drop
+# any checkpoint tables that exist for this database.
+checkpoint_tables=$(${SCRIPT_PATH}/mysql-target-primary -N -B -D "${DATABASE_NAME}" -e \
+    "SELECT GROUP_CONCAT(CONCAT('\`', table_name, '\`')) FROM information_schema.tables WHERE table_schema='${DATABASE_NAME}' AND table_name LIKE '\\_gho\\_%\\_ghk';")
+if [[ -n "${checkpoint_tables}" && "${checkpoint_tables}" != "NULL" ]]; then
+    ${SCRIPT_PATH}/mysql-target-primary -D "${DATABASE_NAME}" -e "DROP TABLE IF EXISTS ${checkpoint_tables};"
+fi
+
+echo "Reset source and target tables (${TABLES[*]}) in ${DATABASE_NAME}"

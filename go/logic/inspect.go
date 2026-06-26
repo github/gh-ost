@@ -86,6 +86,9 @@ func (isp *Inspector) InitDBConnections() (err error) {
 }
 
 func (isp *Inspector) ValidateOriginalTable() (err error) {
+	if isp.migrationContext.IsMoveTablesMode() {
+		return errors.New("ValidateOriginalTable is not available in move-tables mode; each migrated table is validated individually via validateTableExistsAndNotView / validateTableForeignKeysFor / validateTableTriggersFor")
+	}
 	if err := isp.validateTable(); err != nil {
 		return err
 	}
@@ -118,6 +121,9 @@ func (isp *Inspector) InspectTableColumnsAndUniqueKeys(tableName string) (column
 }
 
 func (isp *Inspector) InspectOriginalTable() (err error) {
+	if isp.migrationContext.IsMoveTablesMode() {
+		return errors.New("InspectOriginalTable is not available in move-tables mode; use InspectMoveTable per table")
+	}
 	isp.migrationContext.OriginalTableColumns, isp.migrationContext.OriginalTableVirtualColumns, isp.migrationContext.OriginalTableUniqueKeys, err = isp.InspectTableColumnsAndUniqueKeys(isp.originalTableName())
 	if err != nil {
 		return err
@@ -131,7 +137,7 @@ func (isp *Inspector) InspectOriginalTable() (err error) {
 
 func (isp *Inspector) originalTableName() string {
 	if isp.migrationContext.IsMoveTablesMode() {
-		return isp.migrationContext.MoveTables.TableNames[0]
+		panic("inspector.originalTableName() must not be called in move-tables mode; inspect each table via its name (e.g. validateTableFor/InspectMoveTable)")
 	}
 	return isp.migrationContext.OriginalTableName
 }
@@ -150,7 +156,7 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 		return err
 	}
 	sharedUniqueKeys := isp.getSharedUniqueKeys(isp.migrationContext.OriginalTableUniqueKeys, isp.migrationContext.GhostTableUniqueKeys)
-	isp.migrationContext.UniqueKey = isp.selectUniqueKey(sharedUniqueKeys)
+	isp.migrationContext.UniqueKey = isp.selectUniqueKey(isp.originalTableName(), sharedUniqueKeys)
 	if isp.migrationContext.UniqueKey == nil {
 		return fmt.Errorf("no shared unique key can be found after ALTER! Bailing out")
 	}
@@ -201,9 +207,9 @@ func (isp *Inspector) inspectOriginalAndGhostTables() (err error) {
 	return nil
 }
 
-func (isp *Inspector) selectUniqueKey(candidateKeys []*sql.UniqueKey) *sql.UniqueKey {
+func (isp *Inspector) selectUniqueKey(tableName string, candidateKeys []*sql.UniqueKey) *sql.UniqueKey {
 	for i, candidateKey := range candidateKeys {
-		isp.applyColumnTypes(isp.migrationContext.DatabaseName, isp.originalTableName(), &candidateKey.Columns)
+		isp.applyColumnTypes(isp.migrationContext.DatabaseName, tableName, &candidateKey.Columns)
 		uniqueKeyIsValid := true
 		for _, column := range candidateKey.Columns.Columns() {
 			switch column.Type {
@@ -482,33 +488,52 @@ func (isp *Inspector) validateLogSlaveUpdates() error {
 
 // validateTable makes sure the table we need to operate on actually exists
 func (isp *Inspector) validateTable() error {
+	if err := isp.validateTableExistsAndNotView(isp.originalTableName()); err != nil {
+		return err
+	}
 	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(isp.migrationContext.DatabaseName), isp.originalTableName())
-
-	tableFound := false
 	err := sqlutils.QueryRowsMap(isp.db, query, func(rowMap sqlutils.RowMap) error {
 		isp.migrationContext.TableEngine = rowMap.GetString("Engine")
 		isp.migrationContext.RowsEstimate = rowMap.GetInt64("Rows")
 		isp.migrationContext.UsedRowsEstimateMethod = base.TableStatusRowsEstimate
-		if rowMap.GetString("Comment") == "VIEW" {
-			return fmt.Errorf("%s.%s is a VIEW, not a real table. Bailing out", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
-		}
-		tableFound = true
-
 		return nil
 	})
 	if err != nil {
 		return err
-	}
-	if !tableFound {
-		return isp.migrationContext.Log.Errorf("cannot find table %s.%s!", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
 	}
 	isp.migrationContext.Log.Infof("Table found. Engine=%s", isp.migrationContext.TableEngine)
 	isp.migrationContext.Log.Debugf("Estimated number of rows via STATUS: %d", isp.migrationContext.RowsEstimate)
 	return nil
 }
 
+// validateTableExistsAndNotView verifies the named table exists and is a real
+// table (not a view). Unlike validateTable it does not mutate shared migration
+// state, so it is safe to call per table in move-tables mode.
+func (isp *Inspector) validateTableExistsAndNotView(tableName string) error {
+	query := fmt.Sprintf(`show /* gh-ost */ table status from %s like '%s'`, sql.EscapeName(isp.migrationContext.DatabaseName), tableName)
+	tableFound := false
+	err := sqlutils.QueryRowsMap(isp.db, query, func(rowMap sqlutils.RowMap) error {
+		if rowMap.GetString("Comment") == "VIEW" {
+			return fmt.Errorf("%s.%s is a VIEW, not a real table. Bailing out", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
+		}
+		tableFound = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !tableFound {
+		return isp.migrationContext.Log.Errorf("cannot find table %s.%s!", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
+	}
+	return nil
+}
+
 // validateTableForeignKeys makes sure no foreign keys exist on the migrated table
 func (isp *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error {
+	return isp.validateTableForeignKeysFor(isp.originalTableName(), allowChildForeignKeys)
+}
+
+func (isp *Inspector) validateTableForeignKeysFor(tableName string, allowChildForeignKeys bool) error {
 	if isp.migrationContext.SkipForeignKeyChecks {
 		isp.migrationContext.Log.Warning("--skip-foreign-key-checks provided: will not check for foreign keys")
 		return nil
@@ -534,26 +559,26 @@ func (isp *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error
 		return nil
 	},
 		isp.migrationContext.DatabaseName,
-		isp.originalTableName(),
+		tableName,
 		isp.migrationContext.DatabaseName,
-		isp.originalTableName(),
+		tableName,
 		isp.migrationContext.DatabaseName,
-		isp.originalTableName(),
+		tableName,
 		isp.migrationContext.DatabaseName,
-		isp.originalTableName(),
+		tableName,
 	)
 	if err != nil {
 		return err
 	}
 	if numParentForeignKeys > 0 {
-		return isp.migrationContext.Log.Errorf("found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
+		return isp.migrationContext.Log.Errorf("found %d parent-side foreign keys on %s.%s. Parent-side foreign keys are not supported. Bailing out", numParentForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
 	}
 	if numChildForeignKeys > 0 {
 		if allowChildForeignKeys {
 			isp.migrationContext.Log.Debugf("Foreign keys found and will be dropped, as per given --discard-foreign-keys flag")
 			return nil
 		}
-		return isp.migrationContext.Log.Errorf("found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
+		return isp.migrationContext.Log.Errorf("found %d child-side foreign keys on %s.%s. Child-side foreign keys are not supported. Bailing out", numChildForeignKeys, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
 	}
 	isp.migrationContext.Log.Debugf("Validated no foreign keys exist on table")
 	return nil
@@ -561,6 +586,12 @@ func (isp *Inspector) validateTableForeignKeys(allowChildForeignKeys bool) error
 
 // validateTableTriggers makes sure no triggers exist on the migrated table. if --include_triggers is used then it fetches the triggers
 func (isp *Inspector) validateTableTriggers() error {
+	return isp.validateTableTriggersFor(isp.originalTableName())
+}
+
+// validateTableTriggersFor performs the trigger validation for a specific table,
+// so it can be applied per table in move-tables mode.
+func (isp *Inspector) validateTableTriggersFor(tableName string) error {
 	query := `
 		SELECT /* gh-ost */ COUNT(*) AS num_triggers
 		FROM
@@ -575,15 +606,15 @@ func (isp *Inspector) validateTableTriggers() error {
 		return nil
 	},
 		isp.migrationContext.DatabaseName,
-		isp.originalTableName(),
+		tableName,
 	)
 	if err != nil {
 		return err
 	}
 	if numTriggers > 0 {
 		if isp.migrationContext.IncludeTriggers {
-			isp.migrationContext.Log.Infof("Found %d triggers on %s.%s.", numTriggers, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
-			isp.migrationContext.Triggers, err = mysql.GetTriggers(isp.db, isp.migrationContext.DatabaseName, isp.originalTableName())
+			isp.migrationContext.Log.Infof("Found %d triggers on %s.%s.", numTriggers, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
+			isp.migrationContext.Triggers, err = mysql.GetTriggers(isp.db, isp.migrationContext.DatabaseName, tableName)
 			if err != nil {
 				return err
 			}
@@ -595,7 +626,7 @@ func (isp *Inspector) validateTableTriggers() error {
 			}
 			return nil
 		}
-		return isp.migrationContext.Log.Errorf("found triggers on %s.%s. Tables with triggers are supported only when using \"include-triggers\" flag. Bailing out", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
+		return isp.migrationContext.Log.Errorf("found triggers on %s.%s. Tables with triggers are supported only when using \"include-triggers\" flag. Bailing out", sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
 	}
 	isp.migrationContext.Log.Debugf("Validated no triggers exist on table")
 	return nil
@@ -668,31 +699,64 @@ func (isp *Inspector) estimateTableRowsViaExplain() error {
 	return nil
 }
 
+// estimateTableRows estimates the number of rows in the given source table via
+// EXPLAIN, returning the estimate rather than mutating shared context state. It
+// is used to estimate each migrated table independently in move-tables mode.
+func (isp *Inspector) estimateTableRows(tableName string) (int64, error) {
+	query := fmt.Sprintf(`explain select /* gh-ost */ * from %s.%s where 1=1`,
+		sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
+	var rowsEstimate int64
+	outputFound := false
+	err := sqlutils.QueryRowsMap(isp.db, query, func(rowMap sqlutils.RowMap) error {
+		rowsEstimate = rowMap.GetInt64("rows")
+		outputFound = true
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if !outputFound {
+		return 0, isp.migrationContext.Log.Errorf("cannot run EXPLAIN on %s.%s!",
+			sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
+	}
+	return rowsEstimate, nil
+}
+
+// InspectMoveTable inspects a single source table for move-tables mode and
+// returns its columns, virtual columns, chosen unique key, and row estimate.
+// Unlike InspectOriginalTable it does not mutate shared migration context
+// fields, so each migrated table can be inspected independently into its own
+// per-table container.
+func (isp *Inspector) InspectMoveTable(tableName string) (columns *sql.ColumnList, virtualColumns *sql.ColumnList, uniqueKeys [](*sql.UniqueKey), uniqueKey *sql.UniqueKey, rowsEstimate int64, err error) {
+	columns, virtualColumns, uniqueKeys, err = isp.InspectTableColumnsAndUniqueKeys(tableName)
+	if err != nil {
+		return nil, nil, nil, nil, 0, err
+	}
+	uniqueKey = isp.selectUniqueKey(tableName, uniqueKeys)
+	if uniqueKey == nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("no valid PRIMARY nor UNIQUE key found for table %s.%s; Bailing out",
+			sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
+	}
+	rowsEstimate, err = isp.estimateTableRows(tableName)
+	if err != nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("failed to estimate rows for table %s.%s: %w",
+			sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName), err)
+	}
+	return columns, virtualColumns, uniqueKeys, uniqueKey, rowsEstimate, nil
+}
+
 // CountTableRows counts exact number of rows on the original table
 func (isp *Inspector) CountTableRows(ctx context.Context) error {
+	if isp.migrationContext.IsMoveTablesMode() {
+		return errors.New("CountTableRows is not available in move-tables mode; use CountMoveTablesRows")
+	}
 	atomic.StoreInt64(&isp.migrationContext.CountingRowsFlag, 1)
 	defer atomic.StoreInt64(&isp.migrationContext.CountingRowsFlag, 0)
 
 	isp.migrationContext.Log.Infof("As instructed, I'm issuing a SELECT COUNT(*) on the table. This may take a while")
 
-	conn, err := isp.db.Conn(ctx)
+	rowsEstimate, err := isp.countTableRowsFor(ctx, isp.originalTableName())
 	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	var connectionID string
-	if err := conn.QueryRowContext(ctx, `SELECT /* gh-ost */ CONNECTION_ID()`).Scan(&connectionID); err != nil {
-		return err
-	}
-
-	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(isp.originalTableName()))
-	var rowsEstimate int64
-	if err := conn.QueryRowContext(ctx, query).Scan(&rowsEstimate); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			isp.migrationContext.Log.Infof("exact row count cancelled (%s), likely because I'm about to cut over. I'm going to kill that query.", ctx.Err())
-			return mysql.Kill(isp.db, connectionID)
-		}
 		return err
 	}
 
@@ -706,6 +770,60 @@ func (isp *Inspector) CountTableRows(ctx context.Context) error {
 	isp.migrationContext.Log.Infof("Exact number of rows via COUNT: %d", rowsEstimate)
 
 	return nil
+}
+
+// CountMoveTablesRows counts exact rows across every migrated table, recording
+// each table's count in its container and the sum as the run-wide estimate. It
+// is the move-tables equivalent of CountTableRows, with no representative table.
+func (isp *Inspector) CountMoveTablesRows(ctx context.Context) error {
+	if !isp.migrationContext.IsMoveTablesMode() {
+		return errors.New("CountMoveTablesRows is only available in move-tables mode; use CountTableRows")
+	}
+	atomic.StoreInt64(&isp.migrationContext.CountingRowsFlag, 1)
+	defer atomic.StoreInt64(&isp.migrationContext.CountingRowsFlag, 0)
+
+	isp.migrationContext.Log.Infof("As instructed, counting exact rows across all migrated tables. This may take a while")
+	var total int64
+	for _, mt := range isp.migrationContext.OrderedMoveTables() {
+		count, err := isp.countTableRowsFor(ctx, mt.SourceTableName)
+		if err != nil {
+			return err
+		}
+		atomic.StoreInt64(&mt.RowsEstimate, count)
+		total += count
+	}
+
+	isp.migrationContext.SetCountTableRowsCancelFunc(nil)
+	atomic.StoreInt64(&isp.migrationContext.RowsEstimate, total)
+	isp.migrationContext.UsedRowsEstimateMethod = base.CountRowsEstimate
+	isp.migrationContext.Log.Infof("Exact number of rows via COUNT across %d table(s): %d", len(isp.migrationContext.MoveTables.TableNames), total)
+	return nil
+}
+
+// countTableRowsFor issues a blocking SELECT COUNT(*) for a single table and
+// returns the exact count. A cancelled context kills the running query.
+func (isp *Inspector) countTableRowsFor(ctx context.Context, tableName string) (int64, error) {
+	conn, err := isp.db.Conn(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	var connectionID string
+	if err := conn.QueryRowContext(ctx, `SELECT /* gh-ost */ CONNECTION_ID()`).Scan(&connectionID); err != nil {
+		return 0, err
+	}
+
+	query := fmt.Sprintf(`select /* gh-ost */ count(*) as count_rows from %s.%s`, sql.EscapeName(isp.migrationContext.DatabaseName), sql.EscapeName(tableName))
+	var rowsEstimate int64
+	if err := conn.QueryRowContext(ctx, query).Scan(&rowsEstimate); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			isp.migrationContext.Log.Infof("exact row count cancelled (%s), likely because I'm about to cut over. I'm going to kill that query.", ctx.Err())
+			return 0, mysql.Kill(isp.db, connectionID)
+		}
+		return 0, err
+	}
+	return rowsEstimate, nil
 }
 
 // applyColumnTypes

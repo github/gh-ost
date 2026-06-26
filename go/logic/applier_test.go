@@ -84,7 +84,7 @@ func TestApplierUpdateModifiesUniqueKeyColumns(t *testing.T) {
 			DML:               binlog.UpdateDML,
 			NewColumnValues:   columnValues,
 			WhereColumnValues: columnValues,
-		})
+		}, migrationContext.UniqueKey, migrationContext.OriginalTableColumns)
 		require.Equal(t, "", modifiedColumn)
 		require.False(t, isModified)
 	})
@@ -95,7 +95,7 @@ func TestApplierUpdateModifiesUniqueKeyColumns(t *testing.T) {
 			DML:               binlog.UpdateDML,
 			NewColumnValues:   sql.ToColumnValues([]interface{}{123456, 24}),
 			WhereColumnValues: columnValues,
-		})
+		}, migrationContext.UniqueKey, migrationContext.OriginalTableColumns)
 		require.Equal(t, "item_id", modifiedColumn)
 		require.True(t, isModified)
 	})
@@ -481,19 +481,31 @@ func (suite *ApplierTestSuite) TestFinalCleanupMoveTablesMode_SkipsDrops() {
 }
 
 // initiateStreaming() requires a binlog-capable MySQL connection to call directly.
-// This test verifies IsMoveTablesMode() and that GetChangelogTableName() returns
-// a derivable name. A new streamer always starts with zero listeners; the real
-// proof that no changelog listener is registered comes from the full run not
-// failing on a nonexistent _ghc table.
+// This test verifies IsMoveTablesMode() and that no changelog table is referenced
+// in move-tables mode (§1.2): no `_ghc` table exists on the source or target
+// database. A new streamer always starts with zero listeners; the real proof that
+// no changelog listener is registered comes from the full run not failing on a
+// nonexistent _ghc table.
 func (suite *ApplierTestSuite) TestInitiateStreamingMoveTablesMode_NoChangelogListener() {
+	ctx := context.Background()
 	migrationContext := newTestMigrationContext()
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
 	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
 	suite.Require().True(migrationContext.IsMoveTablesMode())
 
-	changelogTableName := migrationContext.GetChangelogTableName()
-	suite.Require().NotEmpty(changelogTableName, "changelog table name should be derivable")
+	// In move-tables mode there is no changelog table. Verify none exists on
+	// either the source or target database (LIKE '%\_ghc' matches a literal
+	// trailing "_ghc").
+	for _, schema := range []string{testMysqlDatabase, testMysqlDatabaseOther} {
+		var count int
+		err := suite.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name LIKE '%\_ghc'`,
+			schema,
+		).Scan(&count)
+		suite.Require().NoError(err)
+		suite.Require().Equal(0, count, "no changelog (_ghc) table should exist in move-tables mode in schema %s", schema)
+	}
 
 	streamer := NewEventsStreamer(migrationContext)
 	suite.Require().Empty(streamer.listeners, "new streamer should have no listeners")
@@ -812,7 +824,7 @@ func (suite *ApplierTestSuite) TestCreateTargetTable_HappyPath() {
 	suite.Require().NoError(err)
 	suite.Require().Equal(0, count, "precondition: target table must not exist before CreateTargetTable")
 
-	err = applier.CreateTargetTable(sourceCreateDDL)
+	err = applier.CreateTargetTableForName(testMysqlTableName, sourceCreateDDL)
 	suite.Require().NoError(err)
 
 	var targetTableName, targetCreateDDL string
@@ -872,7 +884,7 @@ func (suite *ApplierTestSuite) TestCreateTargetTable_AbortsIfExists() {
 	err = suite.db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", getTestTableName())).Scan(&dummy, &sourceCreateDDL)
 	suite.Require().NoError(err)
 
-	err = applier.CreateTargetTable(sourceCreateDDL)
+	err = applier.CreateTargetTableForName(testMysqlTableName, sourceCreateDDL)
 	suite.Require().Error(err, "CreateTargetTable must return an error when target table already exists")
 	suite.Require().Contains(err.Error(), "already exists", "error message must mention 'already exists'")
 	suite.Require().Contains(err.Error(), testMysqlTableName, "error message must name the table")
@@ -1150,11 +1162,17 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 		Columns:          *sql.NewColumnList([]string{"id", "id2"}),
 	}
 
+	// Populate the per-table container the move-tables checkpoint path operates on.
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = migrationContext.OriginalTableColumns
+	mt.SharedColumns = migrationContext.SharedColumns
+	mt.MappedSharedColumns = migrationContext.MappedSharedColumns
+	mt.UniqueKey = migrationContext.UniqueKey
+
 	inspector := NewInspector(migrationContext)
 	suite.Require().NoError(inspector.InitDBConnections())
-
-	err = inspector.applyColumnTypes(testMysqlDatabase, testMysqlTableName, &migrationContext.UniqueKey.Columns)
-	suite.Require().NoError(err)
 
 	applier := NewApplier(migrationContext)
 
@@ -1167,7 +1185,7 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 	err = applier.prepareQueries()
 	suite.Require().NoError(err)
 
-	err = applier.ReadMigrationRangeValues(inspector.db)
+	err = applier.ReadMoveTableMigrationRangeValues(inspector.db, mt)
 	suite.Require().NoError(err)
 
 	coords, err := mysql.NewGTIDBinlogCoordinates("00000000-0000-0000-0000-000000000001:1-10")
@@ -1176,9 +1194,10 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 	suite.Require().NoError(err)
 
 	chk := &Checkpoint{
+		TableName:                  testMysqlTableName,
 		LastTrxCoords:              coords,
-		IterationRangeMin:          applier.migrationContext.MigrationRangeMinValues,
-		IterationRangeMax:          applier.migrationContext.MigrationRangeMaxValues,
+		IterationRangeMin:          mt.MigrationRangeMinValues,
+		IterationRangeMax:          mt.MigrationRangeMaxValues,
 		Iteration:                  3,
 		RowsCopied:                 1000,
 		DMLApplied:                 2000,
@@ -1186,17 +1205,22 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 		MoveTablesCutOverStarted:   true,
 		MoveTablesCutOverDrainGTID: drainGTID,
 	}
-	id, err := applier.WriteCheckpoint(chk)
+	err = applier.WriteMoveTableCheckpoints([]*Checkpoint{chk})
 	suite.Require().NoError(err)
-	suite.Require().Equal(int64(1), id)
 
-	gotChk, err := applier.ReadLastCheckpoint()
+	gotCheckpoints, err := applier.ReadMoveTableCheckpoints()
 	suite.Require().NoError(err)
+	gotChk := gotCheckpoints[testMysqlTableName]
+	suite.Require().NotNil(gotChk)
 
 	suite.Require().Equal(chk.Iteration, gotChk.Iteration)
 	suite.Require().Equal(chk.LastTrxCoords.String(), gotChk.LastTrxCoords.String())
-	suite.Require().Equal(chk.IterationRangeMin.String(), gotChk.IterationRangeMin.String())
-	suite.Require().Equal(chk.IterationRangeMax.String(), gotChk.IterationRangeMax.String())
+	// The fresh read yields typed values (e.g. int -> "212") while the checkpoint
+	// round-trips them as []byte (-> hex "323132"). Both serialize identically and
+	// are used identically as prepared-statement args on resume, so compare the
+	// serialized (resumable) form rather than the typed String() rendering.
+	suite.Require().Equal(serializeRangeValues(chk.IterationRangeMin), serializeRangeValues(gotChk.IterationRangeMin))
+	suite.Require().Equal(serializeRangeValues(chk.IterationRangeMax), serializeRangeValues(gotChk.IterationRangeMax))
 	suite.Require().Equal(chk.RowsCopied, gotChk.RowsCopied)
 	suite.Require().Equal(chk.DMLApplied, gotChk.DMLApplied)
 	suite.Require().Equal(chk.IsCutover, gotChk.IsCutover)
@@ -1236,27 +1260,36 @@ func (suite *ApplierTestSuite) TestReadMoveTablesCutOverCheckpointIgnoresRowCopy
 		Columns:          *sql.NewColumnList([]string{"id"}),
 	}
 
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = migrationContext.OriginalTableColumns
+	mt.SharedColumns = migrationContext.SharedColumns
+	mt.MappedSharedColumns = migrationContext.MappedSharedColumns
+	mt.UniqueKey = migrationContext.UniqueKey
+
 	inspector := NewInspector(migrationContext)
 	suite.Require().NoError(inspector.InitDBConnections())
-	err = inspector.applyColumnTypes(testMysqlDatabase, testMysqlTableName, &migrationContext.UniqueKey.Columns)
-	suite.Require().NoError(err)
 
 	applier := NewApplier(migrationContext)
 	suite.Require().NoError(applier.InitDBConnections())
 	suite.Require().NoError(applier.CreateCheckpointTable())
 	suite.Require().NoError(applier.prepareQueries())
-	suite.Require().NoError(applier.ReadMigrationRangeValues(inspector.db))
+	suite.Require().NoError(applier.ReadMoveTableMigrationRangeValues(inspector.db, mt))
 
 	coords := mysql.NewFileBinlogCoordinates("mysql-bin.000003", int64(1234))
+	// A row-copy checkpoint: cutover has not started, so the cutover-resume read
+	// must ignore it.
 	chk := &Checkpoint{
+		TableName:         testMysqlTableName,
 		LastTrxCoords:     coords,
-		IterationRangeMin: applier.migrationContext.MigrationRangeMinValues,
-		IterationRangeMax: applier.migrationContext.MigrationRangeMaxValues,
+		IterationRangeMin: mt.MigrationRangeMinValues,
+		IterationRangeMax: mt.MigrationRangeMaxValues,
 		Iteration:         1,
 		RowsCopied:        3,
 		DMLApplied:        0,
 	}
-	_, err = applier.WriteCheckpoint(chk)
+	err = applier.WriteMoveTableCheckpoints([]*Checkpoint{chk})
 	suite.Require().NoError(err)
 
 	_, err = applier.ReadMoveTablesCutOverCheckpoint()
@@ -2045,6 +2078,16 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueriesMoveTablesMode() {
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
 	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
+	// Populate the per-table container that prepareQueries/ApplyDMLEventQueries
+	// route DML through (there is no representative table in move-tables mode).
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = migrationContext.OriginalTableColumns
+	mt.SharedColumns = migrationContext.SharedColumns
+	mt.MappedSharedColumns = migrationContext.MappedSharedColumns
+	mt.UniqueKey = migrationContext.UniqueKey
+
 	applier := NewApplier(migrationContext)
 	suite.Require().NoError(applier.prepareQueries())
 	defer applier.Teardown()
@@ -2112,6 +2155,15 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
 	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
+	// Populate the per-table container the move-tables copy path operates on.
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = migrationContext.OriginalTableColumns
+	mt.SharedColumns = migrationContext.SharedColumns
+	mt.MappedSharedColumns = migrationContext.MappedSharedColumns
+	mt.UniqueKey = migrationContext.UniqueKey
+
 	applier := NewApplier(migrationContext)
 	applier.prepareQueries()
 	defer applier.Teardown()
@@ -2119,18 +2171,15 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	err = applier.InitDBConnections()
 	suite.Require().NoError(err)
 
-	err = applier.CreateChangelogTable()
+	err = applier.ReadMoveTableMigrationRangeValues(nil, mt)
 	suite.Require().NoError(err)
 
-	err = applier.ReadMigrationRangeValues(nil)
-	suite.Require().NoError(err)
-
-	migrationContext.SetNextIterationRangeMinValues()
-	hasFurtherRange, err := applier.CalculateNextIterationRangeEndValues(nil)
+	mt.SetNextIterationRangeMinValues()
+	hasFurtherRange, err := applier.CalculateMoveTableNextIterationRangeEndValues(applier.db, mt)
 	suite.Require().NoError(err)
 	suite.Require().True(hasFurtherRange)
 
-	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db)
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db, mt)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(3), rowsAffected)
 	suite.Require().Equal(int64(1000), chunkSize)
@@ -2195,6 +2244,15 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesNoRows() {
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
 	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 
+	// Populate the per-table container the move-tables copy path operates on.
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = migrationContext.OriginalTableColumns
+	mt.SharedColumns = migrationContext.SharedColumns
+	mt.MappedSharedColumns = migrationContext.MappedSharedColumns
+	mt.UniqueKey = migrationContext.UniqueKey
+
 	applier := NewApplier(migrationContext)
 	applier.prepareQueries()
 	defer applier.Teardown()
@@ -2204,10 +2262,10 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesNoRows() {
 
 	// Point the iteration range at a key range that contains no rows so the
 	// SELECT returns an empty result set and the INSERT is skipped.
-	migrationContext.MigrationIterationRangeMinValues = sql.ToColumnValues([]interface{}{100})
-	migrationContext.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{200})
+	mt.MigrationIterationRangeMinValues = sql.ToColumnValues([]interface{}{100})
+	mt.MigrationIterationRangeMaxValues = sql.ToColumnValues([]interface{}{200})
 
-	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db)
+	chunkSize, rowsAffected, duration, err := applier.ApplyIterationMoveTableCopyQueries(applier.db, mt)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(0), rowsAffected)
 	suite.Require().Equal(int64(1000), chunkSize)

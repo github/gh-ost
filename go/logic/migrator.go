@@ -421,7 +421,11 @@ func (mgtr *Migrator) countTableRows() (err error) {
 	}
 
 	countRowsFunc := func(ctx context.Context) error {
-		if err := mgtr.inspector.CountTableRows(ctx); err != nil {
+		if mgtr.migrationContext.IsMoveTablesMode() {
+			if err := mgtr.inspector.CountMoveTablesRows(ctx); err != nil {
+				return err
+			}
+		} else if err := mgtr.inspector.CountTableRows(ctx); err != nil {
 			return err
 		}
 		if err := mgtr.hooksExecutor.OnRowCountComplete(); err != nil {
@@ -803,14 +807,57 @@ func (mgtr *Migrator) Revert() error {
 	return nil
 }
 
-// prepareMoveTablesCopyState initializes state for row copy in move-tables mode.
-// for move-tables functionality, the source and target tables are identical so we just need to grab any valid UNIQUE key constraint.
-func (mgtr *Migrator) prepareMoveTablesCopyState() {
-	mgtr.migrationContext.UniqueKey = mgtr.inspector.selectUniqueKey(mgtr.migrationContext.OriginalTableUniqueKeys)
+// prepareMoveTablesCopyState initializes per-table runtime state for row copy in
+// move-tables mode (§2.1). Each migrated table is inspected and validated
+// independently into its own container (schema, unique key, row estimate, CREATE
+// statement). There is no representative table: a single-entry --move-tables is
+// simply an array of one, handled by the same per-table loop.
+func (mgtr *Migrator) prepareMoveTablesCopyState() error {
+	mgtr.migrationContext.InitMoveTableContainers()
 
-	// In move-tables mode source and target schemas match, so shared columns are identical.
-	mgtr.migrationContext.SharedColumns = mgtr.migrationContext.OriginalTableColumns
-	mgtr.migrationContext.MappedSharedColumns = mgtr.migrationContext.OriginalTableColumns
+	var totalRowsEstimate int64
+	for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
+		// Validate each entry like a standard single-table run: it must exist, be a
+		// real table (not a view), have no unsupported foreign keys, and no triggers
+		// (unless --include-triggers).
+		if err := mgtr.inspector.validateTableExistsAndNotView(mt.SourceTableName); err != nil {
+			return fmt.Errorf("failed to validate move-table %s.%s: %w",
+				sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName), err)
+		}
+		columns, virtualColumns, uniqueKeys, uniqueKey, rowsEstimate, err := mgtr.inspector.InspectMoveTable(mt.SourceTableName)
+		if err != nil {
+			return fmt.Errorf("failed to inspect move-table %s.%s: %w",
+				sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName), err)
+		}
+		if err := mgtr.inspector.validateTableForeignKeysFor(mt.SourceTableName, mgtr.migrationContext.DiscardForeignKeys); err != nil {
+			return fmt.Errorf("failed to validate foreign keys on move-table %s.%s: %w",
+				sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName), err)
+		}
+		if err := mgtr.inspector.validateTableTriggersFor(mt.SourceTableName); err != nil {
+			return fmt.Errorf("failed to validate triggers on move-table %s.%s: %w",
+				sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName), err)
+		}
+		createStatement, err := mgtr.inspector.showCreateTable(mt.SourceTableName)
+		if err != nil {
+			return fmt.Errorf("failed to fetch create table statement for %s.%s: %w",
+				sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName), err)
+		}
+
+		mt.OriginalTableColumns = columns
+		mt.OriginalTableVirtualColumns = virtualColumns
+		mt.OriginalTableUniqueKeys = uniqueKeys
+		mt.UniqueKey = uniqueKey
+		// In move-tables mode source and target schemas match, so shared columns are identical.
+		mt.SharedColumns = columns
+		mt.MappedSharedColumns = columns
+		mt.RowsEstimate = rowsEstimate
+		mt.CreateTableStatement = createStatement
+		totalRowsEstimate += rowsEstimate
+	}
+
+	// Aggregate the row estimate across all tables for overall progress reporting.
+	atomic.StoreInt64(&mgtr.migrationContext.RowsEstimate, totalRowsEstimate)
+	return nil
 }
 
 func (mgtr *Migrator) hydrateMoveTablesStateFromTarget() error {
@@ -818,17 +865,24 @@ func (mgtr *Migrator) hydrateMoveTablesStateFromTarget() error {
 	probeContext.DatabaseName = mgtr.migrationContext.GetTargetDatabaseName()
 	targetInspector := &Inspector{db: mgtr.applier.moveTablesTargetDB, migrationContext: probeContext}
 
-	columns, virtualColumns, uniqueKeys, err := targetInspector.InspectTableColumnsAndUniqueKeys(mgtr.migrationContext.GetTargetTableName())
-	if err != nil {
-		return err
+	mgtr.migrationContext.InitMoveTableContainers()
+	for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
+		columns, virtualColumns, uniqueKeys, err := targetInspector.InspectTableColumnsAndUniqueKeys(mt.TargetTableName)
+		if err != nil {
+			return err
+		}
+		uniqueKey := targetInspector.selectUniqueKey(mt.TargetTableName, uniqueKeys)
+		if uniqueKey == nil {
+			return fmt.Errorf("no valid unique key found on target table %s.%s while resuming",
+				sql.EscapeName(mt.TargetDatabaseName), sql.EscapeName(mt.TargetTableName))
+		}
+		mt.OriginalTableColumns = columns
+		mt.OriginalTableVirtualColumns = virtualColumns
+		mt.OriginalTableUniqueKeys = uniqueKeys
+		mt.UniqueKey = uniqueKey
+		mt.SharedColumns = columns
+		mt.MappedSharedColumns = columns
 	}
-
-	mgtr.migrationContext.OriginalTableColumns = columns
-	mgtr.migrationContext.OriginalTableVirtualColumns = virtualColumns
-	mgtr.migrationContext.OriginalTableUniqueKeys = uniqueKeys
-	mgtr.migrationContext.UniqueKey = targetInspector.selectUniqueKey(uniqueKeys)
-	mgtr.migrationContext.SharedColumns = columns
-	mgtr.migrationContext.MappedSharedColumns = columns
 	return nil
 }
 
@@ -850,28 +904,8 @@ func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogC
 	}
 	safeCoords = safeCoords.Clone()
 
-	chk := &Checkpoint{
-		LastTrxCoords:              safeCoords,
-		IterationRangeMin:          sql.NewColumnValues(mgtr.migrationContext.UniqueKey.Len()),
-		IterationRangeMax:          sql.NewColumnValues(mgtr.migrationContext.UniqueKey.Len()),
-		Iteration:                  mgtr.migrationContext.GetIteration(),
-		RowsCopied:                 atomic.LoadInt64(&mgtr.migrationContext.TotalRowsCopied),
-		DMLApplied:                 atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
-		IsCutover:                  isCutover,
-		MoveTablesCutOverStarted:   true,
-		MoveTablesCutOverDrainGTID: drainGTID,
-	}
-	mgtr.applier.LastIterationRangeMutex.Lock()
-	if mgtr.applier.LastIterationRangeMinValues != nil {
-		chk.IterationRangeMin = mgtr.applier.LastIterationRangeMinValues.Clone()
-	}
-	if mgtr.applier.LastIterationRangeMaxValues != nil {
-		chk.IterationRangeMax = mgtr.applier.LastIterationRangeMaxValues.Clone()
-	}
-	mgtr.applier.LastIterationRangeMutex.Unlock()
-	id, err := mgtr.applier.WriteCheckpoint(chk)
-	chk.Id = id
-	return err
+	rows := mgtr.buildMoveTableCheckpointRows(safeCoords, isCutover, true, drainGTID)
+	return mgtr.applier.WriteMoveTableCheckpoints(rows)
 }
 
 // moveTablesDrainCoordinateReached returns true when current is at-or-ahead of
@@ -1012,15 +1046,12 @@ func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) err
 }
 
 func (mgtr *Migrator) MoveTables() (err error) {
-	mgtr.migrationContext.Log.Infof("Moving tables %v from %s to %s (%s)",
+	mgtr.migrationContext.Log.Infof("Moving tables %v (run %s) from %s to %s (%s)",
 		mgtr.migrationContext.MoveTables.TableNames,
+		mgtr.migrationContext.MoveTablesRunToken(),
 		sql.EscapeName(mgtr.migrationContext.DatabaseName),
 		sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()), mgtr.migrationContext.MoveTables.TargetHost)
 	mgtr.migrationContext.StartTime = time.Now()
-
-	if mgtr.migrationContext.OriginalTableName == "" {
-		mgtr.migrationContext.OriginalTableName = mgtr.migrationContext.MoveTables.TableNames[0]
-	}
 
 	// Ensure context is cancelled on exit (cleanup)
 	defer mgtr.migrationContext.CancelContext()
@@ -1131,7 +1162,9 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.checkAbort(); err != nil {
 		return err
 	}
-	mgtr.prepareMoveTablesCopyState()
+	if err := mgtr.prepareMoveTablesCopyState(); err != nil {
+		return err
+	}
 	if err := mgtr.initiateApplier(); err != nil {
 		return err
 	}
@@ -1139,19 +1172,46 @@ func (mgtr *Migrator) MoveTables() (err error) {
 		return err
 	}
 	if mgtr.migrationContext.Checkpoint && mgtr.migrationContext.Resume {
-		lastCheckpoint, err := mgtr.applier.ReadLastCheckpoint()
+		checkpoints, err := mgtr.applier.ReadMoveTableCheckpoints()
 		if err != nil {
 			return mgtr.migrationContext.Log.Errorf("no checkpoint found, unable to resume: %+v", err)
 		}
-		mgtr.migrationContext.Log.Infof("Resuming move-tables from checkpoint coords=%+v range_min=%+v range_max=%+v iteration=%d",
-			lastCheckpoint.LastTrxCoords, lastCheckpoint.IterationRangeMin.String(), lastCheckpoint.IterationRangeMax.String(), lastCheckpoint.Iteration)
-
-		mgtr.migrationContext.MigrationIterationRangeMinValues = lastCheckpoint.IterationRangeMin
-		mgtr.migrationContext.MigrationIterationRangeMaxValues = lastCheckpoint.IterationRangeMax
-		mgtr.migrationContext.Iteration = lastCheckpoint.Iteration
-		atomic.StoreInt64(&mgtr.migrationContext.TotalRowsCopied, lastCheckpoint.RowsCopied)
-		atomic.StoreInt64(&mgtr.migrationContext.TotalDMLEventsApplied, lastCheckpoint.DMLApplied)
-		mgtr.migrationContext.InitialStreamerCoords = lastCheckpoint.LastTrxCoords
+		var resumeCoords mysql.BinlogCoordinates
+		var totalRowsCopied, totalDMLApplied int64
+		for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
+			chk, ok := checkpoints[mt.SourceTableName]
+			if !ok {
+				// No checkpoint row for this table yet; it resumes from scratch.
+				continue
+			}
+			// Run-wide state is replicated on every row; capture it regardless of
+			// whether this table had completed a chunk.
+			totalRowsCopied += chk.RowsCopied
+			if chk.DMLApplied > totalDMLApplied {
+				totalDMLApplied = chk.DMLApplied
+			}
+			// Resume the single applied stream from the earliest per-table frontier
+			// so no table misses events; re-applied row-copy/DML is idempotent.
+			if chk.LastTrxCoords != nil && !chk.LastTrxCoords.IsEmpty() {
+				if resumeCoords == nil || chk.LastTrxCoords.SmallerThan(resumeCoords) {
+					resumeCoords = chk.LastTrxCoords
+				}
+			}
+			// Only restore the per-table iteration window if a chunk actually
+			// completed; an empty range means this table must start from its minimum.
+			if isEmptyRange(chk.IterationRangeMin) || isEmptyRange(chk.IterationRangeMax) {
+				continue
+			}
+			mt.RestoreFromCheckpoint(chk.IterationRangeMin, chk.IterationRangeMax, chk.Iteration, chk.RowsCopied)
+			mgtr.migrationContext.Log.Infof("Resuming move-table %s from checkpoint range_min=%+v range_max=%+v iteration=%d",
+				mt.SourceTableName, chk.IterationRangeMin.String(), chk.IterationRangeMax.String(), chk.Iteration)
+		}
+		atomic.StoreInt64(&mgtr.migrationContext.TotalRowsCopied, totalRowsCopied)
+		atomic.StoreInt64(&mgtr.migrationContext.TotalDMLEventsApplied, totalDMLApplied)
+		if resumeCoords != nil {
+			mgtr.migrationContext.InitialStreamerCoords = resumeCoords
+		}
+		mgtr.migrationContext.Log.Infof("Resuming move-tables from checkpoint coords=%+v", resumeCoords)
 	}
 	if err := mgtr.createFlagFiles(); err != nil {
 		return err
@@ -1192,8 +1252,13 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.addDMLEventsListener(); err != nil {
 		return err
 	}
-	if err := mgtr.applier.ReadMigrationRangeValues(mgtr.inspector.db); err != nil {
-		return err
+	// Read each migrated table's full row-copy range into its per-table container
+	// (§2.3). Ranges are read from the source via the inspector connection.
+	for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
+		if err := mgtr.applier.ReadMoveTableMigrationRangeValues(mgtr.inspector.db, mt); err != nil {
+			return fmt.Errorf("failed to read migration range for %s.%s: %w",
+				sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName), err)
+		}
 	}
 
 	mgtr.initiateThrottler()
@@ -1208,7 +1273,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 			_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
 		}
 	}()
-	go mgtr.iterateChunks()
+	go mgtr.iterateChunksMoveTables()
 	mgtr.migrationContext.MarkRowCopyStartTime()
 	go mgtr.initiateStatus()
 	if mgtr.migrationContext.Checkpoint {
@@ -1322,12 +1387,21 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	}
 
 	sourceDB := mgtr.migrationContext.DatabaseName
-	sourceTable := mgtr.migrationContext.OriginalTableName
-	delTable := mgtr.migrationContext.GetOldTableName()
-	renameAndCaptureQuery := fmt.Sprintf("rename /* gh-ost */ table %s.%s to %s.%s;\nselect @@global.gtid_executed",
-		sql.EscapeName(sourceDB), sql.EscapeName(sourceTable),
-		sql.EscapeName(sourceDB), sql.EscapeName(delTable))
-	mgtr.migrationContext.Log.Infof("T1+T2: renaming source table and capturing drain GTID: %s", renameAndCaptureQuery)
+	// Build a single atomic multi-table RENAME covering every table in
+	// --move-tables order (§2.4): `RENAME TABLE db.t1 TO db._t1_del, db.t2 TO
+	// db._t2_del, ...`. MySQL executes this as one event group with one GTID, so
+	// the existing single-drain-GTID mechanism covers the whole move set.
+	renameClauses := make([]string, 0, len(mgtr.migrationContext.MoveTables.TableNames))
+	for _, tableName := range mgtr.migrationContext.MoveTables.TableNames {
+		delTable := mgtr.migrationContext.MoveTableDelName(tableName)
+		renameClauses = append(renameClauses, fmt.Sprintf("%s.%s to %s.%s",
+			sql.EscapeName(sourceDB), sql.EscapeName(tableName),
+			sql.EscapeName(sourceDB), sql.EscapeName(delTable)))
+	}
+	renameAndCaptureQuery := fmt.Sprintf("rename /* gh-ost */ table %s;\nselect @@global.gtid_executed",
+		strings.Join(renameClauses, ", "))
+	mgtr.migrationContext.Log.Infof("T1+T2: renaming %d source table(s) and capturing drain GTID: %s",
+		len(renameClauses), renameAndCaptureQuery)
 
 	// @@GLOBAL scope is explicit so the intent is unambiguous in the SQL itself.
 	// Design: https://github.com/github/gh-ost-tablemove-poc/blob/9dc6df75c4c88ff473906a497836c7518f5614ec/design/coop_cutover.md#32-correctness-verification-for-p4
@@ -1830,28 +1904,35 @@ func (mgtr *Migrator) validateMoveTablesSourceReadHost() error {
 	return fmt.Errorf("move-tables source --host %+v is the cluster primary; reading the full table copy from the primary is the load move-tables is meant to avoid. Point --host at a replica so reads come off the primary, or pass --allow-on-source-primary to proceed against the primary anyway", spc.Key)
 }
 
-// dropSourceOldTable drops the source `__del` rollback handle on the source
-// primary. The inspector/streamer source connections may be a read replica, so
-// the drop cannot go through them; it must use the writable source-primary handle.
-func (mgtr *Migrator) dropSourceOldTable() error {
+// dropMoveTablesSourceOldTables drops every source `_<table>_del` rollback
+// handle on the source primary. Move-tables only: each migrated table leaves a
+// `_del` handle behind after the atomic cutover RENAME, and there may be several.
+// The inspector/streamer source connections may be a read replica, so the drop
+// cannot go through them; it must use the writable source-primary handle.
+func (mgtr *Migrator) dropMoveTablesSourceOldTables() error {
+	if !mgtr.migrationContext.IsMoveTablesMode() {
+		return errors.New("dropMoveTablesSourceOldTables is only available in move-tables mode")
+	}
 	if mgtr.sourcePrimaryDB == nil {
 		return errors.New("source primary connection not initialized; cannot drop source __del table")
 	}
 	databaseName := mgtr.migrationContext.DatabaseName
-	tableName := mgtr.migrationContext.GetOldTableName()
-	query := fmt.Sprintf(`drop /* gh-ost */ table if exists %s.%s`,
-		sql.EscapeName(databaseName),
-		sql.EscapeName(tableName),
-	)
-	mgtr.migrationContext.Log.Infof("Dropping source table %s.%s on primary %+v",
-		sql.EscapeName(databaseName),
-		sql.EscapeName(tableName),
-		mgtr.migrationContext.MoveTables.SourcePrimaryConnectionConfig.Key,
-	)
-	if _, err := mgtr.sourcePrimaryDB.Exec(query); err != nil {
-		return err
+	for _, tableName := range mgtr.migrationContext.MoveTables.TableNames {
+		delTable := mgtr.migrationContext.MoveTableDelName(tableName)
+		query := fmt.Sprintf(`drop /* gh-ost */ table if exists %s.%s`,
+			sql.EscapeName(databaseName),
+			sql.EscapeName(delTable),
+		)
+		mgtr.migrationContext.Log.Infof("Dropping source table %s.%s on primary %+v",
+			sql.EscapeName(databaseName),
+			sql.EscapeName(delTable),
+			mgtr.migrationContext.MoveTables.SourcePrimaryConnectionConfig.Key,
+		)
+		if _, err := mgtr.sourcePrimaryDB.Exec(query); err != nil {
+			return err
+		}
 	}
-	mgtr.migrationContext.Log.Infof("Source table dropped")
+	mgtr.migrationContext.Log.Infof("Source table(s) dropped")
 	return nil
 }
 
@@ -1867,11 +1948,16 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 	if err := mgtr.inspector.InitDBConnections(); err != nil {
 		return err
 	}
-	if err := mgtr.inspector.ValidateOriginalTable(); err != nil {
-		return fmt.Errorf("failed to validate original table: %w", err)
-	}
-	if err := mgtr.inspector.InspectOriginalTable(); err != nil {
-		return fmt.Errorf("failed to inspect original table: %w", err)
+	// Move-tables mode validates and inspects each table independently in
+	// prepareMoveTablesCopyState; there is no representative single table to run
+	// the standard single-table validation/inspection pass against.
+	if !mgtr.migrationContext.IsMoveTablesMode() {
+		if err := mgtr.inspector.ValidateOriginalTable(); err != nil {
+			return fmt.Errorf("failed to validate original table: %w", err)
+		}
+		if err := mgtr.inspector.InspectOriginalTable(); err != nil {
+			return fmt.Errorf("failed to inspect original table: %w", err)
+		}
 	}
 	// So far so good, table is accessible and valid.
 	// Let's get master connection config
@@ -1962,20 +2048,52 @@ func (mgtr *Migrator) initiateStatus() {
 // migration, and as response to the "status" interactive command.
 func (mgtr *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
-	fmt.Fprintf(w, "# Migrating %s.%s; Target table is %s.%s\n",
-		sql.EscapeName(mgtr.migrationContext.DatabaseName),
-		sql.EscapeName(mgtr.migrationContext.OriginalTableName),
-		sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()),
-		sql.EscapeName(mgtr.migrationContext.GetTargetTableName()),
-	)
-	fmt.Fprintf(w, "# Migrating %+v; inspecting %+v; executing on %+v\n",
-		*mgtr.applier.connectionConfig.ImpliedKey,
-		*mgtr.inspector.connectionConfig.ImpliedKey,
-		mgtr.migrationContext.Hostname,
-	)
-	fmt.Fprintf(w, "# Migration started at %+v\n",
-		mgtr.migrationContext.StartTime.Format(time.RubyDate),
-	)
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		// In move-tables mode there may be several migrated tables; list each
+		// source -> target mapping rather than a single primary table (§2.3).
+		// Table names match on source and target; only the database may differ.
+		sourceDatabaseName := mgtr.migrationContext.DatabaseName
+		targetDatabaseName := mgtr.migrationContext.GetTargetDatabaseName()
+		fmt.Fprintf(w, "# Moving %d table(s) from %s to %s:\n",
+			len(mgtr.migrationContext.MoveTables.TableNames),
+			sql.EscapeName(sourceDatabaseName),
+			sql.EscapeName(targetDatabaseName),
+		)
+		for _, tableName := range mgtr.migrationContext.MoveTables.TableNames {
+			fmt.Fprintf(w, "#   - %s.%s -> %s.%s\n",
+				sql.EscapeName(sourceDatabaseName), sql.EscapeName(tableName),
+				sql.EscapeName(targetDatabaseName), sql.EscapeName(tableName),
+			)
+		}
+
+		// In move-tables mode the applier writes the target cluster and the
+		// inspector reads the source cluster, so label them as such rather than
+		// reusing the single-server "migrating/inspecting" phrasing.
+		fmt.Fprintf(w, "# Applying on target %+v; reading source %+v; executing on %+v\n",
+			*mgtr.applier.connectionConfig.ImpliedKey,
+			*mgtr.inspector.connectionConfig.ImpliedKey,
+			mgtr.migrationContext.Hostname,
+		)
+		fmt.Fprintf(w, "# Move started at %+v\n",
+			mgtr.migrationContext.StartTime.Format(time.RubyDate),
+		)
+	} else {
+		fmt.Fprintf(w, "# Migrating %s.%s; Ghost table is %s.%s\n",
+			sql.EscapeName(mgtr.migrationContext.DatabaseName),
+			sql.EscapeName(mgtr.migrationContext.OriginalTableName),
+			sql.EscapeName(mgtr.migrationContext.DatabaseName),
+			sql.EscapeName(mgtr.migrationContext.GetGhostTableName()),
+		)
+		fmt.Fprintf(w, "# Migrating %+v; inspecting %+v; executing on %+v\n",
+			*mgtr.applier.connectionConfig.ImpliedKey,
+			*mgtr.inspector.connectionConfig.ImpliedKey,
+			mgtr.migrationContext.Hostname,
+		)
+		fmt.Fprintf(w, "# Migration started at %+v\n",
+			mgtr.migrationContext.StartTime.Format(time.RubyDate),
+		)
+	}
+
 	maxLoad := mgtr.migrationContext.GetMaxLoad()
 	criticalLoad := mgtr.migrationContext.GetCriticalLoad()
 	fmt.Fprintf(w, "# chunk-size: %+v; max-lag-millis: %+vms; dml-batch-size: %+v; max-load: %s; critical-load: %s; nice-ratio: %f\n",
@@ -2208,6 +2326,26 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	fmt.Fprintln(w, status)
 
+	// In move-tables mode, surface per-table row-copy progress so all migrated
+	// tables are visibly advancing concurrently (§2.3).
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
+			copied := atomic.LoadInt64(&mt.RowsCopied)
+			estimate := atomic.LoadInt64(&mt.RowsEstimate)
+			pct := 100.0
+			if estimate > 0 {
+				pct = 100.0 * float64(copied) / float64(estimate)
+			}
+			tableState := "copying"
+			if mt.IsRowCopyComplete() {
+				tableState = "complete"
+			}
+			fmt.Fprintf(w, "  - %s.%s: Copy %d/%d %.1f%%; iteration %d; %s\n",
+				sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName),
+				copied, estimate, pct, mt.GetIteration(), tableState)
+		}
+	}
+
 	// This "hack" is required here because the underlying logging library
 	// github.com/outbrain/golib/log provides two functions Info and Infof; but the arguments of
 	// both these functions are eventually redirected to the same function, which internally calls
@@ -2283,30 +2421,44 @@ func (mgtr *Migrator) initiateStreaming() error {
 	return nil
 }
 
-// addDMLEventsListener begins listening for binlog events on the original table,
-// and creates & enqueues a write task per such event.
+// addDMLEventsListener begins listening for binlog events on the migrated
+// table(s), and creates & enqueues a write task per such event. In move-tables
+// mode it registers one listener per migrated table on the shared events
+// streamer (§2.2); all listeners feed the same apply queue, parameterized only
+// by table name. The streamer already dispatches per (database, table), and the
+// applier routes DML to the right per-table query builders by table name.
 func (mgtr *Migrator) addDMLEventsListener() error {
-	originalTableName := mgtr.migrationContext.OriginalTableName
-	if mgtr.migrationContext.IsMoveTablesMode() {
-		originalTableName = mgtr.migrationContext.MoveTables.TableNames[0]
+	enqueue := func(dmlEntry *binlog.BinlogEntry) error {
+		// Record that the streamer just delivered an event for a moved table, so
+		// the idle-bump rule can tell "falling behind" from "source is quiet".
+		if mgtr.migrationContext.IsMoveTablesMode() {
+			mgtr.migrationContext.MarkBinlogEventStreamed()
+		}
+		// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits.
+		// This is critical because this callback blocks the event streamer.
+		return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, newApplyEventStructByDML(dmlEntry))
 	}
 
-	err := mgtr.eventsStreamer.AddListener(
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		for _, tableName := range mgtr.migrationContext.MoveTables.TableNames {
+			if err := mgtr.eventsStreamer.AddListener(
+				false,
+				mgtr.migrationContext.DatabaseName,
+				tableName,
+				enqueue,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	return mgtr.eventsStreamer.AddListener(
 		false,
 		mgtr.migrationContext.DatabaseName,
-		originalTableName,
-		func(dmlEntry *binlog.BinlogEntry) error {
-			// Record that the streamer just delivered an event for the moved table,
-			// so the idle-bump rule can tell "falling behind" from "source is quiet".
-			if mgtr.migrationContext.IsMoveTablesMode() {
-				mgtr.migrationContext.MarkBinlogEventStreamed()
-			}
-			// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits
-			// This is critical because this callback blocks the event streamer
-			return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, newApplyEventStructByDML(dmlEntry))
-		},
+		mgtr.migrationContext.OriginalTableName,
+		enqueue,
 	)
-	return err
 }
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
@@ -2335,18 +2487,33 @@ func (mgtr *Migrator) initiateApplier() error {
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
 		if !mgtr.migrationContext.Resume {
-			createTableStatement, err := mgtr.inspector.showCreateTable(mgtr.migrationContext.MoveTables.TableNames[0])
-			if err != nil {
-				return fmt.Errorf("failed to fetch create table statement: %w", err)
-			}
-			if err := mgtr.applier.CreateTargetTable(createTableStatement); err != nil {
-				mgtr.migrationContext.Log.Errorf("unable to create target table, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out")
+			// Fail early and cleanly: if any target table already exists, abort
+			// before creating any of them so we never leave a partially-created set
+			// on the target.
+			if err := mgtr.applier.ValidateMoveTablesTargetsAbsent(); err != nil {
 				return err
 			}
+			// Create every migrated table on the target from its captured CREATE
+			// statement (§2.1). Containers were populated by prepareMoveTablesCopyState.
+			for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
+				createTableStatement := mt.CreateTableStatement
+				if createTableStatement == "" {
+					var err error
+					if createTableStatement, err = mgtr.inspector.showCreateTable(mt.SourceTableName); err != nil {
+						return fmt.Errorf("failed to fetch create table statement for %s.%s: %w",
+							sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName), err)
+					}
+				}
+				if err := mgtr.applier.CreateTargetTableForName(mt.TargetTableName, createTableStatement); err != nil {
+					mgtr.migrationContext.Log.Errorf("unable to create target table %s.%s, see further error details. Perhaps a previous migration failed without dropping the table? Bailing out",
+						sql.EscapeName(mt.TargetDatabaseName), sql.EscapeName(mt.TargetTableName))
+					return err
+				}
+			}
 		} else {
-			mgtr.migrationContext.Log.Infof("Resuming move-tables; reusing existing target table %s.%s",
+			mgtr.migrationContext.Log.Infof("Resuming move-tables; reusing existing target tables %v in %s",
+				mgtr.migrationContext.MoveTables.TableNames,
 				sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()),
-				sql.EscapeName(mgtr.migrationContext.GetTargetTableName()),
 			)
 		}
 	} else {
@@ -2441,13 +2608,7 @@ func (mgtr *Migrator) iterateChunks() error {
 				}
 
 				// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
-				var hasFurtherRange bool
-				var err error
-				if mgtr.migrationContext.IsMoveTablesMode() {
-					hasFurtherRange, err = mgtr.applier.CalculateNextIterationRangeEndValues(mgtr.inspector.db)
-				} else {
-					hasFurtherRange, err = mgtr.applier.CalculateNextIterationRangeEndValues(nil)
-				}
+				hasFurtherRange, err := mgtr.applier.CalculateNextIterationRangeEndValues(nil)
 				if err != nil {
 					return err // wrapping call will retry
 				}
@@ -2466,12 +2627,7 @@ func (mgtr *Migrator) iterateChunks() error {
 					// _ghost_ table, which no longer exists. So, bothering error messages and all, but no damage.
 					return nil
 				}
-				var rowsAffected int64
-				if mgtr.migrationContext.IsMoveTablesMode() {
-					_, rowsAffected, _, err = mgtr.applier.ApplyIterationMoveTableCopyQueries(mgtr.inspector.db)
-				} else {
-					_, rowsAffected, _, err = mgtr.applier.ApplyIterationInsertQuery()
-				}
+				_, rowsAffected, _, err := mgtr.applier.ApplyIterationInsertQuery()
 				if err != nil {
 					return err // wrapping call will retry
 				}
@@ -2514,15 +2670,129 @@ func (mgtr *Migrator) iterateChunks() error {
 			}
 			return terminateRowIteration(err)
 		}
+	}
+}
 
-		mgtr.migrationContext.NewFailPoint("move-tables-panic-after-row-copy", base.WithFailPointWait(2*time.Second))
+// iterateChunksMoveTables drives the interleaved, multi-table row copy (§2.3).
+// It round-robins over the migrated tables in --move-tables order, enqueuing one
+// chunk-copy task per not-yet-complete table per cycle so all tables make
+// progress concurrently through the single shared apply pipeline. Each task
+// operates on its table's own per-table container; the single executeWriteFuncs
+// consumer runs the tasks one at a time, so per-table range/iteration state is
+// never accessed concurrently. Row copy is complete only once EVERY table
+// reports complete, at which point the shared rowCopyComplete signal fires once
+// (so the on-row-copy-complete hook and cutover fire exactly once, after the
+// slowest table).
+func (mgtr *Migrator) iterateChunksMoveTables() error {
+	terminateRowIteration := func(err error) error {
+		_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.rowCopyComplete, err)
+		if err != nil {
+			return mgtr.migrationContext.Log.Errore(err)
+		}
+		return nil
+	}
+	if mgtr.migrationContext.Noop {
+		mgtr.migrationContext.Log.Debugf("Noop operation; not really copying data")
+		return terminateRowIteration(nil)
+	}
+
+	tables := mgtr.migrationContext.OrderedMoveTables()
+	// A table with no rows is immediately complete.
+	for _, mt := range tables {
+		if mt.MigrationRangeMinValues == nil {
+			mgtr.migrationContext.Log.Debugf("No rows found in %s.%s; row copy is implicitly empty",
+				sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName))
+			mt.SetRowCopyComplete()
+		}
+	}
+
+	// enqueueChunk builds and enqueues a single chunk-copy task bound to mt.
+	enqueueChunk := func(mt *base.MoveTable) error {
+		copyRowsFunc := func() error {
+			if mt.IsRowCopyComplete() || atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
+				return nil
+			}
+			mt.SetNextIterationRangeMinValues()
+			applyCopyRowsFunc := func() error {
+				if mt.IsRowCopyComplete() || atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
+					return nil
+				}
+				hasFurtherRange, err := mgtr.applier.CalculateMoveTableNextIterationRangeEndValues(mgtr.inspector.db, mt)
+				if err != nil {
+					return err // wrapping call will retry
+				}
+				if !hasFurtherRange {
+					mt.SetRowCopyComplete()
+					return nil
+				}
+				if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
+					return nil
+				}
+				_, rowsAffected, _, err := mgtr.applier.ApplyIterationMoveTableCopyQueries(mgtr.inspector.db, mt)
+				if err != nil {
+					return err // wrapping call will retry
+				}
+				if mgtr.migrationContext.PanicOnWarnings && len(mgtr.migrationContext.MigrationLastInsertSQLWarnings) > 0 {
+					for _, warning := range mgtr.migrationContext.MigrationLastInsertSQLWarnings {
+						mgtr.migrationContext.Log.Infof("move-table copy on %s.%s has SQL warnings! %s",
+							sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName), warning)
+					}
+					joined := strings.Join(mgtr.migrationContext.MigrationLastInsertSQLWarnings, "; ")
+					return fmt.Errorf("move-table copy on %s.%s failed because of SQL warnings: [%s]",
+						sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName), joined)
+				}
+				atomic.AddInt64(&mgtr.migrationContext.TotalRowsCopied, rowsAffected)
+				atomic.AddInt64(&mt.RowsCopied, rowsAffected)
+				mt.IncrementIteration()
+				return nil
+			}
+			if err := mgtr.retryBatchCopyWithHooks(applyCopyRowsFunc); err != nil {
+				return err
+			}
+			// Record this table's last successfully-copied range for checkpointing.
+			// Skip the final completion-detection pass: it advanced the iteration min
+			// to the previous max without copying anything (and set rowCopyComplete),
+			// so recording here would overwrite the real [min..max] span of the last
+			// actual chunk with a degenerate [max..max].
+			if !mt.IsRowCopyComplete() {
+				mt.RecordLastIterationRange()
+			}
+			return nil
+		}
+		return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.copyRowsQueue, copyRowsFunc)
+	}
+
+	for {
+		if err := mgtr.checkAbort(); err != nil {
+			return terminateRowIteration(err)
+		}
+		if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || mgtr.migrationContext.AllMoveTablesRowCopyComplete() {
+			return terminateRowIteration(nil)
+		}
+		for _, mt := range tables {
+			if mt.IsRowCopyComplete() {
+				continue
+			}
+			if err := enqueueChunk(mt); err != nil {
+				if abortErr := mgtr.checkAbort(); abortErr != nil {
+					return terminateRowIteration(abortErr)
+				}
+				return terminateRowIteration(err)
+			}
+			// Mirrors the standard iterateChunks failpoint: fires after a chunk is
+			// enqueued so resume tests can crash mid-copy (move-tables uses this
+			// loop, not iterateChunks, so the failpoint must live here too).
+			mgtr.migrationContext.NewFailPoint("move-tables-panic-after-row-copy", base.WithFailPointWait(2*time.Second))
+			if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 {
+				return nil
+			}
+		}
 	}
 }
 
 func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 	atomic.AddInt64(&mgtr.applyEventsInFlight, 1)
 	defer atomic.AddInt64(&mgtr.applyEventsInFlight, -1)
-
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
 		if eventStruct.writeFunc != nil {
 			if err := mgtr.retryOperation(*eventStruct.writeFunc); err != nil {
@@ -2591,6 +2861,9 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 // applier reaches that trx. At that point it's safe to resume from these coordinates.
 func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 	coords := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		return mgtr.checkpointMoveTables(ctx, coords)
+	}
 	mgtr.applier.LastIterationRangeMutex.Lock()
 	if mgtr.applier.LastIterationRangeMaxValues == nil || mgtr.applier.LastIterationRangeMinValues == nil {
 		mgtr.applier.LastIterationRangeMutex.Unlock()
@@ -2617,16 +2890,70 @@ func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 			mgtr.applier.CurrentCoordinatesMutex.Unlock()
 			return chk, err
 		}
-		// In move-tables mode we do not emit heartbeat rows into _ghc, so
-		// CurrentCoordinates may not advance while the system is otherwise idle.
-		// If there is no backlog in either queue, it is safe to treat the current
-		// streamer coordinates as applied for checkpointing purposes.
-		if mgtr.migrationContext.IsMoveTablesMode() && len(mgtr.applyEventsQueue) == 0 && (mgtr.eventsStreamer == nil || len(mgtr.eventsStreamer.eventsChannel) == 0) {
-			mgtr.applier.CurrentCoordinates = coords.Clone()
-			id, err := mgtr.applier.WriteCheckpoint(chk)
-			chk.Id = id
+		mgtr.applier.CurrentCoordinatesMutex.Unlock()
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// buildMoveTableCheckpointRows builds one checkpoint row per migrated table. The
+// run-wide fields (coords, total DML, cutover markers, drain GTID) are shared by
+// every row; the per-table fields (iteration range, iteration, rows-copied) come
+// from each table's own container. There is no representative table.
+func (mgtr *Migrator) buildMoveTableCheckpointRows(coords mysql.BinlogCoordinates, isCutover, cutoverStarted bool, drainGTID mysql.BinlogCoordinates) []*Checkpoint {
+	totalDML := atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied)
+	tables := mgtr.migrationContext.OrderedMoveTables()
+	rows := make([]*Checkpoint, 0, len(tables))
+	for _, mt := range tables {
+		rangeMin, rangeMax := mt.GetLastIterationRange()
+		rows = append(rows, &Checkpoint{
+			TableName:                  mt.SourceTableName,
+			LastTrxCoords:              coords,
+			IterationRangeMin:          rangeMin,
+			IterationRangeMax:          rangeMax,
+			Iteration:                  mt.GetIteration(),
+			RowsCopied:                 mt.GetRowsCopied(),
+			DMLApplied:                 totalDML,
+			IsCutover:                  isCutover,
+			MoveTablesCutOverStarted:   cutoverStarted,
+			MoveTablesCutOverDrainGTID: drainGTID,
+		})
+	}
+	return rows
+}
+
+// moveTablesCheckpointSummary returns a representative-free Checkpoint used only
+// for logging a single checkpoint event. Its (empty) range serializes to "".
+func (mgtr *Migrator) moveTablesCheckpointSummary(coords mysql.BinlogCoordinates) *Checkpoint {
+	return &Checkpoint{
+		LastTrxCoords:     coords,
+		IterationRangeMin: sql.NewColumnValues(0),
+		IterationRangeMax: sql.NewColumnValues(0),
+		RowsCopied:        atomic.LoadInt64(&mgtr.migrationContext.TotalRowsCopied),
+		DMLApplied:        atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
+	}
+}
+
+// checkpointMoveTables writes one checkpoint row per migrated table once the
+// streamer frontier is known to be applied (or, on a quiet source with no
+// backlog, treats the frontier as applied since move-tables emits no heartbeat).
+func (mgtr *Migrator) checkpointMoveTables(ctx context.Context, coords mysql.BinlogCoordinates) (*Checkpoint, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		mgtr.applier.CurrentCoordinatesMutex.Lock()
+		applied := coords.SmallerThanOrEquals(mgtr.applier.CurrentCoordinates)
+		idle := len(mgtr.applyEventsQueue) == 0 && (mgtr.eventsStreamer == nil || len(mgtr.eventsStreamer.eventsChannel) == 0)
+		if applied || idle {
+			if !applied {
+				mgtr.applier.CurrentCoordinates = coords.Clone()
+			}
 			mgtr.applier.CurrentCoordinatesMutex.Unlock()
-			return chk, err
+			rows := mgtr.buildMoveTableCheckpointRows(coords, false, false, nil)
+			if err := mgtr.applier.WriteMoveTableCheckpoints(rows); err != nil {
+				return nil, err
+			}
+			return mgtr.moveTablesCheckpointSummary(coords), nil
 		}
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
 		time.Sleep(500 * time.Millisecond)
@@ -2685,6 +3012,13 @@ func (mgtr *Migrator) checkpointLoop() {
 			} else {
 				mgtr.migrationContext.Log.Errorf("error attempting checkpoint: %+v", err)
 			}
+		} else if mgtr.migrationContext.IsMoveTablesMode() {
+			// Move-tables writes one checkpoint row per table; the per-table range
+			// and iteration live in those rows (and the status output). The single
+			// run-wide summary line has no representative range, so report the
+			// aggregate progress instead of the (empty) single-table range fields.
+			mgtr.migrationContext.Log.Infof("checkpoint success at coords=%+v tables=%d rows_copied=%d dml_applied=%d",
+				chk.LastTrxCoords.DisplayString(), len(mgtr.migrationContext.MoveTables.TableNames), chk.RowsCopied, chk.DMLApplied)
 		} else {
 			mgtr.migrationContext.Log.Infof("checkpoint success at coords=%+v range_min=%+v range_max=%+v iteration=%d",
 				chk.LastTrxCoords.DisplayString(), chk.IterationRangeMin.String(), chk.IterationRangeMax.String(), chk.Iteration)
@@ -2839,7 +3173,6 @@ func (mgtr *Migrator) finalCleanup() error {
 // survives as the rollback handle (see logMoveTablesRollbackHint).
 func (mgtr *Migrator) moveTablesFinalCleanup() error {
 	sourceDatabaseName := mgtr.migrationContext.DatabaseName
-	delTableName := mgtr.migrationContext.GetOldTableName()
 	targetDatabaseName := mgtr.migrationContext.GetTargetDatabaseName()
 	checkpointTableName := mgtr.migrationContext.GetCheckpointTableName()
 
@@ -2849,7 +3182,7 @@ func (mgtr *Migrator) moveTablesFinalCleanup() error {
 		// inspector/streamer source connections may point at a read replica, so the
 		// drop goes through the dedicated source-primary handle.
 		if !mgtr.migrationContext.Noop {
-			if err := mgtr.retryOperation(mgtr.dropSourceOldTable); err != nil {
+			if err := mgtr.retryOperation(mgtr.dropMoveTablesSourceOldTables); err != nil {
 				return err
 			}
 		}
@@ -2866,10 +3199,14 @@ func (mgtr *Migrator) moveTablesFinalCleanup() error {
 	}
 
 	// --ok-to-drop-table not set: log the artifacts left behind and the exact
-	// commands to drop them.
+	// commands to drop them. In multi-table mode every migrated table leaves its
+	// own `_<table>_del` rollback handle on the source.
 	mgtr.migrationContext.Log.Infof("Am not dropping move-tables artifacts without `--ok-to-drop-table`. The following are left behind:")
-	mgtr.migrationContext.Log.Infof("- source rollback handle %s.%s. To drop it, issue:", sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName))
-	mgtr.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName))
+	for _, tableName := range mgtr.migrationContext.MoveTables.TableNames {
+		delTableName := mgtr.migrationContext.MoveTableDelName(tableName)
+		mgtr.migrationContext.Log.Infof("- source rollback handle %s.%s. To drop it, issue:", sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName))
+		mgtr.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName))
+	}
 	if mgtr.migrationContext.Checkpoint {
 		mgtr.migrationContext.Log.Infof("- target checkpoint table %s.%s. To drop it, issue:", sql.EscapeName(targetDatabaseName), sql.EscapeName(checkpointTableName))
 		mgtr.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(targetDatabaseName), sql.EscapeName(checkpointTableName))
@@ -2878,20 +3215,26 @@ func (mgtr *Migrator) moveTablesFinalCleanup() error {
 }
 
 // logMoveTablesRollbackHint prints a clear rollback hint after a failed
-// move-tables run in which the source RENAME already happened. The source
-// `__del` table is intentionally left in place as the rollback handle
-// and the operator rolls the source back by renaming
-// `__del` to the original table name. We do NOT drop `__del` on a failure path.
+// move-tables run in which the source RENAME already happened. Each migrated
+// table's source `_<table>_del` table is intentionally left in place as the
+// rollback handle and the operator rolls the source back by renaming every
+// `_<table>_del` back to its original table name. We do NOT drop `__del` on a
+// failure path.
 func (mgtr *Migrator) logMoveTablesRollbackHint() {
 	sourceDatabaseName := mgtr.migrationContext.DatabaseName
-	originalTableName := mgtr.migrationContext.OriginalTableName
-	delTableName := mgtr.migrationContext.GetOldTableName()
-	mgtr.migrationContext.Log.Infof("move-tables run failed after the source rename; leaving %s.%s in place as the rollback handle.",
-		sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName))
-	mgtr.migrationContext.Log.Infof("To roll back the source table, issue:")
-	mgtr.migrationContext.Log.Infof("-- rename table %s.%s to %s.%s",
-		sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName),
-		sql.EscapeName(sourceDatabaseName), sql.EscapeName(originalTableName))
+	mgtr.migrationContext.Log.Infof("move-tables run failed after the source rename; leaving the following rollback handle(s) in place:")
+	rollbackClauses := make([]string, 0, len(mgtr.migrationContext.MoveTables.TableNames))
+	for _, tableName := range mgtr.migrationContext.MoveTables.TableNames {
+		delTableName := mgtr.migrationContext.MoveTableDelName(tableName)
+		mgtr.migrationContext.Log.Infof("- %s.%s (rollback handle for %s.%s)",
+			sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName),
+			sql.EscapeName(sourceDatabaseName), sql.EscapeName(tableName))
+		rollbackClauses = append(rollbackClauses, fmt.Sprintf("%s.%s to %s.%s",
+			sql.EscapeName(sourceDatabaseName), sql.EscapeName(delTableName),
+			sql.EscapeName(sourceDatabaseName), sql.EscapeName(tableName)))
+	}
+	mgtr.migrationContext.Log.Infof("To roll back the source table(s), issue:")
+	mgtr.migrationContext.Log.Infof("-- rename table %s", strings.Join(rollbackClauses, ", "))
 }
 
 func (mgtr *Migrator) teardown() {

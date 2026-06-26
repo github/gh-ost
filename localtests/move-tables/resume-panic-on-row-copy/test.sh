@@ -40,7 +40,12 @@ echo -e "\n\n\n\n\n"
 echo  "⚙️ Validating checkpointed state on unexpected exit..."
 
 # checkpoint table exists on target and is non-empty
-mysql-exec target primary $database -sNe "SELECT 1 FROM _${table_name}_ghk LIMIT 1;"
+checkpoint_table=$(mysql-exec target primary $database -sNe "SELECT table_name FROM information_schema.tables WHERE table_schema='${database}' AND table_name LIKE '\\_gho\\_%\\_ghk' LIMIT 1;")
+if [ -z "$checkpoint_table" ]; then
+    echo "ERROR: Checkpoint table does not exist."
+    return 1
+fi
+mysql-exec target primary $database -sNe "SELECT 1 FROM \`${checkpoint_table}\` LIMIT 1;"
 if [ $? -gt 0 ]; then
     echo "ERROR: Checkpoint table is empty or does not exist."
     return 1
@@ -61,7 +66,7 @@ if [ $? -gt 0 ]; then
 fi
 
 # validate we processed a single row-copy chunk (10 rows) and there are 20 total to process
-rows_copied=$(mysql-exec target primary $database -Ne "SELECT gh_ost_rows_copied FROM _${table_name}_ghk ORDER BY gh_ost_chk_id DESC LIMIT 1;")
+rows_copied=$(mysql-exec target primary $database -Ne "SELECT gh_ost_rows_copied FROM \`${checkpoint_table}\` ORDER BY gh_ost_chk_id DESC LIMIT 1;")
 if [ $rows_copied -ne 10 ]; then
     echo "ERROR: Expected last checkpoint to show 10 rows copied."
     return 1
@@ -105,7 +110,7 @@ echo -e "\n\n\n\n\n"
 echo  "⚙️ Validating checkpointed state after resumed migration..."
 
 # validate we processed the rest of the 20 rows to copy
-rows_copied=$(mysql-exec target primary $database -Ne "SELECT gh_ost_rows_copied FROM _${table_name}_ghk ORDER BY gh_ost_chk_id DESC LIMIT 1;")
+rows_copied=$(mysql-exec target primary $database -Ne "SELECT gh_ost_rows_copied FROM \`${checkpoint_table}\` ORDER BY gh_ost_chk_id DESC LIMIT 1;")
 if [ $rows_copied -ne 20 ]; then
     echo "ERROR: Expected last checkpoint to show 20 rows copied."
     return 1

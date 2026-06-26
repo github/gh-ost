@@ -55,7 +55,7 @@ func TestMoveTablesFinalCleanup_EmitsOperatorCommands(t *testing.T) {
 
 	require.True(t, logger.has("-- drop table `source_db`.`_t_del`"),
 		"must emit the command to drop the source rollback handle")
-	require.True(t, logger.has("-- drop table `target_db`.`_t_ghk`"),
+	require.True(t, logger.has(fmt.Sprintf("-- drop table `target_db`.`%s`", m.migrationContext.GetCheckpointTableName())),
 		"must emit the command to drop the target checkpoint table")
 }
 
@@ -70,13 +70,13 @@ func TestLogMoveTablesRollbackHint_EmitsRenameCommand(t *testing.T) {
 		"must emit the rename command to roll the source table back")
 }
 
-// TestMoveTablesDropSourceOldTable_NilSourcePrimaryErrors verifies the source
+// TestDropMoveTablesSourceOldTables_NilSourcePrimaryErrors verifies the source
 // `__del` drop fails cleanly (rather than panicking) when the source-primary
 // connection was never initialized. The drop must never silently no-op.
-func TestMoveTablesDropSourceOldTable_NilSourcePrimaryErrors(t *testing.T) {
+func TestDropMoveTablesSourceOldTables_NilSourcePrimaryErrors(t *testing.T) {
 	m, _ := newCleanupTestMigrator()
 
-	err := m.dropSourceOldTable()
+	err := m.dropMoveTablesSourceOldTables()
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "source primary connection not initialized")

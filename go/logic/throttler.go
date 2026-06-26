@@ -193,12 +193,15 @@ func (thlr *Throttler) collectControlReplicasLag() {
 		return
 	}
 
-	replicationLagQuery := fmt.Sprintf(`
-		select value from %s.%s where hint = 'heartbeat' and id <= 255
-		`,
-		sql.EscapeName(thlr.migrationContext.DatabaseName),
-		sql.EscapeName(thlr.migrationContext.GetChangelogTableName()),
-	)
+	var replicationLagQuery string
+	if !thlr.migrationContext.IsMoveTablesMode() {
+		replicationLagQuery = fmt.Sprintf(`
+			select value from %s.%s where hint = 'heartbeat' and id <= 255
+			`,
+			sql.EscapeName(thlr.migrationContext.DatabaseName),
+			sql.EscapeName(thlr.migrationContext.GetChangelogTableName()),
+		)
+	}
 
 	readReplicaLag := func(connectionConfig *mysql.ConnectionConfig) (lag time.Duration, err error) {
 		dbUri := connectionConfig.GetDBUri("information_schema")
