@@ -9,17 +9,39 @@ import (
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 )
 
-// GTIDBinlogCoordinates describe binary log coordinates in MySQL GTID format.
-type GTIDBinlogCoordinates struct {
-	GTIDSet *gomysql.MysqlGTIDSet
+// Re-exported go-mysql flavor identifiers so the rest of gh-ost doesn't have to
+// import go-mysql directly to talk about flavors.
+const (
+	MySQLFlavor   = gomysql.MySQLFlavor
+	MariaDBFlavor = gomysql.MariaDBFlavor
+)
+
+// FlavorFor returns the go-mysql flavor identifier for the given server version
+// string. It is used to parse GTID sets and to configure the binlog syncer in
+// the correct (MySQL vs MariaDB) GTID dialect.
+func FlavorFor(mysqlVersion string) string {
+	if IsMariaDB(mysqlVersion) {
+		return MariaDBFlavor
+	}
+	return MySQLFlavor
 }
 
-// NewGTIDBinlogCoordinates parses a MySQL GTID set into a *GTIDBinlogCoordinates struct.
-func NewGTIDBinlogCoordinates(gtidSet string) (*GTIDBinlogCoordinates, error) {
-	set, err := gomysql.ParseMysqlGTIDSet(gtidSet)
-	return &GTIDBinlogCoordinates{
-		GTIDSet: set.(*gomysql.MysqlGTIDSet),
-	}, err
+// GTIDBinlogCoordinates describe binary log coordinates as a GTID set. The
+// underlying set is either a MySQL or a MariaDB GTID set depending on the
+// flavor it was parsed with; all operations go through the gomysql.GTIDSet
+// interface so the two flavors are handled uniformly.
+type GTIDBinlogCoordinates struct {
+	GTIDSet gomysql.GTIDSet
+}
+
+// NewGTIDBinlogCoordinates parses a GTID set string (in the given flavor's
+// dialect) into a *GTIDBinlogCoordinates struct.
+func NewGTIDBinlogCoordinates(flavor, gtidSet string) (*GTIDBinlogCoordinates, error) {
+	set, err := gomysql.ParseGTIDSet(flavor, gtidSet)
+	if err != nil {
+		return nil, err
+	}
+	return &GTIDBinlogCoordinates{GTIDSet: set}, nil
 }
 
 // DisplayString returns a user-friendly string representation of these current UUID set or the full GTID set.
@@ -29,6 +51,9 @@ func (coord *GTIDBinlogCoordinates) DisplayString() string {
 
 // String returns a user-friendly string representation of these full GTID set.
 func (coord GTIDBinlogCoordinates) String() string {
+	if coord.GTIDSet == nil {
+		return ""
+	}
 	return coord.GTIDSet.String()
 }
 
@@ -74,7 +99,7 @@ func (coord *GTIDBinlogCoordinates) SmallerThanOrEquals(other BinlogCoordinates)
 func (coord *GTIDBinlogCoordinates) Clone() BinlogCoordinates {
 	out := &GTIDBinlogCoordinates{}
 	if coord.GTIDSet != nil {
-		out.GTIDSet = coord.GTIDSet.Clone().(*gomysql.MysqlGTIDSet)
+		out.GTIDSet = coord.GTIDSet.Clone()
 	}
 	return out
 }

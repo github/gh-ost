@@ -849,7 +849,7 @@ func (apl *Applier) ReadLastCheckpoint() (*Checkpoint, error) {
 	}
 	chk.Timestamp = time.Unix(timestamp, 0)
 	if apl.migrationContext.UseGTIDs {
-		gtidCoords, err := mysql.NewGTIDBinlogCoordinates(coordStr)
+		gtidCoords, err := mysql.NewGTIDBinlogCoordinates(mysql.FlavorFor(apl.migrationContext.ApplierMySQLVersion), coordStr)
 		if err != nil {
 			return nil, err
 		}
