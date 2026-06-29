@@ -1,9 +1,12 @@
 #!/bin/bash
 
+set -e
+
 # Usage:
-# dock <test|packages> [arg]
-#   dock test:                build gh-ost & run unit and integration tests
-#   docker pkg [target-path]: build gh-ost release packages and copy to target path (default path: /tmp/gh-ost-release)
+# dock <test|pkg> [arg]
+#   dock test:              build gh-ost & run unit and integration tests
+#   dock pkg [target-path]: build gh-ost release packages and write them to
+#                           target-path (default: /tmp/gh-ost-release)
 
 command="$1"
 
@@ -14,12 +17,16 @@ case "$command" in
     ;;
   "pkg")
     packages_path="${2:-/tmp/gh-ost-release}"
-    docker_target="gh-ost-packaging"
-    docker build . -f Dockerfile.packaging -t "${docker_target}" && docker run --rm -it -v "${packages_path}:/tmp/pkg" "${docker_target}:latest" bash -c 'find /tmp/gh-ost-release/ -maxdepth 1 -type f | xargs cp -t /tmp/pkg'
+    # BuildKit exports the artifacts stage straight to the host; no intermediate
+    # container, bind mount, or copy step needed. Requires BuildKit (default in
+    # modern Docker; set DOCKER_BUILDKIT=1 on older daemons).
+    DOCKER_BUILDKIT=1 docker build . -f Dockerfile.packaging \
+      --target artifacts --output "type=local,dest=${packages_path}"
     echo "packages generated on ${packages_path}:"
     ls -l "${packages_path}"
     ;;
   *)
-    >&2 echo "Usage: dock dock <test|alpine|packages> [arg]"
+    >&2 echo "Usage: dock <test|pkg> [target-path]"
     exit 1
+    ;;
 esac
