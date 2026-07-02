@@ -26,6 +26,27 @@ func TestParseAlterStatement(t *testing.T) {
 	require.False(t, parser.IsAutoIncrementDefined())
 }
 
+func TestParseAlterStatementTrailingSemicolon(t *testing.T) {
+	statements := []string{
+		"add column t int;",
+		"add column t int ;",
+		"add column t int;  \t\r\n",
+		"ADD KEY idx_username (`username`);",
+	}
+	expected := []string{
+		"add column t int",
+		"add column t int",
+		"add column t int",
+		"ADD KEY idx_username (`username`)",
+	}
+	for i, statement := range statements {
+		parser := NewAlterTableParser()
+		err := parser.ParseAlterStatement(statement)
+		require.NoError(t, err)
+		require.Equal(t, expected[i], parser.alterStatementOptions)
+	}
+}
+
 func TestParseAlterStatementrivialRename(t *testing.T) {
 	statement := "add column t int, change ts ts timestamp, engine=innodb"
 	parser := NewAlterTableParser()
