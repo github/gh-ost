@@ -471,6 +471,28 @@ func (mgtr *Migrator) checkAbort() error {
 	return nil
 }
 
+// drainGhostTableMigrated consumes the "GhostTableMigrated" changelog signal that
+// initiateApplier emits once the ghost table is in place. It must be called on the
+// instant-DDL success path before finalCleanup runs.
+//
+// The streamer's changelog listener callback (onChangelogStateEvent) publishes this
+// signal synchronously while holding the streamer's listenersMutex. On the normal
+// migration path there is a dedicated receiver (see below in Migrate), but the
+// instant-DDL path returns early and would otherwise never receive. The blocked send
+// keeps listenersMutex held forever, so when finalCleanup closes the binlog reader
+// its rows-event decode callback (shouldDecodeRowsEvent) deadlocks trying to acquire
+// the same mutex. Draining the signal here releases the listener and avoids the
+// deadlock.
+//
+// Resume migrations never emit the signal (initiateApplier only writes it when
+// !Revert && !Resume), so there is nothing to drain in that case.
+func (mgtr *Migrator) drainGhostTableMigrated() {
+	if mgtr.migrationContext.Resume {
+		return
+	}
+	<-mgtr.ghostTableMigrated
+}
+
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (mgtr *Migrator) Migrate() (err error) {
 	mgtr.migrationContext.Log.Infof("Migrating %s.%s", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))
@@ -535,6 +557,7 @@ func (mgtr *Migrator) Migrate() (err error) {
 		} else {
 			mgtr.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := mgtr.applier.AttemptInstantDDL(); err == nil {
+				mgtr.drainGhostTableMigrated()
 				if err := mgtr.finalCleanup(); err != nil {
 					return nil
 				}
