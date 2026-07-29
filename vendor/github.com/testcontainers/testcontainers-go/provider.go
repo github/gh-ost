@@ -141,15 +141,18 @@ func NewDockerProvider(provOpts ...DockerProviderOption) (*DockerProvider, error
 	}
 
 	ctx := context.Background()
+	host, err := core.ExtractDockerHost(ctx)
+	if err != nil {
+		return nil, err
+	}
 	c, err := NewDockerClientWithOpts(ctx)
 	if err != nil {
 		return nil, err
 	}
-
 	return &DockerProvider{
 		DockerProviderOptions: o,
-		host:                  core.MustExtractDockerHost(ctx),
 		client:                c,
+		host:                  host,
 		config:                config.Read(),
 	}, nil
 }

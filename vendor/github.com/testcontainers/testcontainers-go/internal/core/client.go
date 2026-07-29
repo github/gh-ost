@@ -4,7 +4,7 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/testcontainers/testcontainers-go/internal"
 	"github.com/testcontainers/testcontainers-go/internal/config"
@@ -12,11 +12,14 @@ import (
 
 // NewClient returns a new docker client extracting the docker host from the different alternatives
 func NewClient(ctx context.Context, ops ...client.Opt) (*client.Client, error) {
+	dockerHost, err := ExtractDockerHost(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	tcConfig := config.Read()
 
-	dockerHost := MustExtractDockerHost(ctx)
-
-	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	opts := []client.Opt{client.FromEnv}
 	if dockerHost != "" {
 		opts = append(opts, client.WithHost(dockerHost))
 
@@ -41,7 +44,7 @@ func NewClient(ctx context.Context, ops ...client.Opt) (*client.Client, error) {
 	// passed options have priority over the default ones
 	opts = append(opts, ops...)
 
-	cli, err := client.NewClientWithOpts(opts...)
+	cli, err := client.New(opts...)
 	if err != nil {
 		return nil, err
 	}

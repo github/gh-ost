@@ -46,7 +46,7 @@ serve-docs:
 #
 # - compose-clean: Clean the .build directory, and clean the go.mod and go.sum files in the testcontainers-go compose module.
 # - compose-clone: Clone the compose and compose-go repositories into the .build directory.
-# - compose-replace: Replace the docker/compose/v2 dependency in the testcontainers-go compose module with the local copy.
+# - compose-replace: Replace the docker/compose/v5 dependency in the testcontainers-go compose module with the local copy.
 # - compose-spec-replace: Replace the compose-spec/compose-go/v2 dependency in the testcontainers-go compose module with the local copy.
 # - compose-tidy: Run "go mod tidy" in the testcontainers-go compose module.
 # - compose-test-all-latest: Test the testcontainers-go compose module against the latest versions of the compose and compose-go repositories.
@@ -67,7 +67,7 @@ compose-clone: compose-clean
 
 .PHONY: compose-replace
 compose-replace:
-	cd modules/compose && echo "replace github.com/docker/compose/v2 => ../../.build/compose" >> go.mod
+	cd modules/compose && echo "replace github.com/docker/compose/v5 => ../../.build/compose" >> go.mod
 
 .PHONY: compose-spec-replace
 compose-spec-replace:
