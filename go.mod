@@ -1,6 +1,6 @@
 module github.com/github/gh-ost
 
-go 1.25.9
+go 1.25.12
 
 require (
 	github.com/DataDog/datadog-go/v5 v5.8.3
