@@ -123,6 +123,21 @@ func (ws *LogStrategy) Timeout() *time.Duration {
 	return ws.timeout
 }
 
+// String returns a human-readable description of the wait strategy.
+func (ws *LogStrategy) String() string {
+	logType := "log message"
+	if ws.IsRegexp {
+		logType = "log pattern"
+	}
+
+	occurrence := ""
+	if ws.Occurrence > 1 {
+		occurrence = fmt.Sprintf(" (occurrence: %d)", ws.Occurrence)
+	}
+
+	return fmt.Sprintf("%s %q%s", logType, ws.Log, occurrence)
+}
+
 // WaitUntilReady implements Strategy.WaitUntilReady
 func (ws *LogStrategy) WaitUntilReady(ctx context.Context, target StrategyTarget) error {
 	timeout := defaultStartupTimeout()

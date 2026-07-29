@@ -49,7 +49,7 @@ func getTestConnectionConfig(ctx context.Context, container testcontainers.Conta
 
 	connectionConfig := mysql.NewConnectionConfig()
 	connectionConfig.Key.Hostname = host
-	connectionConfig.Key.Port = port.Int()
+	connectionConfig.Key.Port = int(port.Num())
 	connectionConfig.User = testMysqlUser
 	connectionConfig.Password = testMysqlPass
 

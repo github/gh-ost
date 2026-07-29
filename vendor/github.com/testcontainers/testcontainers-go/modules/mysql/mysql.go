@@ -52,53 +52,69 @@ func RunContainer(ctx context.Context, opts ...testcontainers.ContainerCustomize
 
 // Run creates an instance of the MySQL container type
 func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustomizer) (*MySQLContainer, error) {
-	req := testcontainers.ContainerRequest{
-		Image:        img,
-		ExposedPorts: []string{"3306/tcp", "33060/tcp"},
-		Env: map[string]string{
+	moduleOpts := []testcontainers.ContainerCustomizer{
+		testcontainers.WithExposedPorts("3306/tcp", "33060/tcp"),
+		testcontainers.WithEnv(map[string]string{
 			"MYSQL_USER":     defaultUser,
 			"MYSQL_PASSWORD": defaultPassword,
 			"MYSQL_DATABASE": defaultDatabaseName,
-		},
-		WaitingFor: wait.ForLog("port: 3306  MySQL Community Server"),
+		}),
+		testcontainers.WithWaitStrategy(wait.ForLog("port: 3306  MySQL Community Server")),
 	}
 
-	genericContainerReq := testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	}
+	moduleOpts = append(moduleOpts, opts...)
+	moduleOpts = append(moduleOpts, WithDefaultCredentials())
 
-	opts = append(opts, WithDefaultCredentials())
-
-	for _, opt := range opts {
-		if err := opt.Customize(&genericContainerReq); err != nil {
-			return nil, err
+	// Validate credentials after applying all options
+	validateCreds := func(req *testcontainers.GenericContainerRequest) error {
+		username, ok := req.Env["MYSQL_USER"]
+		if !ok {
+			username = rootUser
 		}
+		password := req.Env["MYSQL_PASSWORD"]
+
+		if len(password) == 0 && password == "" && !strings.EqualFold(rootUser, username) {
+			return errors.New("empty password can be used only with the root user")
+		}
+		return nil
 	}
 
-	username, ok := req.Env["MYSQL_USER"]
-	if !ok {
-		username = rootUser
-	}
-	password := req.Env["MYSQL_PASSWORD"]
+	moduleOpts = append(moduleOpts, testcontainers.CustomizeRequestOption(validateCreds))
 
-	if len(password) == 0 && password == "" && !strings.EqualFold(rootUser, username) {
-		return nil, errors.New("empty password can be used only with the root user")
-	}
-
-	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
+	ctr, err := testcontainers.Run(ctx, img, moduleOpts...)
 	var c *MySQLContainer
-	if container != nil {
+	if ctr != nil {
 		c = &MySQLContainer{
-			Container: container,
-			password:  password,
-			username:  username,
-			database:  req.Env["MYSQL_DATABASE"],
+			Container: ctr,
+			username:  rootUser, // default to root, will be overridden if MYSQL_USER is set
 		}
 	}
 
 	if err != nil {
-		return c, fmt.Errorf("generic container: %w", err)
+		return c, fmt.Errorf("run mysql: %w", err)
+	}
+
+	// Retrieve credentials from container environment
+	inspect, err := ctr.Inspect(ctx)
+	if err != nil {
+		return c, fmt.Errorf("inspect mysql: %w", err)
+	}
+
+	var foundUser, foundPass, foundDB bool
+	for _, env := range inspect.Config.Env {
+		if v, ok := strings.CutPrefix(env, "MYSQL_USER="); ok {
+			c.username, foundUser = v, true
+		}
+		if v, ok := strings.CutPrefix(env, "MYSQL_PASSWORD="); ok {
+			c.password, foundPass = v, true
+		}
+		if v, ok := strings.CutPrefix(env, "MYSQL_DATABASE="); ok {
+			c.database, foundDB = v, true
+		}
+
+		if foundUser && foundPass && foundDB {
+			break
+		}
 	}
 
 	return c, nil
@@ -114,12 +130,7 @@ func (c *MySQLContainer) MustConnectionString(ctx context.Context, args ...strin
 }
 
 func (c *MySQLContainer) ConnectionString(ctx context.Context, args ...string) (string, error) {
-	containerPort, err := c.MappedPort(ctx, "3306/tcp")
-	if err != nil {
-		return "", err
-	}
-
-	host, err := c.Host(ctx)
+	endpoint, err := c.PortEndpoint(ctx, "3306/tcp", "")
 	if err != nil {
 		return "", err
 	}
@@ -132,7 +143,7 @@ func (c *MySQLContainer) ConnectionString(ctx context.Context, args ...string) (
 		extraArgs = "?" + extraArgs
 	}
 
-	connectionString := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s%s", c.username, c.password, host, containerPort.Port(), c.database, extraArgs)
+	connectionString := fmt.Sprintf("%s:%s@tcp(%s)/%s%s", c.username, c.password, endpoint, c.database, extraArgs)
 	return connectionString, nil
 }
 
@@ -175,7 +186,7 @@ func WithConfigFile(configFile string) testcontainers.CustomizeRequestOption {
 
 func WithScripts(scripts ...string) testcontainers.CustomizeRequestOption {
 	return func(req *testcontainers.GenericContainerRequest) error {
-		var initScripts []testcontainers.ContainerFile
+		initScripts := make([]testcontainers.ContainerFile, 0, len(scripts))
 		for _, script := range scripts {
 			cf := testcontainers.ContainerFile{
 				HostFilePath:      script,

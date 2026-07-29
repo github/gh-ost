@@ -2,6 +2,7 @@ package wait
 
 import (
 	"errors"
+	"slices"
 )
 
 var (
@@ -58,23 +59,33 @@ func walk(root *Strategy, visit VisitFunc) error {
 		return err
 	}
 
-	if s, ok := (*root).(*MultiStrategy); ok {
-		var i int
-		for range s.Strategies {
-			if err := walk(&s.Strategies[i], visit); err != nil {
-				if errors.Is(err, ErrVisitRemove) {
-					s.Strategies = append(s.Strategies[:i], s.Strategies[i+1:]...)
-					if errors.Is(err, VisitStop) {
-						return VisitStop
-					}
-					continue
-				}
-
-				return err
-			}
-			i++
+	switch s := (*root).(type) {
+	case *MultiStrategy:
+		if err := walkAndMutate(&s.Strategies, visit); err != nil {
+			return err
+		}
+	case *AnyMultiStrategy:
+		if err := walkAndMutate(&s.Strategies, visit); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+func walkAndMutate(strategies *[]Strategy, visit VisitFunc) error {
+	for i := 0; i < len(*strategies); {
+		if err := walk(&(*strategies)[i], visit); err != nil {
+			if errors.Is(err, ErrVisitRemove) {
+				*strategies = slices.Delete(*strategies, i, i+1)
+				if errors.Is(err, VisitStop) {
+					return VisitStop
+				}
+				continue
+			}
+			return err
+		}
+		i++
+	}
 	return nil
 }

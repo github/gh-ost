@@ -19,6 +19,12 @@ theme:
 extra_css:
     - css/extra.css
     - css/tc-header.css
+    - css/usage-metrics.css
+extra_javascript:
+    - https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js
+    - https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js
+    - https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js
+    - js/usage-metrics.js
 repo_name: testcontainers-go
 repo_url: https://github.com/testcontainers/testcontainers-go
 markdown_extensions:
@@ -40,19 +46,6 @@ nav:
     - Quickstart: quickstart.md
     - Features:
         - features/creating_container.md
-        - features/configuration.md
-        - features/image_name_substitution.md
-        - features/files_and_mounts.md
-        - features/creating_networks.md
-        - features/networking.md
-        - features/tls.md
-        - features/test_session_semantics.md
-        - features/garbage_collector.md
-        - features/build_from_dockerfile.md
-        - features/docker_auth.md
-        - features/docker_compose.md
-        - features/follow_logs.md
-        - features/override_container_command.md
         - Wait Strategies:
             - Introduction: features/wait/introduction.md
             - Exec: features/wait/exec.md
@@ -62,10 +55,23 @@ nav:
             - HostPort: features/wait/host_port.md
             - HTTP: features/wait/http.md
             - Log: features/wait/log.md
-            - Multi: features/wait/multi.md
             - SQL: features/wait/sql.md
             - TLS: features/wait/tls.md
             - Walk: features/wait/walk.md
+            - All: features/wait/all.md
+            - Any: features/wait/any.md
+        - features/files_and_mounts.md
+        - features/follow_logs.md
+        - features/garbage_collector.md
+        - features/build_from_dockerfile.md
+        - features/override_container_command.md
+        - features/networking.md
+        - features/configuration.md
+        - features/image_name_substitution.md
+        - features/test_session_semantics.md
+        - features/docker_auth.md
+        - features/docker_compose.md
+        - features/tls.md
     - Modules:
         - modules/index.md
         - modules/aerospike.md
@@ -80,13 +86,15 @@ nav:
         - modules/consul.md
         - modules/couchbase.md
         - modules/databend.md
+        - modules/dex.md
         - modules/dind.md
+        - modules/dockermcpgateway.md
         - modules/dockermodelrunner.md
         - modules/dolt.md
         - modules/dynamodb.md
         - modules/elasticsearch.md
         - modules/etcd.md
-        - modules/firebase.md
+        - modules/forgejo.md
         - modules/gcloud.md
         - modules/grafana-lgtm.md
         - modules/inbucket.md
@@ -97,13 +105,16 @@ nav:
         - modules/localstack.md
         - modules/mariadb.md
         - modules/meilisearch.md
+        - modules/memcached.md
         - modules/milvus.md
         - modules/minio.md
         - modules/mockserver.md
+        - modules/mongodb-atlaslocal.md
         - modules/mongodb.md
         - modules/mssql.md
         - modules/mysql.md
         - modules/nats.md
+        - modules/nebulagraph.md
         - modules/neo4j.md
         - modules/ollama.md
         - modules/openfga.md
@@ -119,7 +130,9 @@ nav:
         - modules/registry.md
         - modules/scylladb.md
         - modules/socat.md
+        - modules/solace.md
         - modules/surrealdb.md
+        - modules/tidb.md
         - modules/toxiproxy.md
         - modules/valkey.md
         - modules/vault.md
@@ -145,9 +158,10 @@ nav:
         - system_requirements/using_colima.md
         - system_requirements/using_podman.md
         - system_requirements/rancher.md
+    - Usage Metrics: usage-metrics.md
     - Dependabot: dependabot.md
     - Contributing: contributing.md
     - Getting help: getting_help.md
 edit_uri: edit/main/docs/
 extra:
-    latest_version: v0.37.0
+    latest_version: v0.43.0
