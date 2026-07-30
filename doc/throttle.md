@@ -30,6 +30,15 @@ Otherwise you may specify your own list of replica servers you wish it to observ
 
 Note that you may dynamically change both `--max-lag-millis` and the `throttle-control-replicas` list via [interactive commands](interactive-commands.md)
 
+### Important: choosing the right hosts for `--throttle-control-replicas`
+
+The hosts you list here should be genuine replicas within the actual replication topology of the table being migrated — not arbitrary hosts, and not replicas of an unrelated database or instance.
+
+It's possible to point `--throttle-control-replicas` at hosts that gh-ost can successfully connect to and poll for lag, even if those hosts have no replication relationship to the table actually being migrated. In that scenario, gh-ost will report healthy, low lag numbers throughout the migration — but this gives a false sense of safety, because the replica that actually matters (e.g., one serving downstream read traffic or analytics for the table being changed) is never being monitored at all, and could be silently falling behind without triggering any throttling.
+
+Before running a migration, confirm the hosts you're passing to `--throttle-control-replicas` are actually replicating from the same primary and the same table you're migrating — ideally, the specific replica(s) that downstream consumers of that table's data depend on.
+
+
 #### Status thresholds
 
 - `--max-load`: list of metrics and threshold values; topping the threshold of any will cause throttler to kick in.
