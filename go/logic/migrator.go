@@ -815,6 +815,21 @@ func (mgtr *Migrator) Revert() error {
 	return nil
 }
 
+func moveTablesWritableColumns(columns, virtualColumns *sql.ColumnList) *sql.ColumnList {
+	generatedColumnNames := make(map[string]bool, virtualColumns.Len())
+	for _, columnName := range virtualColumns.Names() {
+		generatedColumnNames[strings.ToLower(columnName)] = true
+	}
+
+	writableColumnNames := make([]string, 0, columns.Len())
+	for _, columnName := range columns.Names() {
+		if !generatedColumnNames[strings.ToLower(columnName)] {
+			writableColumnNames = append(writableColumnNames, columnName)
+		}
+	}
+	return sql.NewColumnList(writableColumnNames)
+}
+
 // prepareMoveTablesCopyState initializes per-table runtime state for row copy in
 // move-tables mode (§2.1). Each migrated table is inspected and validated
 // independently into its own container (schema, unique key, row estimate, CREATE
@@ -855,9 +870,14 @@ func (mgtr *Migrator) prepareMoveTablesCopyState() error {
 		mt.OriginalTableVirtualColumns = virtualColumns
 		mt.OriginalTableUniqueKeys = uniqueKeys
 		mt.UniqueKey = uniqueKey
-		// In move-tables mode source and target schemas match, so shared columns are identical.
-		mt.SharedColumns = columns
-		mt.MappedSharedColumns = columns
+		// Generated columns are present in row events but are not writable on the target.
+		// Keep independent lists so source and target column metadata can diverge safely.
+		mt.SharedColumns = moveTablesWritableColumns(columns, virtualColumns)
+		if mt.SharedColumns.Len() == 0 {
+			return fmt.Errorf("move-table %s.%s has no writable columns after excluding generated columns",
+				sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName))
+		}
+		mt.MappedSharedColumns = moveTablesWritableColumns(columns, virtualColumns)
 		mt.RowsEstimate = rowsEstimate
 		mt.CreateTableStatement = createStatement
 		totalRowsEstimate += rowsEstimate
@@ -888,8 +908,13 @@ func (mgtr *Migrator) hydrateMoveTablesStateFromTarget() error {
 		mt.OriginalTableVirtualColumns = virtualColumns
 		mt.OriginalTableUniqueKeys = uniqueKeys
 		mt.UniqueKey = uniqueKey
-		mt.SharedColumns = columns
-		mt.MappedSharedColumns = columns
+		// Keep independent lists so source and target column metadata can diverge safely.
+		mt.SharedColumns = moveTablesWritableColumns(columns, virtualColumns)
+		if mt.SharedColumns.Len() == 0 {
+			return fmt.Errorf("move-table %s.%s has no writable columns after excluding generated columns while resuming",
+				sql.EscapeName(mt.TargetDatabaseName), sql.EscapeName(mt.TargetTableName))
+		}
+		mt.MappedSharedColumns = moveTablesWritableColumns(columns, virtualColumns)
 	}
 	return nil
 }
