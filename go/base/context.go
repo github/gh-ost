@@ -100,8 +100,8 @@ type MoveTable struct {
 	CreateTableStatement string
 
 	// Schema, captured from the source (or from the target, on resume). In
-	// move-tables mode source and target schemas match, so the shared columns are
-	// identical to the original columns.
+	// move-tables mode source and target schemas match, so shared columns are the
+	// original columns minus generated columns, which MySQL recomputes on the target.
 	OriginalTableColumns        *sql.ColumnList
 	OriginalTableVirtualColumns *sql.ColumnList
 	OriginalTableUniqueKeys     [](*sql.UniqueKey)
