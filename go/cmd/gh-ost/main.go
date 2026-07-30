@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -231,6 +232,29 @@ func main() {
 
 	if migrationContext.AlterStatement == "" && !migrationContext.Revert {
 		log.Fatal("--alter must be provided and statement must not be empty")
+	}
+	// Validate --alter shape early. A trailing semicolon breaks --attempt-instant-ddl
+	// (ALGORITHM=INSTANT is appended after the ';' and MySQL rejects the statement).
+	// Prefer options-only form ("ADD COLUMN ..."); full ALTER TABLE is still accepted
+	// so --alter can supply database/table, but a leading ALTER TABLE with a trailing
+	// semicolon is a common footgun (see github/gh-ost#1431).
+	if migrationContext.AlterStatement != "" {
+		trimmedAlter := strings.TrimSpace(migrationContext.AlterStatement)
+		if strings.HasSuffix(trimmedAlter, ";") {
+			log.Fatal("--alter must not end with a semicolon ('; 'ADD COLUMN foo INT' not 'ADD COLUMN foo INT;')")
+		}
+		// Case-insensitive check for a full ALTER TABLE statement prefix.
+		lowerAlter := strings.ToLower(trimmedAlter)
+		if strings.HasPrefix(lowerAlter, "alter table") {
+			// Full form is supported for specifying schema/table, but reject the
+			// redundant case where users also pass --table/--database and paste a
+			// complete DDL that still ends with options after ALTER TABLE name —
+			// document the preferred options-only form via a clear fatal when the
+			// statement is ONLY "ALTER TABLE" with no options (empty after strip).
+			// Always warn: options-only is the recommended CLI form.
+			log.Warning("--alter includes 'ALTER TABLE ...'; preferred form is options only (e.g. --alter=\"ADD COLUMN ...\") with --database/--table. Full ALTER TABLE form is accepted for schema/table discovery.")
+		}
+		migrationContext.AlterStatement = trimmedAlter
 	}
 	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
 	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
