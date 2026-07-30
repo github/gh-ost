@@ -2236,6 +2236,74 @@ func (suite *ApplierTestSuite) TestApplyDMLEventQueriesMoveTablesMode() {
 	suite.Require().Equal(int64(0), migrationContext.RowsDeltaEstimate)
 }
 
+func (suite *ApplierTestSuite) TestApplyDMLEventQueriesMoveTablesGeneratedColumns() {
+	ctx := context.Background()
+	createTable := "CREATE TABLE %s (id INT NOT NULL, a INT NOT NULL, virtual_sum INT AS (a + 10) VIRTUAL, b INT NOT NULL, stored_sum INT AS (a + b) STORED, PRIMARY KEY(id));"
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf(createTable, getTestTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.otherDB.ExecContext(ctx, fmt.Sprintf(createTable, getTestOtherTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = sql.NewColumnList([]string{"id", "a", "virtual_sum", "b", "stored_sum"})
+	mt.SharedColumns = sql.NewColumnList([]string{"id", "a", "b"})
+	mt.MappedSharedColumns = sql.NewColumnList([]string{"id", "a", "b"})
+	mt.UniqueKey = &sql.UniqueKey{Name: "PRIMARY", Columns: *sql.NewColumnList([]string{"id"})}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+	suite.Require().NoError(applier.InitDBConnections())
+
+	err = applier.ApplyDMLEventQueries([]*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:    testMysqlDatabase,
+			TableName:       testMysqlTableName,
+			DML:             binlog.InsertDML,
+			NewColumnValues: sql.ToColumnValues([]interface{}{1, 2, 12, 3, 5}),
+		},
+		{
+			DatabaseName:      testMysqlDatabase,
+			TableName:         testMysqlTableName,
+			DML:               binlog.UpdateDML,
+			WhereColumnValues: sql.ToColumnValues([]interface{}{1, 2, 12, 3, 5}),
+			NewColumnValues:   sql.ToColumnValues([]interface{}{1, 7, 17, 11, 18}),
+		},
+	})
+	suite.Require().NoError(err)
+
+	var id, a, virtualSum, b, storedSum int
+	err = suite.otherDB.QueryRowContext(ctx, "SELECT id, a, virtual_sum, b, stored_sum FROM "+getTestOtherTableName()).Scan(&id, &a, &virtualSum, &b, &storedSum)
+	suite.Require().NoError(err)
+	suite.Require().Equal([]int{1, 7, 17, 11, 18}, []int{id, a, virtualSum, b, storedSum})
+
+	err = applier.ApplyDMLEventQueries([]*binlog.BinlogDMLEvent{
+		{
+			DatabaseName:      testMysqlDatabase,
+			TableName:         testMysqlTableName,
+			DML:               binlog.DeleteDML,
+			WhereColumnValues: sql.ToColumnValues([]interface{}{1, 7, 17, 11, 18}),
+		},
+	})
+	suite.Require().NoError(err)
+
+	var count int
+	err = suite.otherDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+getTestOtherTableName()).Scan(&count)
+	suite.Require().NoError(err)
+	suite.Require().Zero(count)
+}
+
 func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	ctx := context.Background()
 	var err error
@@ -2323,6 +2391,62 @@ func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueries() {
 	suite.Require().Equal(3, results[2].id)
 	suite.Require().Equal("carol", results[2].name)
 	suite.Require().Equal("2025-12-31 23:59:59", results[2].createdAt)
+}
+
+func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesGeneratedColumns() {
+	ctx := context.Background()
+	createTable := "CREATE TABLE %s (id INT NOT NULL, a INT NOT NULL, virtual_sum INT AS (a + 10) VIRTUAL, b INT NOT NULL, stored_sum INT AS (a + b) STORED NOT NULL, UNIQUE KEY stored_sum_uidx (stored_sum));"
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf(createTable, getTestTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.otherDB.ExecContext(ctx, fmt.Sprintf(createTable, getTestOtherTableName()))
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "INSERT INTO "+getTestTableName()+" (id, a, b) VALUES (1, 2, 3), (2, 5, 8)")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	migrationContext.InitMoveTableContainers()
+	mt := migrationContext.GetMoveTable(testMysqlTableName)
+	suite.Require().NotNil(mt)
+	mt.OriginalTableColumns = sql.NewColumnList([]string{"id", "a", "virtual_sum", "b", "stored_sum"})
+	mt.SharedColumns = sql.NewColumnList([]string{"id", "a", "b"})
+	mt.MappedSharedColumns = sql.NewColumnList([]string{"id", "a", "b"})
+	uniqueKeyColumns := sql.NewColumnList([]string{"stored_sum"})
+	uniqueKeyColumns.GetColumn("stored_sum").IsVirtual = true
+	mt.UniqueKey = &sql.UniqueKey{Name: "stored_sum_uidx", Columns: *uniqueKeyColumns}
+
+	applier := NewApplier(migrationContext)
+	suite.Require().NoError(applier.prepareQueries())
+	defer applier.Teardown()
+	suite.Require().NoError(applier.InitDBConnections())
+	suite.Require().NoError(applier.ReadMoveTableMigrationRangeValues(nil, mt))
+
+	mt.SetNextIterationRangeMinValues()
+	hasFurtherRange, err := applier.CalculateMoveTableNextIterationRangeEndValues(applier.db, mt)
+	suite.Require().NoError(err)
+	suite.Require().True(hasFurtherRange)
+	_, rowsAffected, _, err := applier.ApplyIterationMoveTableCopyQueries(applier.db, mt)
+	suite.Require().NoError(err)
+	suite.Require().Equal(int64(2), rowsAffected)
+
+	rows, err := suite.otherDB.QueryContext(ctx, "SELECT id, a, virtual_sum, b, stored_sum FROM "+getTestOtherTableName()+" ORDER BY id")
+	suite.Require().NoError(err)
+	defer rows.Close()
+	var results [][]int
+	for rows.Next() {
+		var id, a, virtualSum, b, storedSum int
+		suite.Require().NoError(rows.Scan(&id, &a, &virtualSum, &b, &storedSum))
+		results = append(results, []int{id, a, virtualSum, b, storedSum})
+	}
+	suite.Require().NoError(rows.Err())
+	suite.Require().Equal([][]int{{1, 2, 12, 3, 5}, {2, 5, 15, 8, 13}}, results)
 }
 
 func (suite *ApplierTestSuite) TestApplyIterationMoveTableCopyQueriesNoRows() {

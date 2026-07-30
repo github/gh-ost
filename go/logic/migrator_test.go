@@ -54,6 +54,58 @@ func (buf *buffer) String() string {
 	return buf.Buffer.String()
 }
 
+func TestMoveTablesWritableColumns(t *testing.T) {
+	testCases := []struct {
+		name             string
+		columnNames      []string
+		generatedNames   []string
+		expectedWritable []string
+	}{
+		{
+			name:             "generated columns in middle and end",
+			columnNames:      []string{"id", "virtual_value", "persisted_value", "stored_value"},
+			generatedNames:   []string{"virtual_value", "stored_value"},
+			expectedWritable: []string{"id", "persisted_value"},
+		},
+		{
+			name:             "generated names match case insensitively",
+			columnNames:      []string{"ID", "Virtual_Value", "persisted_value", "Stored_Value"},
+			generatedNames:   []string{"virtual_value", "STORED_VALUE"},
+			expectedWritable: []string{"ID", "persisted_value"},
+		},
+		{
+			name:             "no generated columns",
+			columnNames:      []string{"id", "first_value", "second_value"},
+			generatedNames:   nil,
+			expectedWritable: []string{"id", "first_value", "second_value"},
+		},
+		{
+			name:             "all columns generated",
+			columnNames:      []string{"virtual_value", "stored_value"},
+			generatedNames:   []string{"virtual_value", "stored_value"},
+			expectedWritable: []string{},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			columns := sql.NewColumnList(testCase.columnNames)
+			generatedColumns := sql.NewColumnList(testCase.generatedNames)
+			writableColumns := moveTablesWritableColumns(columns, generatedColumns)
+
+			require.Equal(t, testCase.expectedWritable, writableColumns.Names())
+			require.NotSame(t, columns, writableColumns)
+			for ordinal, columnName := range testCase.expectedWritable {
+				require.Equal(t, ordinal, writableColumns.Ordinals[columnName])
+				require.Equal(t, columnName, writableColumns.Columns()[ordinal].Name)
+			}
+
+			mappedWritableColumns := moveTablesWritableColumns(columns, generatedColumns)
+			require.NotSame(t, writableColumns, mappedWritableColumns)
+		})
+	}
+}
+
 func TestMigratorOnChangelogEvent(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
 	migrator := NewMigrator(migrationContext, "1.2.3")
