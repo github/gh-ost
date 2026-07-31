@@ -72,12 +72,24 @@ verify_master_and_replica() {
     original_sql_mode="$(gh-ost-test-mysql-master -e "select @@global.sql_mode" -s -s)"
     echo "sql_mode on master is ${original_sql_mode}"
 
+    # Detect the server version once (master and replica run the same image);
+    # reused below for GTID handling and replica/source terminology.
+    mysql_version="$(gh-ost-test-mysql-master -s -s -e "select @@version")"
+
     current_gtid_mode=$(gh-ost-test-mysql-master -s -s -e "select @@global.gtid_mode" 2>/dev/null || echo unsupported)
-    current_enforce_gtid_consistency=$(gh-ost-test-mysql-master -s -s -e "select @@global.enforce_gtid_consistency" 2>/dev/null || echo unsupported)
-    current_master_server_uuid=$(gh-ost-test-mysql-master -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
-    current_replica_server_uuid=$(gh-ost-test-mysql-replica -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
-    echo "gtid_mode on master is ${current_gtid_mode} with enforce_gtid_consistency=${current_enforce_gtid_consistency}"
-    echo "server_uuid on master is ${current_master_server_uuid}, replica is ${current_replica_server_uuid}"
+    if [[ "$mysql_version" == *MariaDB* ]]; then
+        # MariaDB has no @@gtid_mode, @@enforce_gtid_consistency or @@server_uuid,
+        # but always records GTIDs in the binary log when binary logging is on.
+        # Treat it as gtid_mode=ON so GTID tests run on it.
+        current_gtid_mode="ON"
+        echo "gtid_mode on master is ${current_gtid_mode}"
+    else
+        current_enforce_gtid_consistency=$(gh-ost-test-mysql-master -s -s -e "select @@global.enforce_gtid_consistency" 2>/dev/null || echo unsupported)
+        current_master_server_uuid=$(gh-ost-test-mysql-master -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
+        current_replica_server_uuid=$(gh-ost-test-mysql-replica -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
+        echo "gtid_mode on master is ${current_gtid_mode} with enforce_gtid_consistency=${current_enforce_gtid_consistency}"
+        echo "server_uuid on master is ${current_master_server_uuid}, replica is ${current_replica_server_uuid}"
+    fi
 
     if [ "$(gh-ost-test-mysql-replica -e "select 1" -ss)" != "1" ]; then
         echo "Cannot verify gh-ost-test-mysql-replica"
@@ -91,9 +103,8 @@ verify_master_and_replica() {
     [ "$replica_host" == "$(hostname)" ] && replica_host="127.0.0.1"
     echo "# replica verified at $replica_host:$replica_port"
 
-    # Detect the server version once; no need to re-query it per test.
-    # Cache replica_terminology and seconds_behind_source values to avoid later checks.
-    mysql_version="$(gh-ost-test-mysql-replica -s -s -e "select @@version")"
+    # mysql_version was detected above; cache replica_terminology and
+    # seconds_behind_source here to avoid re-checking per test.
     mysql_version_comment="$(gh-ost-test-mysql-master -s -s -e "select @@version_comment")"
     if [[ "$mysql_version" == *MariaDB* ]]; then
         # MariaDB reports versions >= 10 but never adopted the replica/source
@@ -308,16 +319,16 @@ test_single() {
     if [ -f $tests_path/$test_name/gtid_mode ]; then
         target_gtid_mode=$(cat $tests_path/$test_name/gtid_mode)
         if [ "$current_gtid_mode" != "$target_gtid_mode" ]; then
-            # MariaDB has no @@gtid_mode (reports "unsupported"); these tests
-      # target MySQL GTID behaviour, so skip rather than abort the run.
-      if [ "$current_gtid_mode" = "unsupported" ]; then
-        echo -n " skipping (gtid_mode unsupported)"
-        return 0
-      fi
-      echo "gtid_mode is ${current_gtid_mode}, expected ${target_gtid_mode}"
-      exit 1
+            # "unsupported" here means a MySQL build without GTID; skip rather
+            # than abort the whole run.
+            if [ "$current_gtid_mode" = "unsupported" ]; then
+                echo -n " skipping (gtid_mode unsupported)"
+                return 0
+            fi
+            echo "gtid_mode is ${current_gtid_mode}, expected ${target_gtid_mode}"
+            exit 1
+        fi
     fi
-  fi
 
     if [ -f $tests_path/$test_name/sql_mode ]; then
         gh-ost-test-mysql-master --default-character-set=utf8mb4 test -e "set @@global.sql_mode='$(cat $tests_path/$test_name/sql_mode)'"
