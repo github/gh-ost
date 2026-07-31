@@ -23,14 +23,15 @@ func IOCountersWithContext(ctx context.Context, pernic bool) ([]IOCountersStat, 
 			BytesRecv:   uint64(netif.IBytes),
 			PacketsSent: uint64(netif.OPackets),
 			PacketsRecv: uint64(netif.IPackets),
-			Errin:       uint64(netif.OErrors),
-			Errout:      uint64(netif.IErrors),
+			Errin:       uint64(netif.IErrors),
+			Errout:      uint64(netif.OErrors),
+			Dropin:      uint64(netif.IfIqDrops),
 			Dropout:     uint64(netif.XmitDrops),
 		}
 		iocounters = append(iocounters, n)
 	}
-	if pernic == false {
-		return getIOCountersAll(iocounters)
+	if !pernic {
+		return getIOCountersAll(iocounters), nil
 	}
 	return iocounters, nil
 }

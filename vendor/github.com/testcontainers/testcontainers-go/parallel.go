@@ -61,10 +61,7 @@ func ParallelContainers(ctx context.Context, reqs ParallelContainerRequest, opt 
 		opt.WorkersCount = defaultWorkersCount
 	}
 
-	tasksChanSize := opt.WorkersCount
-	if tasksChanSize > len(reqs) {
-		tasksChanSize = len(reqs)
-	}
+	tasksChanSize := min(opt.WorkersCount, len(reqs))
 
 	tasksChan := make(chan GenericContainerRequest, tasksChanSize)
 	resultsChan := make(chan parallelContainersResult, tasksChanSize)
@@ -74,7 +71,7 @@ func ParallelContainers(ctx context.Context, reqs ParallelContainerRequest, opt 
 	wg.Add(tasksChanSize)
 
 	// run workers
-	for i := 0; i < tasksChanSize; i++ {
+	for range tasksChanSize {
 		go parallelContainersRunner(ctx, tasksChan, resultsChan, &wg)
 	}
 

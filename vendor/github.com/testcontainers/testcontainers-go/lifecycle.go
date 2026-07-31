@@ -9,10 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 
 	"github.com/testcontainers/testcontainers-go/log"
 )
@@ -190,10 +188,7 @@ var defaultLogConsumersHook = func(cfg *LogConsumerConfig) ContainerLifecycleHoo
 				}
 
 				dockerContainer := c.(*DockerContainer)
-				dockerContainer.consumers = dockerContainer.consumers[:0]
-				for _, consumer := range cfg.Consumers {
-					dockerContainer.followOutput(consumer)
-				}
+				dockerContainer.resetConsumers(cfg.Consumers)
 
 				return dockerContainer.startLogProduction(ctx, cfg.Opts...)
 			},
@@ -213,87 +208,31 @@ var defaultLogConsumersHook = func(cfg *LogConsumerConfig) ContainerLifecycleHoo
 	}
 }
 
-func checkPortsMapped(exposedAndMappedPorts nat.PortMap, exposedPorts []string) error {
-	portMap, _, err := nat.ParsePortSpecs(exposedPorts)
-	if err != nil {
-		return fmt.Errorf("parse exposed ports: %w", err)
-	}
-
-	for exposedPort := range portMap {
-		// having entries in exposedAndMappedPorts, where the key is the exposed port,
-		// and the value is the mapped port, means that the port has been already mapped.
-		if _, ok := exposedAndMappedPorts[exposedPort]; ok {
-			continue
-		}
-
-		// check if the port is mapped with the protocol (default is TCP)
-		if strings.Contains(string(exposedPort), "/") {
-			return fmt.Errorf("port %s is not mapped yet", exposedPort)
-		}
-
-		// Port didn't have a type, default to tcp and retry.
-		exposedPort += "/tcp"
-		if _, ok := exposedAndMappedPorts[exposedPort]; !ok {
-			return fmt.Errorf("port %s is not mapped yet", exposedPort)
-		}
-	}
-
-	return nil
-}
-
 // defaultReadinessHook is a hook that will wait for the container to be ready
 var defaultReadinessHook = func() ContainerLifecycleHooks {
 	return ContainerLifecycleHooks{
 		PostStarts: []ContainerHook{
-			func(ctx context.Context, c Container) error {
-				// wait until all the exposed ports are mapped:
-				// it will be ready when all the exposed ports are mapped,
-				// checking every 50ms, up to 1s, and failing if all the
-				// exposed ports are not mapped in 5s.
-				dockerContainer := c.(*DockerContainer)
-
-				b := backoff.NewExponentialBackOff()
-
-				b.InitialInterval = 50 * time.Millisecond
-				b.MaxElapsedTime = 5 * time.Second
-				b.MaxInterval = time.Duration(float64(time.Second) * backoff.DefaultRandomizationFactor)
-
-				err := backoff.RetryNotify(
-					func() error {
-						jsonRaw, err := dockerContainer.inspectRawContainer(ctx)
-						if err != nil {
-							return err
-						}
-
-						return checkPortsMapped(jsonRaw.NetworkSettings.Ports, dockerContainer.exposedPorts)
-					},
-					b,
-					func(err error, _ time.Duration) {
-						dockerContainer.logger.Printf("All requested ports were not exposed: %v", err)
-					},
-				)
-				if err != nil {
-					return fmt.Errorf("all exposed ports, %s, were not mapped in 5s: %w", dockerContainer.exposedPorts, err)
-				}
-
-				return nil
-			},
 			// wait for the container to be ready
 			func(ctx context.Context, c Container) error {
 				dockerContainer := c.(*DockerContainer)
 
 				// if a Wait Strategy has been specified, wait before returning
 				if dockerContainer.WaitingFor != nil {
+					strategy := dockerContainer.WaitingFor
+					strategyDesc := "unknown strategy"
+					if s, ok := strategy.(fmt.Stringer); ok {
+						strategyDesc = s.String()
+					}
 					dockerContainer.logger.Printf(
 						"⏳ Waiting for container id %s image: %s. Waiting for: %+v",
-						dockerContainer.ID[:12], dockerContainer.Image, dockerContainer.WaitingFor,
+						dockerContainer.ID[:12], dockerContainer.Image, strategyDesc,
 					)
-					if err := dockerContainer.WaitingFor.WaitUntilReady(ctx, c); err != nil {
+					if err := strategy.WaitUntilReady(ctx, dockerContainer); err != nil {
 						return fmt.Errorf("wait until ready: %w", err)
 					}
 				}
 
-				dockerContainer.isRunning = true
+				dockerContainer.isRunning.Store(true)
 
 				return nil
 			},
@@ -373,7 +312,11 @@ func (c *DockerContainer) printLogs(ctx context.Context, cause error) {
 
 	b, err := io.ReadAll(reader)
 	if err != nil {
-		c.logger.Printf("failed reading container logs: %v\n", err)
+		if len(b) > 0 {
+			c.logger.Printf("failed reading container logs: %v\npartial container logs (%s):\n%s", err, cause, b)
+		} else {
+			c.logger.Printf("failed reading container logs: %v\n", err)
+		}
 		return
 	}
 
@@ -578,32 +521,29 @@ func (p *DockerProvider) preCreateContainerHook(ctx context.Context, req Contain
 
 	networkingConfig.EndpointsConfig = endpointSettings
 
+	// Expose ports automatically if the container request exposes zero ports and the container
+	// does not run in a container network. The NetworkMode check must be done after the pre-creation
+	// Modifiers are called, so the network mode is already set.
 	exposedPorts := req.ExposedPorts
-	// this check must be done after the pre-creation Modifiers are called, so the network mode is already set
 	if len(exposedPorts) == 0 && !hostConfig.NetworkMode.IsContainer() {
 		image, err := p.client.ImageInspect(ctx, dockerInput.Image)
 		if err != nil {
 			return err
 		}
-		for p := range image.Config.ExposedPorts {
-			exposedPorts = append(exposedPorts, string(p))
+
+		exposedPorts = exposedPorts[:0]
+		for port := range image.Config.ExposedPorts {
+			exposedPorts = append(exposedPorts, port)
 		}
 	}
 
-	exposedPortSet, exposedPortMap, err := nat.ParsePortSpecs(exposedPorts)
+	exposedPortSet, err := parseExposedPorts(exposedPorts)
 	if err != nil {
 		return err
 	}
 
 	dockerInput.ExposedPorts = exposedPortSet
-
-	// only exposing those ports automatically if the container request exposes zero ports and the container does not run in a container network
-	if len(exposedPorts) == 0 && !hostConfig.NetworkMode.IsContainer() {
-		hostConfig.PortBindings = exposedPortMap
-	} else {
-		hostConfig.PortBindings = mergePortBindings(hostConfig.PortBindings, exposedPortMap, req.ExposedPorts)
-	}
-
+	hostConfig.PortBindings = mergePortBindings(hostConfig.PortBindings, exposedPortSet)
 	return nil
 }
 
@@ -620,7 +560,7 @@ func combineContainerHooks(defaultHooks, userDefinedHooks []ContainerLifecycleHo
 	hooksType := reflect.TypeOf(hooks)
 	for _, defaultHook := range defaultHooks {
 		defaultVal := reflect.ValueOf(defaultHook)
-		for i := 0; i < hooksType.NumField(); i++ {
+		for i := range hooksType.NumField() {
 			if strings.HasPrefix(hooksType.Field(i).Name, "Pre") {
 				field := hooksVal.Field(i)
 				field.Set(reflect.AppendSlice(field, defaultVal.Field(i)))
@@ -633,7 +573,7 @@ func combineContainerHooks(defaultHooks, userDefinedHooks []ContainerLifecycleHo
 	// post-hooks will be the first ones to be executed.
 	for _, userDefinedHook := range userDefinedHooks {
 		userVal := reflect.ValueOf(userDefinedHook)
-		for i := 0; i < hooksType.NumField(); i++ {
+		for i := range hooksType.NumField() {
 			field := hooksVal.Field(i)
 			field.Set(reflect.AppendSlice(field, userVal.Field(i)))
 		}
@@ -642,7 +582,7 @@ func combineContainerHooks(defaultHooks, userDefinedHooks []ContainerLifecycleHo
 	// Finally, append the default post-hooks.
 	for _, defaultHook := range defaultHooks {
 		defaultVal := reflect.ValueOf(defaultHook)
-		for i := 0; i < hooksType.NumField(); i++ {
+		for i := range hooksType.NumField() {
 			if strings.HasPrefix(hooksType.Field(i).Name, "Post") {
 				field := hooksVal.Field(i)
 				field.Set(reflect.AppendSlice(field, defaultVal.Field(i)))
@@ -653,22 +593,59 @@ func combineContainerHooks(defaultHooks, userDefinedHooks []ContainerLifecycleHo
 	return hooks
 }
 
-func mergePortBindings(configPortMap, exposedPortMap nat.PortMap, exposedPorts []string) nat.PortMap {
-	if exposedPortMap == nil {
-		exposedPortMap = make(map[nat.Port][]nat.PortBinding)
-	}
+func parseExposedPorts(specs []string) (network.PortSet, error) {
+	exposed := make(network.PortSet, len(specs))
+	for _, s := range specs {
+		pr, err := network.ParsePortRange(s)
+		if err != nil {
+			return nil, fmt.Errorf("invalid exposed port %q: %w", s, err)
+		}
 
-	mappedPorts := make(map[string]struct{}, len(exposedPorts))
-	for _, p := range exposedPorts {
-		p = strings.Split(p, "/")[0]
-		mappedPorts[p] = struct{}{}
-	}
-
-	for k, v := range configPortMap {
-		if _, ok := mappedPorts[k.Port()]; ok {
-			exposedPortMap[k] = v
+		for p := range pr.All() {
+			exposed[p] = struct{}{}
 		}
 	}
+	return exposed, nil
+}
+
+// mergePortBindings returns a PortMap for the given exposedPortSet.
+//
+// For each port in exposedPortSet, a binding is ensured:
+//   - If configPortMap contains bindings for that port, those bindings are used.
+//   - Otherwise, a default binding with HostPort "0" (ephemeral allocation)
+//     is assigned.
+//
+// Bindings for ports not present in exposedPortSet are not preserved.
+// Any binding with an empty HostPort is normalized to "0".
+//
+// TODO(thaJeztah): this logic seems the reverse of the docker CLI, which
+// exposes ports if the user requests a port-mapping (i.e., if a port-mapping
+// is requested, but not exposed, we map the port *and* add an entry to
+// ExposedPorts). The logic here is the reverse; any port "mapped" in
+// HostConfig.PortBindings is dropped if is not exposed.
+func mergePortBindings(configPortMap network.PortMap, exposedPortSet network.PortSet) network.PortMap {
+	if len(exposedPortSet) == 0 {
+		return network.PortMap{}
+	}
+
+	exposedPortMap := make(network.PortMap, len(exposedPortSet))
+	for p := range exposedPortSet {
+		bindings := configPortMap[p]
+		if len(bindings) == 0 {
+			exposedPortMap[p] = []network.PortBinding{{HostPort: "0"}}
+			continue
+		}
+
+		// Fix: Ensure that ports with empty HostPort get "0" for automatic allocation
+		// This fixes the UDP port binding issue where ports were getting HostPort:0 instead of being allocated
+		for i := range bindings {
+			if bindings[i].HostPort == "" {
+				bindings[i].HostPort = "0" // Tell Docker to allocate a random port
+			}
+		}
+		exposedPortMap[p] = bindings
+	}
+
 	return exposedPortMap
 }
 

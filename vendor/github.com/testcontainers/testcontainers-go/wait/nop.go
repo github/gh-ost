@@ -5,8 +5,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 
 	"github.com/testcontainers/testcontainers-go/exec"
 )
@@ -33,6 +33,11 @@ func (ws *NopStrategy) Timeout() *time.Duration {
 	return ws.timeout
 }
 
+// String returns a human-readable description of the wait strategy.
+func (ws *NopStrategy) String() string {
+	return "custom wait condition"
+}
+
 func (ws *NopStrategy) WithStartupTimeout(timeout time.Duration) *NopStrategy {
 	ws.timeout = &timeout
 	return ws
@@ -56,12 +61,15 @@ func (st NopStrategyTarget) Inspect(_ context.Context) (*container.InspectRespon
 }
 
 // Deprecated: use Inspect instead
-func (st NopStrategyTarget) Ports(_ context.Context) (nat.PortMap, error) {
+func (st NopStrategyTarget) Ports(_ context.Context) (network.PortMap, error) {
 	return nil, nil
 }
 
-func (st NopStrategyTarget) MappedPort(_ context.Context, n nat.Port) (nat.Port, error) {
-	return n, nil
+func (st NopStrategyTarget) MappedPort(_ context.Context, n string) (network.Port, error) {
+	if n == "" {
+		return network.Port{}, nil
+	}
+	return network.ParsePort(n)
 }
 
 func (st NopStrategyTarget) Logs(_ context.Context) (io.ReadCloser, error) {

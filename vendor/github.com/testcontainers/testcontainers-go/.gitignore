@@ -20,3 +20,14 @@ TEST-*.xml
 
 # Environment variables
 .env
+
+# Coverage files
+coverage.out
+
+# Usage metrics script binary
+usage-metrics/scripts/collect-metrics
+
+# Gas Town / Claude Code agent artifacts
+.beads/
+.claude/
+.runtime/
