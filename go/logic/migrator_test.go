@@ -34,6 +34,58 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
+func TestMoveTablesWritableColumns(t *testing.T) {
+	testCases := []struct {
+		name             string
+		columnNames      []string
+		generatedNames   []string
+		expectedWritable []string
+	}{
+		{
+			name:             "generated columns in middle and end",
+			columnNames:      []string{"id", "virtual_value", "persisted_value", "stored_value"},
+			generatedNames:   []string{"virtual_value", "stored_value"},
+			expectedWritable: []string{"id", "persisted_value"},
+		},
+		{
+			name:             "generated names match case insensitively",
+			columnNames:      []string{"ID", "Virtual_Value", "persisted_value", "Stored_Value"},
+			generatedNames:   []string{"virtual_value", "STORED_VALUE"},
+			expectedWritable: []string{"ID", "persisted_value"},
+		},
+		{
+			name:             "no generated columns",
+			columnNames:      []string{"id", "first_value", "second_value"},
+			generatedNames:   nil,
+			expectedWritable: []string{"id", "first_value", "second_value"},
+		},
+		{
+			name:             "all columns generated",
+			columnNames:      []string{"virtual_value", "stored_value"},
+			generatedNames:   []string{"virtual_value", "stored_value"},
+			expectedWritable: []string{},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			columns := sql.NewColumnList(testCase.columnNames)
+			generatedColumns := sql.NewColumnList(testCase.generatedNames)
+			writableColumns := moveTablesWritableColumns(columns, generatedColumns)
+
+			require.Equal(t, testCase.expectedWritable, writableColumns.Names())
+			require.NotSame(t, columns, writableColumns)
+			for ordinal, columnName := range testCase.expectedWritable {
+				require.Equal(t, ordinal, writableColumns.Ordinals[columnName])
+				require.Equal(t, columnName, writableColumns.Columns()[ordinal].Name)
+			}
+
+			mappedWritableColumns := moveTablesWritableColumns(columns, generatedColumns)
+			require.NotSame(t, writableColumns, mappedWritableColumns)
+		})
+	}
+}
+
 func TestMigratorOnChangelogEvent(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
 	migrator := NewMigrator(migrationContext, "1.2.3")
@@ -516,6 +568,58 @@ func (suite *MigratorTestSuite) TestMigrateEmpty() {
 	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_del'").Scan(&tableName)
 	suite.Require().NoError(err)
 	suite.Require().Equal("_testing_del", tableName)
+}
+
+func (suite *MigratorTestSuite) TestMoveTablesStateInitializesColumnMetadata() {
+	ctx := context.Background()
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE %s (
+			id INT PRIMARY KEY,
+			unsigned_value BIGINT UNSIGNED NOT NULL,
+			json_value JSON,
+			virtual_json_value VARCHAR(16) AS (
+				COALESCE(JSON_UNQUOTE(JSON_EXTRACT(json_value, '$.value')), 'direct')
+			) VIRTUAL,
+			binary_value BINARY(4)
+		)`, getTestTableName()))
+	suite.Require().NoError(err)
+
+	newMoveTablesMigrator := func() (*Migrator, *base.MoveTable) {
+		migrationContext := newTestMigrationContext()
+		migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+		migrationContext.MoveTables.TargetDatabase = testMysqlDatabase
+		migrationContext.InitMoveTableContainers()
+		migrator := NewMigrator(migrationContext, "0.0.0")
+		return migrator, migrationContext.GetMoveTable(testMysqlTableName)
+	}
+	assertHydrated := func(mt *base.MoveTable) {
+		suite.Require().Equal(
+			[]string{"id", "unsigned_value", "json_value", "binary_value"},
+			mt.SharedColumns.Names(),
+		)
+		suite.Require().Equal(sql.JSONColumnType, mt.OriginalTableColumns.GetColumnType("json_value"))
+		suite.Require().Equal(sql.JSONColumnType, mt.SharedColumns.GetColumnType("json_value"))
+		suite.Require().Equal(sql.JSONColumnType, mt.MappedSharedColumns.GetColumnType("json_value"))
+		suite.Require().True(mt.SharedColumns.IsUnsigned("unsigned_value"))
+		suite.Require().True(mt.MappedSharedColumns.IsUnsigned("unsigned_value"))
+		suite.Require().Equal(sql.BinaryColumnType, mt.SharedColumns.GetColumnType("binary_value"))
+		suite.Require().Equal(uint(4), mt.SharedColumns.GetColumn("binary_value").BinaryOctetLength)
+	}
+
+	suite.Run("fresh preparation", func() {
+		migrator, mt := newMoveTablesMigrator()
+		migrator.inspector = &Inspector{db: suite.db, migrationContext: migrator.migrationContext}
+		suite.Require().NoError(migrator.prepareMoveTablesCopyState())
+		assertHydrated(mt)
+	})
+
+	suite.Run("resume hydration", func() {
+		migrator, mt := newMoveTablesMigrator()
+		migrator.applier = NewApplier(migrator.migrationContext)
+		migrator.applier.moveTablesTargetDB = suite.db
+		suite.Require().NoError(migrator.hydrateMoveTablesStateFromTarget())
+		assertHydrated(mt)
+	})
 }
 
 func (suite *MigratorTestSuite) TestRetryBatchCopyWithHooks() {

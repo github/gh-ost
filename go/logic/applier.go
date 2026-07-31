@@ -507,7 +507,7 @@ func (apl *Applier) prepareQueries() (err error) {
 		if b.copySelectFirstQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
 			mt.SourceDatabaseName,
 			mt.SourceTableName,
-			mt.OriginalTableColumns,
+			mt.SharedColumns,
 			mt.UniqueKey.Name,
 			&mt.UniqueKey.Columns,
 			true, // <-- include start range values for first select query
@@ -517,7 +517,7 @@ func (apl *Applier) prepareQueries() (err error) {
 		if b.copySelectNextQueryBuilder, err = sql.NewMoveTableCopySelectQueryBuilder(
 			mt.SourceDatabaseName,
 			mt.SourceTableName,
-			mt.OriginalTableColumns,
+			mt.SharedColumns,
 			mt.UniqueKey.Name,
 			&mt.UniqueKey.Columns,
 			false,
@@ -527,7 +527,7 @@ func (apl *Applier) prepareQueries() (err error) {
 		if b.copyInsertQueryBuilder, err = sql.NewMoveTableCopyInsertQueryBuilder(
 			mt.TargetDatabaseName,
 			mt.TargetTableName,
-			mt.OriginalTableColumns,
+			mt.SharedColumns,
 		); err != nil {
 			return err
 		}
