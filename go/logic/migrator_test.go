@@ -570,6 +570,58 @@ func (suite *MigratorTestSuite) TestMigrateEmpty() {
 	suite.Require().Equal("_testing_del", tableName)
 }
 
+func (suite *MigratorTestSuite) TestMoveTablesStateInitializesColumnMetadata() {
+	ctx := context.Background()
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE %s (
+			id INT PRIMARY KEY,
+			unsigned_value BIGINT UNSIGNED NOT NULL,
+			json_value JSON,
+			virtual_json_value VARCHAR(16) AS (
+				COALESCE(JSON_UNQUOTE(JSON_EXTRACT(json_value, '$.value')), 'direct')
+			) VIRTUAL,
+			binary_value BINARY(4)
+		)`, getTestTableName()))
+	suite.Require().NoError(err)
+
+	newMoveTablesMigrator := func() (*Migrator, *base.MoveTable) {
+		migrationContext := newTestMigrationContext()
+		migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+		migrationContext.MoveTables.TargetDatabase = testMysqlDatabase
+		migrationContext.InitMoveTableContainers()
+		migrator := NewMigrator(migrationContext, "0.0.0")
+		return migrator, migrationContext.GetMoveTable(testMysqlTableName)
+	}
+	assertHydrated := func(mt *base.MoveTable) {
+		suite.Require().Equal(
+			[]string{"id", "unsigned_value", "json_value", "binary_value"},
+			mt.SharedColumns.Names(),
+		)
+		suite.Require().Equal(sql.JSONColumnType, mt.OriginalTableColumns.GetColumnType("json_value"))
+		suite.Require().Equal(sql.JSONColumnType, mt.SharedColumns.GetColumnType("json_value"))
+		suite.Require().Equal(sql.JSONColumnType, mt.MappedSharedColumns.GetColumnType("json_value"))
+		suite.Require().True(mt.SharedColumns.IsUnsigned("unsigned_value"))
+		suite.Require().True(mt.MappedSharedColumns.IsUnsigned("unsigned_value"))
+		suite.Require().Equal(sql.BinaryColumnType, mt.SharedColumns.GetColumnType("binary_value"))
+		suite.Require().Equal(uint(4), mt.SharedColumns.GetColumn("binary_value").BinaryOctetLength)
+	}
+
+	suite.Run("fresh preparation", func() {
+		migrator, mt := newMoveTablesMigrator()
+		migrator.inspector = &Inspector{db: suite.db, migrationContext: migrator.migrationContext}
+		suite.Require().NoError(migrator.prepareMoveTablesCopyState())
+		assertHydrated(mt)
+	})
+
+	suite.Run("resume hydration", func() {
+		migrator, mt := newMoveTablesMigrator()
+		migrator.applier = NewApplier(migrator.migrationContext)
+		migrator.applier.moveTablesTargetDB = suite.db
+		suite.Require().NoError(migrator.hydrateMoveTablesStateFromTarget())
+		assertHydrated(mt)
+	})
+}
+
 func (suite *MigratorTestSuite) TestRetryBatchCopyWithHooks() {
 	ctx := context.Background()
 

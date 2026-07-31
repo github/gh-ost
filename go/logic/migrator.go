@@ -822,6 +822,32 @@ func moveTablesWritableColumns(columns, virtualColumns *sql.ColumnList) *sql.Col
 	return sql.NewColumnList(writableColumnNames)
 }
 
+func prepareMoveTableColumnMetadata(inspector *Inspector, databaseName, tableName string, mt *base.MoveTable) error {
+	// Generated columns are present in row events but are not writable on the target.
+	// Keep separate source and target lists because query builders may mutate column metadata.
+	mt.SharedColumns = moveTablesWritableColumns(mt.OriginalTableColumns, mt.OriginalTableVirtualColumns)
+	if mt.SharedColumns.Len() == 0 {
+		return fmt.Errorf("move-table %s.%s has no writable columns after excluding generated columns",
+			sql.EscapeName(databaseName), sql.EscapeName(tableName))
+	}
+	mt.MappedSharedColumns = moveTablesWritableColumns(mt.OriginalTableColumns, mt.OriginalTableVirtualColumns)
+
+	// Move-tables does not perform schema conversions, but query builders still
+	// need type metadata to encode values such as JSON, unsigned, and binary correctly.
+	if err := inspector.applyColumnTypes(
+		databaseName,
+		tableName,
+		mt.OriginalTableColumns,
+		mt.SharedColumns,
+		mt.MappedSharedColumns,
+		&mt.UniqueKey.Columns,
+	); err != nil {
+		return fmt.Errorf("failed to inspect column types for move-table %s.%s: %w",
+			sql.EscapeName(databaseName), sql.EscapeName(tableName), err)
+	}
+	return nil
+}
+
 // prepareMoveTablesCopyState initializes per-table runtime state for row copy in
 // move-tables mode (§2.1). Each migrated table is inspected and validated
 // independently into its own container (schema, unique key, row estimate, CREATE
@@ -862,14 +888,9 @@ func (mgtr *Migrator) prepareMoveTablesCopyState() error {
 		mt.OriginalTableVirtualColumns = virtualColumns
 		mt.OriginalTableUniqueKeys = uniqueKeys
 		mt.UniqueKey = uniqueKey
-		// Generated columns are present in row events but are not writable on the target.
-		// Keep independent lists so source and target column metadata can diverge safely.
-		mt.SharedColumns = moveTablesWritableColumns(columns, virtualColumns)
-		if mt.SharedColumns.Len() == 0 {
-			return fmt.Errorf("move-table %s.%s has no writable columns after excluding generated columns",
-				sql.EscapeName(mt.SourceDatabaseName), sql.EscapeName(mt.SourceTableName))
+		if err := prepareMoveTableColumnMetadata(mgtr.inspector, mt.SourceDatabaseName, mt.SourceTableName, mt); err != nil {
+			return err
 		}
-		mt.MappedSharedColumns = moveTablesWritableColumns(columns, virtualColumns)
 		mt.RowsEstimate = rowsEstimate
 		mt.CreateTableStatement = createStatement
 		totalRowsEstimate += rowsEstimate
@@ -900,13 +921,9 @@ func (mgtr *Migrator) hydrateMoveTablesStateFromTarget() error {
 		mt.OriginalTableVirtualColumns = virtualColumns
 		mt.OriginalTableUniqueKeys = uniqueKeys
 		mt.UniqueKey = uniqueKey
-		// Keep independent lists so source and target column metadata can diverge safely.
-		mt.SharedColumns = moveTablesWritableColumns(columns, virtualColumns)
-		if mt.SharedColumns.Len() == 0 {
-			return fmt.Errorf("move-table %s.%s has no writable columns after excluding generated columns while resuming",
-				sql.EscapeName(mt.TargetDatabaseName), sql.EscapeName(mt.TargetTableName))
+		if err := prepareMoveTableColumnMetadata(targetInspector, mt.TargetDatabaseName, mt.TargetTableName, mt); err != nil {
+			return fmt.Errorf("failed to hydrate move-table state while resuming: %w", err)
 		}
-		mt.MappedSharedColumns = moveTablesWritableColumns(columns, virtualColumns)
 	}
 	return nil
 }
