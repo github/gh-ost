@@ -427,6 +427,13 @@ func (isp *Inspector) validateBinlogs() error {
 
 // validateGTIDConfig checks that the GTID configuration is good to go
 func (isp *Inspector) validateGTIDConfig() error {
+	if mysql.IsMariaDB(isp.dbVersion) {
+		// MariaDB has no @@gtid_mode / @@enforce_gtid_consistency: GTIDs are
+		// always recorded in the binary log when binary logging is enabled
+		// (which is validated separately). Nothing else to check.
+		isp.migrationContext.Log.Infof("MariaDB GTID config validated on %s", isp.connectionConfig.Key.String())
+		return nil
+	}
 	var gtidMode, enforceGtidConsistency string
 	query := `select @@global.gtid_mode, @@global.enforce_gtid_consistency`
 	if err := isp.db.QueryRow(query).Scan(&gtidMode, &enforceGtidConsistency); err != nil {
