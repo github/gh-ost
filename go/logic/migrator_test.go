@@ -647,7 +647,7 @@ func (suite *MigratorTestSuite) SetupSuite() {
 	suite.db = db
 }
 
-func (suite *MigratorTestSuite) TeardownSuite() {
+func (suite *MigratorTestSuite) TearDownSuite() {
 	suite.Assert().NoError(suite.db.Close())
 	suite.Assert().NoError(testcontainers.TerminateContainer(suite.mysqlContainer))
 }

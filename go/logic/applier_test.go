@@ -266,6 +266,73 @@ func TestRetryOnLockWaitTimeout(t *testing.T) {
 	})
 }
 
+func TestClassifyAnalyzeTableResult(t *testing.T) {
+	tests := []struct {
+		name string
+		rows []analyzeTableResultRow
+		// errContains is the substring the refusal error must carry; empty means expect success.
+		// Asserting the substring proves which branch refused and that the underlying cause
+		// propagates to the operator, rather than accepting any error.
+		errContains string
+	}{
+		{
+			name: "status OK passes",
+			rows: []analyzeTableResultRow{{msgType: "status", msgText: "OK"}},
+		},
+		{
+			// gh-ost lowercases Msg_type and folds Msg_text, so a differently-cased OK still passes.
+			name: "status OK is matched case-insensitively",
+			rows: []analyzeTableResultRow{{msgType: "Status", msgText: "ok"}},
+		},
+		{
+			// The fail-open the PR fixes: MySQL reports a table-level failure as an Error row while
+			// the statement succeeds at the protocol level. An error row must refuse cut-over.
+			name:        "error row refuses cut-over",
+			rows:        []analyzeTableResultRow{{msgType: "Error", msgText: "Table 'test._testing_gho' doesn't exist"}},
+			errContains: "doesn't exist",
+		},
+		{
+			// An error row must refuse even when a status-OK row is also present — this is the case
+			// that exercises the error-row clause independently of the missing-status-OK clause.
+			name: "error row refuses even alongside status OK",
+			rows: []analyzeTableResultRow{
+				{msgType: "Error", msgText: "Incorrect key file for table"},
+				{msgType: "status", msgText: "OK"},
+			},
+			errContains: "Incorrect key file",
+		},
+		{
+			// All rows are scanned: a status-OK row must not short-circuit a later error row.
+			name: "status OK before a later error row still refuses",
+			rows: []analyzeTableResultRow{
+				{msgType: "status", msgText: "OK"},
+				{msgType: "Error", msgText: "late corruption error"},
+			},
+			errContains: "late corruption error",
+		},
+		{
+			name:        "status row that is not OK refuses cut-over",
+			rows:        []analyzeTableResultRow{{msgType: "status", msgText: "Operation failed"}},
+			errContains: "did not report status OK",
+		},
+		{
+			name:        "empty result refuses cut-over (fail-closed)",
+			rows:        nil,
+			errContains: "did not report status OK",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := classifyAnalyzeTableResult("_testing_gho", tc.rows)
+			if tc.errContains == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.errContains)
+			}
+		})
+	}
+}
+
 type ApplierTestSuite struct {
 	suite.Suite
 
@@ -295,7 +362,7 @@ func (suite *ApplierTestSuite) SetupSuite() {
 	suite.db = db
 }
 
-func (suite *ApplierTestSuite) TeardownSuite() {
+func (suite *ApplierTestSuite) TearDownSuite() {
 	suite.Assert().NoError(suite.db.Close())
 	suite.Assert().NoError(testcontainers.TerminateContainer(suite.mysqlContainer))
 }
@@ -625,6 +692,48 @@ func (suite *ApplierTestSuite) TestCreateGhostTable() {
 	err = suite.db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", getTestGhostTableName())).Scan(&tableName, &createDDL)
 	suite.Require().NoError(err)
 	suite.Require().Equal("CREATE TABLE `_testing_gho` (\n  `id` int DEFAULT NULL,\n  `item_id` int DEFAULT NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createDDL)
+}
+
+func (suite *ApplierTestSuite) TestAnalyzeGhostTable() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, "CREATE TABLE test.testing (id INT, item_id INT);")
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := base.NewMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.DatabaseName = "test"
+	migrationContext.SkipPortValidation = true
+	migrationContext.OriginalTableName = "testing"
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.InitiallyDropGhostTable = true
+
+	applier := NewApplier(migrationContext)
+	defer applier.Teardown()
+
+	suite.Require().NoError(applier.InitDBConnections())
+	suite.Require().NoError(applier.CreateGhostTable())
+
+	// Happy path: ANALYZE on the freshly-created ghost table succeeds.
+	suite.Require().NoError(applier.AnalyzeGhostTable())
+
+	// Fail-closed regression: if the ghost table is gone at cut-over time, MySQL reports the missing
+	// table as a Msg_type=Error result row while the statement itself succeeds at the protocol
+	// level. A naive statement-error check would fail open and swap in a broken table; the
+	// row-inspection guard must refuse instead. ErrorContains pins the refusal to that guard rather
+	// than to any incidental error.
+	_, err = suite.db.ExecContext(ctx, "DROP TABLE test._testing_gho")
+	suite.Require().NoError(err)
+	suite.Require().ErrorContains(applier.AnalyzeGhostTable(), "did not report status OK")
+
+	// Statement-error path: a failure at the protocol level (here, a closed connection) rather than
+	// a result row is refused through the distinct statement-error branch. This closes the applier's
+	// connections, so the deferred Teardown above becomes a harmless second close.
+	applier.Teardown()
+	suite.Require().ErrorContains(applier.AnalyzeGhostTable(), "failed; refusing cut-over")
 }
 
 func (suite *ApplierTestSuite) TestPanicOnWarningsInApplyIterationInsertQuerySucceedsWithUniqueKeyWarningInsertedByDMLEvent() {

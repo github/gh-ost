@@ -904,6 +904,19 @@ func (mgtr *Migrator) cutOver() (err error) {
 	mgtr.migrationContext.MarkPointOfInterest()
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
 
+	if mgtr.migrationContext.AnalyzeGhostTableBeforeCutOver {
+		// Force a synchronous ANALYZE on the ghost table here — after the postpone gate
+		// releases, before atomicCutOver() takes the source write lock, and before
+		// --test-on-replica stops replication (so a failure cannot strand a stopped
+		// replica). A failure must be fatal, not retried: a plain `return err` re-runs
+		// cutOver() — and the ANALYZE — up to --default-retries, and a PanicAbort send
+		// races the retrier. Log.Fatale exits synchronously without ever locking the
+		// source.
+		if err := mgtr.applier.AnalyzeGhostTable(); err != nil {
+			return mgtr.migrationContext.Log.Fatale(err)
+		}
+	}
+
 	if mgtr.migrationContext.TestOnReplica {
 		// With `--test-on-replica` we stop replication thread, and then proceed to use
 		// the same cut-over phase as the master would use. That means we take locks
