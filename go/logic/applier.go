@@ -566,18 +566,18 @@ func classifyAnalyzeTableResult(tableName string, rows []analyzeTableResultRow) 
 // cannot prove plan safety — plan checks belong to the orchestrating layer, which
 // knows the table's context. The caller must treat a returned error as fatal,
 // not retriable.
-func (this *Applier) AnalyzeGhostTable() error {
+func (apl *Applier) AnalyzeGhostTable() error {
 	query := fmt.Sprintf(`analyze /* gh-ost */ table %s.%s`,
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+		sql.EscapeName(apl.migrationContext.DatabaseName),
+		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
 	)
-	this.migrationContext.Log.Infof("Running ANALYZE TABLE on ghost table %s.%s before cut-over",
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	apl.migrationContext.Log.Infof("Running ANALYZE TABLE on ghost table %s.%s before cut-over",
+		sql.EscapeName(apl.migrationContext.DatabaseName),
+		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
 	)
 	analyzeStartTime := time.Now()
 	var rows []analyzeTableResultRow
-	err := sqlutils.QueryRowsMap(this.db, query, func(rowMap sqlutils.RowMap) error {
+	err := sqlutils.QueryRowsMap(apl.db, query, func(rowMap sqlutils.RowMap) error {
 		rows = append(rows, analyzeTableResultRow{
 			msgType: rowMap.GetString("Msg_type"),
 			msgText: rowMap.GetString("Msg_text"),
@@ -585,14 +585,14 @@ func (this *Applier) AnalyzeGhostTable() error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("ANALYZE TABLE on ghost %s failed; refusing cut-over: %w", sql.EscapeName(this.migrationContext.GetGhostTableName()), err)
+		return fmt.Errorf("ANALYZE TABLE on ghost %s failed; refusing cut-over: %w", sql.EscapeName(apl.migrationContext.GetGhostTableName()), err)
 	}
-	if err := classifyAnalyzeTableResult(this.migrationContext.GetGhostTableName(), rows); err != nil {
+	if err := classifyAnalyzeTableResult(apl.migrationContext.GetGhostTableName(), rows); err != nil {
 		return err
 	}
-	this.migrationContext.Log.Infof("ANALYZE TABLE on ghost table %s.%s completed in %dms",
-		sql.EscapeName(this.migrationContext.DatabaseName),
-		sql.EscapeName(this.migrationContext.GetGhostTableName()),
+	apl.migrationContext.Log.Infof("ANALYZE TABLE on ghost table %s.%s completed in %dms",
+		sql.EscapeName(apl.migrationContext.DatabaseName),
+		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
 		time.Since(analyzeStartTime).Milliseconds(),
 	)
 	return nil
