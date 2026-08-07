@@ -526,6 +526,78 @@ func (apl *Applier) CreateGhostTable() error {
 	return err
 }
 
+// analyzeTableResultRow is the subset of an `ANALYZE TABLE` result-set row that gh-ost inspects
+// to decide whether the analyze succeeded.
+type analyzeTableResultRow struct {
+	msgType string
+	msgText string
+}
+
+// classifyAnalyzeTableResult decides whether an `ANALYZE TABLE` succeeded from its result rows.
+// ANALYZE TABLE reports table-level failures (missing table, storage-engine errors) as
+// Msg_type "Error" rows while still succeeding at the protocol level, so the statement error
+// alone cannot be trusted — the rows must be inspected. Cut-over is refused unless the result
+// carries a status-OK row and no error row (fail-closed: an empty or status-less result also
+// refuses). tableName is used only to build the error message.
+func classifyAnalyzeTableResult(tableName string, rows []analyzeTableResultRow) error {
+	sawStatusOk := false
+	var resultErrors []string
+	for _, row := range rows {
+		msgType := strings.ToLower(row.msgType)
+		if msgType == "error" {
+			resultErrors = append(resultErrors, row.msgText)
+		}
+		if msgType == "status" && strings.EqualFold(row.msgText, "OK") {
+			sawStatusOk = true
+		}
+	}
+	if len(resultErrors) > 0 || !sawStatusOk {
+		return fmt.Errorf("ANALYZE TABLE on ghost %s did not report status OK; refusing cut-over: %s", sql.EscapeName(tableName), strings.Join(resultErrors, "; "))
+	}
+	return nil
+}
+
+// AnalyzeGhostTable runs an explicit ANALYZE TABLE on the ghost table, forcing a
+// synchronous InnoDB persistent-statistics recompute before cut-over. Without it the
+// freshly swapped table can serve traffic with a near-zero row estimate, which the
+// optimizer costs as a free full scan — the failure mode motivating upstream #1419.
+// No row-count assertion follows the ANALYZE: on a freshly built, compact ghost a
+// successful ANALYZE yields correct statistics by construction, and a row count
+// cannot prove plan safety — plan checks belong to the orchestrating layer, which
+// knows the table's context. The caller must treat a returned error as fatal,
+// not retriable.
+func (apl *Applier) AnalyzeGhostTable() error {
+	query := fmt.Sprintf(`analyze /* gh-ost */ table %s.%s`,
+		sql.EscapeName(apl.migrationContext.DatabaseName),
+		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
+	)
+	apl.migrationContext.Log.Infof("Running ANALYZE TABLE on ghost table %s.%s before cut-over",
+		sql.EscapeName(apl.migrationContext.DatabaseName),
+		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
+	)
+	analyzeStartTime := time.Now()
+	var rows []analyzeTableResultRow
+	err := sqlutils.QueryRowsMap(apl.db, query, func(rowMap sqlutils.RowMap) error {
+		rows = append(rows, analyzeTableResultRow{
+			msgType: rowMap.GetString("Msg_type"),
+			msgText: rowMap.GetString("Msg_text"),
+		})
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("ANALYZE TABLE on ghost %s failed; refusing cut-over: %w", sql.EscapeName(apl.migrationContext.GetGhostTableName()), err)
+	}
+	if err := classifyAnalyzeTableResult(apl.migrationContext.GetGhostTableName(), rows); err != nil {
+		return err
+	}
+	apl.migrationContext.Log.Infof("ANALYZE TABLE on ghost table %s.%s completed in %dms",
+		sql.EscapeName(apl.migrationContext.DatabaseName),
+		sql.EscapeName(apl.migrationContext.GetGhostTableName()),
+		time.Since(analyzeStartTime).Milliseconds(),
+	)
+	return nil
+}
+
 // AlterGhost applies `alter` statement on ghost table
 func (apl *Applier) AlterGhost() error {
 	query := fmt.Sprintf(`alter /* gh-ost */ table %s.%s %s`,

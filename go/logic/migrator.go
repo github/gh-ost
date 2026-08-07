@@ -854,6 +854,20 @@ func (mgtr *Migrator) handleCutOverResult(cutOverError error) (err error) {
 	return nil
 }
 
+// analyzeGhostTableBeforeCutOver runs the opt-in pre-cut-over ANALYZE TABLE via the
+// injected analyze operation, gated on --analyze-ghost-table-before-cutover. It
+// returns nil (proceed) when the flag is off, and otherwise returns whatever analyze
+// returns; the caller must treat a non-nil error as fatal and abort cut-over before
+// any source lock, replica stop, or cut-over retry. analyze is a parameter so the
+// gating and fail-closed contract is testable without a live applier (whose ANALYZE
+// requires a real MySQL) or the process-exiting Log.Fatale path.
+func (mgtr *Migrator) analyzeGhostTableBeforeCutOver(analyze func() error) error {
+	if !mgtr.migrationContext.AnalyzeGhostTableBeforeCutOver {
+		return nil
+	}
+	return analyze()
+}
+
 // cutOver performs the final step of migration, based on migration
 // type (on replica? atomic? safe?)
 func (mgtr *Migrator) cutOver() (err error) {
@@ -903,6 +917,18 @@ func (mgtr *Migrator) cutOver() (err error) {
 	atomic.StoreInt64(&mgtr.migrationContext.IsPostponingCutOver, 0)
 	mgtr.migrationContext.MarkPointOfInterest()
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
+
+	// Force a synchronous ANALYZE on the ghost table here — after the postpone gate
+	// releases, before atomicCutOver() takes the source write lock, and before
+	// --test-on-replica stops replication (so a failure cannot strand a stopped
+	// replica). A failure must be fatal, not retried: a plain `return err` re-runs
+	// cutOver() — and the ANALYZE — up to --default-retries, and a PanicAbort send
+	// races the retrier. Log.Fatale exits synchronously without ever locking the
+	// source. Gating and the injectable analyze op live in
+	// analyzeGhostTableBeforeCutOver so this ordering contract is unit-testable.
+	if err := mgtr.analyzeGhostTableBeforeCutOver(mgtr.applier.AnalyzeGhostTable); err != nil {
+		return mgtr.migrationContext.Log.Fatale(err)
+	}
 
 	if mgtr.migrationContext.TestOnReplica {
 		// With `--test-on-replica` we stop replication thread, and then proceed to use

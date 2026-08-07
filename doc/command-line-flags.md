@@ -6,6 +6,10 @@ A more in-depth discussion of various `gh-ost` command line flags: implementatio
 
 Add this flag when executing on Aliyun RDS.
 
+### analyze-ghost-table-before-cutover
+
+Run an explicit `ANALYZE TABLE` on the ghost table immediately before cut-over — after a postponed cut-over is released, before the atomic swap takes its locks — and abort the migration if the `ANALYZE` fails, rather than swap in a table with stale InnoDB statistics. Without it, the freshly swapped table can briefly serve traffic with a near-zero row estimate, which the optimizer may cost as a free full scan on hot query paths. This is the same rationale as issue #1418 / PR #1419; this flag is a corrected variant: the `ANALYZE` runs after the postpone gate releases (so a postponed cut-over still gets fresh statistics) and a failed `ANALYZE` aborts the migration instead of being ignored. Opt-in; intended for small, non-partitioned tables that are non-empty at copy (`ANALYZE TABLE` cost grows with partition count, and its statement replicates to replicas).
+
 ### allow-zero-in-date
 
 Allows the user to make schema changes that include a zero date or zero in date (e.g. adding a `datetime default '0000-00-00 00:00:00'` column), even if global `sql_mode` on MySQL has `NO_ZERO_IN_DATE,NO_ZERO_DATE`.
