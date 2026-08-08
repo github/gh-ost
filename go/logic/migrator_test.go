@@ -35,6 +35,59 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
+func TestMigratorDrainGhostTableMigrated(t *testing.T) {
+	t.Run("receives the GhostTableMigrated signal", func(t *testing.T) {
+		migrationContext := base.NewMigrationContext()
+		migrator := NewMigrator(migrationContext, "test")
+
+		// Emulate the streamer's changelog listener: onChangelogStateEvent publishes
+		// the signal synchronously and only returns once a receiver consumes it.
+		sendErr := make(chan error, 1)
+		go func() {
+			sendErr <- base.SendWithContext(migrationContext.GetContext(), migrator.ghostTableMigrated, true)
+		}()
+
+		done := make(chan struct{})
+		go func() {
+			migrator.drainGhostTableMigrated()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("drainGhostTableMigrated blocked; the signal was not consumed")
+		}
+
+		select {
+		case err := <-sendErr:
+			require.NoError(t, err, "publisher should have been unblocked by the drain")
+		case <-time.After(2 * time.Second):
+			t.Fatal("publisher still blocked after drain")
+		}
+	})
+
+	t.Run("skips draining for resume migrations", func(t *testing.T) {
+		migrationContext := base.NewMigrationContext()
+		migrationContext.Resume = true
+		migrator := NewMigrator(migrationContext, "test")
+
+		// A resume migration never emits the signal, so the drain must return
+		// immediately instead of blocking forever on the empty channel.
+		done := make(chan struct{})
+		go func() {
+			migrator.drainGhostTableMigrated()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("drainGhostTableMigrated blocked for a resume migration")
+		}
+	})
+}
+
 func TestMigratorOnChangelogEvent(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
 	migrator := NewMigrator(migrationContext, "1.2.3")
