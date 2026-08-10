@@ -2,6 +2,7 @@ package wait
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 
@@ -74,6 +75,22 @@ func ForExec(cmd []string) *ExecStrategy {
 
 func (ws *ExecStrategy) Timeout() *time.Duration {
 	return ws.timeout
+}
+
+// String returns a human-readable description of the wait strategy.
+func (ws *ExecStrategy) String() string {
+	if len(ws.cmd) == 0 {
+		return "exec command"
+	}
+	// Only show the command name and argument count to avoid exposing sensitive data
+	argCount := len(ws.cmd) - 1
+	if argCount == 0 {
+		return fmt.Sprintf("exec command %q", ws.cmd[0])
+	}
+	if argCount == 1 {
+		return fmt.Sprintf("exec command %q with 1 argument", ws.cmd[0])
+	}
+	return fmt.Sprintf("exec command %q with %d arguments", ws.cmd[0], argCount)
 }
 
 func (ws *ExecStrategy) WaitUntilReady(ctx context.Context, target StrategyTarget) error {

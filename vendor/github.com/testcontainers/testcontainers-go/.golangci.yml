@@ -8,19 +8,43 @@ formatters:
         - standard
         - default
         - prefix(github.com/testcontainers)
+
 linters:
   enable:
     - errorlint
     - gocritic
+    - govet
     - misspell
     - nakedret
     - nolintlint
     - perfsprint
+    - prealloc
     - revive
     - testifylint
     - thelper
     - usestdlibvars
   exclusions:
+    rules:
+      - linters:
+          - revive
+        path: "^exec/"
+        text: "var-naming: avoid package names that conflict with Go standard library package names"
+      - linters:
+          - revive
+        path: "^log/"
+        text: "var-naming: avoid package names that conflict with Go standard library package names"
+      - linters:
+          - revive
+        path: "modulegen/internal/(context|template)/"
+        text: "var-naming: avoid package names that conflict with Go standard library package names"
+      - linters:
+          - revive
+        path: "internal/sdk/types/"
+        text: "var-naming: avoid meaningless package names"
+      - linters:
+          - revive
+        path: "gcloud/internal/shared/"
+        text: "var-naming: avoid meaningless package names"
     presets:
       - comments
       - common-false-positives
@@ -32,6 +56,11 @@ linters:
       comparison: true
       errorf: true
       errorf-multi: true
+    govet:
+      disable:
+        - fieldalignment
+        - shadow
+      enable-all: true
     revive:
       rules:
         - name: blank-imports
@@ -85,5 +114,7 @@ output:
   formats:
     text:
       path: stdout
-  path-prefix: .
+run:
+  relative-path-mode: gitroot
+
 version: "2"

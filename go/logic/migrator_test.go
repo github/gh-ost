@@ -209,7 +209,7 @@ func TestMigratorHeartbeatDoesNotAdvancePastUnappliedDML(t *testing.T) {
 
 	// A DML on the original table at GTID :100 is observed and enqueued, but
 	// not yet applied.
-	dmlCoords, err := mysql.NewGTIDBinlogCoordinates(srcUUID + ":1-100")
+	dmlCoords, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, srcUUID+":1-100")
 	require.NoError(t, err)
 	migrator.applyEventsQueue <- newApplyEventStructByDML(&binlog.BinlogEntry{
 		DmlEvent: &binlog.BinlogDMLEvent{
@@ -224,7 +224,7 @@ func TestMigratorHeartbeatDoesNotAdvancePastUnappliedDML(t *testing.T) {
 
 	// A heartbeat row is then written; its GTID set includes the un-applied
 	// DML plus a few additional transactions.
-	heartbeatCoords, err := mysql.NewGTIDBinlogCoordinates(srcUUID + ":1-105")
+	heartbeatCoords, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, srcUUID+":1-105")
 	require.NoError(t, err)
 	heartbeatColumnValues := sql.ToColumnValues([]interface{}{
 		123,
@@ -496,6 +496,57 @@ func TestCutOverOperationWithMetricsAbort(t *testing.T) {
 	assert.Equal(t, [][]string{{"outcome:" + metrics.CutOverOutcomeAbort}}, spy.histogramTags)
 }
 
+// TestAnalyzeGhostTableBeforeCutOver covers the cut-over orchestration contract for
+// the opt-in pre-cut-over ANALYZE: the --analyze-ghost-table-before-cutover flag
+// gates the call, and a failed ANALYZE surfaces as an error so cutOver() aborts
+// (via Log.Fatale) before it reaches replica-stop or the cut-over locking/retry
+// switch. The applier's ANALYZE execution and result parsing are covered separately
+// by ApplierTestSuite.TestAnalyzeGhostTable against a real MySQL.
+func TestAnalyzeGhostTableBeforeCutOver(t *testing.T) {
+	t.Run("flag off: ANALYZE is not invoked, cut-over proceeds", func(t *testing.T) {
+		migrator := NewMigrator(base.NewMigrationContext(), "test")
+		migrator.migrationContext.AnalyzeGhostTableBeforeCutOver = false
+
+		invoked := false
+		err := migrator.analyzeGhostTableBeforeCutOver(func() error {
+			invoked = true
+			return nil
+		})
+
+		require.NoError(t, err)
+		assert.False(t, invoked, "ANALYZE must not run when the flag is off")
+	})
+
+	t.Run("flag on, ANALYZE succeeds: invoked once, cut-over proceeds", func(t *testing.T) {
+		migrator := NewMigrator(base.NewMigrationContext(), "test")
+		migrator.migrationContext.AnalyzeGhostTableBeforeCutOver = true
+
+		calls := 0
+		err := migrator.analyzeGhostTableBeforeCutOver(func() error {
+			calls++
+			return nil
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, 1, calls)
+	})
+
+	t.Run("flag on, ANALYZE fails: error propagates so cut-over aborts fail-closed", func(t *testing.T) {
+		migrator := NewMigrator(base.NewMigrationContext(), "test")
+		migrator.migrationContext.AnalyzeGhostTableBeforeCutOver = true
+
+		analyzeErr := errors.New("ANALYZE TABLE on ghost failed; refusing cut-over")
+		calls := 0
+		err := migrator.analyzeGhostTableBeforeCutOver(func() error {
+			calls++
+			return analyzeErr
+		})
+
+		require.ErrorIs(t, err, analyzeErr)
+		assert.Equal(t, 1, calls, "a failed ANALYZE must not be retried inside the seam")
+	})
+}
+
 func TestReportStatusEmitsProgressGaugesEveryTick(t *testing.T) {
 	spy := &progressGaugeSpy{}
 	ctx := base.NewMigrationContext()
@@ -647,7 +698,7 @@ func (suite *MigratorTestSuite) SetupSuite() {
 	suite.db = db
 }
 
-func (suite *MigratorTestSuite) TeardownSuite() {
+func (suite *MigratorTestSuite) TearDownSuite() {
 	suite.Assert().NoError(suite.db.Close())
 	suite.Assert().NoError(testcontainers.TerminateContainer(suite.mysqlContainer))
 }

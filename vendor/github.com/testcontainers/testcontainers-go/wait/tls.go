@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -97,6 +98,25 @@ func (ws *TLSStrategy) TLSConfig() *tls.Config {
 	}
 
 	return ws.tlsConfig
+}
+
+// String returns a human-readable description of the wait strategy.
+func (ws *TLSStrategy) String() string {
+	var parts []string
+
+	if len(ws.rootFiles) > 0 {
+		parts = append(parts, fmt.Sprintf("root CAs %v", ws.rootFiles))
+	}
+
+	if ws.certFiles != nil {
+		parts = append(parts, fmt.Sprintf("cert %q and key %q", ws.certFiles.certPEMFile, ws.certFiles.keyPEMFile))
+	}
+
+	if len(parts) == 0 {
+		return "TLS certificates"
+	}
+
+	return strings.Join(parts, " and ")
 }
 
 // WaitUntilReady implements the [Strategy] interface.

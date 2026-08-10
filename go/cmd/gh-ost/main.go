@@ -167,6 +167,7 @@ func main() {
 	flag.BoolVar(&migrationContext.Resume, "resume", false, "Attempt to resume migration from checkpoint")
 	flag.BoolVar(&migrationContext.Revert, "revert", false, "Attempt to revert completed migration")
 	flag.StringVar(&migrationContext.OldTableName, "old-table", "", "The name of the old table when using --revert, e.g. '_mytable_del'")
+	flag.BoolVar(&migrationContext.AnalyzeGhostTableBeforeCutOver, "analyze-ghost-table-before-cutover", false, "Run ANALYZE TABLE on the ghost table immediately before cut-over; abort the migration (fatal) if the ANALYZE fails, rather than swapping in a table with stale statistics. Opt-in; intended for small, non-partitioned tables that are non-empty at copy. Default false")
 
 	maxLoad := flag.String("max-load", "", "Comma delimited status-name=threshold. e.g: 'Threads_running=100,Threads_connected=500'. When status exceeds threshold, app throttles writes")
 	criticalLoad := flag.String("critical-load", "", "Comma delimited status-name=threshold, same format as --max-load. When status exceeds threshold, app panics and quits")

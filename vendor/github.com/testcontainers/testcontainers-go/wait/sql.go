@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/network"
 )
 
 var (
@@ -17,7 +17,7 @@ var (
 const defaultForSQLQuery = "SELECT 1"
 
 // ForSQL constructs a new waitForSql strategy for the given driver
-func ForSQL(port nat.Port, driver string, url func(host string, port nat.Port) string) *waitForSQL {
+func ForSQL(port string, driver string, url func(host string, port network.Port) string) *waitForSQL {
 	return &waitForSQL{
 		Port:           port,
 		URL:            url,
@@ -31,9 +31,9 @@ func ForSQL(port nat.Port, driver string, url func(host string, port nat.Port) s
 type waitForSQL struct {
 	timeout *time.Duration
 
-	URL            func(host string, port nat.Port) string
+	URL            func(host string, port network.Port) string
 	Driver         string
-	Port           nat.Port
+	Port           string
 	startupTimeout time.Duration
 	PollInterval   time.Duration
 	query          string
@@ -61,6 +61,24 @@ func (w *waitForSQL) Timeout() *time.Duration {
 	return w.timeout
 }
 
+// String returns a human-readable description of the wait strategy.
+func (w *waitForSQL) String() string {
+	port := "default"
+	if w.Port != "" {
+		p, err := network.ParsePort(w.Port)
+		if err == nil {
+			port = p.Port()
+		}
+	}
+
+	query := ""
+	if w.query != defaultForSQLQuery {
+		query = fmt.Sprintf(" with query %q", w.query)
+	}
+
+	return fmt.Sprintf("SQL database on port %s using driver %q%s", port, w.Driver, query)
+}
+
 // WaitUntilReady repeatedly tries to run "SELECT 1" or user defined query on the given port using sql and driver.
 //
 // If it doesn't succeed until the timeout value which defaults to 60 seconds, it will return an error.
@@ -81,10 +99,10 @@ func (w *waitForSQL) WaitUntilReady(ctx context.Context, target StrategyTarget) 
 	ticker := time.NewTicker(w.PollInterval)
 	defer ticker.Stop()
 
-	var port nat.Port
+	var port network.Port
 	port, err = target.MappedPort(ctx, w.Port)
 
-	for port == "" {
+	for port.IsZero() {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("%w: %w", ctx.Err(), err)

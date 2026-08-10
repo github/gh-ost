@@ -1,4 +1,4 @@
-FROM golang:1.25.9-bookworm AS build
+FROM golang:1.25.12-bookworm AS build
 
 # build.sh shells out to fpm to produce the .deb/.rpm packages. fpm is a Ruby
 # gem (needs ruby + ruby-dev + a C toolchain), and the rpm target needs

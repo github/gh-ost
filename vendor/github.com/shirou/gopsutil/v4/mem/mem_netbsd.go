@@ -15,7 +15,7 @@ func GetPageSize() (uint64, error) {
 	return GetPageSizeWithContext(context.Background())
 }
 
-func GetPageSizeWithContext(ctx context.Context) (uint64, error) {
+func GetPageSizeWithContext(_ context.Context) (uint64, error) {
 	uvmexp, err := unix.SysctlUvmexp("vm.uvmexp2")
 	if err != nil {
 		return 0, err
@@ -27,7 +27,7 @@ func VirtualMemory() (*VirtualMemoryStat, error) {
 	return VirtualMemoryWithContext(context.Background())
 }
 
-func VirtualMemoryWithContext(ctx context.Context) (*VirtualMemoryStat, error) {
+func VirtualMemoryWithContext(_ context.Context) (*VirtualMemoryStat, error) {
 	uvmexp, err := unix.SysctlUvmexp("vm.uvmexp2")
 	if err != nil {
 		return nil, err
@@ -61,6 +61,7 @@ func SwapMemory() (*SwapMemoryStat, error) {
 	return SwapMemoryWithContext(context.Background())
 }
 
+// Reference: https://man.netbsd.org/swapctl.8
 func SwapMemoryWithContext(ctx context.Context) (*SwapMemoryStat, error) {
 	out, err := invoke.CommandWithContext(ctx, "swapctl", "-sk")
 	if err != nil {
@@ -71,7 +72,7 @@ func SwapMemoryWithContext(ctx context.Context) (*SwapMemoryStat, error) {
 	var total, used, free uint64
 
 	_, err = fmt.Sscanf(line,
-		"total: %d 1K-blocks allocated, %d used, %d available",
+		"total: %d KBytes allocated, %d KBytes used, %d KBytes available",
 		&total, &used, &free)
 	if err != nil {
 		return nil, errors.New("failed to parse swapctl output")
