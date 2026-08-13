@@ -1520,7 +1520,7 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, snap migrationProgressSn
 
 	throughputSuffix := ""
 	if mgtr.migrationContext.ParallelCopy {
-		throughputSuffix = fmt.Sprintf("; Throughput: %drows/sec", atomic.LoadInt64(&mgtr.migrationContext.EtaRowsPerSecond))
+		throughputSuffix = fmt.Sprintf("; Throughput: %d rows/sec", atomic.LoadInt64(&mgtr.migrationContext.EtaRowsPerSecond))
 	}
 	status := fmt.Sprintf("Copy: %d/%d %.1f%%; Applied: %d; Backlog: %d/%d; Time: %+v(total), %+v(copy); streamer: %+v; Lag: %.2fs, HeartbeatLag: %.2fs, State: %s; ETA: %s%s",
 		snap.totalRowsCopied, snap.rowsEstimate, snap.progressPct,
@@ -1708,7 +1708,7 @@ func (mgtr *Migrator) iterateChunks() error {
 			return nil
 		}
 		// --parallel-copy state, captured once per copyRowsFunc invocation under
-		// parallelSelectMutex so the chunk INSERT (which runs unlocked, in parallel) uses
+		// parallelCopySelectMutex so the chunk INSERT (which runs unlocked, in parallel) uses
 		// a stable range even as other workers advance the shared cursor, and so a retry
 		// re-inserts the same chunk rather than re-scanning a new range.
 		var parallelIteration int64
@@ -1720,10 +1720,14 @@ func (mgtr *Migrator) iterateChunks() error {
 			}
 			// Copy task:
 			applyCopyRowsFunc := func() error {
-				if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
-					// Done.
-					// There's another such check down the line
-					return nil
+				// Once this closure has captured a chunk range, it must keep retrying that
+				// same INSERT to completion even if hasNoFurtherRangeFlag/rowCopyCompleteFlag is set
+				if !parallelCaptured {
+					if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
+						// Done.
+						// There's another such check down the line
+						return nil
+					}
 				}
 
 				if mgtr.migrationContext.ParallelCopy {
@@ -1733,7 +1737,7 @@ func (mgtr *Migrator) iterateChunks() error {
 					// advanceFrontier is never left with an abandoned iteration.
 					if !parallelCaptured {
 						var stopErr error
-						parallelIteration, parallelRangeMin, parallelRangeMax, parallelCaptured, stopErr = mgtr.captureParallelChunkRange(&hasNoFurtherRangeFlag, terminateRowIteration)
+						parallelIteration, parallelRangeMin, parallelRangeMax, parallelCaptured, stopErr = mgtr.captureParallelChunkRange(&hasNoFurtherRangeFlag)
 						if !parallelCaptured {
 							return stopErr
 						}
@@ -1819,9 +1823,9 @@ func (mgtr *Migrator) iterateChunks() error {
 		}
 
 		// Enqueue copy operation. In serial mode it is consumed by executeWriteFuncs(); in
-		// --parallel-copy mode it is consumed by one of the CopyWorkers workers started in
-		// copyRowsParallel(). The closure itself serializes its boundary SELECT under
-		// parallelSelectMutex, so the only thing parallelized is the chunk INSERT.
+		// --parallel-copy mode it is consumed by one of the ParallelCopyWorkers worker
+		// goroutines started in copyRowsParallel(). The closure itself serializes its boundary SELECT under
+		// parallelCopySelectMutex, so the only thing parallelized is the chunk INSERT.
 		// Use helper to prevent deadlock if the consumer exits.
 		if err := base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.copyRowsQueue, copyRowsFunc); err != nil {
 			// Context cancelled, check for abort and exit
@@ -1833,13 +1837,14 @@ func (mgtr *Migrator) iterateChunks() error {
 	}
 }
 
-// captureParallelChunkRange acquires parallelSelectMutex, advances the shared scan
-// cursor, and captures the next chunk's range. Returns captured=true with the range
-// values on success. Returns captured=false with nil err when no further work is needed
-// (row copy already complete or table exhausted; in the latter case terminateRowIteration
-// is called to signal the channel). Returns captured=false with non-nil err when the
-// range scan itself fails; the caller should propagate it to trigger a retry.
-func (mgtr *Migrator) captureParallelChunkRange(hasNoFurtherRangeFlag *int64, terminateRowIteration func(error) error) (iteration int64, rangeMin, rangeMax *sql.ColumnValues, captured bool, err error) {
+// This helper never signals clean completion on rowCopyComplete itself: that signal must
+// fire exactly once, after copyRowsParallel's wg.Wait() confirms every worker goroutine
+// has actually returned — not merely that the scan is exhausted. Signaling here, as soon
+// as no further range is found, would let the migrator start moving toward cutover while
+// other workers may still be retrying an in-flight INSERT for a chunk they already
+// captured. (That a captured chunk is never dropped once other workers see this flag is a
+// separate guarantee, enforced by applyCopyRowsFunc's parallelCaptured guard.)
+func (mgtr *Migrator) captureParallelChunkRange(hasNoFurtherRangeFlag *int64) (iteration int64, rangeMin, rangeMax *sql.ColumnValues, captured bool, err error) {
 	mgtr.parallelCopySelectMutex.Lock()
 	if atomic.LoadInt64(&mgtr.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(hasNoFurtherRangeFlag) == 1 {
 		mgtr.parallelCopySelectMutex.Unlock()
@@ -1854,7 +1859,7 @@ func (mgtr *Migrator) captureParallelChunkRange(hasNoFurtherRangeFlag *int64, te
 	if !hasFurtherRange {
 		atomic.StoreInt64(hasNoFurtherRangeFlag, 1)
 		mgtr.parallelCopySelectMutex.Unlock()
-		return 0, nil, nil, false, terminateRowIteration(nil)
+		return 0, nil, nil, false, nil
 	}
 	iteration = atomic.LoadInt64(&mgtr.parallelCopyDispatchSeq)
 	rangeMin = mgtr.migrationContext.MigrationIterationRangeMinValues.Clone()

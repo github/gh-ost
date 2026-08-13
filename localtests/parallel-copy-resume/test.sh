@@ -6,7 +6,7 @@
 # The test is robust to timing: if the first run happens to finish the row copy
 # before we kill it, --resume simply has no gaps to fill and completes. Either
 # way the ghost table must match the original. The deterministic gap-filling
-# logic itself is covered by the unit tests in go/logic/parallel_test.go.
+# logic itself is covered by the unit tests in go/logic/parallel_copy_test.go.
 
 table_name="gh_ost_test"
 ghost_table_name="_gh_ost_test_gho"

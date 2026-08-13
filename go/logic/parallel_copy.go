@@ -57,8 +57,8 @@ func (mgtr *Migrator) throttleOnHeartbeatLag(ctx context.Context) {
 
 // copyRowsParallel is the --parallel-copy consumer side. iterateChunks remains the single
 // producer, enqueuing copy-task closures onto copyRowsQueue exactly as in serial mode; this
-// function starts CopyWorkers consumer goroutines that pull those closures and run them
-// concurrently. Each closure serializes its own boundary SELECT under parallelSelectMutex
+// function starts ParallelCopyWorkers consumer goroutines that pull those closures and run them
+// concurrently. Each closure serializes its own boundary SELECT under parallelCopySelectMutex
 // (so chunk ranges are still produced sequentially) and only the chunk INSERT runs in
 // parallel; advanceFrontier then commits global state in contiguous iteration order so a
 // crash/resume with checkpoints never leaves un-copied holes.

@@ -56,16 +56,16 @@ const (
 	MaxEventsBatchSize = 1000
 	ETAUnknown         = math.MinInt64
 
-	// MaxCopyWorkers is the hard upper bound on --parallel-copy-workers. The applier
-	// connection pool is sized to CopyWorkers + ParallelCopyConnHeadroom, so this
-	// also bounds connection usage and prevents exhausting the server's
+	// MaxParallelCopyWorkers is the hard upper bound on --parallel-copy-workers. The
+	// applier connection pool is sized to ParallelCopyWorkers + ParallelCopyConnHeadroom,
+	// so this also bounds connection usage and prevents exhausting the server's
 	// max_connections.
-	MaxCopyWorkers = 64
-	// RecommendedMaxCopyWorkers is a soft threshold above which we warn: the
+	MaxParallelCopyWorkers = 64
+	// RecommendedMaxParallelCopyWorkers is a soft threshold above which we warn: the
 	// throughput benefit of more workers plateaus while load keeps growing.
-	RecommendedMaxCopyWorkers = 16
+	RecommendedMaxParallelCopyWorkers = 16
 	// ParallelCopyConnHeadroom is the number of connections added to the applier
-	// pool on top of CopyWorkers, to cover the DML event applier goroutine
+	// pool on top of ParallelCopyWorkers, to cover the DML event applier goroutine,
 	// the status logger, the heartbeat goroutine, and the checkpoint loop.
 	ParallelCopyConnHeadroom = 4
 )

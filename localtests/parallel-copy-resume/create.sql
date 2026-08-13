@@ -17,7 +17,7 @@ insert into gh_ost_test (i, color) values
 -- run spends well over one checkpoint interval (10s) in row-copy. This makes it
 -- likely that a checkpoint lands mid-copy, so --resume exercises gap-filling
 -- from a partial frontier. (The test stays correct either way; the deterministic
--- gap logic is covered by go/logic/parallel_test.go.)
+-- gap logic is covered by go/logic/parallel_copy_test.go.)
 insert into gh_ost_test (i, color) select i, color from gh_ost_test;
 insert into gh_ost_test (i, color) select i, color from gh_ost_test;
 insert into gh_ost_test (i, color) select i, color from gh_ost_test;

@@ -1178,7 +1178,7 @@ func (apl *Applier) ApplyIterationInsertQuery(parallelRange ...*iterationRange) 
 	if parallel {
 		// Use the explicitly-passed range. The parallel INSERT runs unlocked and
 		// concurrently, so it must NOT read the shared MigrationIterationRange* cursor:
-		// another worker is mutating it under parallelSelectMutex.
+		// another worker is mutating it under parallelCopySelectMutex.
 		rangeMin = parallelRange[0].min
 		rangeMax = parallelRange[0].max
 		includeRangeStartValues = parallelRange[0].includeRangeStart

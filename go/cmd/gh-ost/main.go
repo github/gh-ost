@@ -347,13 +347,13 @@ func main() {
 		if migrationContext.ParallelCopyWorkers < 1 {
 			migrationContext.Log.Fatalf("--parallel-copy-workers should be >=1")
 		}
-		if migrationContext.ParallelCopyWorkers > base.MaxCopyWorkers {
-			migrationContext.Log.Fatalf("--parallel-copy-workers should be <=%d", base.MaxCopyWorkers)
+		if migrationContext.ParallelCopyWorkers > base.MaxParallelCopyWorkers {
+			migrationContext.Log.Fatalf("--parallel-copy-workers should be <=%d", base.MaxParallelCopyWorkers)
 		}
-		if migrationContext.ParallelCopyWorkers > base.RecommendedMaxCopyWorkers {
-			migrationContext.Log.Warningf("--parallel-copy-workers=%d is high: throughput gains tend to plateau while load on the server grows. Consider <=%d.", migrationContext.ParallelCopyWorkers, base.RecommendedMaxCopyWorkers)
+		if migrationContext.ParallelCopyWorkers > base.RecommendedMaxParallelCopyWorkers {
+			migrationContext.Log.Warningf("--parallel-copy-workers=%d is high: throughput gains tend to plateau while load on the server grows. Consider <=%d.", migrationContext.ParallelCopyWorkers, base.RecommendedMaxParallelCopyWorkers)
 		}
-		if migrationContext.ParallelCopyMaxHeartbeatLagThresholdMillies > 0 && migrationContext.ParallelCopyMaxHeartbeatLagThresholdMillies < 100 {
+		if migrationContext.ParallelCopyMaxHeartbeatLagThresholdMillies != 0 && migrationContext.ParallelCopyMaxHeartbeatLagThresholdMillies < 100 {
 			migrationContext.Log.Fatalf("--parallel-copy-max-heartbeatlag-millis should be >=100 or 0 (disabled)")
 		}
 	}
