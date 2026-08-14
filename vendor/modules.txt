@@ -183,10 +183,6 @@ github.com/moby/sys/userns
 ## explicit; go 1.18
 github.com/moby/term
 github.com/moby/term/windows
-# github.com/openark/golib v0.0.0-20210531070646-355f37940af8
-## explicit; go 1.16
-github.com/openark/golib/log
-github.com/openark/golib/sqlutils
 # github.com/opencontainers/go-digest v1.0.0
 ## explicit; go 1.13
 github.com/opencontainers/go-digest
