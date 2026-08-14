@@ -86,13 +86,13 @@ func (gmr *GoMySQLReader) ConnectBinlogStreamer(coordinates mysql.BinlogCoordina
 
 	gmr.currentCoordinatesMutex.Lock()
 	defer gmr.currentCoordinatesMutex.Unlock()
-	gmr.currentCoordinates = coordinates
+	gmr.currentCoordinates = coordinates.Clone()
 	gmr.migrationContext.Log.Infof("Connecting binlog streamer at %+v", coordinates)
 
 	// Start sync with specified GTID set or binlog file and position
 	if gmr.migrationContext.UseGTIDs {
 		coords := coordinates.(*mysql.GTIDBinlogCoordinates)
-		gmr.binlogStreamer, err = gmr.binlogSyncer.StartSyncGTID(coords.GTIDSet)
+		gmr.binlogStreamer, err = gmr.binlogSyncer.StartSyncGTID(coords.GTIDSet.Clone())
 	} else {
 		coords := gmr.currentCoordinates.(*mysql.FileBinlogCoordinates)
 		gmr.binlogStreamer, err = gmr.binlogSyncer.StartSync(gomysql.Position{

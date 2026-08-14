@@ -87,6 +87,7 @@ type Migrator struct {
 	throttler        *Throttler
 	hooksExecutor    base.Hooks
 	migrationContext *base.MigrationContext
+	statusWriter     io.Writer
 
 	firstThrottlingCollected   chan bool
 	ghostTableMigrated         chan bool
@@ -112,6 +113,7 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		appVersion:               appVersion,
 		hooksExecutor:            hooks,
 		migrationContext:         context,
+		statusWriter:             os.Stdout,
 		parser:                   sql.NewAlterTableParser(),
 		ghostTableMigrated:       make(chan bool),
 		firstThrottlingCollected: make(chan bool, 3),
@@ -1481,7 +1483,7 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, snap migrationProgressSn
 	if rule == NoPrintStatusRule {
 		return
 	}
-	writers = append(writers, os.Stdout)
+	writers = append(writers, mgtr.statusWriter)
 
 	// Before status, let's see if we should print a nice reminder for what exactly we're doing here.
 	if mgtr.shouldPrintMigrationStatusHint(rule, snap.elapsedSeconds) {
