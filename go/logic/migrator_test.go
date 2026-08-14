@@ -35,6 +35,25 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
+type buffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (buf *buffer) Write(data []byte) (int, error) {
+	buf.mu.Lock()
+	defer buf.mu.Unlock()
+
+	return buf.Buffer.Write(data)
+}
+
+func (buf *buffer) String() string {
+	buf.mu.Lock()
+	defer buf.mu.Unlock()
+
+	return buf.Buffer.String()
+}
+
 func TestMigratorOnChangelogEvent(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
 	migrator := NewMigrator(migrationContext, "1.2.3")
@@ -824,14 +843,6 @@ echo "[gh-ost-on-batch-copy-retry]: Done, exiting..."
 	err = os.WriteFile(hookScript, []byte(hookContent), 0755)
 	suite.Require().NoError(err)
 
-	origStdout := os.Stdout
-	origStderr := os.Stderr
-
-	rOut, wOut, _ := os.Pipe()
-	rErr, wErr, _ := os.Pipe()
-	os.Stdout = wOut
-	os.Stderr = wErr
-
 	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
 	suite.Require().NoError(err)
 
@@ -854,18 +865,14 @@ echo "[gh-ost-on-batch-copy-retry]: Done, exiting..."
 	migrationContext.ServeSocketFile = "/tmp/gh-ost.sock"
 
 	migrator := NewMigrator(migrationContext, "0.0.0")
+	hooksExecutor, ok := migrator.hooksExecutor.(*HooksExecutor)
+	suite.Require().True(ok)
+	var bufOut, bufErr buffer
+	migrator.statusWriter = &bufOut
+	hooksExecutor.writer = &bufErr
 
 	err = migrator.Migrate()
 	suite.Require().NoError(err)
-
-	wOut.Close()
-	wErr.Close()
-	os.Stdout = origStdout
-	os.Stderr = origStderr
-
-	var bufOut, bufErr bytes.Buffer
-	io.Copy(&bufOut, rOut)
-	io.Copy(&bufErr, rErr)
 
 	outStr := bufOut.String()
 	errStr := bufErr.String()
