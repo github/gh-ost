@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/openark/golib/log"
+	"github.com/github/gh-ost/go/log"
 )
 
 // CellData stores a nullable database string.

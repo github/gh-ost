@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/DataDog/datadog-go/v5/statsd"
-	"github.com/openark/golib/log"
+	"github.com/github/gh-ost/go/log"
 )
 
 // Noop is a StatsD client that discards all metrics. NewClient("", ...) returns

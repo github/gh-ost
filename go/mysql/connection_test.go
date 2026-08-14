@@ -9,7 +9,7 @@ import (
 	"crypto/tls"
 	"testing"
 
-	"github.com/openark/golib/log"
+	"github.com/github/gh-ost/go/log"
 	"github.com/stretchr/testify/require"
 )
 

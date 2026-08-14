@@ -6,7 +6,7 @@
 package base
 
 import (
-	"github.com/openark/golib/log"
+	"github.com/github/gh-ost/go/log"
 )
 
 type simpleLogger struct{}

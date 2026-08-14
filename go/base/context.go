@@ -19,10 +19,10 @@ import (
 
 	uuid "github.com/google/uuid"
 
+	"github.com/github/gh-ost/go/log"
 	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
-	"github.com/openark/golib/log"
 
 	"github.com/go-ini/ini"
 )

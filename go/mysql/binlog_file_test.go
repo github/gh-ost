@@ -9,8 +9,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/github/gh-ost/go/log"
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/openark/golib/log"
 	"github.com/stretchr/testify/require"
 )
 

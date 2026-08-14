@@ -16,11 +16,11 @@ import (
 	"time"
 
 	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/log"
 	"github.com/github/gh-ost/go/logic"
 	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/sql"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/openark/golib/log"
 
 	"golang.org/x/term"
 )
