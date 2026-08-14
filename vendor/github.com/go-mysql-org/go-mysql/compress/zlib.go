@@ -57,7 +57,7 @@ func GetPooledZlibReader(src io.Reader) (io.ReadCloser, error) {
 
 	if r := zlibReaderPool.Get(); r != nil {
 		rc = r.(io.ReadCloser)
-		if rc.(zlib.Resetter).Reset(src, nil) != nil {
+		if err = rc.(zlib.Resetter).Reset(src, nil); err != nil {
 			return nil, err
 		}
 	} else {
