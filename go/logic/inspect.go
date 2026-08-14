@@ -20,7 +20,7 @@ import (
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
-	"github.com/openark/golib/sqlutils"
+	"github.com/github/gh-ost/go/sqlutils"
 )
 
 const startReplicationPostWait = 250 * time.Millisecond

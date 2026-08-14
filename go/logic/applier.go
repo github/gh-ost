@@ -28,8 +28,8 @@ import (
 	"sync"
 
 	"github.com/github/gh-ost/go/mysql"
+	"github.com/github/gh-ost/go/sqlutils"
 	drivermysql "github.com/go-sql-driver/mysql"
-	"github.com/openark/golib/sqlutils"
 )
 
 const (

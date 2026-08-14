@@ -18,7 +18,7 @@ import (
 
 	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/log"
-	"github.com/openark/golib/sqlutils"
+	"github.com/github/gh-ost/go/sqlutils"
 )
 
 const (
