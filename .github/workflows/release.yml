@@ -79,4 +79,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release upload "${RELEASE_TAG}" release-artifacts/* --clobber
+        run: |
+          test "$(gh release view "${RELEASE_TAG}" --json isDraft --jq '.isDraft')" = "true"
+          gh release upload "${RELEASE_TAG}" release-artifacts/* --clobber
