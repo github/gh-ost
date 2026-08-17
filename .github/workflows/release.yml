@@ -1,0 +1,82 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Build release artifacts
+        run: |
+          DOCKER_BUILDKIT=1 docker build . \
+            --file Dockerfile.packaging \
+            --target artifacts \
+            --output type=local,dest=release-artifacts
+
+      - name: Verify checksums
+        working-directory: release-artifacts
+        run: sha256sum --check SHA256SUMS
+
+      - name: Verify embedded version
+        working-directory: release-artifacts
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          # Match build.sh, which strips every "v" from the tag to form the version.
+          expected_version=$(echo "${RELEASE_TAG}" | tr -d 'v')
+
+          # linux-amd64 runs on the runner, so assert the reported version exactly.
+          tar -xzf gh-ost-linux-amd64.tar.gz
+          actual_version=$(./gh-ost --version)
+          test "${actual_version%% *}" = "${expected_version}"
+          rm -f gh-ost
+
+          # The other platforms can't execute here, so assert the version string is
+          # embedded in each binary instead.
+          for tarball in gh-ost-linux-arm64.tar.gz gh-ost-darwin-amd64.tar.gz gh-ost-darwin-arm64.tar.gz; do
+            tar -xzf "${tarball}"
+            grep -a -q -- "${expected_version}" gh-ost
+            rm -f gh-ost
+          done
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: release-artifacts/*
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" \
+              --verify-tag \
+              --draft \
+              --generate-notes \
+              --title "${RELEASE_TAG}"
+          fi
+
+      - name: Upload release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release upload "${RELEASE_TAG}" release-artifacts/* --clobber
