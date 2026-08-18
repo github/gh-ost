@@ -84,6 +84,23 @@ func TestMoveTablesCutOver_OnBeforeCutOverHookAbortsBeforeRename(t *testing.T) {
 		"post-state: only the failing T0 hook fires; no OnSuccess, no OnBeginPostponed")
 }
 
+func TestMoveTablesDrainGTIDVariable(t *testing.T) {
+	testCases := []struct {
+		name    string
+		version string
+		want    string
+	}{
+		{name: "MySQL", version: "8.0.41", want: "@@global.gtid_executed"},
+		{name: "MariaDB", version: "10.11.18-MariaDB", want: "@@global.gtid_binlog_pos"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			require.Equal(t, testCase.want, moveTablesDrainGTIDVariable(testCase.version))
+		})
+	}
+}
+
 type onSuccessCheckHooks struct {
 	*recordingHooks
 	onSuccessCheck func() error
