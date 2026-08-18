@@ -622,6 +622,82 @@ func (suite *MigratorTestSuite) TestMoveTablesStateInitializesColumnMetadata() {
 	})
 }
 
+func (suite *MigratorTestSuite) TestMoveTablesNoopDropsTargetTables() {
+	ctx := context.Background()
+	targetTableNames := []string{testMysqlTableName, "test_noop_target"}
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.Noop = true
+	migrationContext.Checkpoint = true
+	migrationContext.MoveTables.TableNames = targetTableNames
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabase
+	migrationContext.InitMoveTableContainers()
+
+	migrator := NewMigrator(migrationContext, "test")
+	migrator.applier = NewApplier(migrationContext)
+	migrator.applier.moveTablesTargetDB = suite.db
+	suite.Require().NoError(migrator.applier.CreateCheckpointTable())
+
+	for _, tableName := range targetTableNames {
+		_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s.%s (id INT PRIMARY KEY)",
+			sql.EscapeName(testMysqlDatabase), sql.EscapeName(tableName)))
+		suite.Require().NoError(err)
+	}
+
+	suite.Require().NoError(migrator.moveTablesFinalCleanup())
+
+	for _, tableName := range targetTableNames {
+		exists, err := migrator.applier.targetTableExists(tableName)
+		suite.Require().NoError(err)
+		suite.Require().False(exists, "noop cleanup must drop target table %s", tableName)
+	}
+	checkpointExists, err := migrator.applier.targetTableExists(migrationContext.GetCheckpointTableName())
+	suite.Require().NoError(err)
+	suite.Require().False(checkpointExists, "fresh noop cleanup must drop its checkpoint table")
+}
+
+func (suite *MigratorTestSuite) TestMoveTablesResumedNoopPreservesTargetTables() {
+	ctx := context.Background()
+	targetTableNames := []string{testMysqlTableName, "test_noop_resume_target"}
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.Noop = true
+	migrationContext.Resume = true
+	migrationContext.Checkpoint = true
+	migrationContext.MoveTables.TableNames = targetTableNames
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabase
+	migrationContext.InitMoveTableContainers()
+
+	migrator := NewMigrator(migrationContext, "test")
+	migrator.applier = NewApplier(migrationContext)
+	migrator.applier.moveTablesTargetDB = suite.db
+	suite.Require().NoError(migrator.applier.CreateCheckpointTable())
+
+	for _, tableName := range targetTableNames {
+		_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s.%s (id INT PRIMARY KEY)",
+			sql.EscapeName(testMysqlDatabase), sql.EscapeName(tableName)))
+		suite.Require().NoError(err)
+	}
+	defer func() {
+		for _, tableName := range append(targetTableNames, migrationContext.GetCheckpointTableName()) {
+			_, err := suite.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s.%s",
+				sql.EscapeName(testMysqlDatabase), sql.EscapeName(tableName)))
+			suite.Require().NoError(err)
+		}
+	}()
+
+	suite.Require().NoError(migrator.moveTablesFinalCleanup())
+
+	for _, tableName := range targetTableNames {
+		exists, err := migrator.applier.targetTableExists(tableName)
+		suite.Require().NoError(err)
+		suite.Require().True(exists, "resumed noop cleanup must preserve target table %s", tableName)
+	}
+	checkpointExists, err := migrator.applier.targetTableExists(migrationContext.GetCheckpointTableName())
+	suite.Require().NoError(err)
+	suite.Require().True(checkpointExists, "resumed noop cleanup must preserve its checkpoint table")
+}
+
 func (suite *MigratorTestSuite) TestRetryBatchCopyWithHooks() {
 	ctx := context.Background()
 

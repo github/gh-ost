@@ -3218,13 +3218,18 @@ func (mgtr *Migrator) moveTablesFinalCleanup() error {
 	targetDatabaseName := mgtr.migrationContext.GetTargetDatabaseName()
 	checkpointTableName := mgtr.migrationContext.GetCheckpointTableName()
 
-	if mgtr.migrationContext.OkToDropTable {
-		// The source `__del` rollback handle only exists after a real cutover,
-		// never in Noop runs. It must be dropped on the source primary: the
-		// inspector/streamer source connections may point at a read replica, so the
-		// drop goes through the dedicated source-primary handle.
-		if !mgtr.migrationContext.Noop {
-			if err := mgtr.retryOperation(mgtr.dropMoveTablesSourceOldTables); err != nil {
+	// A resumed noop reuses the target tables and checkpoint from the interrupted
+	// migration, so it must preserve both. A fresh noop creates target tables and
+	// a checkpoint only for schema validation, so it must remove those artifacts
+	// regardless of --ok-to-drop-table.
+	if mgtr.migrationContext.Noop {
+		if mgtr.migrationContext.Resume {
+			return nil
+		}
+		for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
+			if err := mgtr.retryOperation(func() error {
+				return mgtr.applier.dropTable(mt.TargetTableName)
+			}); err != nil {
 				return err
 			}
 		}
@@ -3236,7 +3241,19 @@ func (mgtr *Migrator) moveTablesFinalCleanup() error {
 		return nil
 	}
 
-	if mgtr.migrationContext.Noop {
+	if mgtr.migrationContext.OkToDropTable {
+		// The source `__del` rollback handle only exists after a real cutover,
+		// never in Noop runs. It must be dropped on the source primary: the
+		// inspector/streamer source connections may point at a read replica, so the
+		// drop goes through the dedicated source-primary handle.
+		if err := mgtr.retryOperation(mgtr.dropMoveTablesSourceOldTables); err != nil {
+			return err
+		}
+		if mgtr.migrationContext.Checkpoint {
+			if err := mgtr.retryOperation(mgtr.applier.DropCheckpointTable); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
