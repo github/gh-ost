@@ -2,9 +2,9 @@ drop table if exists gh_ost_test;
 create table gh_ost_test (
   id int auto_increment,
   a int not null,
-  virtual_sum int as (a + 10) virtual not null,
+  virtual_sum int as (a + 10) virtual,
   b int not null,
-  stored_sum int as (a + b) stored not null,
+  stored_sum int as (a + b) stored,
   json_value json default null,
   virtual_json_value varchar(16) as (
     coalesce(json_unquote(json_extract(json_value, '$.value')), 'direct')
