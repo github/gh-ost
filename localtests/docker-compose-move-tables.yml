@@ -2,7 +2,7 @@ services:
   mysql-source-primary:
     image: $TEST_MYSQL_IMAGE
     container_name: mysql-source-primary
-    command: --server-id=1 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON --character-set-server=utf8mb4 $MYSQL_NATIVE_PASSWORD_FLAG
+    command: --server-id=1 $MYSQL_PRIMARY_OPTIONS
     environment:
       MYSQL_ROOT_PASSWORD: opensesame
       MYSQL_ROOT_HOST: '%'
@@ -16,7 +16,7 @@ services:
   mysql-source-replica:
     image: $TEST_MYSQL_IMAGE
     container_name: mysql-source-replica
-    command: --server-id=2 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON --log-slave-updates=ON --character-set-server=utf8mb4 $MYSQL_NATIVE_PASSWORD_FLAG
+    command: --server-id=2 $MYSQL_REPLICA_OPTIONS
     environment:
       MYSQL_ROOT_PASSWORD: opensesame
       MYSQL_ROOT_HOST: '%'
@@ -30,7 +30,7 @@ services:
   mysql-target-primary:
     image: $TEST_MYSQL_IMAGE
     container_name: mysql-target-primary
-    command: --server-id=3 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON --character-set-server=utf8mb4 $MYSQL_NATIVE_PASSWORD_FLAG
+    command: --server-id=3 $MYSQL_PRIMARY_OPTIONS
     environment:
       MYSQL_ROOT_PASSWORD: opensesame
       MYSQL_ROOT_HOST: '%'
@@ -44,7 +44,7 @@ services:
   mysql-target-replica:
     image: $TEST_MYSQL_IMAGE
     container_name: mysql-target-replica
-    command: --server-id=4 --log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON --log-slave-updates=ON --character-set-server=utf8mb4 $MYSQL_NATIVE_PASSWORD_FLAG
+    command: --server-id=4 $MYSQL_REPLICA_OPTIONS
     environment:
       MYSQL_ROOT_PASSWORD: opensesame
       MYSQL_ROOT_HOST: '%'
