@@ -1472,9 +1472,25 @@ func (apl *Applier) ReadMoveTablesCutOverCheckpoint() (*Checkpoint, error) {
 		return nil, err
 	}
 	chk.Timestamp = time.Unix(timestamp, 0)
+	sourceGTIDFlavor := ""
+	if apl.migrationContext.UseGTIDs && (coordStr != "" || drainGTIDStr != "") {
+		sourceVersion := apl.migrationContext.InspectorMySQLVersion
+		if sourceVersion == "" {
+			var err error
+			sourceVersion, err = mysql.GetDBVersion(
+				apl.migrationContext.Uuid,
+				apl.migrationContext.InspectorConnectionConfig.GetDBUri(apl.migrationContext.DatabaseName),
+			)
+			if err != nil {
+				return nil, err
+			}
+			apl.migrationContext.InspectorMySQLVersion = sourceVersion
+		}
+		sourceGTIDFlavor = mysql.FlavorFor(sourceVersion)
+	}
 	if coordStr != "" {
 		if apl.migrationContext.UseGTIDs {
-			coords, err := mysql.NewGTIDBinlogCoordinates(mysql.FlavorFor(apl.migrationContext.InspectorMySQLVersion), coordStr)
+			coords, err := mysql.NewGTIDBinlogCoordinates(sourceGTIDFlavor, coordStr)
 			if err != nil {
 				return nil, err
 			}
@@ -1488,7 +1504,7 @@ func (apl *Applier) ReadMoveTablesCutOverCheckpoint() (*Checkpoint, error) {
 		}
 	}
 	if drainGTIDStr != "" {
-		drainGTID, err := mysql.NewGTIDBinlogCoordinates(mysql.FlavorFor(apl.migrationContext.InspectorMySQLVersion), drainGTIDStr)
+		drainGTID, err := mysql.NewGTIDBinlogCoordinates(sourceGTIDFlavor, drainGTIDStr)
 		if err != nil {
 			return nil, err
 		}
