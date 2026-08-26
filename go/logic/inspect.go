@@ -294,7 +294,10 @@ func (isp *Inspector) validateGrants() error {
 func (isp *Inspector) restartReplication() error {
 	isp.migrationContext.Log.Infof("Restarting replication on %s to make sure binlog settings apply to replication thread", isp.connectionConfig.Key.String())
 
-	masterKey, _ := mysql.GetMasterKeyFromSlaveStatus(isp.dbVersion, isp.connectionConfig)
+	masterKey, err := mysql.GetMasterKeyFromSlaveStatus(isp.dbVersion, isp.connectionConfig)
+	if err != nil {
+		return err
+	}
 	if masterKey == nil {
 		// This is not a replica
 		return nil
