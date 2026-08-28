@@ -1106,6 +1106,7 @@ func (apl *Applier) CalculateNextIterationRangeEndValues() (hasFurtherRange bool
 		query, explodedArgs, err := buildFunc(
 			apl.migrationContext.DatabaseName,
 			apl.migrationContext.OriginalTableName,
+			apl.migrationContext.UniqueKey.Name,
 			&apl.migrationContext.UniqueKey.Columns,
 			apl.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 			apl.migrationContext.MigrationRangeMaxValues.AbstractValues(),
