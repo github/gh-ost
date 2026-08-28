@@ -267,6 +267,22 @@ func (mgtr *Migrator) consumeRowCopyComplete() {
 	}()
 }
 
+// waitForGhostTableMigrated blocks until the ghost table has been migrated, or
+// until the migration context is cancelled by an abort. The only sender on
+// ghostTableMigrated publishes via base.SendWithContext, which stops sending
+// once the context is cancelled, so waiting on the channel alone would block
+// forever after an abort.
+func (mgtr *Migrator) waitForGhostTableMigrated() error {
+	select {
+	case <-mgtr.ghostTableMigrated:
+		mgtr.migrationContext.Log.Debugf("ghost table migrated")
+		return nil
+	case <-mgtr.migrationContext.GetContext().Done():
+		// Abort cancelled the context
+		return mgtr.checkAbort()
+	}
+}
+
 func (mgtr *Migrator) canStopStreaming() bool {
 	return atomic.LoadInt64(&mgtr.migrationContext.CutOverCompleteFlag) != 0
 }
@@ -554,8 +570,9 @@ func (mgtr *Migrator) Migrate() (err error) {
 	initialLag, _ := mgtr.inspector.getReplicationLag()
 	if !mgtr.migrationContext.Resume {
 		mgtr.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
-		<-mgtr.ghostTableMigrated
-		mgtr.migrationContext.Log.Debugf("ghost table migrated")
+		if err := mgtr.waitForGhostTableMigrated(); err != nil {
+			return err
+		}
 	}
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
 	// When running on replica, this means the replica has those tables. When running
