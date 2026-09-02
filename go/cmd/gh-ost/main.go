@@ -12,12 +12,15 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/logic"
 	"github.com/github/gh-ost/go/metrics"
+	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/openark/golib/log"
@@ -131,7 +134,7 @@ func main() {
 
 	maxLagMillis := flag.Int64("max-lag-millis", 1500, "replication lag at which to throttle operation")
 	replicationLagQuery := flag.String("replication-lag-query", "", "Deprecated. gh-ost uses an internal, subsecond resolution query")
-	throttleControlReplicas := flag.String("throttle-control-replicas", "", "List of replicas on which to check for lag; comma delimited. Example: myhost1.com:3306,myhost2.com,myhost3.com:3307")
+	throttleControlReplicas := flag.String("throttle-control-replicas", "", "List of replicas on which to check for lag; comma delimited. Example: myhost1.com:3306,myhost2.com,myhost3.com:3307. In move-tables mode, these replicas are expected to be in the target cluster. Specified target credentials will be used for the connection.")
 	throttleQuery := flag.String("throttle-query", "", "when given, issued (every second) to check if operation should throttle. Expecting to return zero for no-throttle, >0 for throttle. Query is issued on the migrated server. Make sure this query is lightweight")
 	throttleHTTP := flag.String("throttle-http", "", "when given, gh-ost checks given URL via HEAD request; any response code other than 200 (OK) causes throttling; make sure it has low latency response")
 	flag.Int64Var(&migrationContext.ThrottleHTTPIntervalMillis, "throttle-http-interval-millis", 100, "Number of milliseconds to wait before triggering another HTTP throttle check")
@@ -185,9 +188,27 @@ func main() {
 	version := flag.Bool("version", false, "Print version & exit")
 	checkFlag := flag.Bool("check-flag", false, "Check if another flag exists/supported. This allows for cross-version scripting. Exits with 0 when all additional provided flags exist, nonzero otherwise. You must provide (dummy) values for flags that require a value. Example: gh-ost --check-flag --cut-over-lock-timeout-seconds --nice-ratio 0")
 	flag.StringVar(&migrationContext.ForceTmpTableName, "force-table-names", "", "table name prefix to be used on the temporary tables")
-	flag.CommandLine.SetOutput(os.Stdout)
 
+	// move tables flags
+	moveTables := flag.String("move-tables", "", "Comma delimited list of tables to move. e.g. 'table1,table2,table3'. This is a special mode that allows you to move tables between database clusters. This mode is mutually exclusive with --alter, --table, --test-on-replica, --migrate-on-replica and --revert.")
+	flag.StringVar(&migrationContext.MoveTables.TargetHost, "target-host", "", "Target MySQL hostname for --move-tables mode. Must be specified if --move-tables is specified.")
+	flag.IntVar(&migrationContext.MoveTables.TargetPort, "target-port", 3306, "Target MySQL port for --move-tables mode. Defaults to 3306.")
+	flag.StringVar(&migrationContext.MoveTables.TargetUser, "target-user", "", "Target MySQL username for --move-tables mode. If not provided, uses the same user as the source connection")
+	flag.StringVar(&migrationContext.MoveTables.TargetPass, "target-password", "", "Target MySQL password for --move-tables mode. If not provided, uses the same password as the source connection")
+	flag.StringVar(&migrationContext.MoveTables.TargetDatabase, "target-database", "", "Target MySQL database name for --move-tables mode. If not provided, uses the same database name as the source connection")
+	flag.BoolVar(&migrationContext.MoveTables.AllowOnSourcePrimary, "allow-on-source-primary", false, "allow --move-tables to read (schema, row copy, binlog) from the source cluster's primary. By default gh-ost stops if --host is the primary; prefer pointing --host at a replica to spare the primary the copy load.")
+
+	// unsafe fail points, for integration testing purposes
+	flag.BoolVar(&migrationContext.UnsafeFailPointsEnabled, "unsafe-fail-points-enabled", false, "UNSAFE: Enable fail points for integration testing purposes. Do not use in production.")
+
+	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Parse()
+	cutOverLockTimeoutUserSpecified := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "cut-over-lock-timeout-seconds" {
+			cutOverLockTimeoutUserSpecified = true
+		}
+	})
 
 	if *checkFlag {
 		return
@@ -224,14 +245,8 @@ func main() {
 		migrationContext.Log.SetLevel(log.ERROR)
 	}
 
-	if err := migrationContext.SetConnectionConfig(*storageEngine); err != nil {
-		migrationContext.Log.Fatale(err)
-	}
-
-	migrationContext.SetConnectionCharset(*charset)
-
-	if migrationContext.AlterStatement == "" && !migrationContext.Revert {
-		log.Fatal("--alter must be provided and statement must not be empty")
+	if migrationContext.AlterStatement == "" && !migrationContext.Revert && *moveTables == "" {
+		log.Fatal("--alter must be provided and statement must not be empty, or --revert must be used, or --move-tables must be used")
 	}
 	parser := sql.NewParserFromAlterStatement(migrationContext.AlterStatement)
 	migrationContext.AlterStatementOptions = parser.GetAlterStatementOptions()
@@ -271,7 +286,7 @@ func main() {
 		migrationContext.Log.Fatale(err)
 	}
 
-	if migrationContext.OriginalTableName == "" {
+	if migrationContext.OriginalTableName == "" && *moveTables == "" {
 		if parser.HasExplicitTable() {
 			migrationContext.OriginalTableName = parser.GetExplicitTable()
 		} else {
@@ -334,12 +349,76 @@ func main() {
 	if *storageEngine == "rocksdb" {
 		migrationContext.Log.Warning("RocksDB storage engine support is experimental")
 	}
-	if migrationContext.CheckpointIntervalSeconds < 10 {
+	// ignore low checkpoint intervals in unsafe mode as frequent checkpoints are required to reliably
+	// reduce test duration
+	if migrationContext.CheckpointIntervalSeconds < 10 && !migrationContext.UnsafeFailPointsEnabled {
 		migrationContext.Log.Fatalf("--checkpoint-seconds should be >=10")
 	}
 	if migrationContext.CountTableRows && migrationContext.PanicOnWarnings {
 		migrationContext.Log.Warning("--exact-rowcount with --panic-on-warnings: row counts cannot be exact due to warning detection")
 	}
+
+	if *moveTables != "" {
+		if migrationContext.AlterStatement != "" {
+			log.Fatal("--move-tables is mutually exclusive with --alter")
+		}
+		if migrationContext.OriginalTableName != "" {
+			log.Fatal("--move-tables is mutually exclusive with --table")
+		}
+		if migrationContext.TestOnReplica {
+			log.Fatal("--move-tables is mutually exclusive with --test-on-replica")
+		}
+		if migrationContext.MigrateOnReplica {
+			log.Fatal("--move-tables is mutually exclusive with --migrate-on-replica")
+		}
+		if migrationContext.Revert {
+			log.Fatal("--move-tables is mutually exclusive with --revert")
+		}
+		if migrationContext.MoveTables.TargetHost == "" {
+			log.Fatal("--target-host must be specified when using --move-tables")
+		}
+		if migrationContext.PostponeCutOverFlagFile == "" {
+			log.Fatal("--postpone-cut-over-flag-file must be specified when using --move-tables")
+		}
+		if !migrationContext.Checkpoint {
+			log.Infof("--move-tables requires checkpointing; enabling --checkpoint")
+			migrationContext.Checkpoint = true
+		}
+		if !migrationContext.UseGTIDs {
+			log.Infof("--move-tables requires GTID coordinates for cutover drain checks; enabling --gtid")
+			migrationContext.UseGTIDs = true
+		}
+		migrationContext.MoveTables.TableNames = strings.Split(*moveTables, ",")
+		for i := range migrationContext.MoveTables.TableNames {
+			migrationContext.MoveTables.TableNames[i] = strings.TrimSpace(migrationContext.MoveTables.TableNames[i])
+		}
+		migrationContext.MoveTables.TableNames = slices.DeleteFunc(migrationContext.MoveTables.TableNames, func(s string) bool { return s == "" })
+		if len(migrationContext.MoveTables.TableNames) == 0 {
+			log.Fatal("--move-tables requires at least one table")
+		}
+		// Reject duplicate table names: a table listed twice would register two
+		// listeners and two row-copy loops for the same data.
+		seenMoveTables := make(map[string]bool, len(migrationContext.MoveTables.TableNames))
+		for _, tableName := range migrationContext.MoveTables.TableNames {
+			if seenMoveTables[tableName] {
+				log.Fatalf("--move-tables lists table %q more than once", tableName)
+			}
+			seenMoveTables[tableName] = true
+		}
+		if migrationContext.MoveTables.TargetDatabase == "" {
+			migrationContext.MoveTables.TargetDatabase = migrationContext.DatabaseName
+		}
+		if !cutOverLockTimeoutUserSpecified {
+			*cutOverLockTimeoutSeconds = 60
+		}
+		migrationContext.MoveTables.ConnectionConfig = mysql.NewConnectionConfig()
+	}
+
+	if err := migrationContext.SetConnectionConfig(*storageEngine); err != nil {
+		migrationContext.Log.Fatale(err)
+	}
+
+	migrationContext.SetConnectionCharset(*charset)
 
 	switch *cutOver {
 	case "atomic", "default", "":
@@ -362,7 +441,14 @@ func main() {
 		migrationContext.Log.Fatale(err)
 	}
 	if migrationContext.ServeSocketFile == "" {
-		migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
+		if migrationContext.IsMoveTablesMode() {
+			// OriginalTableName is not set until MoveTables() runs and there is no
+			// single "primary" table, so name the socket from the set-derived run
+			// token (avoids an empty path component like /tmp/gh-ost.test..sock).
+			migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.movetables-%s.sock", migrationContext.DatabaseName, migrationContext.MoveTablesRunToken())
+		} else {
+			migrationContext.ServeSocketFile = fmt.Sprintf("/tmp/gh-ost.%s.%s.sock", migrationContext.DatabaseName, migrationContext.OriginalTableName)
+		}
 	}
 	if *askPass {
 		fmt.Println("Password:")
@@ -411,6 +497,8 @@ func main() {
 	var err error
 	if migrationContext.Revert {
 		err = migrator.Revert()
+	} else if migrationContext.IsMoveTablesMode() {
+		err = migrator.MoveTables()
 	} else {
 		err = migrator.Migrate()
 	}

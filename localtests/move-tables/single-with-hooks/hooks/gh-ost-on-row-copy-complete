@@ -1,0 +1,14 @@
+#!/bin/bash
+
+repo_root=$(git rev-parse --show-toplevel)
+source $repo_root/localtests/move-tables/single-with-hooks/hooks/util.sh
+
+# dump environment variables on dirty exit
+trap '[[ $? -eq 0 ]] || dump_env' EXIT
+
+set -e
+
+assert_common_envs
+
+# touch file to mark completion of on-row-copy-complete hook
+touch /tmp/gh-ost-hooks/on-row-copy-complete
