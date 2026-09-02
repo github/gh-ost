@@ -1676,6 +1676,7 @@ func (apl *Applier) CalculateNextIterationRangeEndValues(db *gosql.DB) (hasFurth
 		query, explodedArgs, err := buildFunc(
 			apl.migrationContext.DatabaseName,
 			apl.originalTableName(),
+			apl.migrationContext.UniqueKey.Name,
 			&apl.migrationContext.UniqueKey.Columns,
 			apl.migrationContext.MigrationIterationRangeMinValues.AbstractValues(),
 			apl.migrationContext.MigrationRangeMaxValues.AbstractValues(),
@@ -1796,6 +1797,7 @@ func (apl *Applier) CalculateMoveTableNextIterationRangeEndValues(db *gosql.DB, 
 		query, explodedArgs, err := buildFunc(
 			mt.SourceDatabaseName,
 			mt.SourceTableName,
+			mt.UniqueKey.Name,
 			&mt.UniqueKey.Columns,
 			mt.MigrationIterationRangeMinValues.AbstractValues(),
 			mt.MigrationRangeMaxValues.AbstractValues(),
