@@ -58,16 +58,57 @@ func GetDB(migrationUuid string, mysql_uri string) (*gosql.DB, bool, error) {
 	return knownDBs[cacheKey], exists, nil
 }
 
-// GetReplicationLagFromSlaveStatus returns replication lag for a given db; via SHOW SLAVE STATUS
-func GetReplicationLagFromSlaveStatus(informationSchemaDb *gosql.DB) (replicationLag time.Duration, err error) {
-	err = sqlutils.QueryRowsMap(informationSchemaDb, `show slave status`, func(m sqlutils.RowMap) error {
-		slaveIORunning := m.GetString("Slave_IO_Running")
-		slaveSQLRunning := m.GetString("Slave_SQL_Running")
-		secondsBehindMaster := m.GetNullInt64("Seconds_Behind_Master")
-		if !secondsBehindMaster.Valid {
-			return fmt.Errorf("replication not running; Slave_IO_Running=%+v, Slave_SQL_Running=%+v", slaveIORunning, slaveSQLRunning)
+// queryReplicaStatus runs SHOW REPLICA STATUS (MySQL 8.0.22+/MariaDB 10.5+), falling back to the
+// legacy SHOW SLAVE STATUS on servers that don't support the new syntax (removed entirely in MySQL 8.4).
+func queryReplicaStatus(db *gosql.DB, onRow func(sqlutils.RowMap) error) (err error) {
+	if err = sqlutils.QueryRowsMap(db, `show replica status`, onRow); err != nil {
+		err = sqlutils.QueryRowsMap(db, `show slave status`, onRow)
+	}
+	return err
+}
+
+// queryBinaryLogStatus runs SHOW BINARY LOG STATUS (MySQL 8.0.22+), falling back to the legacy
+// SHOW MASTER STATUS on servers that don't support the new syntax (removed entirely in MySQL 8.4).
+func queryBinaryLogStatus(db *gosql.DB, onRow func(sqlutils.RowMap) error) (err error) {
+	if err = sqlutils.QueryRowsMap(db, `show binary log status`, onRow); err != nil {
+		err = sqlutils.QueryRowsMap(db, `show master status`, onRow)
+	}
+	return err
+}
+
+// getRowMapString reads the first present/non-empty column among the given (old, new) name candidates.
+func getRowMapString(m sqlutils.RowMap, keys ...string) string {
+	for _, key := range keys {
+		if v := m.GetString(key); v != "" {
+			return v
 		}
-		replicationLag = time.Duration(secondsBehindMaster.Int64) * time.Second
+	}
+	return ""
+}
+
+// getRowMapInt64 reads the first present/non-zero column among the given (old, new) name candidates.
+func getRowMapInt64(m sqlutils.RowMap, keys ...string) int64 {
+	for _, key := range keys {
+		if v := m.GetInt64(key); v != 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+// GetReplicationLagFromSlaveStatus returns replication lag for a given db; via SHOW REPLICA STATUS / SHOW SLAVE STATUS
+func GetReplicationLagFromSlaveStatus(informationSchemaDb *gosql.DB) (replicationLag time.Duration, err error) {
+	err = queryReplicaStatus(informationSchemaDb, func(m sqlutils.RowMap) error {
+		replicaIORunning := getRowMapString(m, "Replica_IO_Running", "Slave_IO_Running")
+		replicaSQLRunning := getRowMapString(m, "Replica_SQL_Running", "Slave_SQL_Running")
+		secondsBehindSource := m.GetNullInt64("Seconds_Behind_Source")
+		if !secondsBehindSource.Valid {
+			secondsBehindSource = m.GetNullInt64("Seconds_Behind_Master")
+		}
+		if !secondsBehindSource.Valid {
+			return fmt.Errorf("replication not running; Replica_IO_Running=%+v, Replica_SQL_Running=%+v", replicaIORunning, replicaSQLRunning)
+		}
+		replicationLag = time.Duration(secondsBehindSource.Int64) * time.Second
 		return nil
 	})
 
@@ -83,29 +124,29 @@ func GetMasterKeyFromSlaveStatus(connectionConfig *ConnectionConfig) (masterKey 
 	}
 	defer db.Close()
 
-	err = sqlutils.QueryRowsMap(db, `show slave status`, func(rowMap sqlutils.RowMap) error {
+	err = queryReplicaStatus(db, func(rowMap sqlutils.RowMap) error {
 		// We wish to recognize the case where the topology's master actually has replication configuration.
 		// This can happen when a DBA issues a `RESET SLAVE` instead of `RESET SLAVE ALL`.
 
 		// An empty log file indicates this is a master:
-		if rowMap.GetString("Master_Log_File") == "" {
+		if getRowMapString(rowMap, "Source_Log_File", "Master_Log_File") == "" {
 			return nil
 		}
 
-		slaveIORunning := rowMap.GetString("Slave_IO_Running")
-		slaveSQLRunning := rowMap.GetString("Slave_SQL_Running")
+		replicaIORunning := getRowMapString(rowMap, "Replica_IO_Running", "Slave_IO_Running")
+		replicaSQLRunning := getRowMapString(rowMap, "Replica_SQL_Running", "Slave_SQL_Running")
 
-		if slaveIORunning != "Yes" || slaveSQLRunning != "Yes" {
-			return fmt.Errorf("Replication on %+v is broken: Slave_IO_Running: %s, Slave_SQL_Running: %s. Please make sure replication runs before using gh-ost.",
+		if replicaIORunning != "Yes" || replicaSQLRunning != "Yes" {
+			return fmt.Errorf("Replication on %+v is broken: Replica_IO_Running: %s, Replica_SQL_Running: %s. Please make sure replication runs before using gh-ost.",
 				connectionConfig.Key,
-				slaveIORunning,
-				slaveSQLRunning,
+				replicaIORunning,
+				replicaSQLRunning,
 			)
 		}
 
 		masterKey = &InstanceKey{
-			Hostname: rowMap.GetString("Master_Host"),
-			Port:     rowMap.GetInt("Master_Port"),
+			Hostname: getRowMapString(rowMap, "Source_Host", "Master_Host"),
+			Port:     int(getRowMapInt64(rowMap, "Source_Port", "Master_Port")),
 		}
 		return nil
 	})
@@ -141,14 +182,14 @@ func GetMasterConnectionConfigSafe(connectionConfig *ConnectionConfig, visitedKe
 }
 
 func GetReplicationBinlogCoordinates(db *gosql.DB) (readBinlogCoordinates *BinlogCoordinates, executeBinlogCoordinates *BinlogCoordinates, err error) {
-	err = sqlutils.QueryRowsMap(db, `show slave status`, func(m sqlutils.RowMap) error {
+	err = queryReplicaStatus(db, func(m sqlutils.RowMap) error {
 		readBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("Master_Log_File"),
-			LogPos:  m.GetInt64("Read_Master_Log_Pos"),
+			LogFile: getRowMapString(m, "Source_Log_File", "Master_Log_File"),
+			LogPos:  getRowMapInt64(m, "Read_Source_Log_Pos", "Read_Master_Log_Pos"),
 		}
 		executeBinlogCoordinates = &BinlogCoordinates{
-			LogFile: m.GetString("Relay_Master_Log_File"),
-			LogPos:  m.GetInt64("Exec_Master_Log_Pos"),
+			LogFile: getRowMapString(m, "Relay_Source_Log_File", "Relay_Master_Log_File"),
+			LogPos:  getRowMapInt64(m, "Exec_Source_Log_Pos", "Exec_Master_Log_Pos"),
 		}
 		return nil
 	})
@@ -156,7 +197,7 @@ func GetReplicationBinlogCoordinates(db *gosql.DB) (readBinlogCoordinates *Binlo
 }
 
 func GetSelfBinlogCoordinates(db *gosql.DB) (selfBinlogCoordinates *BinlogCoordinates, err error) {
-	err = sqlutils.QueryRowsMap(db, `show master status`, func(m sqlutils.RowMap) error {
+	err = queryBinaryLogStatus(db, func(m sqlutils.RowMap) error {
 		selfBinlogCoordinates = &BinlogCoordinates{
 			LogFile: m.GetString("File"),
 			LogPos:  m.GetInt64("Position"),

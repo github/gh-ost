@@ -146,11 +146,12 @@ func (this *EventsStreamer) GetReconnectBinlogCoordinates() *mysql.BinlogCoordin
 	return &mysql.BinlogCoordinates{LogFile: this.GetCurrentBinlogCoordinates().LogFile, LogPos: 4}
 }
 
-// readCurrentBinlogCoordinates reads master status from hooked server
+// readCurrentBinlogCoordinates reads master/binary log status from hooked server.
+// MySQL 8.4 removed `SHOW MASTER STATUS` in favor of `SHOW BINARY LOG STATUS`, so try the new
+// syntax first and fall back to the legacy one for older MySQL/MariaDB servers.
 func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
-	query := `show /* gh-ost readCurrentBinlogCoordinates */ master status`
 	foundMasterStatus := false
-	err := sqlutils.QueryRowsMap(this.db, query, func(m sqlutils.RowMap) error {
+	onRow := func(m sqlutils.RowMap) error {
 		this.initialBinlogCoordinates = &mysql.BinlogCoordinates{
 			LogFile: m.GetString("File"),
 			LogPos:  m.GetInt64("Position"),
@@ -158,12 +159,16 @@ func (this *EventsStreamer) readCurrentBinlogCoordinates() error {
 		foundMasterStatus = true
 
 		return nil
-	})
+	}
+	err := sqlutils.QueryRowsMap(this.db, `show /* gh-ost readCurrentBinlogCoordinates */ binary log status`, onRow)
+	if err != nil {
+		err = sqlutils.QueryRowsMap(this.db, `show /* gh-ost readCurrentBinlogCoordinates */ master status`, onRow)
+	}
 	if err != nil {
 		return err
 	}
 	if !foundMasterStatus {
-		return fmt.Errorf("Got no results from SHOW MASTER STATUS. Bailing out")
+		return fmt.Errorf("Got no results from SHOW BINARY LOG STATUS / SHOW MASTER STATUS. Bailing out")
 	}
 	log.Debugf("Streamer binlog coordinates: %+v", *this.initialBinlogCoordinates)
 	return nil
