@@ -1448,12 +1448,14 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 			sql.EscapeName(sourceDB), sql.EscapeName(tableName),
 			sql.EscapeName(sourceDB), sql.EscapeName(delTable)))
 	}
-	renameAndCaptureQuery := fmt.Sprintf("rename /* gh-ost */ table %s;\nselect @@global.gtid_executed",
-		strings.Join(renameClauses, ", "))
+	drainGTIDVariable := moveTablesDrainGTIDVariable(mgtr.migrationContext.InspectorMySQLVersion)
+	renameAndCaptureQuery := fmt.Sprintf("rename /* gh-ost */ table %s;\nselect %s",
+		strings.Join(renameClauses, ", "), drainGTIDVariable)
 	mgtr.migrationContext.Log.Infof("T1+T2: renaming %d source table(s) and capturing drain GTID: %s",
 		len(renameClauses), renameAndCaptureQuery)
 
-	// @@GLOBAL scope is explicit so the intent is unambiguous in the SQL itself.
+	// MySQL exposes @@global.gtid_executed, while MariaDB exposes
+	// @@global.gtid_binlog_pos.
 	// Design: https://github.com/github/gh-ost-tablemove-poc/blob/9dc6df75c4c88ff473906a497836c7518f5614ec/design/coop_cutover.md#32-correctness-verification-for-p4
 	drainGTIDStr, err := func() (string, error) {
 		rows, err := mgtr.sourcePrimaryDB.QueryContext(cutOverCtx, renameAndCaptureQuery)
@@ -1480,14 +1482,14 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 				if err := rows.Err(); err != nil {
 					return "", err
 				}
-				return "", errors.New("expected result set for @@global.gtid_executed after RENAME")
+				return "", fmt.Errorf("expected result set for %s after RENAME", drainGTIDVariable)
 			}
 		}
 		if !rows.Next() {
 			if err := rows.Err(); err != nil {
 				return "", err
 			}
-			return "", errors.New("no row returned for @@global.gtid_executed")
+			return "", fmt.Errorf("no row returned for %s", drainGTIDVariable)
 		}
 		var gtid string
 		if err := rows.Scan(&gtid); err != nil {
@@ -1545,6 +1547,13 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 
 	// ----- T6: return nil -----
 	return nil
+}
+
+func moveTablesDrainGTIDVariable(mysqlVersion string) string {
+	if mysql.IsMariaDB(mysqlVersion) {
+		return "@@global.gtid_binlog_pos"
+	}
+	return "@@global.gtid_executed"
 }
 
 // ExecOnFailureHook executes the onFailure hook, and this method is provided as the only external
@@ -2680,15 +2689,18 @@ func (mgtr *Migrator) initiateApplier() error {
 		}
 	}
 
-	// ensure performance_schema.metadata_locks is available.
-	if err := mgtr.applier.StateMetadataLockInstrument(); err != nil {
-		mgtr.migrationContext.Log.Warning("unable to enable metadata lock instrument, see further error details")
-	}
-	if !mgtr.migrationContext.IsOpenMetadataLockInstruments {
-		if !mgtr.migrationContext.SkipMetadataLockCheck {
-			return mgtr.migrationContext.Log.Errorf("bailing out because metadata lock instrument not enabled. Use --skip-metadata-lock-check if you wish to proceed without. See https://github.com/github/gh-ost/pull/1536 for details")
+	if !mgtr.migrationContext.IsMoveTablesMode() {
+		// Standard cut-over uses the atomic magic-lock protocol and verifies its
+		// pending metadata lock before releasing the original-table lock.
+		if err := mgtr.applier.StateMetadataLockInstrument(); err != nil {
+			mgtr.migrationContext.Log.Warning("unable to enable metadata lock instrument, see further error details")
 		}
-		mgtr.migrationContext.Log.Warning("proceeding without metadata lock check. There is a small chance of data loss if another session accesses the ghost table during cut-over. See https://github.com/github/gh-ost/pull/1536 for details")
+		if !mgtr.migrationContext.IsOpenMetadataLockInstruments {
+			if !mgtr.migrationContext.SkipMetadataLockCheck {
+				return mgtr.migrationContext.Log.Errorf("bailing out because metadata lock instrument not enabled. Use --skip-metadata-lock-check if you wish to proceed without. See https://github.com/github/gh-ost/pull/1536 for details")
+			}
+			mgtr.migrationContext.Log.Warning("proceeding without metadata lock check. There is a small chance of data loss if another session accesses the ghost table during cut-over. See https://github.com/github/gh-ost/pull/1536 for details")
+		}
 	}
 
 	if !mgtr.migrationContext.IsMoveTablesMode() {

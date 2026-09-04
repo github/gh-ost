@@ -89,12 +89,18 @@ verify_master_and_replica() {
     original_sql_mode="$(mysql-exec $cluster primary -e "select @@global.sql_mode" -s -s)"
     echo "sql_mode on master is ${original_sql_mode}"
 
-    current_gtid_mode=$(mysql-exec $cluster primary -s -s -e "select @@global.gtid_mode" 2>/dev/null || echo unsupported)
-    current_enforce_gtid_consistency=$(mysql-exec $cluster primary -s -s -e "select @@global.enforce_gtid_consistency" 2>/dev/null || echo unsupported)
-    current_master_server_uuid=$(mysql-exec $cluster primary -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
-    current_replica_server_uuid=$(mysql-exec $cluster replica -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
-    echo "gtid_mode on master is ${current_gtid_mode} with enforce_gtid_consistency=${current_enforce_gtid_consistency}"
-    echo "server_uuid on master is ${current_master_server_uuid}, replica is ${current_replica_server_uuid}"
+    mysql_version=$(mysql-exec $cluster primary -s -s -e "select @@version")
+    if [[ $mysql_version == *MariaDB* ]]; then
+        current_gtid_mode="ON"
+        echo "MariaDB GTID replication is enabled"
+    else
+        current_gtid_mode=$(mysql-exec $cluster primary -s -s -e "select @@global.gtid_mode" 2>/dev/null || echo unsupported)
+        current_enforce_gtid_consistency=$(mysql-exec $cluster primary -s -s -e "select @@global.enforce_gtid_consistency" 2>/dev/null || echo unsupported)
+        current_master_server_uuid=$(mysql-exec $cluster primary -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
+        current_replica_server_uuid=$(mysql-exec $cluster replica -s -s -e "select @@global.server_uuid" 2>/dev/null || echo unsupported)
+        echo "gtid_mode on master is ${current_gtid_mode} with enforce_gtid_consistency=${current_enforce_gtid_consistency}"
+        echo "server_uuid on master is ${current_master_server_uuid}, replica is ${current_replica_server_uuid}"
+    fi
 
     echo "Gracefully sleeping for 3 seconds while replica is setting up..."
     sleep 3
