@@ -1250,19 +1250,23 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 	}()
 
 	time.Sleep(2 * time.Second)
-	//nolint:dogsled
-	_, filename, _, _ := runtime.Caller(0)
-	err = os.Remove(filepath.Join(filepath.Dir(filename), "../../tmp/ghost.postpone.flag"))
-	if err != nil {
-		suite.Require().NoError(err)
-	}
-	time.Sleep(1 * time.Second)
+
+	// Hold a read lock on the ghost table *before* un-postponing: cut-over completes
+	// in milliseconds, so grabbing the lock after the flag removal is a race.
 	go func() {
 		holdConn, err := suite.db.Conn(ctx)
 		suite.Require().NoError(err)
 		_, err = holdConn.ExecContext(ctx, "SELECT *, sleep(2) FROM test._testing_gho WHERE id = 1")
 		suite.Require().NoError(err)
 	}()
+	time.Sleep(200 * time.Millisecond)
+
+	//nolint:dogsled
+	_, filename, _, _ := runtime.Caller(0)
+	err = os.Remove(filepath.Join(filepath.Dir(filename), "../../tmp/ghost.postpone.flag"))
+	if err != nil {
+		suite.Require().NoError(err)
+	}
 
 	dmlConn, err := suite.db.Conn(ctx)
 	suite.Require().NoError(err)
