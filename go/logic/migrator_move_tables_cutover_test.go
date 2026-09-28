@@ -352,6 +352,38 @@ func (s *MoveTablesCutOverSuite) setupCutOverCheckpoint(m *Migrator, mc *base.Mi
 	}
 }
 
+func (s *MoveTablesCutOverSuite) TestMoveTablesCheckpointUsesAppliedTransactionBoundary() {
+	start, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, "00000000-0000-0000-0000-000000000001:1")
+	s.Require().NoError(err)
+	end, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, "00000000-0000-0000-0000-000000000001:1-2")
+	s.Require().NoError(err)
+	m, mc := s.buildMigrator(nil, end)
+	s.setupCutOverCheckpoint(m, mc, false)
+	m.applier.AppliedTransactionCoordinates = start.Clone()
+
+	// Row progress may already be at end, but without its commit marker only
+	// the earlier boundary is safe to persist and replay from.
+	chk, err := m.Checkpoint(context.Background())
+	s.Require().NoError(err)
+	s.Require().True(chk.LastTrxCoords.Equals(start))
+	rows, err := m.applier.ReadMoveTableCheckpoints()
+	s.Require().NoError(err)
+	s.Require().True(rows[testMysqlTableName].LastTrxCoords.Equals(start))
+
+	s.Require().NoError(m.onApplyEventStruct(&applyEventStruct{coords: end, transactionComplete: true}))
+	chk, err = m.Checkpoint(context.Background())
+	s.Require().NoError(err)
+	s.Require().True(chk.LastTrxCoords.Equals(end))
+	rows, err = m.applier.ReadMoveTableCheckpoints()
+	s.Require().NoError(err)
+	s.Require().True(rows[testMysqlTableName].LastTrxCoords.Equals(end))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = m.Checkpoint(ctx)
+	s.Require().ErrorIs(err, context.Canceled)
+}
+
 func (s *MoveTablesCutOverSuite) TestMoveTablesListenersBeforeStreaming() {
 	ctx := context.Background()
 	tableNames := []string{testMysqlTableName, "testing_other"}
@@ -380,6 +412,7 @@ func (s *MoveTablesCutOverSuite) TestMoveTablesListenersBeforeStreaming() {
 	mc.MoveTables.TableNames = tableNames
 	mc.UseGTIDs = true
 	m := NewMigrator(mc, "test")
+	m.applier = NewApplier(mc)
 	s.Require().NoError(m.initiateStreaming())
 	s.T().Cleanup(func() {
 		atomic.StoreInt64(&m.finishedMigrating, 1)
@@ -401,11 +434,15 @@ func (s *MoveTablesCutOverSuite) TestMoveTablesListenersBeforeStreaming() {
 	seen := make(map[string]int)
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
-	for range len(tableNames) * rowsPerTable {
+	for rows := 0; rows < len(tableNames)*rowsPerTable; {
 		select {
 		case event := <-m.applyEventsQueue:
+			if event.transactionComplete {
+				continue
+			}
 			s.Require().NotNil(event.dmlEvent)
 			seen[event.dmlEvent.TableName]++
+			rows++
 		case <-deadline.C:
 			s.FailNow("timed out waiting for pending DML")
 		}

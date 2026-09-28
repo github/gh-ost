@@ -56,10 +56,11 @@ type lockProcessedStruct struct {
 }
 
 type applyEventStruct struct {
-	writeFunc      *tableWriteFunc
-	dmlEvent       *binlog.BinlogDMLEvent
-	coords         mysql.BinlogCoordinates
-	eventTimestamp time.Time
+	writeFunc           *tableWriteFunc
+	dmlEvent            *binlog.BinlogDMLEvent
+	coords              mysql.BinlogCoordinates
+	eventTimestamp      time.Time
+	transactionComplete bool
 }
 
 func newApplyEventStructByFunc(writeFunc *tableWriteFunc) *applyEventStruct {
@@ -2578,6 +2579,13 @@ func (mgtr *Migrator) initiateStreaming() error {
 	if err := mgtr.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
+	// The starting position is a safe boundary before any streamed DML. In
+	// move-tables mode there is no heartbeat to advance it on a quiet source.
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		mgtr.applier.CurrentCoordinatesMutex.Lock()
+		mgtr.applier.AppliedTransactionCoordinates = mgtr.eventsStreamer.initialBinlogCoordinates.Clone()
+		mgtr.applier.CurrentCoordinatesMutex.Unlock()
+	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
 		mgtr.migrationContext.Log.Info("Skipping stream of the changelog table")
@@ -2640,6 +2648,8 @@ func (mgtr *Migrator) initiateStreaming() error {
 // by table name. The streamer already dispatches per (database, table), and the
 // applier routes DML to the right per-table query builders by table name.
 func (mgtr *Migrator) addDMLEventsListener() error {
+	// Register before the DML listeners to preserve row/commit order.
+	mgtr.eventsStreamer.AddTransactionCompleteListener(mgtr.onTransactionComplete)
 	enqueue := func(dmlEntry *binlog.BinlogEntry) error {
 		// Record that the streamer just delivered an event for a moved table, so
 		// the idle-bump rule can tell "falling behind" from "source is quiet".
@@ -2671,6 +2681,14 @@ func (mgtr *Migrator) addDMLEventsListener() error {
 		mgtr.migrationContext.OriginalTableName,
 		enqueue,
 	)
+}
+
+// onTransactionComplete enqueues an acknowledgement, not another SQL write.
+// The applier may batch across these markers, but cannot acknowledge them
+// until the batch containing their preceding DML has successfully committed.
+func (mgtr *Migrator) onTransactionComplete(entry *binlog.BinlogEntry) error {
+	marker := &applyEventStruct{coords: entry.Coordinates.Clone(), transactionComplete: true}
+	return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, marker)
 }
 
 // initiateThrottler kicks in the throttling collection and the throttling checks.
@@ -3017,7 +3035,17 @@ func (mgtr *Migrator) iterateChunksMoveTables() error {
 func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 	atomic.AddInt64(&mgtr.applyEventsInFlight, 1)
 	defer atomic.AddInt64(&mgtr.applyEventsInFlight, -1)
+	// Cancellation may happen after the worker's loop check, while throttled.
+	// A standalone marker must not bypass the abort checks used by SQL tasks.
+	if err := mgtr.checkAbort(); err != nil {
+		return err
+	}
 	handleNonDMLEventStruct := func(eventStruct *applyEventStruct) error {
+		if eventStruct.transactionComplete {
+			mgtr.applier.CurrentCoordinatesMutex.Lock()
+			mgtr.applier.AppliedTransactionCoordinates = eventStruct.coords.Clone()
+			mgtr.applier.CurrentCoordinatesMutex.Unlock()
+		}
 		if eventStruct.writeFunc != nil {
 			if err := mgtr.retryOperation(*eventStruct.writeFunc); err != nil {
 				return mgtr.migrationContext.Log.Errore(err)
@@ -3033,16 +3061,19 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		dmlEvents = append(dmlEvents, eventStruct.dmlEvent)
 		lastEventTimestamp := eventStruct.eventTimestamp
 		var nonDmlStructToApply *applyEventStruct
+		var completedTransaction *applyEventStruct
 
 		availableEvents := len(mgtr.applyEventsQueue)
 		batchSize := int(atomic.LoadInt64(&mgtr.migrationContext.DMLBatchSize))
-		if availableEvents > batchSize-1 {
-			// The "- 1" is because we already consumed one event: the original event that led to this function getting called.
-			// So, if DMLBatchSize==1 we wish to not process any further events
-			availableEvents = batchSize - 1
-		}
-		for i := 0; i < availableEvents; i++ {
+		for i := 0; i < availableEvents && len(dmlEvents) < batchSize; i++ {
 			additionalStruct := <-mgtr.applyEventsQueue
+			if additionalStruct.transactionComplete {
+				// Markers need no SQL and don't count toward DMLBatchSize.
+				// Acknowledge only after this entire batch succeeds, never while
+				// merely collecting rows from the queue.
+				completedTransaction = additionalStruct
+				continue
+			}
 			if additionalStruct.dmlEvent == nil {
 				// Not a DML. We don't group this, and we don't batch any further
 				nonDmlStructToApply = additionalStruct
@@ -3061,6 +3092,9 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 		// update applier coordinates
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
 		mgtr.applier.CurrentCoordinates = eventStruct.coords
+		if completedTransaction != nil {
+			mgtr.applier.AppliedTransactionCoordinates = completedTransaction.coords.Clone()
+		}
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
 
 		// In move-tables mode there is no changelog heartbeat; writer lag is derived
@@ -3081,13 +3115,24 @@ func (mgtr *Migrator) onApplyEventStruct(eventStruct *applyEventStruct) error {
 }
 
 // Checkpoint attempts to write a checkpoint of the Migrator's current state.
-// It gets the binlog coordinates of the last received trx and waits until the
-// applier reaches that trx. At that point it's safe to resume from these coordinates.
+// It samples reader progress and waits for an applied transaction boundary
+// covering that progress. Row/batch progress alone is not a safe resume point.
 func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
-	coords := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
-	if mgtr.migrationContext.IsMoveTablesMode() {
-		return mgtr.checkpointMoveTables(ctx, coords)
+	if err := mgtr.checkAbort(); err != nil {
+		return nil, err
 	}
+	// Observe both the caller's deadline and migration cancellation, including
+	// while executing the checkpoint INSERT rather than only while polling.
+	ctx, cancel := context.WithCancel(ctx)
+	//nolint:contextcheck // Merge migration cancellation with the caller-derived checkpoint context.
+	stopCancel := context.AfterFunc(mgtr.migrationContext.GetContext(), cancel)
+	defer stopCancel()
+	defer cancel()
+
+	if mgtr.migrationContext.IsMoveTablesMode() {
+		return mgtr.checkpointMoveTables(ctx)
+	}
+	coords := mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
 	mgtr.applier.LastIterationRangeMutex.Lock()
 	if mgtr.applier.LastIterationRangeMaxValues == nil || mgtr.applier.LastIterationRangeMinValues == nil {
 		mgtr.applier.LastIterationRangeMutex.Unlock()
@@ -3097,25 +3142,37 @@ func (mgtr *Migrator) Checkpoint(ctx context.Context) (*Checkpoint, error) {
 		Iteration:         mgtr.migrationContext.GetIteration(),
 		IterationRangeMin: mgtr.applier.LastIterationRangeMinValues.Clone(),
 		IterationRangeMax: mgtr.applier.LastIterationRangeMaxValues.Clone(),
-		LastTrxCoords:     coords,
 		RowsCopied:        atomic.LoadInt64(&mgtr.migrationContext.TotalRowsCopied),
 		DMLApplied:        atomic.LoadInt64(&mgtr.migrationContext.TotalDMLEventsApplied),
 	}
 	mgtr.applier.LastIterationRangeMutex.Unlock()
 
 	for {
+		if err := mgtr.checkAbort(); err != nil {
+			return nil, err
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
-		if coords.SmallerThanOrEquals(mgtr.applier.CurrentCoordinates) {
-			id, err := mgtr.applier.WriteCheckpoint(chk)
+		applied := mgtr.applier.AppliedTransactionCoordinates
+		if applied != nil && coords.SmallerThanOrEquals(applied) {
+			// Persist the acknowledged commit boundary, not the sampled reader
+			// position, which may be inside a row event or transaction.
+			chk.LastTrxCoords = applied.Clone()
+			id, err := mgtr.applier.WriteCheckpoint(ctx, chk)
 			chk.Id = id
 			mgtr.applier.CurrentCoordinatesMutex.Unlock()
 			return chk, err
 		}
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-		time.Sleep(500 * time.Millisecond)
+		sleepDuration := 500 * time.Millisecond
+		metrics.RecordSleep(mgtr.migrationContext.Metrics, "replica_wait", sleepDuration)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(sleepDuration):
+		}
 	}
 }
 
@@ -3157,33 +3214,28 @@ func (mgtr *Migrator) moveTablesCheckpointSummary(coords mysql.BinlogCoordinates
 	}
 }
 
-// checkpointMoveTables writes one checkpoint row per migrated table based on
-// applier coordinates or idle queues. Neither proves a completed transaction;
-// see #1781.
-func (mgtr *Migrator) checkpointMoveTables(ctx context.Context, coords mysql.BinlogCoordinates) (*Checkpoint, error) {
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		mgtr.applier.CurrentCoordinatesMutex.Lock()
-		applied := coords.SmallerThanOrEquals(mgtr.applier.CurrentCoordinates)
-		idle := len(mgtr.applyEventsQueue) == 0 && (mgtr.eventsStreamer == nil || len(mgtr.eventsStreamer.eventsChannel) == 0)
-		if applied || idle {
-			if !applied {
-				mgtr.applier.CurrentCoordinates = coords.Clone()
-			}
-			mgtr.applier.CurrentCoordinatesMutex.Unlock()
-			rows := mgtr.buildMoveTableCheckpointRows(coords, false, false, nil)
-			if err := mgtr.applier.WriteMoveTableCheckpoints(rows); err != nil {
-				return nil, err
-			}
-			return mgtr.moveTablesCheckpointSummary(coords), nil
-		}
-		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-		sleepDuration := 500 * time.Millisecond
-		metrics.RecordSleep(mgtr.migrationContext.Metrics, "replica_wait", sleepDuration)
-		time.Sleep(sleepDuration)
+// checkpointMoveTables persists the last applied transaction boundary. Unlike
+// standard mode, there is no source heartbeat to advance the reader on a quiet
+// source, so a safe older boundary is preferable to waiting for reader progress.
+func (mgtr *Migrator) checkpointMoveTables(ctx context.Context) (*Checkpoint, error) {
+	if err := mgtr.checkAbort(); err != nil {
+		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	mgtr.applier.CurrentCoordinatesMutex.Lock()
+	defer mgtr.applier.CurrentCoordinatesMutex.Unlock()
+	applied := mgtr.applier.AppliedTransactionCoordinates
+	if applied == nil {
+		return nil, errors.New("no applied transaction boundary, not checkpointing")
+	}
+	coords := applied.Clone()
+	rows := mgtr.buildMoveTableCheckpointRows(coords, false, false, nil)
+	if err := mgtr.applier.writeMoveTableCheckpoints(ctx, rows); err != nil {
+		return nil, err
+	}
+	return mgtr.moveTablesCheckpointSummary(coords), nil
 }
 
 // CheckpointAfterCutOver writes a final checkpoint after the cutover completes successfully.
@@ -3210,7 +3262,7 @@ func (mgtr *Migrator) CheckpointAfterCutOver() (*Checkpoint, error) {
 	}
 	mgtr.applier.LastIterationRangeMutex.Unlock()
 
-	id, err := mgtr.applier.WriteCheckpoint(chk)
+	id, err := mgtr.applier.WriteCheckpoint(mgtr.migrationContext.GetContext(), chk)
 	chk.Id = id
 	return chk, err
 }
@@ -3222,7 +3274,15 @@ func (mgtr *Migrator) checkpointLoop() {
 	}
 	checkpointInterval := time.Duration(mgtr.migrationContext.CheckpointIntervalSeconds) * time.Second
 	ticker := time.NewTicker(checkpointInterval)
-	for t := range ticker.C {
+	defer ticker.Stop()
+	migrationCtx := mgtr.migrationContext.GetContext()
+	for {
+		var t time.Time
+		select {
+		case <-migrationCtx.Done():
+			return
+		case t = <-ticker.C:
+		}
 		if atomic.LoadInt64(&mgtr.finishedMigrating) > 0 || atomic.LoadInt64(&mgtr.migrationContext.CutOverCompleteFlag) > 0 {
 			return
 		}
@@ -3230,7 +3290,7 @@ func (mgtr *Migrator) checkpointLoop() {
 			continue
 		}
 		mgtr.migrationContext.Log.Infof("starting checkpoint at %+v", t)
-		ctx, cancel := context.WithTimeout(context.Background(), checkpointTimeout)
+		ctx, cancel := context.WithTimeout(migrationCtx, checkpointTimeout)
 		chk, err := mgtr.Checkpoint(ctx)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {

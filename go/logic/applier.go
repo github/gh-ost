@@ -76,8 +76,9 @@ type Applier struct {
 	finishedMigrating int64
 	name              string
 
-	CurrentCoordinatesMutex sync.Mutex
-	CurrentCoordinates      mysql.BinlogCoordinates
+	CurrentCoordinatesMutex       sync.Mutex
+	CurrentCoordinates            mysql.BinlogCoordinates
+	AppliedTransactionCoordinates mysql.BinlogCoordinates
 
 	LastIterationRangeMutex     sync.Mutex
 	LastIterationRangeMinValues *sql.ColumnValues
@@ -1272,7 +1273,7 @@ func (apl *Applier) WriteChangelogState(value string) (string, error) {
 // WriteCheckpoint writes a standard-mode checkpoint row to the _ghk table. In
 // move-tables mode use WriteMoveTableCheckpoints instead; calling this there is a
 // programmer error (the checkpoint schema and query builder are standard-only).
-func (apl *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
+func (apl *Applier) WriteCheckpoint(ctx context.Context, chk *Checkpoint) (int64, error) {
 	if apl.migrationContext.IsMoveTablesMode() {
 		panic("WriteCheckpoint() must not be called in move-tables mode; use WriteMoveTableCheckpoints")
 	}
@@ -1285,7 +1286,7 @@ func (apl *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 	}
 	args := sqlutils.Args(chk.LastTrxCoords.String(), chk.Iteration, chk.RowsCopied, chk.DMLApplied, chk.IsCutover)
 	args = append(args, uniqueKeyArgs...)
-	res, err := apl.checkpointDB().Exec(query, args...)
+	res, err := apl.checkpointDB().ExecContext(ctx, query, args...)
 	if err != nil {
 		return insertId, err
 	}
@@ -1314,6 +1315,10 @@ var moveTablesCheckpointColumns = []string{
 // rows-copied, and serialized iteration range. The latest row therefore always
 // reflects the freshest run-wide state.
 func (apl *Applier) WriteMoveTableCheckpoints(rows []*Checkpoint) error {
+	return apl.writeMoveTableCheckpoints(apl.migrationContext.GetContext(), rows)
+}
+
+func (apl *Applier) writeMoveTableCheckpoints(ctx context.Context, rows []*Checkpoint) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -1347,7 +1352,7 @@ func (apl *Applier) WriteMoveTableCheckpoints(rows []*Checkpoint) error {
 			serializeRangeValues(chk.IterationRangeMin),
 			serializeRangeValues(chk.IterationRangeMax),
 		)
-		if _, err := apl.checkpointDB().Exec(query, args...); err != nil {
+		if _, err := apl.checkpointDB().ExecContext(ctx, query, args...); err != nil {
 			return err
 		}
 	}
