@@ -40,6 +40,7 @@ type EventsStreamer struct {
 	migrationContext         *base.MigrationContext
 	initialBinlogCoordinates mysql.BinlogCoordinates
 	listeners                [](*BinlogEventListener)
+	transactionListeners     []func(*binlog.BinlogEntry) error
 	listenersMutex           *sync.Mutex
 	eventsChannel            chan *binlog.BinlogEntry
 	binlogReader             *binlog.GoMySQLReader
@@ -80,6 +81,14 @@ func (es *EventsStreamer) AddListener(
 	return nil
 }
 
+// AddTransactionCompleteListener registers a synchronous commit listener.
+// Consumers must also use synchronous DML listeners to preserve queue order.
+func (es *EventsStreamer) AddTransactionCompleteListener(listener func(*binlog.BinlogEntry) error) {
+	es.listenersMutex.Lock()
+	defer es.listenersMutex.Unlock()
+	es.transactionListeners = append(es.transactionListeners, listener)
+}
+
 // shouldDecodeRowsEvent returns true when at least one listener is registered for
 // the table on which the rows event operates. This is used by the binlog parser
 // after it decodes the row event header/table map, but before it decodes row data.
@@ -99,11 +108,34 @@ func (es *EventsStreamer) shouldDecodeRowsEvent(databaseName, tableName string) 
 	return false
 }
 
-// notifyListeners will notify relevant listeners with given DML event. Only
-// listeners registered for changes on the table on which the DML operates are notified.
-func (es *EventsStreamer) notifyListeners(binlogEntry *binlog.BinlogEntry) {
+// notifyListeners dispatches table-filtered DML or a transaction completion
+// marker. Synchronous listeners run on the same dispatcher to preserve order.
+// Failed delivery is fatal: continuing could acknowledge a transaction whose
+// preceding DML never reached the apply queue.
+func (es *EventsStreamer) notifyListeners(binlogEntry *binlog.BinlogEntry) (err error) {
 	es.listenersMutex.Lock()
 	defer es.listenersMutex.Unlock()
+	defer func() {
+		if err != nil {
+			es.migrationContext.SetAbortError(err)
+			es.migrationContext.CancelContext()
+		}
+	}()
+	if err := es.migrationContext.GetAbortError(); err != nil {
+		return err
+	}
+	if err := es.migrationContext.GetContext().Err(); err != nil {
+		return err
+	}
+
+	if binlogEntry.TransactionComplete {
+		for _, listener := range es.transactionListeners {
+			if err := listener(binlogEntry); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	for _, listener := range es.listeners {
 		listener := listener
@@ -117,10 +149,11 @@ func (es *EventsStreamer) notifyListeners(binlogEntry *binlog.BinlogEntry) {
 			go func() {
 				listener.onDmlEvent(binlogEntry)
 			}()
-		} else {
-			listener.onDmlEvent(binlogEntry)
+		} else if err := listener.onDmlEvent(binlogEntry); err != nil {
+			return err
 		}
 	}
+	return nil
 }
 
 func (es *EventsStreamer) InitDBConnections() (err error) {
@@ -216,19 +249,32 @@ func (es *EventsStreamer) readCurrentMariaDBGTIDCoordinates() error {
 // StreamEvents will begin streaming events. It will be blocking, so should be
 // executed by a goroutine
 func (es *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
+	ctx := es.migrationContext.GetContext()
 	go func() {
-		for binlogEntry := range es.eventsChannel {
-			if binlogEntry.DmlEvent != nil {
-				es.notifyListeners(binlogEntry)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case binlogEntry, ok := <-es.eventsChannel:
+				if !ok {
+					return
+				}
+				if binlogEntry.DmlEvent != nil || binlogEntry.TransactionComplete {
+					if err := es.notifyListeners(binlogEntry); err != nil {
+						return
+					}
+				}
 			}
 		}
 	}()
 	// The next should block and execute forever, unless there's a serious error.
 	var successiveFailures int
 	var reconnectCoords mysql.BinlogCoordinates
-	ctx := es.migrationContext.GetContext()
 	for {
-		// Check for context cancellation each iteration
+		// Preserve a listener's failure rather than hiding it as cancellation.
+		if err := es.migrationContext.GetAbortError(); err != nil {
+			return err
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -239,6 +285,12 @@ func (es *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 		// of the last trx that was read completely from the streamer.
 		// Since row event application is idempotent, it's OK if we reapply some events.
 		if err := es.binlogReader.StreamEvents(canStopStreaming, es.eventsChannel); err != nil {
+			if abortErr := es.migrationContext.GetAbortError(); abortErr != nil {
+				return abortErr
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if canStopStreaming() {
 				return nil
 			}
