@@ -8,3 +8,6 @@ character-set-server=utf8mb4
 log-bin=mariadb-bin
 binlog-format=ROW
 log-slave-updates=ON
+# Enforce strictly in-order GTIDs (MariaDB's recommended production setting) so
+# the tests exercise gh-ost's MariaDB GTID handling under strict mode.
+gtid-strict-mode=ON

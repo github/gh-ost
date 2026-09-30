@@ -143,13 +143,20 @@ func GetReplicationLagFromSlaveStatus(dbVersion string, informationSchemaDb *gos
 }
 
 func GetMasterKeyFromSlaveStatus(dbVersion string, connectionConfig *ConnectionConfig) (masterKey *InstanceKey, err error) {
+	return getMasterKeyFromSlaveStatus(dbVersion, connectionConfig, OpenDB)
+}
+
+func getMasterKeyFromSlaveStatus(dbVersion string, connectionConfig *ConnectionConfig, openDB func(string) (*gosql.DB, error)) (masterKey *InstanceKey, err error) {
 	currentUri := connectionConfig.GetDBUri("information_schema")
 	// This function is only called once, okay to not have a cached connection pool
-	db, err := OpenDB(currentUri)
+	db, err := openDB(currentUri)
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
+	if err := db.QueryRow(`select @@global.version`).Scan(&dbVersion); err != nil {
+		return nil, err
+	}
 
 	showReplicaStatusQuery := fmt.Sprintf("show %s", ReplicaTermFor(dbVersion, `slave status`))
 	err = sqlutils.QueryRowsMap(db, showReplicaStatusQuery, func(rowMap sqlutils.RowMap) error {
@@ -187,9 +194,13 @@ func GetMasterKeyFromSlaveStatus(dbVersion string, connectionConfig *ConnectionC
 }
 
 func GetMasterConnectionConfigSafe(dbVersion string, connectionConfig *ConnectionConfig, visitedKeys *InstanceKeyMap, allowMasterMaster bool) (masterConfig *ConnectionConfig, err error) {
+	return getMasterConnectionConfigSafe(dbVersion, connectionConfig, visitedKeys, allowMasterMaster, OpenDB)
+}
+
+func getMasterConnectionConfigSafe(dbVersion string, connectionConfig *ConnectionConfig, visitedKeys *InstanceKeyMap, allowMasterMaster bool, openDB func(string) (*gosql.DB, error)) (masterConfig *ConnectionConfig, err error) {
 	log.Debugf("Looking for %s on %+v", ReplicaTermFor(dbVersion, "master"), connectionConfig.Key)
 
-	masterKey, err := GetMasterKeyFromSlaveStatus(dbVersion, connectionConfig)
+	masterKey, err := getMasterKeyFromSlaveStatus(dbVersion, connectionConfig, openDB)
 	if err != nil {
 		return nil, err
 	}
@@ -213,18 +224,21 @@ func GetMasterConnectionConfigSafe(dbVersion string, connectionConfig *Connectio
 		return nil, fmt.Errorf("there seems to be a master-master setup at %+v. This is unsupported. Bailing out", masterConfig.Key)
 	}
 	visitedKeys.AddKey(masterConfig.Key)
-	return GetMasterConnectionConfigSafe(dbVersion, masterConfig, visitedKeys, allowMasterMaster)
+	return getMasterConnectionConfigSafe(dbVersion, masterConfig, visitedKeys, allowMasterMaster, openDB)
 }
 
 func GetReplicationBinlogCoordinates(dbVersion string, db *gosql.DB, gtid bool) (readBinlogCoordinates, executeBinlogCoordinates BinlogCoordinates, err error) {
+	if gtid && IsMariaDB(dbVersion) {
+		return getMariaDBReplicationGTIDCoordinates(db)
+	}
 	showReplicaStatusQuery := fmt.Sprintf("show %s", ReplicaTermFor(dbVersion, `slave status`))
 	err = sqlutils.QueryRowsMap(db, showReplicaStatusQuery, func(m sqlutils.RowMap) error {
 		if gtid {
-			executeBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Executed_Gtid_Set"))
+			executeBinlogCoordinates, err = NewGTIDBinlogCoordinates(MySQLFlavor, m.GetString("Executed_Gtid_Set"))
 			if err != nil {
 				return err
 			}
-			readBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Retrieved_Gtid_Set"))
+			readBinlogCoordinates, err = NewGTIDBinlogCoordinates(MySQLFlavor, m.GetString("Retrieved_Gtid_Set"))
 			if err != nil {
 				return err
 			}
@@ -244,10 +258,20 @@ func GetReplicationBinlogCoordinates(dbVersion string, db *gosql.DB, gtid bool) 
 }
 
 func GetSelfBinlogCoordinates(dbVersion string, db *gosql.DB, gtid bool) (selfBinlogCoordinates BinlogCoordinates, err error) {
+	if gtid && IsMariaDB(dbVersion) {
+		// MariaDB does not expose a GTID column in SHOW MASTER STATUS; the
+		// executed GTID position of this server's own binary log is in
+		// @@global.gtid_binlog_pos.
+		var gtidBinlogPos string
+		if err = db.QueryRow(`select @@global.gtid_binlog_pos`).Scan(&gtidBinlogPos); err != nil {
+			return nil, err
+		}
+		return NewGTIDBinlogCoordinates(MariaDBFlavor, gtidBinlogPos)
+	}
 	binaryLogStatusTerm := ReplicaTermFor(dbVersion, "master status")
 	err = sqlutils.QueryRowsMap(db, fmt.Sprintf("show %s", binaryLogStatusTerm), func(m sqlutils.RowMap) error {
 		if gtid {
-			selfBinlogCoordinates, err = NewGTIDBinlogCoordinates(m.GetString("Executed_Gtid_Set"))
+			selfBinlogCoordinates, err = NewGTIDBinlogCoordinates(MySQLFlavor, m.GetString("Executed_Gtid_Set"))
 		} else {
 			selfBinlogCoordinates = NewFileBinlogCoordinates(
 				m.GetString("File"),
@@ -257,6 +281,26 @@ func GetSelfBinlogCoordinates(dbVersion string, db *gosql.DB, gtid bool) (selfBi
 		return nil
 	})
 	return selfBinlogCoordinates, err
+}
+
+// getMariaDBReplicationGTIDCoordinates reports the IO/SQL thread GTID positions
+// of a MariaDB replica. MariaDB has no Executed_Gtid_Set/Retrieved_Gtid_Set
+// columns: the IO thread position is in SHOW SLAVE STATUS's Gtid_IO_Pos, and the
+// applied position is in @@global.gtid_slave_pos.
+func getMariaDBReplicationGTIDCoordinates(db *gosql.DB) (readBinlogCoordinates, executeBinlogCoordinates BinlogCoordinates, err error) {
+	err = sqlutils.QueryRowsMap(db, "show slave status", func(m sqlutils.RowMap) error {
+		readBinlogCoordinates, err = NewGTIDBinlogCoordinates(MariaDBFlavor, m.GetString("Gtid_IO_Pos"))
+		return err
+	})
+	if err != nil {
+		return readBinlogCoordinates, executeBinlogCoordinates, err
+	}
+	var gtidSlavePos string
+	if err = db.QueryRow(`select @@global.gtid_slave_pos`).Scan(&gtidSlavePos); err != nil {
+		return readBinlogCoordinates, executeBinlogCoordinates, err
+	}
+	executeBinlogCoordinates, err = NewGTIDBinlogCoordinates(MariaDBFlavor, gtidSlavePos)
+	return readBinlogCoordinates, executeBinlogCoordinates, err
 }
 
 // GetInstanceKey reads hostname and port on given DB

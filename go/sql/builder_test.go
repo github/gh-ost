@@ -423,21 +423,22 @@ func TestBuildUniqueKeyRangeEndPreparedQueryViaOffset(t *testing.T) {
 	var chunkSize int64 = 500
 	{
 		// Different first-column values → 3-part UNION for efficient boundary seeks.
+		// A named (non-PRIMARY) key asserts the caller-supplied key reaches the force index hint.
 		uniqueKeyColumns := NewColumnList([]string{"name", "position"})
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, originalTableName, "name_position_uidx", uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		require.NoError(t, err)
 		expected := `
 			select /* gh-ost mydb.tbl test */
 				name, position
 			from
-				((select name, position from mydb.tbl where name = ? and position > ? order by name asc, position asc limit 500)
+				((select name, position from mydb.tbl force index (name_position_uidx) where name = ? and position > ? order by name asc, position asc limit 500)
 				union all
-				(select name, position from mydb.tbl where name > ? and name < ? order by name asc, position asc limit 500)
+				(select name, position from mydb.tbl force index (name_position_uidx) where name > ? and name < ? order by name asc, position asc limit 500)
 				union all
-				(select name, position from mydb.tbl where name = ? and position <= ? order by name asc, position asc limit 500)) t
+				(select name, position from mydb.tbl force index (name_position_uidx) where name = ? and position <= ? order by name asc, position asc limit 500)) t
 			order by
 				name asc, position asc
 			limit 1
@@ -451,13 +452,13 @@ func TestBuildUniqueKeyRangeEndPreparedQueryViaOffset(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{3, 117}
 
-		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, originalTableName, "PRIMARY", uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		require.NoError(t, err)
 		expected := `
 			select /* gh-ost mydb.tbl test */
 				name, position
 			from
-				mydb.tbl
+				mydb.tbl force index (PRIMARY)
 			where
 				(name = ? and position > ? and position <= ?)
 			order by
@@ -479,18 +480,18 @@ func TestBuildUniqueKeyRangeEndPreparedQueryViaTemptable(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{103, 117}
 
-		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, "PRIMARY", uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		require.NoError(t, err)
 		expected := `
 			select /* gh-ost mydb.tbl test */ name, position
 			from (
 				select name, position
 				from
-					((select name, position from mydb.tbl where name = ? and position > ? order by name asc, position asc limit 500)
+					((select name, position from mydb.tbl force index (PRIMARY) where name = ? and position > ? order by name asc, position asc limit 500)
 					union all
-					(select name, position from mydb.tbl where name > ? and name < ? order by name asc, position asc limit 500)
+					(select name, position from mydb.tbl force index (PRIMARY) where name > ? and name < ? order by name asc, position asc limit 500)
 					union all
-					(select name, position from mydb.tbl where name = ? and position <= ? order by name asc, position asc limit 500)) t
+					(select name, position from mydb.tbl force index (PRIMARY) where name = ? and position <= ? order by name asc, position asc limit 500)) t
 				order by name asc, position asc
 				limit 500
 			) select_osc_chunk
@@ -505,13 +506,13 @@ func TestBuildUniqueKeyRangeEndPreparedQueryViaTemptable(t *testing.T) {
 		rangeStartArgs := []interface{}{3, 17}
 		rangeEndArgs := []interface{}{3, 117}
 
-		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		query, explodedArgs, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, "PRIMARY", uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		require.NoError(t, err)
 		expected := `
 			select /* gh-ost mydb.tbl test */ name, position
 			from (
 				select name, position
-				from mydb.tbl
+				from mydb.tbl force index (PRIMARY)
 				where (name = ? and position > ? and position <= ?)
 				order by name asc, position asc
 				limit 500
@@ -535,17 +536,17 @@ func TestBuildUniqueKeyRangeEndPreparedQueryTwoColumnEnum(t *testing.T) {
 		rangeStartArgs := []interface{}{"a", 17}
 		rangeEndArgs := []interface{}{"z", 117}
 
-		query, _, err := BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		query, _, err := BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, originalTableName, "PRIMARY", uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		require.NoError(t, err)
 		expected := `
 			select /* gh-ost mydb.tbl test */
 				name, position
 			from
-				((select name, position from mydb.tbl where name = ? and position > ? order by concat(name) asc, position asc limit 500)
+				((select name, position from mydb.tbl force index (PRIMARY) where name = ? and position > ? order by concat(name) asc, position asc limit 500)
 				union all
-				(select name, position from mydb.tbl where name > ? and name < ? order by concat(name) asc, position asc limit 500)
+				(select name, position from mydb.tbl force index (PRIMARY) where name > ? and name < ? order by concat(name) asc, position asc limit 500)
 				union all
-				(select name, position from mydb.tbl where name = ? and position <= ? order by concat(name) asc, position asc limit 500)) t
+				(select name, position from mydb.tbl force index (PRIMARY) where name = ? and position <= ? order by concat(name) asc, position asc limit 500)) t
 			order by
 				concat(name) asc, position asc
 			limit 1
@@ -560,18 +561,18 @@ func TestBuildUniqueKeyRangeEndPreparedQueryTwoColumnEnum(t *testing.T) {
 		rangeStartArgs := []interface{}{3, "a"}
 		rangeEndArgs := []interface{}{103, "z"}
 
-		query, _, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
+		query, _, err := BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, originalTableName, "PRIMARY", uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, false, "test")
 		require.NoError(t, err)
 		expected := `
 			select /* gh-ost mydb.tbl test */ name, position
 			from (
 				select name, position
 				from
-					((select name, position from mydb.tbl where name = ? and position > ? order by name asc, concat(position) asc limit 500)
+					((select name, position from mydb.tbl force index (PRIMARY) where name = ? and position > ? order by name asc, concat(position) asc limit 500)
 					union all
-					(select name, position from mydb.tbl where name > ? and name < ? order by name asc, concat(position) asc limit 500)
+					(select name, position from mydb.tbl force index (PRIMARY) where name > ? and name < ? order by name asc, concat(position) asc limit 500)
 					union all
-					(select name, position from mydb.tbl where name = ? and position <= ? order by name asc, concat(position) asc limit 500)) t
+					(select name, position from mydb.tbl force index (PRIMARY) where name = ? and position <= ? order by name asc, concat(position) asc limit 500)) t
 				order by name asc, concat(position) asc
 				limit 500
 			) select_osc_chunk

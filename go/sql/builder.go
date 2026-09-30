@@ -425,7 +425,7 @@ func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableNa
 	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, noWait)
 }
 
-func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
+func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", explodedArgs, fmt.Errorf("got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}
@@ -438,7 +438,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 	}
 
 	if uniqueKeyColumns.Len() == 2 {
-		return buildUniqueKeyRangeEndTwoColumnViaOffset(databaseName, tableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, startRangeComparisonSign, hint)
+		return buildUniqueKeyRangeEndTwoColumnViaOffset(databaseName, tableName, EscapeName(uniqueKey), uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, startRangeComparisonSign, hint)
 	}
 
 	rangeStartComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeStartArgs, startRangeComparisonSign)
@@ -483,7 +483,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string
 	return result, explodedArgs, nil
 }
 
-func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
+func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", explodedArgs, fmt.Errorf("got 0 columns in BuildUniqueKeyRangeEndPreparedQuery")
 	}
@@ -496,7 +496,7 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 	}
 
 	if uniqueKeyColumns.Len() == 2 {
-		return buildUniqueKeyRangeEndTwoColumnViaTemptable(databaseName, tableName, uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, startRangeComparisonSign, hint)
+		return buildUniqueKeyRangeEndTwoColumnViaTemptable(databaseName, tableName, EscapeName(uniqueKey), uniqueKeyColumns, rangeStartArgs, rangeEndArgs, chunkSize, startRangeComparisonSign, hint)
 	}
 
 	rangeStartComparison, rangeExplodedArgs, err := BuildRangePreparedComparison(uniqueKeyColumns, rangeStartArgs, startRangeComparisonSign)
@@ -616,7 +616,7 @@ func buildTwoColumnUnionParts(
 }
 
 func buildUniqueKeyRangeEndTwoColumnViaOffset(
-	databaseName, tableName string,
+	databaseName, tableName, uniqueKey string,
 	uniqueKeyColumns *ColumnList,
 	rangeStartArgs, rangeEndArgs []interface{},
 	chunkSize int64,
@@ -629,7 +629,7 @@ func buildUniqueKeyRangeEndTwoColumnViaOffset(
 	}
 	col2StartOp := string(startRangeComparisonSign)
 	selectClause := m.col1Name + ", " + m.col2Name
-	fromClause := databaseName + "." + tableName
+	fromClause := fmt.Sprintf("%s.%s force index (%s)", databaseName, tableName, uniqueKey)
 	partSuffix := fmt.Sprintf("order by %s limit %d", m.orderByAsc, chunkSize)
 
 	if sameFirstColumnValue(rangeStartArgs, rangeEndArgs) {
@@ -637,7 +637,7 @@ func buildUniqueKeyRangeEndTwoColumnViaOffset(
 			select /* gh-ost %s.%s %s */
 				%s, %s
 			from
-				%s.%s
+				%s
 			where
 				(%s = %s and %s %s %s and %s <= %s)
 			order by
@@ -646,7 +646,7 @@ func buildUniqueKeyRangeEndTwoColumnViaOffset(
 			offset %d`,
 			databaseName, tableName, hint,
 			m.col1Name, m.col2Name,
-			databaseName, tableName,
+			fromClause,
 			m.col1Name, m.col1Val, m.col2Name, col2StartOp, m.col2Val, m.col2Name, m.col2Val,
 			m.orderByAsc,
 			chunkSize-1,
@@ -682,7 +682,7 @@ func buildUniqueKeyRangeEndTwoColumnViaOffset(
 }
 
 func buildUniqueKeyRangeEndTwoColumnViaTemptable(
-	databaseName, tableName string,
+	databaseName, tableName, uniqueKey string,
 	uniqueKeyColumns *ColumnList,
 	rangeStartArgs, rangeEndArgs []interface{},
 	chunkSize int64,
@@ -695,7 +695,7 @@ func buildUniqueKeyRangeEndTwoColumnViaTemptable(
 	}
 	col2StartOp := string(startRangeComparisonSign)
 	selectClause := m.col1Name + ", " + m.col2Name
-	fromClause := databaseName + "." + tableName
+	fromClause := fmt.Sprintf("%s.%s force index (%s)", databaseName, tableName, uniqueKey)
 	partSuffix := fmt.Sprintf("order by %s limit %d", m.orderByAsc, chunkSize)
 
 	if sameFirstColumnValue(rangeStartArgs, rangeEndArgs) {
@@ -703,7 +703,7 @@ func buildUniqueKeyRangeEndTwoColumnViaTemptable(
 			select /* gh-ost %s.%s %s */ %s, %s
 			from (
 				select %s, %s
-				from %s.%s
+				from %s
 				where (%s = %s and %s %s %s and %s <= %s)
 				order by %s
 				limit %d
@@ -712,7 +712,7 @@ func buildUniqueKeyRangeEndTwoColumnViaTemptable(
 			limit 1`,
 			databaseName, tableName, hint, m.col1Name, m.col2Name,
 			m.col1Name, m.col2Name,
-			databaseName, tableName,
+			fromClause,
 			m.col1Name, m.col1Val, m.col2Name, col2StartOp, m.col2Val, m.col2Name, m.col2Val,
 			m.orderByAsc, chunkSize,
 			m.orderByDesc,

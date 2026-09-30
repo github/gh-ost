@@ -26,11 +26,18 @@ var MysqlReplicaTermMap = map[string]string{
 	"slave":                 "replica",
 }
 
+// IsMariaDB reports whether the given server version string identifies a
+// MariaDB server (as opposed to Oracle MySQL). MariaDB reports versions >= 10
+// and differs from MySQL in replica terminology and GTID handling.
+func IsMariaDB(mysqlVersion string) bool {
+	return strings.Contains(strings.ToLower(mysqlVersion), "mariadb")
+}
+
 func ReplicaTermFor(mysqlVersion string, term string) string {
 	// MariaDB reports versions >= 10, which compare greater than the 8.4
 	// cutoff, but it never adopted the new replica/source terminology. Keep
 	// the legacy terms for it.
-	if strings.Contains(strings.ToLower(mysqlVersion), "mariadb") {
+	if IsMariaDB(mysqlVersion) {
 		return term
 	}
 

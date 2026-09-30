@@ -267,6 +267,12 @@ type MigrationContext struct {
 	TriggerSuffix       string
 	Triggers            []mysql.Trigger
 
+	// AnalyzeGhostTableBeforeCutOver makes cutOver() run ANALYZE TABLE on the ghost table
+	// immediately before the atomic swap, and abort the migration if the ANALYZE errors,
+	// rather than swap in a table with stale statistics. Opt-in: the operator enables it
+	// only for eligible tables — small, non-partitioned, non-empty at copy.
+	AnalyzeGhostTableBeforeCutOver bool
+
 	recentBinlogCoordinates mysql.BinlogCoordinates
 
 	BinlogSyncerMaxReconnectAttempts  int
