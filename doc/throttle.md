@@ -24,8 +24,6 @@ Otherwise you may specify your own list of replica servers you wish it to observ
 
 - `--throttle-control-replicas`: list of replicas you explicitly wish `gh-ost` to check for replication lag.
 
-- _Note:_ these hosts should be actual replicas within the migrated table's replication chain — pointing this at unrelated hosts can report healthy lag while leaving your real downstream replicas unmonitored.
-
   Example: `--throttle-control-replicas=myhost1.com:3306,myhost2.com,myhost3.com:3307`
 
   Note that these must be replicas within the migrated table's replication chain. `gh-ost` does not verify that the hosts in the list are part of it, so unrelated hosts will report healthy lag while your real replicas go unmonitored.
