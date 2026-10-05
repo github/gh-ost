@@ -29,6 +29,7 @@ import (
 
 	"github.com/github/gh-ost/go/mysql"
 	drivermysql "github.com/go-sql-driver/mysql"
+	version "github.com/hashicorp/go-version"
 	"github.com/openark/golib/sqlutils"
 )
 
@@ -92,6 +93,10 @@ type Applier struct {
 	migrationLockName string
 	migrationLockStop chan struct{}
 	migrationLockDone chan struct{}
+
+	// usePerformanceSchemaProcesslist tells ExpectProcess to read performance_schema.processlist
+	// rather than information_schema.processlist; see chooseProcesslistTable()
+	usePerformanceSchemaProcesslist bool
 }
 
 func NewApplier(migrationContext *base.MigrationContext) *Applier {
@@ -140,6 +145,7 @@ func (apl *Applier) InitDBConnections() (err error) {
 	if err := apl.validateAndReadGlobalVariables(); err != nil {
 		return err
 	}
+	apl.chooseProcesslistTable()
 	if !apl.migrationContext.AliyunRDS && !apl.migrationContext.GoogleCloudPlatform && !apl.migrationContext.AzureMySQL {
 		if impliedKey, err := mysql.GetInstanceKey(apl.db); err != nil {
 			return err
@@ -349,6 +355,47 @@ func (apl *Applier) validateAndReadGlobalVariables() error {
 
 	apl.migrationContext.Log.Infof("will use time_zone='%s' on applier", apl.migrationContext.ApplierTimeZone)
 	return nil
+}
+
+// chooseProcesslistTable decides which table ExpectProcess reads. performance_schema.processlist is
+// preferred: since MySQL 9.1, reading information_schema.processlist fails with Error 3854 while any
+// other session runs a statement not representable in utf8mb3, such as one with an emoji.
+// information_schema.processlist remains the fallback when performance_schema.processlist is not usable:
+// absent (MySQL 5.7, 8.0 before 8.0.22, MariaDB), empty because performance_schema is disabled, or not
+// readable by this account.
+func (apl *Applier) chooseProcesslistTable() {
+	var ownSessions int64
+	query := `select /* gh-ost */ count(*) from performance_schema.processlist where id = connection_id()`
+	err := apl.db.QueryRow(query).Scan(&ownSessions)
+	if err == nil && ownSessions == 1 {
+		apl.usePerformanceSchemaProcesslist = true
+		apl.migrationContext.Log.Infof("will use performance_schema.processlist on applier")
+		return
+	}
+	reason := "own session not listed, performance_schema may be disabled"
+	if err != nil {
+		reason = err.Error()
+	}
+	if hasStrictTmpTableCharsetConversion(apl.migrationContext.ApplierMySQLVersion) {
+		apl.migrationContext.Log.Warningf("performance_schema.processlist is not usable on applier (%s); falling back to information_schema.processlist. On MySQL 9.1 and later reading it fails while any other session runs a statement not representable in utf8mb3 (such as one with an emoji), and the atomic cut-over may then fail to find its RENAME. Enable performance_schema, and make sure this user can read performance_schema.processlist, to avoid this. See https://github.com/github/gh-ost/issues/1780 for details", reason)
+		return
+	}
+	apl.migrationContext.Log.Infof("will use information_schema.processlist on applier: performance_schema.processlist is not usable (%s)", reason)
+}
+
+// hasStrictTmpTableCharsetConversion tells whether the server is MySQL 9.1 or later, where character
+// set conversions into temporary tables are strict: information_schema.processlist then fails with
+// Error 3854 instead of a warning while a session runs a statement not representable in utf8mb3
+// (MySQL Bug #87579).
+func hasStrictTmpTableCharsetConversion(mysqlVersion string) bool {
+	if mysql.IsMariaDB(mysqlVersion) {
+		return false
+	}
+	serverVersion, err := version.NewVersion(mysqlVersion)
+	if err != nil {
+		return false
+	}
+	return serverVersion.Core().GreaterThanOrEqual(version.Must(version.NewVersion("9.1")))
 }
 
 // generateSqlModeQuery return a `sql_mode = ...` query, to be wrapped with a `set session` or `set global`,
@@ -1443,27 +1490,31 @@ func (apl *Applier) ExpectUsedLock(sessionId int64) error {
 	return nil
 }
 
-// ExpectProcess expects a process to show up in `SHOW PROCESSLIST` that has given characteristics
+// ExpectProcess expects a process to show up in `SHOW PROCESSLIST` that has given characteristics.
+// It reads performance_schema.processlist when usable, information_schema.processlist otherwise.
 func (apl *Applier) ExpectProcess(sessionId int64, stateHint, infoHint string) error {
-	found := false
-	query := `
+	processlistTable := "information_schema.processlist"
+	if apl.usePerformanceSchemaProcesslist {
+		processlistTable = "performance_schema.processlist"
+	}
+	query := fmt.Sprintf(`
 		select /* gh-ost */ id
 		from
-			information_schema.processlist
+			%s
 		where
 			id != connection_id()
 			and ? in (0, id)
-			and state like concat('%', ?, '%')
-			and info like concat('%', ?, '%')`
-	err := sqlutils.QueryRowsMap(apl.db, query, func(m sqlutils.RowMap) error {
-		found = true
-		return nil
-	}, sessionId, stateHint, infoHint)
-	if err != nil {
-		return err
-	}
-	if !found {
+			and state like concat('%%', ?, '%%')
+			and info like concat('%%', ?, '%%')`, processlistTable)
+	// A failed read may only report its error after the result set has started (Error 3854 does);
+	// sqlutils.QueryRowsMap would drop it and report the process as missing, Scan() returns it.
+	var id int64
+	err := apl.db.QueryRow(query, sessionId, stateHint, infoHint).Scan(&id)
+	if errors.Is(err, gosql.ErrNoRows) {
 		return fmt.Errorf("cannot find process. Hints: %s, %s", stateHint, infoHint)
+	}
+	if err != nil {
+		return apl.migrationContext.Log.Errore(fmt.Errorf("failed reading %s: %w", processlistTable, err))
 	}
 	return nil
 }
