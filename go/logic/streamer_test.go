@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
@@ -284,6 +286,70 @@ func TestEventsStreamerShouldDecodeRowsEvent(t *testing.T) {
 	}
 	if streamer.shouldDecodeRowsEvent("other_database", testMysqlTableName) {
 		t.Fatalf("expected unregistered database to be skipped")
+	}
+}
+
+// TestEventsStreamerInstantDDLDeadlockIsResolvedByDraining reproduces the
+// deadlock that occurs when the GhostTableMigrated signal is never received on
+// the instant-DDL success path: notifyListeners invokes the changelog listener
+// synchronously while holding listenersMutex, the listener blocks on an
+// unbuffered send until something receives, and shouldDecodeRowsEvent needs the
+// same mutex to run. Without a receiver, both stay blocked forever. It proves
+// that receiving the signal (what Migrator.waitForGhostTableMigrated does on
+// the instant-DDL success path) resolves it.
+func TestEventsStreamerInstantDDLDeadlockIsResolvedByDraining(t *testing.T) {
+	migrationContext := newTestMigrationContext()
+	streamer := NewEventsStreamer(migrationContext)
+
+	ghostTableMigrated := make(chan bool) // unbuffered, mirrors Migrator.ghostTableMigrated
+
+	err := streamer.AddListener(false, testMysqlDatabase, testMysqlTableName, func(event *binlog.BinlogEntry) error {
+		return base.SendWithContext(migrationContext.GetContext(), ghostTableMigrated, true)
+	})
+	require.NoError(t, err)
+
+	entry := &binlog.BinlogEntry{
+		DmlEvent: binlog.NewBinlogDMLEvent(testMysqlDatabase, testMysqlTableName, binlog.InsertDML),
+	}
+
+	notifyReturned := make(chan struct{})
+	go func() {
+		streamer.notifyListeners(entry) // holds listenersMutex, blocks on the listener's send
+		close(notifyReturned)
+	}()
+
+	decodeReturned := make(chan bool, 1)
+	go func() {
+		decodeReturned <- streamer.shouldDecodeRowsEvent(testMysqlDatabase, testMysqlTableName)
+	}()
+
+	// Both goroutines are blocked and cannot progress until the signal is received:
+	// notifyListeners on the send, shouldDecodeRowsEvent on the mutex.
+	select {
+	case <-notifyReturned:
+		t.Fatal("notifyListeners returned before receiving; the test no longer reproduces the deadlock")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// The fix: the instant-DDL path waits for the signal before finalCleanup.
+	select {
+	case <-ghostTableMigrated:
+	case <-time.After(2 * time.Second):
+		t.Fatal("GhostTableMigrated signal was never published")
+	}
+
+	// Receiving releases the listener, so notifyListeners returns and frees the
+	// mutex, which unblocks the decode path.
+	select {
+	case <-notifyReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("notifyListeners still blocked after receive: deadlock not resolved")
+	}
+	select {
+	case decoded := <-decodeReturned:
+		require.True(t, decoded, "registered table should be decoded")
+	case <-time.After(2 * time.Second):
+		t.Fatal("shouldDecodeRowsEvent still blocked after receive: mutex was not released")
 	}
 }
 

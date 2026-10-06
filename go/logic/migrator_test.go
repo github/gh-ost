@@ -1566,6 +1566,63 @@ func TestAbort_DuringInspection(t *testing.T) {
 	}
 }
 
+func TestAbort_DuringGhostTableWait(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// Start listenOnPanicAbort
+	go migrator.listenOnPanicAbort()
+
+	// Give listenOnPanicAbort time to start
+	time.Sleep(20 * time.Millisecond)
+
+	// Simulate an abort raised while Migrate() waits for the ghost table
+	testErr := errors.New("ghost table wait aborted")
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		select {
+		case migrationContext.PanicAbort <- testErr:
+		case <-migrationContext.GetContext().Done():
+		}
+	}()
+
+	// Nothing sends on ghostTableMigrated, mirroring an abort that cancels the
+	// context before the changelog event arrives: the real sender publishes via
+	// base.SendWithContext, which stops sending once the context is cancelled.
+	// Waiting on the channel alone would block here forever.
+	done := make(chan error, 1)
+	go func() {
+		done <- migrator.waitForGhostTableMigrated()
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Expected an error once the abort cancelled the context")
+		}
+		if err.Error() != "ghost table wait aborted" {
+			t.Errorf("Expected 'ghost table wait aborted', got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Expected waitForGhostTableMigrated to return after the abort cancelled the context")
+	}
+}
+
+func TestWaitForGhostTableMigrated(t *testing.T) {
+	migrationContext := base.NewMigrationContext()
+	migrator := NewMigrator(migrationContext, "1.0.0")
+
+	// ghostTableMigrated is unbuffered, so the send must be async
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		migrator.ghostTableMigrated <- true
+	}()
+
+	if err := migrator.waitForGhostTableMigrated(); err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+}
+
 func TestAbort_DuringStreaming(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
 	migrator := NewMigrator(migrationContext, "1.0.0")
