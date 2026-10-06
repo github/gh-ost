@@ -54,13 +54,20 @@ setup() {
 
     echo "Starting MySQL $TEST_MYSQL_IMAGE containers..."
     compose_file="$GH_OST_ROOT/localtests/docker-compose-move-tables.yml"
-    MYSQL_SHA2_RSA_KEYS_FLAG=""
+    MYSQL_EXTRA_SERVER_OPTIONS=""
     MYSQL_PASSWORD_HASHING_ALGORITHM="mysql_native_password"
     if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
         MYSQL_PASSWORD_HASHING_ALGORITHM="caching_sha2_password"
-        MYSQL_SHA2_RSA_KEYS_FLAG="--caching-sha2-password-auto-generate-rsa-keys=ON"
+        MYSQL_EXTRA_SERVER_OPTIONS="--caching-sha2-password-auto-generate-rsa-keys=ON"
     fi
-    (TEST_MYSQL_IMAGE="$TEST_MYSQL_IMAGE" MYSQL_SHA2_RSA_KEYS_FLAG="$MYSQL_SHA2_RSA_KEYS_FLAG" envsubst <"$compose_file") >"$compose_file.tmp"
+    if [[ $TEST_MYSQL_IMAGE =~ "mariadb" ]]; then
+        MYSQL_PRIMARY_OPTIONS="--log-bin=mariadb-bin --binlog-format=row --gtid-strict-mode=ON --character-set-server=utf8mb4"
+        MYSQL_REPLICA_OPTIONS="$MYSQL_PRIMARY_OPTIONS --log-slave-updates=ON"
+    else
+        MYSQL_PRIMARY_OPTIONS="--log-bin=mysql-bin --binlog-format=row --gtid-mode=ON --enforce-gtid-consistency=ON --character-set-server=utf8mb4 $MYSQL_EXTRA_SERVER_OPTIONS"
+        MYSQL_REPLICA_OPTIONS="$MYSQL_PRIMARY_OPTIONS --log-slave-updates=ON"
+    fi
+    (TEST_MYSQL_IMAGE="$TEST_MYSQL_IMAGE" MYSQL_PRIMARY_OPTIONS="$MYSQL_PRIMARY_OPTIONS" MYSQL_REPLICA_OPTIONS="$MYSQL_REPLICA_OPTIONS" envsubst <"$compose_file") >"$compose_file.tmp"
 
     docker compose -f "$compose_file.tmp" up -d --wait
 
@@ -74,9 +81,14 @@ setup() {
         poll_mysql "$cluster" "replica" || exit 1
 
         echo -n "Setting up replication..."
-        mysql-exec "$cluster" "primary" -e "create user if not exists 'repl'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'repl';"
+        if [[ $TEST_MYSQL_IMAGE =~ "mariadb" ]]; then
+            mysql-exec "$cluster" "primary" -e "create user if not exists 'repl'@'%' identified by 'repl';"
+            mysql-exec "$cluster" "primary" -e "create user if not exists 'gh-ost'@'%' identified by 'gh-ost';"
+        else
+            mysql-exec "$cluster" "primary" -e "create user if not exists 'repl'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'repl';"
+            mysql-exec "$cluster" "primary" -e "create user if not exists 'gh-ost'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'gh-ost';"
+        fi
         mysql-exec "$cluster" "primary" -e "grant replication slave on *.* to 'repl'@'%'; flush privileges;"
-        mysql-exec "$cluster" "primary" -e "create user if not exists 'gh-ost'@'%' identified with $MYSQL_PASSWORD_HASHING_ALGORITHM by 'gh-ost';"
         mysql-exec "$cluster" "primary" -e "grant all on *.* to 'gh-ost'@'%';"
 
         primary_port=3307
@@ -85,7 +97,11 @@ setup() {
         fi
 
         sleep 1
-        if [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
+        if [[ $TEST_MYSQL_IMAGE =~ "mariadb" ]]; then
+            mysql-exec "$cluster" "replica" -e "reset master; set global gtid_slave_pos=''; set global gtid_domain_id=1;"
+            mysql-exec "$cluster" "replica" -e "change master to master_host='mysql-$cluster-primary', master_port=$primary_port, master_user='repl', master_password='repl', master_use_gtid=slave_pos;"
+            mysql-exec "$cluster" "replica" -e "start slave;"
+        elif [[ $TEST_MYSQL_IMAGE =~ "mysql:8.4" ]]; then
             mysql-exec "$cluster" "replica" -e "change replication source to source_host='mysql-$cluster-primary', source_port=$primary_port, source_user='repl', source_password='repl', source_auto_position=1, source_ssl=1;"
             mysql-exec "$cluster" "replica" -e "start replica;"
         else
