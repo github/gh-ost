@@ -1998,6 +1998,17 @@ func (mgtr *Migrator) executeDMLWriteFuncs() error {
 func (mgtr *Migrator) finalCleanup() error {
 	atomic.StoreInt64(&mgtr.migrationContext.CleanupImminentFlag, 1)
 
+	// The throttler polls the changelog table (`_ghc`) from background
+	// goroutines. Setting CleanupImminentFlag above stops any *new* polls
+	// from starting, but one may already be in flight (possibly against a
+	// lagging replica); wait for it to finish before we drop the table below,
+	// or it can spuriously fail with "table doesn't exist". The throttler may
+	// not have been initiated yet (e.g. finalCleanup is reached via the
+	// instant-DDL path before initiateThrottler runs).
+	if mgtr.throttler != nil {
+		mgtr.throttler.WaitForPendingChangelogReads()
+	}
+
 	mgtr.migrationContext.Log.Infof("Writing changelog state: %+v", Migrated)
 	if _, err := mgtr.applier.WriteChangelogState(string(Migrated)); err != nil {
 		return err

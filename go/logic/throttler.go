@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,6 +55,14 @@ type Throttler struct {
 	httpClientTimeout time.Duration
 	inspector         *Inspector
 	finishedMigrating int64
+
+	// pendingChangelogReads tracks throttler goroutines that are reading from
+	// the changelog table (`_ghc`), so that finalCleanup can wait for them to
+	// finish before dropping that table. Without this, a read that was
+	// already in flight when cleanup began can run into "table doesn't
+	// exist" once the drop lands (or, for reads issued against a replica,
+	// once the drop has replicated there).
+	pendingChangelogReads sync.WaitGroup
 
 	throttleStartedAt     time.Time
 	throttleStartedReason string
@@ -180,7 +189,16 @@ func (thlr *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 		if atomic.LoadInt64(&thlr.finishedMigrating) > 0 {
 			return
 		}
-		go collectFunc()
+		if atomic.LoadInt64(&thlr.migrationContext.CleanupImminentFlag) > 0 {
+			// Cleanup (which drops the changelog table) is about to start or
+			// already in progress; don't kick off any more reads against it.
+			return
+		}
+		thlr.pendingChangelogReads.Add(1)
+		go func() {
+			defer thlr.pendingChangelogReads.Done()
+			collectFunc()
+		}()
 	}
 }
 
@@ -263,6 +281,11 @@ func (thlr *Throttler) collectControlReplicasLag() {
 		if atomic.LoadInt64(&thlr.finishedMigrating) > 0 {
 			return
 		}
+		if atomic.LoadInt64(&thlr.migrationContext.CleanupImminentFlag) > 0 {
+			// Cleanup (which drops the changelog table) is about to start or
+			// already in progress; don't kick off any more reads against it.
+			return
+		}
 		if counter%relaxedFactor == 0 {
 			// we only check if we wish to be aggressive once per second. The parameters for being aggressive
 			// do not typically change at all throughout the migration, but nonetheless we check them.
@@ -271,8 +294,13 @@ func (thlr *Throttler) collectControlReplicasLag() {
 			shouldReadLagAggressively = (maxLagMillisecondsThrottleThreshold < 1000)
 		}
 		if counter == 0 || shouldReadLagAggressively {
-			// We check replication lag every so often, or if we wish to be aggressive
+			// We check replication lag every so often, or if we wish to be aggressive.
+			// checkControlReplicasLag blocks until all its replica reads complete, so
+			// track it as pending to let finalCleanup wait it out before dropping the
+			// changelog table.
+			thlr.pendingChangelogReads.Add(1)
 			checkControlReplicasLag()
+			thlr.pendingChangelogReads.Done()
 		}
 		counter++
 	}
@@ -562,4 +590,12 @@ func (thlr *Throttler) throttle(onThrottled func()) {
 func (thlr *Throttler) Teardown() {
 	thlr.migrationContext.Log.Debugf("Tearing down...")
 	atomic.StoreInt64(&thlr.finishedMigrating, 1)
+}
+
+// WaitForPendingChangelogReads blocks until any throttler goroutines that were
+// already reading from the changelog table (`_ghc`) when cleanup began have
+// finished. Callers must set CleanupImminentFlag first, so that no further
+// reads get started; this only needs to wait out ones already in flight.
+func (thlr *Throttler) WaitForPendingChangelogReads() {
+	thlr.pendingChangelogReads.Wait()
 }
