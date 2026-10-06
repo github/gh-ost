@@ -28,6 +28,7 @@ type migrationProgressSnapshot struct {
 	streamerBinlogPosition string
 	replicationLagSeconds  float64
 	heartbeatLagSeconds    float64
+	writerLagSeconds       float64
 }
 
 func (mgtr *Migrator) migrationProgressSnapshot() migrationProgressSnapshot {
@@ -63,6 +64,7 @@ func (mgtr *Migrator) migrationProgressSnapshot() migrationProgressSnapshot {
 		streamerBinlogPosition: streamerBinlogPosition,
 		replicationLagSeconds:  mgtr.migrationContext.GetCurrentLagDuration().Seconds(),
 		heartbeatLagSeconds:    mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds(),
+		writerLagSeconds:       mgtr.migrationContext.GetBinlogWriterLag().Seconds(),
 	}
 }
 

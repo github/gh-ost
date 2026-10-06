@@ -73,15 +73,20 @@ The following variables are available on all hooks:
 - `GH_OST_MIGRATED_HOST`
 - `GH_OST_INSPECTED_HOST`
 - `GH_OST_EXECUTING_HOST`
+- `GH_OST_TARGET_HOST` - the target/applier hostname (in `--move-tables`, this is the target cluster host)
 - `GH_OST_HOOKS_HINT` - copy of `--hooks-hint` value
 - `GH_OST_HOOKS_HINT_OWNER` - copy of `--hooks-hint-owner` value
 - `GH_OST_HOOKS_HINT_TOKEN` - copy of `--hooks-hint-token` value
 - `GH_OST_DRY_RUN` - whether or not the `gh-ost` run is a dry run
 - `GH_OST_REVERT` - whether or not `gh-ost` is running in revert mode
+- `GH_OST_MOVE_TABLES` - whether or not `gh-ost` is running in `--move-tables` mode
+- `GH_OST_TARGET_DATABASE_NAME` - operation target database name (in `--move-tables`, this is the explicit target database)
+- `GH_OST_TARGET_TABLE_NAME` - operation target table name (mode-dependent)
 
-The following variable are available on particular hooks:
+The following variables are available on particular hooks:
 
 - `GH_OST_INSTANT_DDL` is only available in `gh-ost-on-success`. The value is `true` if instant DDL was successful, and `false` if it was not.
+- `GH_OST_DRAIN_GTID` is only available in `gh-ost-on-success` and only in `--move-tables` mode. It contains the source `@@gtid_executed` captured immediately after the source `RENAME TABLE` (cutover) and represents the drain target the applier waits for.
 - `GH_OST_COMMAND` is only available in `gh-ost-on-interactive-command`
 - `GH_OST_STATUS` is only available in `gh-ost-on-status`
 - `GH_OST_LAST_BATCH_COPY_ERROR` is only available in `gh-ost-on-batch-copy-retry`

@@ -61,6 +61,44 @@ func TestGetTableNames(t *testing.T) {
 	}
 }
 
+func TestMoveTableDelName(t *testing.T) {
+	context := NewMigrationContext()
+	// Per-table `_<table>_del` rollback handle, independent of any other table.
+	require.Equal(t, "_some_table_del", context.MoveTableDelName("some_table"))
+	require.Equal(t, "_other_del", context.MoveTableDelName("other"))
+
+	// Honors --timestamp-old-table like the single-table GetOldTableName does.
+	context.TimestampOldTable = true
+	longForm := "Jan 2, 2006 at 3:04pm (MST)"
+	context.StartTime, _ = time.Parse(longForm, "Feb 3, 2013 at 7:54pm (PST)")
+	require.Equal(t, "_some_table_20130203195400_del", context.MoveTableDelName("some_table"))
+}
+
+func TestMoveTablesRunToken(t *testing.T) {
+	// Empty outside move-tables mode.
+	require.Equal(t, "", NewMigrationContext().MoveTablesRunToken())
+
+	context := NewMigrationContext()
+	context.MoveTables.TableNames = []string{"a", "b", "c"}
+	token := context.MoveTablesRunToken()
+	// Fixed length, lowercase hex (12 chars / 48 bits).
+	require.Len(t, token, 12)
+	require.Regexp(t, "^[0-9a-f]{12}$", token)
+	// Deterministic: the same set always yields the same token (so a resumed run
+	// finds the same run-wide artifacts).
+	require.Equal(t, token, context.MoveTablesRunToken())
+
+	// Order-independent: --move-tables=a,b,c and =c,b,a match.
+	reordered := NewMigrationContext()
+	reordered.MoveTables.TableNames = []string{"c", "b", "a"}
+	require.Equal(t, token, reordered.MoveTablesRunToken())
+
+	// A different set yields a different token.
+	different := NewMigrationContext()
+	different.MoveTables.TableNames = []string{"a", "b", "d"}
+	require.NotEqual(t, token, different.MoveTablesRunToken())
+}
+
 func TestGetTriggerNames(t *testing.T) {
 	{
 		context := NewMigrationContext()
@@ -216,6 +254,62 @@ func TestReadConfigFile(t *testing.T) {
 	}
 }
 
+func TestApplyCredentialsMoveTablesDerivesConnectionConfig(t *testing.T) {
+	ctx := NewMigrationContext()
+	ctx.MoveTables.TableNames = []string{"some_table"}
+	ctx.MoveTables.TargetHost = "target-host"
+	ctx.MoveTables.TargetPort = 3307
+	ctx.MoveTables.TargetUser = "target-user"
+	ctx.MoveTables.TargetPass = "target-pass"
+
+	ctx.InspectorConnectionConfig.Key.Hostname = "source-host"
+	ctx.InspectorConnectionConfig.Key.Port = 3306
+	ctx.InspectorConnectionConfig.User = "source-user"
+	ctx.InspectorConnectionConfig.Password = "source-pass"
+	ctx.InspectorConnectionConfig.Timeout = 12.5
+	ctx.InspectorConnectionConfig.TransactionIsolation = "REPEATABLE-READ"
+	ctx.InspectorConnectionConfig.Charset = "utf8mb4"
+
+	ctx.ApplyCredentials()
+
+	got := ctx.MoveTables.ConnectionConfig
+	require.NotNil(t, got)
+	require.Equal(t, "target-host", got.Key.Hostname)
+	require.Equal(t, 3307, got.Key.Port)
+	require.Equal(t, "target-user", got.User)
+	require.Equal(t, "target-pass", got.Password)
+	require.Equal(t, 12.5, got.Timeout)
+	require.Equal(t, "REPEATABLE-READ", got.TransactionIsolation)
+	require.Equal(t, "utf8mb4", got.Charset)
+	require.NotNil(t, got.ImpliedKey)
+	require.Equal(t, "target-host", got.ImpliedKey.Hostname)
+	require.Equal(t, 3307, got.ImpliedKey.Port)
+}
+
+func TestSetupTLSAppliesToMoveTablesConfig(t *testing.T) {
+	ctx := NewMigrationContext()
+	ctx.UseTLS = true
+	ctx.TLSAllowInsecure = true
+	ctx.MoveTables.TableNames = []string{"some_table"}
+	ctx.MoveTables.TargetHost = "target-host"
+	ctx.MoveTables.TargetPort = 3307
+	ctx.MoveTables.TargetUser = "target-user"
+	ctx.MoveTables.TargetPass = "target-pass"
+
+	ctx.InspectorConnectionConfig.Key.Hostname = "source-host"
+	ctx.InspectorConnectionConfig.Key.Port = 3306
+	ctx.InspectorConnectionConfig.User = "source-user"
+	ctx.InspectorConnectionConfig.Password = "source-pass"
+
+	ctx.ApplyCredentials()
+	require.NoError(t, ctx.SetupTLS())
+
+	require.NotNil(t, ctx.InspectorConnectionConfig.TLSConfig())
+	require.NotNil(t, ctx.MoveTables.ConnectionConfig.TLSConfig())
+	require.Equal(t, "source-host", ctx.InspectorConnectionConfig.TLSConfig().ServerName)
+	require.Equal(t, "target-host", ctx.MoveTables.ConnectionConfig.TLSConfig().ServerName)
+}
+
 func TestSetAbortError_StoresFirstError(t *testing.T) {
 	ctx := NewMigrationContext()
 
@@ -268,5 +362,24 @@ func TestSetAbortError_ThreadSafe(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Stored error %v not in list of sent errors", got)
+	}
+}
+
+func TestSetCutOverLockTimeoutSecondsRangeByMode(t *testing.T) {
+	{
+		ctx := NewMigrationContext()
+		require.NoError(t, ctx.SetCutOverLockTimeoutSeconds(10))
+		err := ctx.SetCutOverLockTimeoutSeconds(11)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "maximal timeout is 10sec")
+	}
+
+	{
+		ctx := NewMigrationContext()
+		ctx.MoveTables.TableNames = []string{"tbl"}
+		require.NoError(t, ctx.SetCutOverLockTimeoutSeconds(60))
+		err := ctx.SetCutOverLockTimeoutSeconds(61)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "maximal timeout is 60sec")
 	}
 }

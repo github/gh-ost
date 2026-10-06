@@ -7,6 +7,7 @@ package binlog
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/github/gh-ost/go/mysql"
 )
@@ -14,7 +15,11 @@ import (
 // BinlogEntry describes an entry in the binary log
 type BinlogEntry struct {
 	Coordinates mysql.BinlogCoordinates
-	DmlEvent    *BinlogDMLEvent
+	// Timestamp is the wall-clock time recorded in the binlog event header of the
+	// event that produced this entry. It is used in move-tables mode to measure
+	// writer lag (now - last applied event timestamp).
+	Timestamp time.Time
+	DmlEvent  *BinlogDMLEvent
 }
 
 // NewBinlogEntryAt creates an empty, ready to go BinlogEntry object
