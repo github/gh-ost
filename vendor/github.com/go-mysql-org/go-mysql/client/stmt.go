@@ -49,6 +49,49 @@ func (s *Stmt) ExecuteSelectStreaming(result *mysql.Result, perRowCb SelectPerRo
 	return s.conn.readResultStreaming(true, result, perRowCb, perResCb)
 }
 
+// StmtProcedureMultiResultForward is called once per logical result returned by
+// COM_STMT_EXECUTE. When err is non-nil, res is nil. Implementations typically
+// forward each result to a proxy client via server.Conn.WriteValue.
+// A nil return from forward means the result or error was handled successfully.
+type StmtProcedureMultiResultForward func(res *mysql.Result, err error) error
+
+// ExecuteProcedureMultiResults runs COM_STMT_EXECUTE and reads every response
+// until SERVER_MORE_RESULTS_EXISTS is clear (CALL / stored procedures with
+// multiple result sets). forward is called for each result in arrival order;
+// the loop continues draining the server response even after forward returns
+// non-nil, matching ExecuteMultiple semantics so that unread packets do not
+// corrupt the connection state.
+//
+// The first non-nil error returned by forward is saved and returned after all
+// results have been drained. If forward handles an error and returns nil, that
+// error is not propagated.
+func (s *Stmt) ExecuteProcedureMultiResults(forward StmtProcedureMultiResultForward, args ...any) error {
+	if forward == nil {
+		return errors.New("forward callback cannot be nil")
+	}
+	if err := s.write(args...); err != nil {
+		return errors.Trace(err)
+	}
+	var forwardErr error
+	for {
+		res, err := s.conn.readResult(true)
+		if forwardErr == nil {
+			if err != nil {
+				forwardErr = forward(nil, err)
+			} else if res != nil {
+				forwardErr = forward(res, nil)
+			}
+		}
+		if err != nil {
+			break
+		}
+		if res == nil || res.Status&mysql.SERVER_MORE_RESULTS_EXISTS == 0 {
+			break
+		}
+	}
+	return forwardErr
+}
+
 func (s *Stmt) Close() error {
 	if err := s.conn.writeCommandUint32(mysql.COM_STMT_CLOSE, s.ID); err != nil {
 		return errors.Trace(err)

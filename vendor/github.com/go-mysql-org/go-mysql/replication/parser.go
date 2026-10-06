@@ -37,6 +37,7 @@ type BinlogParser struct {
 
 	useDecimal               bool
 	useFloatWithTrailingZero bool
+	renderJSONAsMySQLText    bool
 	ignoreJSONDecodeErr      bool
 	verifyChecksum           bool
 
@@ -205,6 +206,12 @@ func (p *BinlogParser) SetUseFloatWithTrailingZero(useFloatWithTrailingZero bool
 	p.useFloatWithTrailingZero = useFloatWithTrailingZero
 }
 
+// SetRenderJSONAsMySQLText toggles MySQL-text JSON rendering for RowsEvents.
+// See BinlogSyncerConfig.RenderJSONAsMySQLText for the full rationale.
+func (p *BinlogParser) SetRenderJSONAsMySQLText(renderJSONAsMySQLText bool) {
+	p.renderJSONAsMySQLText = renderJSONAsMySQLText
+}
+
 func (p *BinlogParser) SetIgnoreJSONDecodeError(ignoreJSONDecodeErr bool) {
 	p.ignoreJSONDecodeErr = ignoreJSONDecodeErr
 }
@@ -227,6 +234,30 @@ func (p *BinlogParser) SetRowsEventDecodeFunc(rowsEventDecodeFunc func(*RowsEven
 
 func (p *BinlogParser) SetTableMapOptionalMetaDecodeFunc(tableMapOptionalMetaDecondeFunc func([]byte) error) {
 	p.tableMapOptionalMetaDecodeFunc = tableMapOptionalMetaDecondeFunc
+}
+
+// cloneForPayloadDecode returns a new BinlogParser that inherits the
+// caller's user-settable decode options (UseDecimal, RenderJSONAsMySQLText,
+// ParseTime, etc.) but with checksum verification disabled and a fresh
+// tables map. It is used to parse the events nested inside a
+// TRANSACTION_PAYLOAD_EVENT, so that those rows decode with the same
+// options as uncompressed rows.
+func (p *BinlogParser) cloneForPayloadDecode() *BinlogParser {
+	inner := NewBinlogParser()
+	inner.flavor = p.flavor
+	inner.rawMode = p.rawMode
+	inner.parseTime = p.parseTime
+	inner.timestampStringLocation = p.timestampStringLocation
+	inner.useDecimal = p.useDecimal
+	inner.useFloatWithTrailingZero = p.useFloatWithTrailingZero
+	inner.renderJSONAsMySQLText = p.renderJSONAsMySQLText
+	inner.ignoreJSONDecodeErr = p.ignoreJSONDecodeErr
+	// verifyChecksum is intentionally left at the zero value: nested
+	// events do not carry their own checksum trailers.
+	inner.payloadDecoderConcurrency = p.payloadDecoderConcurrency
+	inner.rowsEventDecodeFunc = p.rowsEventDecodeFunc
+	inner.tableMapOptionalMetaDecodeFunc = p.tableMapOptionalMetaDecodeFunc
+	return inner
 }
 
 func (p *BinlogParser) parseHeader(data []byte) (*EventHeader, error) {
@@ -356,6 +387,10 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 		p.tables[te.TableID] = te
 	}
 
+	if tpe, ok := e.(*TransactionPayloadEvent); ok {
+		tpe.stampInnerEventPositions(h)
+	}
+
 	if re, ok := e.(*RowsEvent); ok {
 		if (re.Flags & RowsEventStmtEndFlag) > 0 {
 			// Refer https://github.com/alibaba/canal/blob/38cc81b7dab29b51371096fb6763ca3a8432ffee/dbsync/src/main/java/com/taobao/tddl/dbsync/binlog/event/RowsLogEvent.java#L176
@@ -432,6 +467,7 @@ func (p *BinlogParser) newRowsEvent(h *EventHeader) *RowsEvent {
 	e.timestampStringLocation = p.timestampStringLocation
 	e.useDecimal = p.useDecimal
 	e.useFloatWithTrailingZero = p.useFloatWithTrailingZero
+	e.renderJSONAsMySQLText = p.renderJSONAsMySQLText
 	e.ignoreJSONDecodeErr = p.ignoreJSONDecodeErr
 
 	switch h.EventType {
@@ -477,6 +513,7 @@ func (p *BinlogParser) newTransactionPayloadEvent() *TransactionPayloadEvent {
 	e := &TransactionPayloadEvent{}
 	e.format = *p.format
 	e.concurrency = p.payloadDecoderConcurrency
+	e.parent = p
 
 	return e
 }

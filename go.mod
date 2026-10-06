@@ -5,7 +5,7 @@ go 1.25.12
 require (
 	github.com/DataDog/datadog-go/v5 v5.8.3
 	github.com/go-ini/ini v1.67.0
-	github.com/go-mysql-org/go-mysql v1.15.0
+	github.com/go-mysql-org/go-mysql v1.16.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-version v1.7.0

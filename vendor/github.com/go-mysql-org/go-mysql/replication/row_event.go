@@ -953,6 +953,7 @@ type RowsEvent struct {
 	timestampStringLocation  *time.Location
 	useDecimal               bool
 	useFloatWithTrailingZero bool
+	renderJSONAsMySQLText    bool
 	ignoreJSONDecodeErr      bool
 }
 
