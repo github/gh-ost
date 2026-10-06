@@ -18,6 +18,8 @@ Allows the user to make schema changes that include a zero date or zero in date 
 
 Mandatory unless using [`--revert`](#revert). The schema change to apply to the migrated table. You can pass just the alter options, for example `--alter="ADD COLUMN created_at timestamp NULL"`, together with [`--database`](#database) and [`--table`](#table). You can also pass a full `ALTER TABLE [database.]table ...` statement; an explicit database or table in `--alter` can be used instead of the corresponding flag.
 
+Do **not** end the statement with a semicolon (`;`). A trailing semicolon is rejected: it breaks `--attempt-instant-ddl` because `ALGORITHM=INSTANT` is appended after the statement, and it has caused empty/broken indexes in some MySQL/MariaDB edge cases. Prefer the options-only form for clarity.
+
 ### azure
 
 Add this flag when executing on Azure Database for MySQL.
