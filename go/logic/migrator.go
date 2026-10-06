@@ -2015,8 +2015,10 @@ func (mgtr *Migrator) finalCleanup() error {
 		mgtr.migrationContext.Log.Errore(err)
 	}
 
-	if err := mgtr.retryOperation(mgtr.applier.DropChangelogTable); err != nil {
-		return err
+	if !mgtr.migrationContext.Noop || !mgtr.migrationContext.Resume {
+		if err := mgtr.retryOperation(mgtr.applier.DropChangelogTable); err != nil {
+			return err
+		}
 	}
 	if mgtr.migrationContext.OkToDropTable && !mgtr.migrationContext.TestOnReplica {
 		if err := mgtr.retryOperation(mgtr.applier.DropOldTable); err != nil {
@@ -2033,7 +2035,7 @@ func (mgtr *Migrator) finalCleanup() error {
 			mgtr.migrationContext.Log.Infof("-- drop table %s.%s", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.GetCheckpointTableName()))
 		}
 	}
-	if mgtr.migrationContext.Noop {
+	if mgtr.migrationContext.Noop && !mgtr.migrationContext.Resume {
 		if err := mgtr.retryOperation(mgtr.applier.DropGhostTable); err != nil {
 			return err
 		}

@@ -1428,6 +1428,128 @@ func (suite *MigratorTestSuite) TestRevert() {
 	suite.Require().Equal(checksum1, checksum2)
 }
 
+// TestResumeWithoutExecuteDoesNotDropGhostTable is a regression test for
+// https://github.com/github/gh-ost/issues/1769: resuming a --checkpoint
+// migration without --execute (i.e. a dry-run resume) must not drop the
+// ghost table, since it holds real progress from the interrupted --execute
+// run and a later `--resume --execute` still needs it.
+func (suite *MigratorTestSuite) TestResumeWithoutExecuteDoesNotDropGhostTable() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY AUTO_INCREMENT, name TEXT)", getTestTableName()))
+	suite.Require().NoError(err)
+
+	// Seed enough rows, and slow the copy down via --nice-ratio (SetNiceRatio),
+	// so row-copy reliably outlasts the first checkpoint and we get a window
+	// to interrupt the migration mid-copy.
+	_, err = suite.db.ExecContext(ctx, "INSERT INTO "+getTestTableName()+" (name) VALUES ('a'),('a'),('a'),('a')")
+	suite.Require().NoError(err)
+	for range 12 { // 4 * 2^12 = 16384 rows
+		_, err = suite.db.ExecContext(ctx, "INSERT INTO "+getTestTableName()+" (name) SELECT name FROM "+getTestTableName())
+		suite.Require().NoError(err)
+	}
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	tableExists := func(name string) bool {
+		var one int
+		err := suite.db.QueryRowContext(ctx,
+			"SELECT 1 FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+			testMysqlDatabase, name).Scan(&one)
+		return err == nil
+	}
+
+	// --- first run: interrupt mid-copy, leaving checkpoint/ghost tables behind ---
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.AlterStatement = "ADD COLUMN newcol INT"
+	migrationContext.AlterStatementOptions = "ADD COLUMN newcol INT"
+	migrationContext.Checkpoint = true
+	migrationContext.CheckpointIntervalSeconds = 1
+	migrationContext.DropServeSocket = true
+	migrationContext.UseGTIDs = true
+	migrationContext.SetChunkSize(50)
+	migrationContext.SetNiceRatio(50)
+
+	migrator := NewMigrator(migrationContext, "0.0.0")
+
+	migrateErrCh := make(chan error, 1)
+	go func() {
+		migrateErrCh <- migrator.Migrate()
+	}()
+
+	checkpointTable := fmt.Sprintf("`%s`.`%s`", testMysqlDatabase, migrationContext.GetCheckpointTableName())
+	changelogTable := fmt.Sprintf("`%s`.`%s`", testMysqlDatabase, migrationContext.GetChangelogTableName())
+	defer func() {
+		_, _ = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+checkpointTable)
+		_, _ = suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+changelogTable)
+	}()
+
+	checkpointed := false
+	for range 100 {
+		var count int
+		if err := suite.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+checkpointTable).Scan(&count); err == nil && count > 0 {
+			checkpointed = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	suite.Require().True(checkpointed, "expected a checkpoint to be written before row copy completed")
+
+	// Abort without cleanup, like the interactive `panic` command: this leaves
+	// the ghost, changelog and checkpoint tables in place for the resume.
+	migrationContext.PanicAbort <- errors.New("simulated interruption for TestResumeWithoutExecuteDoesNotDropGhostTable")
+	suite.Require().Error(<-migrateErrCh)
+
+	suite.Require().True(tableExists(migrationContext.GetGhostTableName()), "ghost table should exist after interrupted migration")
+
+	// --- second run: dry-run resume (--resume without --execute) must not touch the ghost table ---
+	resumeContext := newTestMigrationContext()
+	resumeContext.ApplierConnectionConfig = connectionConfig
+	resumeContext.InspectorConnectionConfig = connectionConfig
+	resumeContext.SetConnectionConfig("innodb")
+	resumeContext.AlterStatement = migrationContext.AlterStatement
+	resumeContext.Checkpoint = true
+	resumeContext.CheckpointIntervalSeconds = 1
+	resumeContext.DropServeSocket = true
+	resumeContext.UseGTIDs = true
+	resumeContext.Resume = true
+	resumeContext.Noop = true // no --execute
+
+	resumeMigrator := NewMigrator(resumeContext, "0.0.0")
+	err = resumeMigrator.Migrate()
+	suite.Require().NoError(err)
+
+	suite.Require().True(tableExists(migrationContext.GetGhostTableName()), "dry-run --resume must not drop the ghost table")
+
+	// --- third run: a real `--resume --execute` should still pick up where the aborted run left off ---
+	finishContext := newTestMigrationContext()
+	finishContext.ApplierConnectionConfig = connectionConfig
+	finishContext.InspectorConnectionConfig = connectionConfig
+	finishContext.SetConnectionConfig("innodb")
+	finishContext.AlterStatement = migrationContext.AlterStatement
+	finishContext.Checkpoint = true
+	finishContext.CheckpointIntervalSeconds = 1
+	finishContext.DropServeSocket = true
+	finishContext.UseGTIDs = true
+	finishContext.Resume = true
+	finishContext.OkToDropTable = true
+	finishContext.InitiallyDropOldTable = true
+
+	finishMigrator := NewMigrator(finishContext, "0.0.0")
+	suite.Require().NoError(finishMigrator.Migrate())
+
+	var colCount int
+	err = suite.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=? AND table_name=? AND column_name='newcol'",
+		testMysqlDatabase, testMysqlTableName).Scan(&colCount)
+	suite.Require().NoError(err)
+	suite.Require().Equal(1, colCount, "resumed migration should have completed the ALTER")
+}
+
 func TestMigrator(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping migrator test suite in short mode")
