@@ -32,6 +32,7 @@ Otherwise you may specify your own list of replica servers you wish it to observ
 
 Note that you may dynamically change both `--max-lag-millis` and the `throttle-control-replicas` list via [interactive commands](interactive-commands.md)
 
+
 #### Status thresholds
 
 - `--max-load`: list of metrics and threshold values; topping the threshold of any will cause throttler to kick in.
