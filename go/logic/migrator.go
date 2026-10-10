@@ -165,13 +165,18 @@ func (mgtr *Migrator) retryBatchCopyWithHooks(operation func() error, notFatalHi
 // retryOperation attempts up to `count` attempts at running given function,
 // exiting as soon as it returns with non-error.
 func (mgtr *Migrator) retryOperation(operation func() error, notFatalHint ...bool) (err error) {
-	maxRetries := int(mgtr.migrationContext.MaxRetries())
-	for i := 0; i < maxRetries; i++ {
+	return mgtr.retryOperationWithInterval(operation, int(mgtr.migrationContext.MaxRetries()), time.Second, notFatalHint...)
+}
+
+// retryOperationWithInterval is `retryOperation` with an explicit attempt count and
+// wait between attempts. Callers that run while tables are locked use a sub-second
+// interval, where the default 1s wait would be pure table downtime.
+func (mgtr *Migrator) retryOperationWithInterval(operation func() error, attempts int, interval time.Duration, notFatalHint ...bool) (err error) {
+	for i := 0; i < attempts; i++ {
 		if i != 0 {
 			// sleep after previous iteration
-			sleepDuration := 1 * time.Second
-			metrics.RecordSleep(mgtr.migrationContext.Metrics, "retry_backoff", sleepDuration)
-			RetrySleepFn(sleepDuration)
+			metrics.RecordSleep(mgtr.migrationContext.Metrics, "retry_backoff", interval)
+			RetrySleepFn(interval)
 		}
 		// Check for abort/context cancellation before each retry
 		if abortErr := mgtr.checkAbort(); abortErr != nil {
@@ -1119,8 +1124,21 @@ func (mgtr *Migrator) atomicCutOver() (err error) {
 		}
 		return mgtr.applier.ExpectProcess(renameSessionId, "metadata lock", "rename")
 	}
-	// Wait for the RENAME to appear in PROCESSLIST
-	if err := mgtr.retryOperation(waitForRename, true); err != nil {
+	// Wait for the RENAME to appear in PROCESSLIST. The first poll usually loses the
+	// race against the RENAME registering its metadata-lock wait, and this runs with
+	// the original table write-locked -- so poll fast rather than paying
+	// retryOperation's flat 1s backoff in table downtime. What we wait on is a
+	// statement starting on an already-open connection: a round-trip, not seconds.
+	//
+	// The RENAME runs with lock_wait_timeout=CutOverLockTimeoutSeconds (see
+	// Applier.AtomicCutoverRename), so past that it has errored out and set
+	// tableRenameKnownToHaveFailed -- at which point waitForRename returns
+	// immediately. Budget twice that, so the flag always wins and running out of
+	// attempts is unreachable in practice.
+	const renamePollInterval = 10 * time.Millisecond
+	renameWaitTimeout := 2 * time.Duration(mgtr.migrationContext.CutOverLockTimeoutSeconds) * time.Second
+	renamePollAttempts := int(renameWaitTimeout / renamePollInterval)
+	if err := mgtr.retryOperationWithInterval(waitForRename, renamePollAttempts, renamePollInterval, true); err != nil {
 		metrics.RecordCutOverPhase(mgtr.migrationContext.Metrics, metrics.CutOverPhaseMagicRename, time.Since(phaseStartTime), err)
 		// Abort! Release the lock
 		okToUnlockTable <- true
@@ -1936,7 +1954,18 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 			}
 		default:
 			{
+				// Nothing was immediately available on the events queue. Block until one
+				// of the queues has work instead of sleeping a fixed second: during
+				// cut-over the AllEventsUpToLockProcessed sentinel arrives on
+				// applyEventsQueue while the tables are locked, and an unconditional
+				// sleep adds up to a full second of lock time (issue #1630).
 				select {
+				case eventStruct := <-mgtr.applyEventsQueue:
+					{
+						if err := mgtr.onApplyEventStruct(eventStruct); err != nil {
+							return err
+						}
+					}
 				case copyRowsFunc := <-mgtr.copyRowsQueue:
 					{
 						copyRowsStartTime := time.Now()
@@ -1956,12 +1985,11 @@ func (mgtr *Migrator) executeWriteFuncs() error {
 							}
 						}
 					}
-				default:
+				case <-time.After(time.Second):
 					{
-						// Hmmmmm... nothing in the queue; no events, but also no row copy.
-						// This is possible upon load. Let's just sleep it over.
-						mgtr.migrationContext.Log.Debugf("Getting nothing in the write queue. Sleeping...")
-						time.Sleep(time.Second)
+						// Nothing in the queue; no events, but also no row copy.
+						// Loop around to re-check abort/throttle state.
+						mgtr.migrationContext.Log.Debugf("Getting nothing in the write queue. Waiting...")
 					}
 				}
 			}
