@@ -13,8 +13,9 @@ import (
 
 // BinlogEntry describes an entry in the binary log
 type BinlogEntry struct {
-	Coordinates mysql.BinlogCoordinates
-	DmlEvent    *BinlogDMLEvent
+	Coordinates         mysql.BinlogCoordinates
+	DmlEvent            *BinlogDMLEvent
+	TransactionComplete bool
 }
 
 // NewBinlogEntryAt creates an empty, ready to go BinlogEntry object

@@ -75,8 +75,9 @@ type Applier struct {
 	finishedMigrating int64
 	name              string
 
-	CurrentCoordinatesMutex sync.Mutex
-	CurrentCoordinates      mysql.BinlogCoordinates
+	CurrentCoordinatesMutex       sync.Mutex
+	CurrentCoordinates            mysql.BinlogCoordinates
+	AppliedTransactionCoordinates mysql.BinlogCoordinates
 
 	LastIterationRangeMutex     sync.Mutex
 	LastIterationRangeMinValues *sql.ColumnValues
@@ -882,8 +883,8 @@ func (apl *Applier) WriteChangelogState(value string) (string, error) {
 	return apl.WriteAndLogChangelog("state", value)
 }
 
-// WriteCheckpoints writes a checkpoint to the _ghk table.
-func (apl *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
+// WriteCheckpoint writes a checkpoint to the _ghk table.
+func (apl *Applier) WriteCheckpoint(ctx context.Context, chk *Checkpoint) (int64, error) {
 	var insertId int64
 	uniqueKeyArgs := sqlutils.Args(chk.IterationRangeMin.AbstractValues()...)
 	uniqueKeyArgs = append(uniqueKeyArgs, chk.IterationRangeMax.AbstractValues()...)
@@ -893,7 +894,7 @@ func (apl *Applier) WriteCheckpoint(chk *Checkpoint) (int64, error) {
 	}
 	args := sqlutils.Args(chk.LastTrxCoords.String(), chk.Iteration, chk.RowsCopied, chk.DMLApplied, chk.IsCutover)
 	args = append(args, uniqueKeyArgs...)
-	res, err := apl.db.Exec(query, args...)
+	res, err := apl.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return insertId, err
 	}
