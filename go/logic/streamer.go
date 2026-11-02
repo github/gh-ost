@@ -101,18 +101,26 @@ func (es *EventsStreamer) shouldDecodeRowsEvent(databaseName, tableName string) 
 
 // notifyListeners will notify relevant listeners with given DML event. Only
 // listeners registered for changes on the table on which the DML operates are notified.
+//
+// The matching listeners are collected under listenersMutex and invoked after it is
+// released. A synchronous listener can block indefinitely, and shouldDecodeRowsEvent
+// takes the same mutex on the binlog parser's goroutine: holding it across the call
+// stalls the parser, which in turn stalls BinlogSyncer.Close.
 func (es *EventsStreamer) notifyListeners(binlogEntry *binlog.BinlogEntry) {
 	es.listenersMutex.Lock()
-	defer es.listenersMutex.Unlock()
-
+	matched := make([]*BinlogEventListener, 0, len(es.listeners))
 	for _, listener := range es.listeners {
-		listener := listener
 		if !strings.EqualFold(listener.databaseName, binlogEntry.DmlEvent.DatabaseName) {
 			continue
 		}
 		if !strings.EqualFold(listener.tableName, binlogEntry.DmlEvent.TableName) {
 			continue
 		}
+		matched = append(matched, listener)
+	}
+	es.listenersMutex.Unlock()
+
+	for _, listener := range matched {
 		if listener.async {
 			go func() {
 				listener.onDmlEvent(binlogEntry)

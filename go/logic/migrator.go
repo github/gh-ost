@@ -110,12 +110,14 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		hooks = NewHooksExecutor(context)
 	}
 	migrator := &Migrator{
-		appVersion:               appVersion,
-		hooksExecutor:            hooks,
-		migrationContext:         context,
-		statusWriter:             os.Stdout,
-		parser:                   sql.NewAlterTableParser(),
-		ghostTableMigrated:       make(chan bool),
+		appVersion:       appVersion,
+		hooksExecutor:    hooks,
+		migrationContext: context,
+		statusWriter:     os.Stdout,
+		parser:           sql.NewAlterTableParser(),
+		// Buffered: the changelog carries one GhostTableMigrated state per migration,
+		// and the --attempt-instant-ddl path returns without ever reading it.
+		ghostTableMigrated:       make(chan bool, 1),
 		firstThrottlingCollected: make(chan bool, 3),
 		rowCopyComplete:          make(chan error),
 		// Buffered with capacity 1; the send uses overwrite-oldest semantics
