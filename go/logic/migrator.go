@@ -539,6 +539,9 @@ func (mgtr *Migrator) Migrate() (err error) {
 		} else {
 			mgtr.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := mgtr.applier.AttemptInstantDDL(); err == nil {
+				// The migration is over: without this the streamer keeps reconnecting
+				// after finalCleanup closes it, since canStopStreaming reads this flag.
+				atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
 				if err := mgtr.finalCleanup(); err != nil {
 					return nil
 				}

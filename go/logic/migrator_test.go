@@ -1326,6 +1326,14 @@ func (suite *MigratorTestSuite) TestMigrateInstantDDLReturns() {
 	case err := <-migrateDone:
 		suite.Require().NoError(err)
 	case <-time.After(60 * time.Second):
+		// Cancelling releases the parked changelog send, which unwinds the deadlock
+		// so the migration goroutine does not hold its connections and its locks on
+		// the test table for the rest of the suite.
+		migrationContext.CancelContext()
+		select {
+		case <-migrateDone:
+		case <-time.After(30 * time.Second):
+		}
 		suite.Require().Fail("Migrate did not return after the instant DDL succeeded")
 	}
 
