@@ -1294,6 +1294,55 @@ func (suite *MigratorTestSuite) TestCutOverLossDataCaseLockGhostBeforeRename() {
 	suite.Require().Equal("CREATE TABLE `testing` (\n  `id` int NOT NULL,\n  `name` varchar(64) DEFAULT NULL,\n  `foobar` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", createTableSQL)
 }
 
+// TestMigrateInstantDDLReturns locks down the deadlock in which a migration that
+// --attempt-instant-ddl completes never returns: the changelog listener parks on the
+// GhostTableMigrated send that this path never reads, and because notifyListeners used
+// to hold listenersMutex across that call, the binlog parser's shouldDecodeRowsEvent
+// stalled behind it and BinlogSyncer.Close in finalCleanup waited on the parser.
+func (suite *MigratorTestSuite) TestMigrateInstantDDLReturns() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, name VARCHAR(64))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.DropServeSocket = true
+	migrationContext.InitiallyDropOldTable = true
+	migrationContext.AttemptInstantDDL = true
+	migrationContext.AlterStatementOptions = "ADD COLUMN author varchar(255)"
+
+	migrator := NewMigrator(migrationContext, "0.0.0")
+
+	migrateDone := make(chan error, 1)
+	go func() { migrateDone <- migrator.Migrate() }()
+
+	select {
+	case err := <-migrateDone:
+		suite.Require().NoError(err)
+	case <-time.After(60 * time.Second):
+		// Cancelling releases the parked changelog send, which unwinds the deadlock
+		// so the migration goroutine does not hold its connections and its locks on
+		// the test table for the rest of the suite.
+		migrationContext.CancelContext()
+		select {
+		case <-migrateDone:
+		case <-time.After(30 * time.Second):
+		}
+		suite.Require().Fail("Migrate did not return after the instant DDL succeeded")
+	}
+
+	var tableName, createTableSQL string
+	err = suite.db.QueryRow("SHOW CREATE TABLE "+getTestTableName()).Scan(&tableName, &createTableSQL)
+	suite.Require().NoError(err)
+	suite.Require().Contains(createTableSQL, "`author` varchar(255)")
+}
+
 func (suite *MigratorTestSuite) TestRevertEmpty() {
 	ctx := context.Background()
 

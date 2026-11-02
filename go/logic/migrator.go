@@ -110,12 +110,14 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		hooks = NewHooksExecutor(context)
 	}
 	migrator := &Migrator{
-		appVersion:               appVersion,
-		hooksExecutor:            hooks,
-		migrationContext:         context,
-		statusWriter:             os.Stdout,
-		parser:                   sql.NewAlterTableParser(),
-		ghostTableMigrated:       make(chan bool),
+		appVersion:       appVersion,
+		hooksExecutor:    hooks,
+		migrationContext: context,
+		statusWriter:     os.Stdout,
+		parser:           sql.NewAlterTableParser(),
+		// Buffered: the changelog carries one GhostTableMigrated state per migration,
+		// and the --attempt-instant-ddl path returns without ever reading it.
+		ghostTableMigrated:       make(chan bool, 1),
 		firstThrottlingCollected: make(chan bool, 3),
 		rowCopyComplete:          make(chan error),
 		// Buffered with capacity 1; the send uses overwrite-oldest semantics
@@ -537,6 +539,9 @@ func (mgtr *Migrator) Migrate() (err error) {
 		} else {
 			mgtr.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := mgtr.applier.AttemptInstantDDL(); err == nil {
+				// The migration is over: without this the streamer keeps reconnecting
+				// after finalCleanup closes it, since canStopStreaming reads this flag.
+				atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
 				if err := mgtr.finalCleanup(); err != nil {
 					return nil
 				}
