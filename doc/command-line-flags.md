@@ -179,6 +179,8 @@ The `--dml-batch-size` flag controls the size of the batched write. Allowed valu
 
 Why is this behavior configurable? Different workloads have different characteristics. Some workloads have very large writes, such that aggregating even `50` writes into a transaction makes for a significant transaction size. On other workloads write rate is high such that one just can't allow for a hundred more syncs to disk per second. The default value is `100`, but the appropriate batch size depends on the workload. Your mileage may vary.
 
+For workloads with large rows, the combined DML statements in a batch can exceed MySQL's `max_allowed_packet` limit. `gh-ost` retries the same batch without reducing its size, so a persistently oversized batch eventually aborts the migration when retries are exhausted. Use a smaller `--dml-batch-size` for these workloads; `--dml-batch-size=10` preserves the previous default batch limit.
+
 Noteworthy is that setting `--dml-batch-size` to higher value _does not_ mean `gh-ost` blocks or waits on writes. The batch size is an upper limit on transaction size, not a minimal one. If `gh-ost` doesn't have "enough" events in the pipe, it does not wait on the binary log, it just writes what it already has. This conveniently suggests that if write load is light enough for `gh-ost` to only see a few events in the binary log at a given time, then it is also light enough for `gh-ost` to apply a fraction of the batch size.
 
 ### exact-rowcount
