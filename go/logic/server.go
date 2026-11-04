@@ -234,6 +234,7 @@ throttle                             # Force throttling
 no-throttle                          # End forced throttling (other throttling may still apply)
 postpone-cut-over-flag-file=<path>   # Postpone the cut-over phase, writing a cut over flag file to the given path
 unpostpone                           # Bail out a cut-over postpone; proceed to cut-over
+cancel-unpostpone                    # Withdraw a pending 'unpostpone' that has not started cut-over yet; keep postponing
 panic                                # panic and quit without cleanup
 help                                 # This message
 - use '?' (question mark) as argument to get info rather than set. e.g. "max-load=?" will just print out current max-load.
@@ -436,6 +437,22 @@ help                                 # This message
 				return ForcePrintStatusAndHintRule, nil
 			}
 			fmt.Fprintf(writer, "You may only invoke this when gh-ost is actively postponing migration. At this time it is not\n")
+			return NoPrintStatusRule, nil
+		}
+	case "cancel-unpostpone":
+		{
+			if arg != "" && arg != srv.migrationContext.OriginalTableName {
+				// User explicitly provided table name. This is a courtesy protection mechanism
+				err := fmt.Errorf("user commanded 'cancel-unpostpone' on %s, but migrated table is %s; ignoring request", arg, srv.migrationContext.OriginalTableName)
+				return NoPrintStatusRule, err
+			}
+			// The migrator consumes the request with the same compare-and-swap once it
+			// starts cut-over, so exactly one side wins.
+			if atomic.CompareAndSwapInt64(&srv.migrationContext.UserCommandedUnpostponeFlag, 1, 0) {
+				fmt.Fprintf(writer, "Unpostpone cancelled; cut-over stays postponed while the postpone flag file exists\n")
+				return ForcePrintStatusAndHintRule, nil
+			}
+			fmt.Fprintf(writer, "There is no pending unpostpone to cancel. Either none was requested, or cut-over has already started\n")
 			return NoPrintStatusRule, nil
 		}
 	case "panic":

@@ -43,6 +43,8 @@ Both interfaces may serve at the same time. Both respond to simple text command,
 - `no-throttle`: cancel forced suspension (though other throttling reasons may still apply)
 - `postpone-cut-over-flag-file=<path>`: Postpone the [cut-over](cut-over.md) phase, writing a cut over flag file to the given path
 - `unpostpone`: at a time where `gh-ost` is postponing the [cut-over](cut-over.md) phase, instruct `gh-ost` to stop postponing and proceed immediately to cut-over.
+  - Cut-over still waits until the heartbeat lag is below both `--max-lag-millis` and `--cut-over-lock-timeout-seconds`. Until it starts, `status` reports the request, e.g. `State: postponing cut-over, unpostpone requested: waiting for heartbeat lag (4.20s) to drop below 1.50s`.
+- `cancel-unpostpone`: withdraw a pending `unpostpone` that has not started cut-over yet, so `gh-ost` keeps postponing as long as the postpone flag file exists. Replies `There is no pending unpostpone to cancel` if no request is pending or cut-over has already started. Useful for tooling that issues `unpostpone` and wants to give up if the lag does not recover in time.
 - `panic`: immediately panic and abort operation
 
 ### Querying for data
