@@ -431,8 +431,7 @@ help                                 # This message
 				err := fmt.Errorf("user commanded 'unpostpone' on %s, but migrated table is %s; ignoring request", arg, srv.migrationContext.OriginalTableName)
 				return NoPrintStatusRule, err
 			}
-			if atomic.LoadInt64(&srv.migrationContext.IsPostponingCutOver) > 0 {
-				atomic.StoreInt64(&srv.migrationContext.UserCommandedUnpostponeFlag, 1)
+			if srv.migrationContext.RequestUnpostpone() {
 				fmt.Fprintf(writer, "Unpostponed\n")
 				return ForcePrintStatusAndHintRule, nil
 			}
@@ -446,9 +445,8 @@ help                                 # This message
 				err := fmt.Errorf("user commanded 'cancel-unpostpone' on %s, but migrated table is %s; ignoring request", arg, srv.migrationContext.OriginalTableName)
 				return NoPrintStatusRule, err
 			}
-			// The migrator consumes the request with the same compare-and-swap once it
-			// starts cut-over, so exactly one side wins.
-			if atomic.CompareAndSwapInt64(&srv.migrationContext.UserCommandedUnpostponeFlag, 1, 0) {
+			// Serialized with the migrator consuming the request, so exactly one side wins.
+			if srv.migrationContext.CancelUnpostpone() {
 				fmt.Fprintf(writer, "Unpostpone cancelled; cut-over stays postponed while the postpone flag file exists\n")
 				return ForcePrintStatusAndHintRule, nil
 			}

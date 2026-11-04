@@ -887,8 +887,9 @@ func (mgtr *Migrator) cutOverHeartbeatLag() (lag, limit time.Duration, tooHigh b
 //
 // A pending 'unpostpone' is only consumed once the heartbeat lag allows cut-over to
 // start. Until then it stays visible in the status output and can be withdrawn with
-// the 'cancel-unpostpone' command. Both sides use compare-and-swap, so a request is
-// either consumed here or cancelled by the user, never both.
+// the 'cancel-unpostpone' command. Requests, cancellations and consumption are
+// serialized with the end of postponement, so a request is either consumed here or
+// cancelled by the user, never both, and none is accepted once cut-over has begun.
 func (mgtr *Migrator) shouldPostponeCutOver() (bool, error) {
 	if lag, limit, tooHigh := mgtr.cutOverHeartbeatLag(); tooHigh {
 		mgtr.migrationContext.Log.Debugf("current HeartbeatLag (%.2fs) is too high, it needs to be less than both --max-lag-millis and --cut-over-lock-timeout-seconds (%.2fs) to continue", lag.Seconds(), limit.Seconds())
@@ -897,7 +898,7 @@ func (mgtr *Migrator) shouldPostponeCutOver() (bool, error) {
 	if mgtr.migrationContext.PostponeCutOverFlagFile == "" {
 		return false, nil
 	}
-	if atomic.CompareAndSwapInt64(&mgtr.migrationContext.UserCommandedUnpostponeFlag, 1, 0) {
+	if mgtr.migrationContext.ConsumeUnpostpone() {
 		return false, nil
 	}
 	if base.FileExists(mgtr.migrationContext.PostponeCutOverFlagFile) {
@@ -910,6 +911,7 @@ func (mgtr *Migrator) shouldPostponeCutOver() (bool, error) {
 		atomic.StoreInt64(&mgtr.migrationContext.IsPostponingCutOver, 1)
 		return true, nil
 	}
+	mgtr.migrationContext.EndPostponingCutOver()
 	return false, nil
 }
 
@@ -930,7 +932,7 @@ func (mgtr *Migrator) cutOver() (err error) {
 	if err := mgtr.sleepWhileTrue("cut_over_postpone", mgtr.shouldPostponeCutOver); err != nil {
 		return err
 	}
-	atomic.StoreInt64(&mgtr.migrationContext.IsPostponingCutOver, 0)
+	mgtr.migrationContext.EndPostponingCutOver()
 	mgtr.migrationContext.MarkPointOfInterest()
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
 

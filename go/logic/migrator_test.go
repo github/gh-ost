@@ -1920,6 +1920,7 @@ func TestMigratorUnpostponeCancelRace(t *testing.T) {
 	require.NoError(t, err)
 
 	for range 500 {
+		atomic.StoreInt64(&migrator.migrationContext.IsPostponingCutOver, 1)
 		atomic.StoreInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag, 1)
 		var consumed, cancelled bool
 		var wg sync.WaitGroup
@@ -1942,6 +1943,61 @@ func TestMigratorUnpostponeCancelRace(t *testing.T) {
 		wg.Wait()
 		require.True(t, consumed != cancelled, "consumed=%v cancelled=%v", consumed, cancelled)
 		require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag))
+	}
+}
+
+// TestMigratorRepeatedUnpostponeAfterConsume checks that once the cut-over loop has
+// consumed a request, a repeated 'unpostpone' is refused and 'cancel-unpostpone'
+// does not report success while cut-over is proceeding.
+func TestMigratorRepeatedUnpostponeAfterConsume(t *testing.T) {
+	migrator, srv := newPostponeTestMigrator(t)
+	postpone, err := migrator.shouldPostponeCutOver()
+	require.NoError(t, err)
+	require.True(t, postpone)
+
+	require.Equal(t, "Unpostponed\n", applyTestServerCommand(t, srv, "unpostpone"))
+	postpone, err = migrator.shouldPostponeCutOver()
+	require.NoError(t, err)
+	require.False(t, postpone)
+	require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.IsPostponingCutOver))
+
+	require.Contains(t, applyTestServerCommand(t, srv, "unpostpone"), "You may only invoke this when gh-ost is actively postponing")
+	require.Contains(t, applyTestServerCommand(t, srv, "cancel-unpostpone"), "There is no pending unpostpone to cancel")
+	require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag))
+}
+
+// TestMigratorRepeatedUnpostponeRace interleaves repeated 'unpostpone' commands with
+// the cut-over loop consuming the first one. Whatever the timing, no request may be
+// left pending after cut-over has begun, so a later cancel never claims success.
+func TestMigratorRepeatedUnpostponeRace(t *testing.T) {
+	for range 300 {
+		migrator, srv := newPostponeTestMigrator(t)
+		_, err := migrator.shouldPostponeCutOver()
+		require.NoError(t, err)
+		require.True(t, migrator.migrationContext.RequestUnpostpone())
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			postpone, err := migrator.shouldPostponeCutOver()
+			assert.NoError(t, err)
+			assert.False(t, postpone)
+		}()
+		go func() {
+			defer wg.Done()
+			var buf bytes.Buffer
+			writer := bufio.NewWriter(&buf)
+			_, err := srv.applyServerCommand("unpostpone", writer)
+			assert.NoError(t, err)
+			assert.NoError(t, writer.Flush())
+		}()
+		wg.Wait()
+
+		// The cut-over loop has exited; cut-over is proceeding.
+		require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.IsPostponingCutOver))
+		require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag))
+		require.Contains(t, applyTestServerCommand(t, srv, "cancel-unpostpone"), "There is no pending unpostpone to cancel")
 	}
 }
 
