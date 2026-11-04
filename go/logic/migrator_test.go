@@ -6,6 +6,7 @@
 package logic
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	gosql "database/sql"
@@ -1813,4 +1814,233 @@ func (suite *MigratorTestSuite) TestPanicOnWarningsDuplicateDuringCutoverWithHig
 	err = suite.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE email = 'user1@example.com'", getTestTableName())).Scan(&duplicateCount)
 	suite.Require().NoError(err)
 	suite.Require().Equal(2, duplicateCount, "Should have 2 duplicate email entries")
+}
+
+// newPostponeTestMigrator returns a migrator whose cut-over is postponed by an
+// existing flag file, with a fresh heartbeat, and a server sharing its context.
+func newPostponeTestMigrator(t *testing.T) (*Migrator, *Server) {
+	t.Helper()
+	migrationContext := base.NewMigrationContext()
+	migrationContext.OriginalTableName = "users"
+	migrationContext.PostponeCutOverFlagFile = filepath.Join(t.TempDir(), "postpone.flag")
+	require.NoError(t, base.TouchFile(migrationContext.PostponeCutOverFlagFile))
+	atomic.StoreInt64(&migrationContext.MaxLagMillisecondsThrottleThreshold, 1500)
+	migrationContext.CutOverLockTimeoutSeconds = 3
+	migrationContext.SetLastHeartbeatOnChangelogTime(time.Now())
+	migrator := NewMigrator(migrationContext, "1.2.3")
+	migrator.hooksExecutor = CompositeHooks{}
+	return migrator, NewServer(migrationContext, CompositeHooks{}, nil)
+}
+
+func applyTestServerCommand(t *testing.T, srv *Server, command string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := bufio.NewWriter(&buf)
+	_, err := srv.applyServerCommand(command, writer)
+	require.NoError(t, err)
+	require.NoError(t, writer.Flush())
+	return buf.String()
+}
+
+func TestMigratorCutOverHeartbeatLag(t *testing.T) {
+	migrator, _ := newPostponeTestMigrator(t)
+	_, limit, tooHigh := migrator.cutOverHeartbeatLag()
+	require.False(t, tooHigh)
+	require.Equal(t, 1500*time.Millisecond, limit)
+
+	// The limit is the lower of --max-lag-millis and --cut-over-lock-timeout-seconds.
+	atomic.StoreInt64(&migrator.migrationContext.MaxLagMillisecondsThrottleThreshold, 10000)
+	_, limit, _ = migrator.cutOverHeartbeatLag()
+	require.Equal(t, 3*time.Second, limit)
+
+	migrator.migrationContext.SetLastHeartbeatOnChangelogTime(time.Now().Add(-5 * time.Second))
+	lag, _, tooHigh := migrator.cutOverHeartbeatLag()
+	require.True(t, tooHigh)
+	require.GreaterOrEqual(t, lag, 5*time.Second)
+}
+
+func TestMigratorShouldPostponeCutOver(t *testing.T) {
+	t.Run("postpones while the flag file exists", func(t *testing.T) {
+		migrator, _ := newPostponeTestMigrator(t)
+		postpone, err := migrator.shouldPostponeCutOver()
+		require.NoError(t, err)
+		require.True(t, postpone)
+		require.Equal(t, int64(1), atomic.LoadInt64(&migrator.migrationContext.IsPostponingCutOver))
+	})
+
+	t.Run("pending unpostpone is kept while heartbeat lag is too high", func(t *testing.T) {
+		migrator, srv := newPostponeTestMigrator(t)
+		postpone, err := migrator.shouldPostponeCutOver()
+		require.NoError(t, err)
+		require.True(t, postpone)
+
+		require.Equal(t, "Unpostponed\n", applyTestServerCommand(t, srv, "unpostpone"))
+		migrator.migrationContext.SetLastHeartbeatOnChangelogTime(time.Now().Add(-time.Hour))
+
+		for range 3 {
+			postpone, err = migrator.shouldPostponeCutOver()
+			require.NoError(t, err)
+			require.True(t, postpone)
+			require.Equal(t, int64(1), atomic.LoadInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag))
+		}
+		state, _, _ := migrator.getMigrationStateAndETA(0)
+		require.Regexp(t, `^postponing cut-over, unpostpone requested: waiting for heartbeat lag \(\d+\.\d{2}s\) to drop below 1\.50s$`, state)
+
+		// Once the lag recovers, the request is consumed and cut-over may begin.
+		migrator.migrationContext.SetLastHeartbeatOnChangelogTime(time.Now())
+		postpone, err = migrator.shouldPostponeCutOver()
+		require.NoError(t, err)
+		require.False(t, postpone)
+		require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag))
+	})
+
+	t.Run("cancelled unpostpone keeps postponing", func(t *testing.T) {
+		migrator, srv := newPostponeTestMigrator(t)
+		_, err := migrator.shouldPostponeCutOver()
+		require.NoError(t, err)
+		applyTestServerCommand(t, srv, "unpostpone")
+		state, _, _ := migrator.getMigrationStateAndETA(0)
+		require.Equal(t, "postponing cut-over, unpostpone requested", state)
+
+		require.Contains(t, applyTestServerCommand(t, srv, "cancel-unpostpone"), "Unpostpone cancelled")
+		state, _, _ = migrator.getMigrationStateAndETA(0)
+		require.Equal(t, "postponing cut-over", state)
+
+		postpone, err := migrator.shouldPostponeCutOver()
+		require.NoError(t, err)
+		require.True(t, postpone)
+	})
+}
+
+// TestMigratorUnpostponeCancelRace checks that a pending unpostpone is either
+// consumed by the cut-over loop or withdrawn by cancel-unpostpone, never both.
+func TestMigratorUnpostponeCancelRace(t *testing.T) {
+	migrator, srv := newPostponeTestMigrator(t)
+	_, err := migrator.shouldPostponeCutOver()
+	require.NoError(t, err)
+
+	for range 500 {
+		atomic.StoreInt64(&migrator.migrationContext.IsPostponingCutOver, 1)
+		atomic.StoreInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag, 1)
+		var consumed, cancelled bool
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			postpone, err := migrator.shouldPostponeCutOver()
+			assert.NoError(t, err)
+			consumed = !postpone
+		}()
+		go func() {
+			defer wg.Done()
+			var buf bytes.Buffer
+			writer := bufio.NewWriter(&buf)
+			_, err := srv.applyServerCommand("cancel-unpostpone", writer)
+			assert.NoError(t, err)
+			assert.NoError(t, writer.Flush())
+			cancelled = strings.Contains(buf.String(), "Unpostpone cancelled")
+		}()
+		wg.Wait()
+		require.True(t, consumed != cancelled, "consumed=%v cancelled=%v", consumed, cancelled)
+		require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag))
+	}
+}
+
+// TestMigratorRepeatedUnpostponeAfterConsume checks that once the cut-over loop has
+// consumed a request, a repeated 'unpostpone' is refused and 'cancel-unpostpone'
+// does not report success while cut-over is proceeding.
+func TestMigratorRepeatedUnpostponeAfterConsume(t *testing.T) {
+	migrator, srv := newPostponeTestMigrator(t)
+	postpone, err := migrator.shouldPostponeCutOver()
+	require.NoError(t, err)
+	require.True(t, postpone)
+
+	require.Equal(t, "Unpostponed\n", applyTestServerCommand(t, srv, "unpostpone"))
+	postpone, err = migrator.shouldPostponeCutOver()
+	require.NoError(t, err)
+	require.False(t, postpone)
+	require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.IsPostponingCutOver))
+
+	require.Contains(t, applyTestServerCommand(t, srv, "unpostpone"), "You may only invoke this when gh-ost is actively postponing")
+	require.Contains(t, applyTestServerCommand(t, srv, "cancel-unpostpone"), "There is no pending unpostpone to cancel")
+	require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag))
+}
+
+// TestMigratorRepeatedUnpostponeRace interleaves repeated 'unpostpone' commands with
+// the cut-over loop consuming the first one. Whatever the timing, no request may be
+// left pending after cut-over has begun, so a later cancel never claims success.
+func TestMigratorRepeatedUnpostponeRace(t *testing.T) {
+	for range 300 {
+		migrator, srv := newPostponeTestMigrator(t)
+		_, err := migrator.shouldPostponeCutOver()
+		require.NoError(t, err)
+		require.True(t, migrator.migrationContext.RequestUnpostpone())
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			postpone, err := migrator.shouldPostponeCutOver()
+			assert.NoError(t, err)
+			assert.False(t, postpone)
+		}()
+		go func() {
+			defer wg.Done()
+			var buf bytes.Buffer
+			writer := bufio.NewWriter(&buf)
+			_, err := srv.applyServerCommand("unpostpone", writer)
+			assert.NoError(t, err)
+			assert.NoError(t, writer.Flush())
+		}()
+		wg.Wait()
+
+		// The cut-over loop has exited; cut-over is proceeding.
+		require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.IsPostponingCutOver))
+		require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag))
+		require.Contains(t, applyTestServerCommand(t, srv, "cancel-unpostpone"), "There is no pending unpostpone to cancel")
+	}
+}
+
+// TestMigratorCutOverPostponeLoop drives the real sleepWhileTrue loop through
+// unpostpone, cancel-unpostpone and unpostpone again under high heartbeat lag.
+func TestMigratorCutOverPostponeLoop(t *testing.T) {
+	migrator, srv := newPostponeTestMigrator(t)
+	// Generous limits so a fresh heartbeat stays under them for the whole test.
+	atomic.StoreInt64(&migrator.migrationContext.MaxLagMillisecondsThrottleThreshold, 60000)
+	migrator.migrationContext.CutOverLockTimeoutSeconds = 60
+	done := make(chan error, 1)
+	go func() {
+		done <- migrator.sleepWhileTrue("cut_over_postpone", migrator.shouldPostponeCutOver)
+	}()
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt64(&migrator.migrationContext.IsPostponingCutOver) == 1
+	}, 5*time.Second, 10*time.Millisecond)
+
+	migrator.migrationContext.SetLastHeartbeatOnChangelogTime(time.Now().Add(-time.Hour))
+	applyTestServerCommand(t, srv, "unpostpone")
+	time.Sleep(1500 * time.Millisecond) // at least one more loop iteration
+	select {
+	case err := <-done:
+		t.Fatalf("cut-over started while heartbeat lag was too high: %v", err)
+	default:
+	}
+	require.Contains(t, applyTestServerCommand(t, srv, "cancel-unpostpone"), "Unpostpone cancelled")
+
+	// Lag recovers, but the request was withdrawn: still postponing.
+	migrator.migrationContext.SetLastHeartbeatOnChangelogTime(time.Now())
+	time.Sleep(1500 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("cut-over started after unpostpone was cancelled: %v", err)
+	default:
+	}
+
+	applyTestServerCommand(t, srv, "unpostpone")
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("cut-over did not proceed after unpostpone")
+	}
+	require.Equal(t, int64(0), atomic.LoadInt64(&migrator.migrationContext.UserCommandedUnpostponeFlag))
 }
