@@ -165,18 +165,23 @@ func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent
 
 	databaseName := string(rowsEvent.Table.Schema)
 	tableName := string(rowsEvent.Table.Table)
-	rowCount := int64(RowsInRowsEvent(len(rowsEvent.Rows), dml))
 	eventType := dml.EventTypeTag()
 	emit := gmr.migrationContext.Metrics
-	metrics.RecordBinlogRowsEventProcessed(emit, tableName, eventType, rowCount)
+	metrics.RecordBinlogRowsEventProcessed(emit, tableName)
 	relevant := gmr.isRelevantTable(databaseName, tableName)
 	if !relevant {
-		metrics.RecordBinlogRowsEventFiltered(emit, tableName, eventType, rowCount)
+		metrics.RecordBinlogRowsEventFiltered(emit, tableName)
 	} else {
-		metrics.RecordBinlogRowsEventConsumed(emit, tableName, eventType, rowCount)
-		metrics.RecordBinlogRowsInEvent(emit, tableName, rowCount)
+		metrics.RecordBinlogRowsEventConsumed(emit, tableName, eventType)
 		gmr.transactionRowEventTotal++
-		gmr.transactionRowTotal += rowCount
+		// Header-only filtering leaves Rows empty with an unknown row count.
+		// Only decoded payloads can contribute row counts.
+		if len(rowsEvent.Rows) > 0 {
+			rowCount := int64(RowsInRowsEvent(len(rowsEvent.Rows), dml))
+			metrics.RecordBinlogRowsConsumed(emit, tableName, eventType, rowCount)
+			metrics.RecordBinlogRowsInEvent(emit, tableName, rowCount)
+			gmr.transactionRowTotal += rowCount
+		}
 	}
 
 	beforeChannel := time.Now()

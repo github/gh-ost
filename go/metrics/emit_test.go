@@ -438,9 +438,10 @@ func TestRecordSleepNilSafe(t *testing.T) {
 func TestRecordBinlogRowsEventMetrics(t *testing.T) {
 	spy := &histogramSpy{}
 
-	RecordBinlogRowsEventProcessed(spy, "orders", "insert", 3)
-	RecordBinlogRowsEventFiltered(spy, "other_table", "update", 2)
-	RecordBinlogRowsEventConsumed(spy, "orders", "delete", 1)
+	RecordBinlogRowsEventProcessed(spy, "orders")
+	RecordBinlogRowsEventFiltered(spy, "other_table")
+	RecordBinlogRowsEventConsumed(spy, "orders", "delete")
+	RecordBinlogRowsConsumed(spy, "orders", "delete", 1)
 	RecordBinlogRowsInEvent(spy, "orders", 1)
 
 	wantCounts := []struct {
@@ -449,9 +450,7 @@ func TestRecordBinlogRowsEventMetrics(t *testing.T) {
 		tags  []string
 	}{
 		{"binlog_events", 1, []string{"type:processed", "table:orders"}},
-		{"binlog_rows", 3, []string{"type:processed", "table:orders", "binlog_event_type:insert"}},
 		{"binlog_events", 1, []string{"type:filtered", "table:other_table"}},
-		{"binlog_rows", 2, []string{"type:filtered", "table:other_table", "binlog_event_type:update"}},
 		{"binlog_events", 1, []string{"type:consumed", "table:orders", "binlog_event_type:delete"}},
 		{"binlog_rows", 1, []string{"type:consumed", "table:orders", "binlog_event_type:delete"}},
 	}
@@ -475,11 +474,24 @@ func TestRecordBinlogRowsEventMetrics(t *testing.T) {
 }
 
 func TestRecordBinlogRowsEventMetricsNilSafe(t *testing.T) {
-	RecordBinlogRowsEventProcessed(nil, "orders", "insert", 1)
-	RecordBinlogRowsEventFiltered(&histogramSpy{}, "", "insert", 1)
-	RecordBinlogRowsEventConsumed(&histogramSpy{}, "orders", "", 1)
-	RecordBinlogRowsInEvent(&histogramSpy{}, "", 1)
-	RecordBinlogRowsInEvent(&histogramSpy{}, "orders", -1)
+	spy := &histogramSpy{}
+	RecordBinlogRowsEventProcessed(nil, "orders")
+	RecordBinlogRowsEventProcessed(spy, "")
+	RecordBinlogRowsEventFiltered(nil, "orders")
+	RecordBinlogRowsEventFiltered(spy, "")
+	RecordBinlogRowsEventConsumed(nil, "orders", "insert")
+	RecordBinlogRowsEventConsumed(spy, "", "insert")
+	RecordBinlogRowsEventConsumed(spy, "orders", "")
+	RecordBinlogRowsConsumed(nil, "orders", "insert", 1)
+	RecordBinlogRowsConsumed(spy, "", "insert", 1)
+	RecordBinlogRowsConsumed(spy, "orders", "", 1)
+	RecordBinlogRowsConsumed(spy, "orders", "insert", -1)
+	RecordBinlogRowsConsumed(spy, "orders", "insert", 0)
+	RecordBinlogRowsInEvent(spy, "", 1)
+	RecordBinlogRowsInEvent(spy, "orders", -1)
+	if len(spy.countNames) != 0 || len(spy.names) != 0 {
+		t.Fatalf("unexpected counts %v or histograms %v", spy.countNames, spy.names)
+	}
 }
 
 func TestRecordBinlogTransactionMetrics(t *testing.T) {

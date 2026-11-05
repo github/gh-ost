@@ -172,40 +172,40 @@ func cutOverOutcomeFromError(err error) string {
 	return CutOverOutcomeSuccess
 }
 
-// RecordBinlogRowsEventProcessed emits gh_ost.binlog_events and gh_ost.binlog_rows for a
-// rows event read from the binlog stream.
-func RecordBinlogRowsEventProcessed(emit Emitter, tableName, binlogEventType string, rowCount int64) {
-	if emit == nil || tableName == "" || binlogEventType == "" || rowCount < 0 {
+// RecordBinlogRowsEventProcessed counts a rows event read from the binlog stream,
+// including header-only events whose row count is unknown.
+func RecordBinlogRowsEventProcessed(emit Emitter, tableName string) {
+	if emit == nil || tableName == "" {
 		return
 	}
-	tableTag := "table:" + tableName
-	eventTypeTag := "binlog_event_type:" + binlogEventType
-	emit.Count("binlog_events", 1, "type:processed", tableTag)
-	emit.Count("binlog_rows", rowCount, "type:processed", tableTag, eventTypeTag)
+	emit.Count("binlog_events", 1, "type:processed", "table:"+tableName)
 }
 
-// RecordBinlogRowsEventFiltered emits gh_ost.binlog_events and gh_ost.binlog_rows for a
-// rows event on a table that is not being migrated.
-func RecordBinlogRowsEventFiltered(emit Emitter, tableName, binlogEventType string, rowCount int64) {
-	if emit == nil || tableName == "" || binlogEventType == "" || rowCount < 0 {
+// RecordBinlogRowsEventFiltered counts a rows event on an unrelated table.
+// Header-only filtering leaves its row count unknown, so no rows are counted.
+func RecordBinlogRowsEventFiltered(emit Emitter, tableName string) {
+	if emit == nil || tableName == "" {
 		return
 	}
-	tableTag := "table:" + tableName
-	eventTypeTag := "binlog_event_type:" + binlogEventType
-	emit.Count("binlog_events", 1, "type:filtered", tableTag)
-	emit.Count("binlog_rows", rowCount, "type:filtered", tableTag, eventTypeTag)
+	emit.Count("binlog_events", 1, "type:filtered", "table:"+tableName)
 }
 
-// RecordBinlogRowsEventConsumed emits gh_ost.binlog_events and gh_ost.binlog_rows for a
-// rows event forwarded for application on a migrated table.
-func RecordBinlogRowsEventConsumed(emit Emitter, tableName, binlogEventType string, rowCount int64) {
-	if emit == nil || tableName == "" || binlogEventType == "" || rowCount < 0 {
+// RecordBinlogRowsEventConsumed counts a rows event on the original or changelog table.
+func RecordBinlogRowsEventConsumed(emit Emitter, tableName, binlogEventType string) {
+	if emit == nil || tableName == "" || binlogEventType == "" {
 		return
 	}
-	tableTag := "table:" + tableName
-	eventTypeTag := "binlog_event_type:" + binlogEventType
-	emit.Count("binlog_events", 1, "type:consumed", tableTag, eventTypeTag)
-	emit.Count("binlog_rows", rowCount, "type:consumed", tableTag, eventTypeTag)
+	emit.Count("binlog_events", 1, "type:consumed", "table:"+tableName, "binlog_event_type:"+binlogEventType)
+}
+
+// RecordBinlogRowsConsumed counts decoded logical rows on the original or changelog
+// table. Processed and filtered row counters are intentionally not emitted: the
+// number of rows in header-only events is unknown.
+func RecordBinlogRowsConsumed(emit Emitter, tableName, binlogEventType string, rowCount int64) {
+	if emit == nil || tableName == "" || binlogEventType == "" || rowCount <= 0 {
+		return
+	}
+	emit.Count("binlog_rows", rowCount, "type:consumed", "table:"+tableName, "binlog_event_type:"+binlogEventType)
 }
 
 // RecordBinlogRowsInEvent emits gh_ost.binlog_rows_in_event for the row count in a forwarded event.

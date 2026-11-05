@@ -1,8 +1,3 @@
-/*
-   Copyright 2026 GitHub Inc.
-	 See https://github.com/github/gh-ost/blob/master/LICENSE
-*/
-
 package binlog
 
 import (
