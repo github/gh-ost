@@ -158,7 +158,6 @@ func (gmr *GoMySQLReader) onGTIDEvent(gtidEvent gomysql.BinlogGTIDEvent) {
 }
 
 func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
-	currentCoords := gmr.GetCurrentBinlogCoordinates()
 	dml := ToEventDML(ev.Header.EventType.String())
 	if dml == NotDML {
 		return fmt.Errorf("unknown DML type: %s", ev.Header.EventType.String())
@@ -187,7 +186,7 @@ func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent
 			// We do both at the same time
 			continue
 		}
-		binlogEntry := NewBinlogEntryAt(currentCoords)
+		binlogEntry := NewBinlogEntryAt(gmr.GetCurrentBinlogCoordinates())
 		binlogEntry.DmlEvent = NewBinlogDMLEvent(
 			string(rowsEvent.Table.Schema),
 			string(rowsEvent.Table.Table),
