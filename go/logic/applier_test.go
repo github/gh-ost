@@ -470,6 +470,49 @@ func (suite *ApplierTestSuite) TestInitiateApplierMoveTablesMode_NoGhostOrChange
 	suite.Require().Nil(migrationContext.OriginalTableColumnsOnApplier)
 }
 
+func (suite *ApplierTestSuite) TestMoveTablesCheckpointCreationFailurePreservesExistingTable() {
+	ctx := context.Background()
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.Checkpoint = true
+	migrationContext.MoveTables.TableNames = []string{"checkpoint_init_target"}
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	suite.Require().NoError(migrationContext.SetConnectionConfig("innodb"))
+	migrationContext.InitMoveTableContainers()
+
+	checkpointTable := fmt.Sprintf("%s.%s", sql.EscapeName(testMysqlDatabaseOther),
+		sql.EscapeName(migrationContext.GetCheckpointTableName()))
+	_, err = suite.otherDB.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (sentinel INT)", checkpointTable))
+	suite.Require().NoError(err)
+	defer func() {
+		_, err := suite.otherDB.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", checkpointTable))
+		suite.Require().NoError(err)
+	}()
+	_, err = suite.otherDB.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s VALUES (42)", checkpointTable))
+	suite.Require().NoError(err)
+
+	migrator := NewMigrator(migrationContext, "test")
+	err = migrator.initiateApplier()
+	if migrator.applier != nil {
+		defer migrator.applier.Teardown()
+	}
+	suite.Require().ErrorContains(err, "unable to create move-tables checkpoint table")
+	var mysqlErr *drivermysql.MySQLError
+	suite.Require().ErrorAs(err, &mysqlErr)
+	suite.Require().Equal(uint16(1050), mysqlErr.Number)
+
+	var sentinel int
+	suite.Require().NoError(suite.otherDB.QueryRowContext(ctx, fmt.Sprintf("SELECT sentinel FROM %s", checkpointTable)).Scan(&sentinel))
+	suite.Require().Equal(42, sentinel)
+	exists, err := migrator.applier.targetTableExists("checkpoint_init_target")
+	suite.Require().NoError(err)
+	suite.Require().False(exists)
+}
+
 func (suite *ApplierTestSuite) TestApplyDMLEventQueries() {
 	ctx := context.Background()
 
@@ -1290,6 +1333,8 @@ func (suite *ApplierTestSuite) TestWriteCheckpointMoveTables() {
 
 	err = applier.CreateCheckpointTable()
 	suite.Require().NoError(err)
+	t := suite.T()
+	t.Cleanup(func() { require.NoError(t, applier.DropCheckpointTable()) })
 
 	err = applier.prepareQueries()
 	suite.Require().NoError(err)
@@ -1383,6 +1428,8 @@ func (suite *ApplierTestSuite) TestReadMoveTablesCutOverCheckpointIgnoresRowCopy
 	applier := NewApplier(migrationContext)
 	suite.Require().NoError(applier.InitDBConnections())
 	suite.Require().NoError(applier.CreateCheckpointTable())
+	t := suite.T()
+	t.Cleanup(func() { require.NoError(t, applier.DropCheckpointTable()) })
 	suite.Require().NoError(applier.prepareQueries())
 	suite.Require().NoError(applier.ReadMoveTableMigrationRangeValues(inspector.db, mt))
 

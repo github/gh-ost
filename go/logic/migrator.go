@@ -1279,12 +1279,6 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.applier.prepareQueries(); err != nil {
 		return err
 	}
-	if mgtr.migrationContext.Checkpoint && !mgtr.migrationContext.Resume {
-		if err := mgtr.applier.CreateCheckpointTable(); err != nil {
-			mgtr.migrationContext.Log.Errorf("unable to create checkpoint table, see further error details")
-		}
-	}
-
 	// Validation complete! Run on-validated hook.
 	if err := mgtr.hooksExecutor.OnValidated(); err != nil {
 		return err
@@ -2626,6 +2620,13 @@ func (mgtr *Migrator) initiateApplier() error {
 			// on the target.
 			if err := mgtr.applier.ValidateMoveTablesTargetsAbsent(); err != nil {
 				return err
+			}
+			if mgtr.migrationContext.Checkpoint {
+				if err := mgtr.applier.CreateCheckpointTable(); err != nil {
+					return fmt.Errorf("unable to create move-tables checkpoint table %s.%s; if it already exists, inspect it before resuming or removing it: %w",
+						sql.EscapeName(mgtr.applier.checkpointDatabaseName()),
+						sql.EscapeName(mgtr.migrationContext.GetCheckpointTableName()), err)
+				}
 			}
 			// Create every migrated table on the target from its captured CREATE
 			// statement (§2.1). Containers were populated by prepareMoveTablesCopyState.

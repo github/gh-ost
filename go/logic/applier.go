@@ -1017,11 +1017,11 @@ func (apl *Applier) CreateChangelogTable() error {
 // There are two sets of columns with the same types as the shared unique key,
 // one for IterationMinValues and one for IterationMaxValues.
 func (apl *Applier) CreateCheckpointTable() error {
-	if err := apl.DropCheckpointTable(); err != nil {
-		return err
-	}
 	if apl.migrationContext.IsMoveTablesMode() {
 		return apl.createMoveTablesCheckpointTable()
+	}
+	if err := apl.DropCheckpointTable(); err != nil {
+		return err
 	}
 	colDefs := []string{
 		"`gh_ost_chk_id` bigint auto_increment primary key",
@@ -1085,10 +1085,10 @@ func (apl *Applier) createMoveTablesCheckpointTable() error {
 		sql.EscapeName(apl.migrationContext.GetCheckpointTableName()),
 		strings.Join(colDefs, ",\n "),
 	)
-	apl.migrationContext.Log.Infof("Created move-tables checkpoint table")
 	if _, err := sqlutils.ExecNoPrepare(apl.checkpointDB(), query); err != nil {
 		return err
 	}
+	apl.migrationContext.Log.Infof("Created move-tables checkpoint table")
 	return nil
 }
 
