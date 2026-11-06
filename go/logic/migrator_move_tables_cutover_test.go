@@ -16,6 +16,7 @@ import (
 	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
+	"github.com/github/gh-ost/go/sql"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
@@ -146,47 +147,6 @@ func TestMoveTablesCutOver_PostponeGateFiresOnBeginPostponedOnce(t *testing.T) {
 		"post-state: T0 hook must fire after gate releases")
 	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag),
 		"post-state: hook failure must leave CutOverCompleteFlag unset")
-}
-
-// TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained verifies the crash-
-// safe resume branch skips T1 entirely and proceeds directly to T5 when the
-// persisted checkpoint already shows a drain-satisfied position.
-func TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained(t *testing.T) {
-	var calls []string
-	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
-
-	ctx := base.NewMigrationContext()
-	ctx.Hooks = fakeHooks
-	ctx.Checkpoint = false
-
-	m := NewMigrator(ctx, "test")
-	m.applier = NewApplier(ctx)
-
-	drainGTID, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, "11111111-1111-1111-1111-111111111111:1-10")
-	require.NoError(t, err)
-
-	chk := &Checkpoint{
-		LastTrxCoords:              drainGTID,
-		MoveTablesCutOverStarted:   true,
-		MoveTablesCutOverDrainGTID: drainGTID,
-	}
-
-	require.Equal(t, int64(0), atomic.LoadInt64(&ctx.CutOverCompleteFlag), "pre-state: flag must be 0")
-	require.Empty(t, calls, "pre-state: no hooks recorded")
-
-	require.NoError(t, m.resumeMoveTablesCutOverFromCheckpoint(chk))
-
-	require.Equal(t, int64(1), atomic.LoadInt64(&ctx.CutOverCompleteFlag),
-		"post-state: resume path must set CutOverCompleteFlag before exiting")
-	require.NotNil(t, ctx.MoveTables.DrainGTID,
-		"post-state: resume must set MoveTables.DrainGTID so the on-success hook gets GH_OST_DRAIN_GTID")
-	require.Equal(t, drainGTID.String(), ctx.MoveTables.DrainGTID.String(),
-		"post-state: MoveTables.DrainGTID must equal the checkpoint drain GTID")
-	require.Equal(t, []string{"fake:OnSuccess"}, calls,
-		"post-state: resume path should jump directly to T5 without rerunning T0/T1")
-	if m.applier.CurrentCoordinates != nil {
-		require.Equal(t, drainGTID.String(), m.applier.CurrentCoordinates.String())
-	}
 }
 
 // TestResolveSourcePrimaryConnectionConfig_AssumeMasterHostnameOverride verifies
@@ -352,6 +312,87 @@ func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks base.Hooks, initialCoor
 		m.applier.CurrentCoordinatesMutex.Unlock()
 	}
 	return m, mc
+}
+
+func (s *MoveTablesCutOverSuite) setupCutOverCheckpoint(m *Migrator, mc *base.MigrationContext, rejectComplete bool) {
+	_, err := s.db.Exec("CREATE DATABASE IF NOT EXISTS " + testMysqlDatabaseOther)
+	s.Require().NoError(err)
+	mc.Checkpoint, mc.UseGTIDs = true, true
+	mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	mc.InitMoveTableContainers()
+	m.applier.moveTablesTargetDB = s.db
+	s.Require().NoError(m.applier.CreateCheckpointTable())
+	s.T().Cleanup(func() { s.Assert().NoError(m.applier.DropCheckpointTable()) })
+	if rejectComplete {
+		_, err = s.db.Exec(fmt.Sprintf("ALTER TABLE %s.%s ADD CHECK (gh_ost_is_cutover = 0)",
+			sql.EscapeName(testMysqlDatabaseOther), sql.EscapeName(mc.GetCheckpointTableName())))
+		s.Require().NoError(err)
+	}
+}
+
+func (s *MoveTablesCutOverSuite) TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained() {
+	var calls []string
+	coords := s.containingDrainGTID()
+	m, mc := s.buildMigrator(&recordingHooks{name: "fake", calls: &calls}, coords)
+	s.T().Cleanup(func() { s.Assert().NoError(m.sourcePrimaryDB.Close()) })
+	s.setupCutOverCheckpoint(m, mc, false)
+
+	s.Require().Zero(atomic.LoadInt64(&mc.CutOverCompleteFlag))
+	s.Require().Empty(calls)
+	chk := &Checkpoint{
+		LastTrxCoords:              coords,
+		MoveTablesCutOverStarted:   true,
+		MoveTablesCutOverDrainGTID: coords,
+	}
+	s.Require().NoError(m.resumeMoveTablesCutOverFromCheckpoint(chk))
+	s.Require().Equal(int64(1), atomic.LoadInt64(&mc.CutOverCompleteFlag))
+	s.Require().NotNil(mc.MoveTables.DrainGTID)
+	s.Require().Equal(coords.String(), mc.MoveTables.DrainGTID.String())
+	s.Require().Equal([]string{"fake:OnSuccess"}, calls)
+	persisted, err := m.applier.ReadMoveTablesCutOverCheckpoint()
+	s.Require().NoError(err)
+	s.Require().True(persisted.IsCutover)
+}
+
+func (s *MoveTablesCutOverSuite) TestResumeMoveTablesCutOverCheckpointFailureStopsSuccessHook() {
+	var calls []string
+	coords := s.containingDrainGTID()
+	m, mc := s.buildMigrator(&recordingHooks{name: "fake", calls: &calls}, coords)
+	s.T().Cleanup(func() { s.Assert().NoError(m.sourcePrimaryDB.Close()) })
+	s.setupCutOverCheckpoint(m, mc, true)
+
+	chk := &Checkpoint{
+		TableName:                  testMysqlTableName,
+		LastTrxCoords:              coords,
+		MoveTablesCutOverStarted:   true,
+		MoveTablesCutOverDrainGTID: coords,
+	}
+	s.Require().NoError(m.applier.WriteMoveTableCheckpoints([]*Checkpoint{chk}))
+	err := m.resumeMoveTablesCutOverFromCheckpoint(chk)
+	s.Require().ErrorContains(err, "failed to checkpoint drained move-tables cutover")
+	s.Require().Empty(calls)
+	s.Require().Zero(atomic.LoadInt64(&mc.CutOverCompleteFlag))
+	persisted, err := m.applier.ReadMoveTablesCutOverCheckpoint()
+	s.Require().NoError(err)
+	s.Require().False(persisted.IsCutover)
+}
+
+func (s *MoveTablesCutOverSuite) TestCutOverCheckpointFailureStopsSuccessHook() {
+	_, err := s.db.ExecContext(context.Background(), fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestTableName()))
+	s.Require().NoError(err)
+
+	var calls []string
+	m, mc := s.buildMigrator(&recordingHooks{name: "fake", calls: &calls}, s.containingDrainGTID())
+	s.T().Cleanup(func() { s.Assert().NoError(m.sourcePrimaryDB.Close()) })
+	s.setupCutOverCheckpoint(m, mc, true)
+
+	err = m.moveTablesCutOver()
+	s.Require().ErrorContains(err, "failed to checkpoint drained move-tables cutover")
+	s.Require().Equal([]string{"fake:OnBeforeCutOver"}, calls)
+	s.Require().Zero(atomic.LoadInt64(&mc.CutOverCompleteFlag))
+	checkpoint, err := m.applier.ReadMoveTablesCutOverCheckpoint()
+	s.Require().NoError(err)
+	s.Require().False(checkpoint.IsCutover)
 }
 
 // TestDropMoveTablesSourceOldTablesUsesSourcePrimary verifies the source `__del`

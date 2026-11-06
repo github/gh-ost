@@ -1080,10 +1080,8 @@ func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) err
 	if err := mgtr.drainMoveTablesCutOver(chk.MoveTablesCutOverDrainGTID); err != nil {
 		return err
 	}
-	if mgtr.migrationContext.Checkpoint {
-		if err := mgtr.persistMoveTablesCutOverCheckpoint(chk.MoveTablesCutOverDrainGTID, true); err != nil {
-			mgtr.migrationContext.Log.Warningf("failed to checkpoint drained move-tables cutover: %+v", err)
-		}
+	if err := mgtr.persistMoveTablesCutOverCheckpoint(chk.MoveTablesCutOverDrainGTID, true); err != nil {
+		return fmt.Errorf("failed to checkpoint drained move-tables cutover; recover manually: %w", err)
 	}
 	atomic.StoreInt64(&mgtr.migrationContext.CutOverCompleteFlag, 1)
 	mgtr.migrationContext.Log.Debugf("T4: CutOverCompleteFlag set")
@@ -1525,7 +1523,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	}
 	if mgtr.migrationContext.Checkpoint {
 		if err := mgtr.persistMoveTablesCutOverCheckpoint(drainGTID, true); err != nil {
-			mgtr.migrationContext.Log.Warningf("failed to checkpoint drained move-tables cutover: %+v", err)
+			return fmt.Errorf("failed to checkpoint drained move-tables cutover; recover manually: %w", err)
 		}
 	}
 
