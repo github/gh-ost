@@ -1142,14 +1142,13 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	// so we don't leave things hanging around
 	defer mgtr.teardown()
 
-	// If the run fails after the source RENAME, the source `__del` table is the
-	// rollback handle. Emit a clear rollback hint on any error return once the
-	// rename has happened. finalCleanup errors are
-	// swallowed below (they return nil), so this never fires on a successful
-	// cutover whose only failure was post-success cleanup.
 	defer func() {
 		if err != nil && atomic.LoadInt64(&mgtr.migrationContext.MoveTablesSourceRenamedFlag) > 0 {
-			mgtr.logMoveTablesRollbackHint()
+			if atomic.LoadInt64(&mgtr.migrationContext.CutOverCompleteFlag) > 0 {
+				mgtr.migrationContext.Log.Warningf("move-tables cutover may have enabled target writes; inspect the source and target and recover manually")
+			} else {
+				mgtr.logMoveTablesRollbackHint()
+			}
 		}
 	}()
 
@@ -1238,7 +1237,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 				return err
 			}
 			if err := mgtr.finalCleanup(); err != nil {
-				return nil
+				return fmt.Errorf("move-tables cutover completed but cleanup failed: %w", err)
 			}
 			mgtr.migrationContext.Log.Infof("Done moving tables %v from %s to %s (%s)",
 				mgtr.migrationContext.MoveTables.TableNames, sql.EscapeName(mgtr.migrationContext.DatabaseName),
