@@ -965,9 +965,8 @@ func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogC
 	mgtr.applier.CurrentCoordinatesMutex.Unlock()
 
 	if safeCoords == nil || safeCoords.IsEmpty() {
-		// In move-tables mode CurrentCoordinates may never advance on a quiet source
-		// (no _ghc heartbeats, no DML). If there is no backlog, the streamer's
-		// frontier is a safe fallback for checkpointing.
+		// This quiet-source fallback does not prove a completed transaction boundary;
+		// it remains subject to the shared checkpoint issue #1781.
 		if mgtr.eventsStreamer != nil && len(mgtr.applyEventsQueue) == 0 && len(mgtr.eventsStreamer.eventsChannel) == 0 {
 			safeCoords = mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
 		}
@@ -999,7 +998,8 @@ func moveTablesDrainCoordinateReached(current mysql.BinlogCoordinates, drain mys
 
 // moveTablesDrainProvenByStreamerProgress is the non-DML-tail fallback used
 // in T3: if both queues are empty and the streamer has advanced to drain,
-// drain is considered complete even when applier coords did not move.
+// drain is considered complete even when applier coords did not move. This is
+// not a completed-transaction guarantee; see #1781.
 func moveTablesDrainProvenByStreamerProgress(drain mysql.BinlogCoordinates, streamer mysql.BinlogCoordinates, applyBacklog int, streamerBacklog int) bool {
 	if applyBacklog != 0 || streamerBacklog != 0 {
 		return false
@@ -3120,9 +3120,9 @@ func (mgtr *Migrator) moveTablesCheckpointSummary(coords mysql.BinlogCoordinates
 	}
 }
 
-// checkpointMoveTables writes one checkpoint row per migrated table once the
-// streamer frontier is known to be applied (or, on a quiet source with no
-// backlog, treats the frontier as applied since move-tables emits no heartbeat).
+// checkpointMoveTables writes one checkpoint row per migrated table based on
+// applier coordinates or idle queues. Neither proves a completed transaction;
+// see #1781.
 func (mgtr *Migrator) checkpointMoveTables(ctx context.Context, coords mysql.BinlogCoordinates) (*Checkpoint, error) {
 	for {
 		if err := ctx.Err(); err != nil {
