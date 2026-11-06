@@ -7,9 +7,11 @@ package binlog
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/github/gh-ost/go/base"
+	"github.com/github/gh-ost/go/metrics"
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 
@@ -49,6 +51,11 @@ type GoMySQLReader struct {
 	// LastTrxCoords are the coordinates of the last transaction completely read.
 	// If using the file coordinates it is binlog position of the transaction's XID event.
 	LastTrxCoords mysql.BinlogCoordinates
+
+	// Per-transaction counters for relevant (consumed) row events, flushed at transaction boundaries.
+	transactionRowEventTotal int64
+	transactionRowTotal      int64
+	previousLastCommitted    int64
 }
 
 func NewGoMySQLReader(migrationContext *base.MigrationContext, rowsEventFilters ...RowsEventFilterFunc) *GoMySQLReader {
@@ -109,12 +116,75 @@ func (gmr *GoMySQLReader) GetCurrentBinlogCoordinates() mysql.BinlogCoordinates 
 	return gmr.currentCoordinates.Clone()
 }
 
+func (gmr *GoMySQLReader) isRelevantTable(databaseName, tableName string) bool {
+	if !strings.EqualFold(databaseName, gmr.migrationContext.DatabaseName) {
+		return false
+	}
+	if strings.EqualFold(tableName, gmr.migrationContext.OriginalTableName) {
+		return true
+	}
+	return strings.EqualFold(tableName, gmr.migrationContext.GetChangelogTableName())
+}
+
+func (gmr *GoMySQLReader) flushTransactionMetrics() {
+	if gmr.transactionRowEventTotal == 0 {
+		return
+	}
+	emit := gmr.migrationContext.Metrics
+	metrics.RecordBinlogTransactionSize(emit, gmr.transactionRowEventTotal, gmr.transactionRowTotal)
+	gmr.transactionRowEventTotal = 0
+	gmr.transactionRowTotal = 0
+}
+
+func (gmr *GoMySQLReader) onGTIDEvent(gtidEvent gomysql.BinlogGTIDEvent) {
+	gmr.flushTransactionMetrics()
+
+	// Both flavors mark transaction boundaries, but only MySQL GTID events
+	// provide transaction length and parallel replication sequence numbers.
+	event, ok := gtidEvent.(*replication.GTIDEvent)
+	if !ok {
+		return
+	}
+
+	emit := gmr.migrationContext.Metrics
+	if event.TransactionLength > 0 {
+		metrics.RecordGTIDTransactionLengthBytes(emit, event.TransactionLength)
+	}
+	if event.LastCommitted != gmr.previousLastCommitted {
+		metrics.RecordUnfilteredCommitGroupSize(emit, float64(event.SequenceNumber-event.LastCommitted))
+	}
+	gmr.previousLastCommitted = event.LastCommitted
+}
+
 func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent *replication.RowsEvent, entriesChannel chan<- *BinlogEntry) error {
 	currentCoords := gmr.GetCurrentBinlogCoordinates()
 	dml := ToEventDML(ev.Header.EventType.String())
 	if dml == NotDML {
 		return fmt.Errorf("unknown DML type: %s", ev.Header.EventType.String())
 	}
+
+	databaseName := string(rowsEvent.Table.Schema)
+	tableName := string(rowsEvent.Table.Table)
+	eventType := dml.EventTypeTag()
+	emit := gmr.migrationContext.Metrics
+	metrics.RecordBinlogRowsEventProcessed(emit, tableName)
+	relevant := gmr.isRelevantTable(databaseName, tableName)
+	if !relevant {
+		metrics.RecordBinlogRowsEventFiltered(emit, tableName)
+	} else {
+		metrics.RecordBinlogRowsEventConsumed(emit, tableName, eventType)
+		gmr.transactionRowEventTotal++
+		// Header-only filtering leaves Rows empty with an unknown row count.
+		// Only decoded payloads can contribute row counts.
+		if len(rowsEvent.Rows) > 0 {
+			rowCount := int64(RowsInRowsEvent(len(rowsEvent.Rows), dml))
+			metrics.RecordBinlogRowsConsumed(emit, tableName, eventType, rowCount)
+			metrics.RecordBinlogRowsInEvent(emit, tableName, rowCount)
+			gmr.transactionRowTotal += rowCount
+		}
+	}
+
+	beforeChannel := time.Now()
 	for i, row := range rowsEvent.Rows {
 		if dml == UpdateDML && i%2 == 1 {
 			// An update has two rows (WHERE+SET)
@@ -148,6 +218,9 @@ func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent
 		// next iteration) or asynchronously (we keep pushing more events)
 		// In reality, reads will be synchronous
 		entriesChannel <- binlogEntry
+	}
+	if relevant {
+		metrics.RecordBinlogStreamerBlockedOnOutChannel(emit, time.Since(beforeChannel))
 	}
 	return nil
 }
@@ -192,6 +265,7 @@ func (gmr *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChan
 			if err != nil {
 				return err
 			}
+			gmr.onGTIDEvent(gtidEvent)
 			gmr.currentCoordinatesMutex.Lock()
 			if gmr.LastTrxCoords != nil {
 				gmr.currentCoordinates = gmr.LastTrxCoords.Clone()
@@ -214,6 +288,9 @@ func (gmr *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChan
 			gmr.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", coords.LogFile, int64(ev.Header.LogPos), event.NextLogName)
 			gmr.currentCoordinatesMutex.Unlock()
 		case *replication.XIDEvent:
+			if !gmr.migrationContext.UseGTIDs {
+				gmr.flushTransactionMetrics()
+			}
 			if gmr.migrationContext.UseGTIDs {
 				// event.GSet is the full executed GTID set maintained by the
 				// syncer (MysqlGTIDSet or MariadbGTIDSet depending on flavor).
