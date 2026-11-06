@@ -1100,6 +1100,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 		mgtr.migrationContext.MoveTablesRunToken(),
 		sql.EscapeName(mgtr.migrationContext.DatabaseName),
 		sql.EscapeName(mgtr.migrationContext.GetTargetDatabaseName()), mgtr.migrationContext.MoveTables.TargetHost)
+	mgtr.migrationContext.Log.Warningf("Move-tables locks only coordinate moves on the same source primary and do not fence lock loss or failover; avoid overlapping target operations, moves using a server as both source and target, standard migrations, and moves using older gh-ost versions")
 	mgtr.migrationContext.StartTime = time.Now()
 
 	// Ensure context is cancelled on exit (cleanup)
@@ -1132,9 +1133,27 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	}()
 
 	if mgtr.migrationContext.Checkpoint && mgtr.migrationContext.Resume {
+		sourceURI := mgtr.migrationContext.InspectorConnectionConfig.GetDBUri(mgtr.migrationContext.DatabaseName)
+		sourceDB, err := mysql.OpenDB(sourceURI)
+		if err != nil {
+			return fmt.Errorf("open move-tables source version connection: %w", err)
+		}
+		var sourceVersion string
+		err = sourceDB.QueryRowContext(mgtr.migrationContext.GetContext(), "select @@global.version").Scan(&sourceVersion)
+		err = errors.Join(err, sourceDB.Close())
+		if err != nil {
+			return fmt.Errorf("failed to determine move-tables source version: %w", err)
+		}
+		mgtr.migrationContext.InspectorMySQLVersion = sourceVersion
+		if err := mgtr.setupMoveTablesSourcePrimary(sourceVersion); err != nil {
+			return err
+		}
 		mgtr.migrationContext.ApplierConnectionConfig = mgtr.migrationContext.MoveTables.ConnectionConfig
 		mgtr.applier = NewApplier(mgtr.migrationContext)
 		if err := mgtr.applier.InitDBConnections(); err != nil {
+			return err
+		}
+		if err := mgtr.applier.AcquireMigrationLock(mgtr.migrationContext.GetContext()); err != nil {
 			return err
 		}
 		cutoverResumeCheckpoint, err := mgtr.applier.ReadMoveTablesCutOverCheckpoint()
@@ -1153,14 +1172,6 @@ func (mgtr *Migrator) MoveTables() (err error) {
 				return err
 			}
 			if err := mgtr.initiateStreaming(); err != nil {
-				return err
-			}
-			// The cutover-resume path skips initiateInspector, so set up the
-			// source-primary connection here. It is needed by finalCleanup to drop
-			// the source `__del` rollback handle on a writable primary; the streamer
-			// connection may be a read replica. Uses the streamer's source version
-			// for replica-status terminology.
-			if err := mgtr.setupMoveTablesSourcePrimary(mgtr.eventsStreamer.dbVersion); err != nil {
 				return err
 			}
 			if err := mgtr.applier.prepareQueries(); err != nil {
@@ -1198,11 +1209,6 @@ func (mgtr *Migrator) MoveTables() (err error) {
 			}
 			return nil
 		}
-		// Do not teardown this preflight applier on the miss path. Its DB handles
-		// come from the shared connection cache keyed by migration UUID, and
-		// closing them here would poison the later inspector/applier init path
-		// with "sql: database is closed".
-		mgtr.applier = nil
 	}
 
 	if err := mgtr.initiateInspector(); err != nil {
@@ -1210,6 +1216,15 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	}
 	if err := mgtr.checkAbort(); err != nil {
 		return err
+	}
+	if mgtr.applier == nil {
+		mgtr.applier = NewApplier(mgtr.migrationContext)
+		if err := mgtr.applier.InitDBConnections(); err != nil {
+			return err
+		}
+		if err := mgtr.applier.AcquireMigrationLock(mgtr.migrationContext.GetContext()); err != nil {
+			return err
+		}
 	}
 	if err := mgtr.prepareMoveTablesCopyState(); err != nil {
 		return err
@@ -2078,8 +2093,10 @@ func (mgtr *Migrator) initiateInspector() (err error) {
 		// The source --host (inspector) is used for all reads and may be a read
 		// replica. Detect and connect the source-cluster primary, which the cutover
 		// RENAME, drain-GTID capture, and source `__del` DROP run against.
-		if err := mgtr.setupMoveTablesSourcePrimary(mgtr.inspector.dbVersion); err != nil {
-			return err
+		if mgtr.sourcePrimaryDB == nil {
+			if err := mgtr.setupMoveTablesSourcePrimary(mgtr.inspector.dbVersion); err != nil {
+				return err
+			}
 		}
 		// Guard the read path: if --host turned out to be the primary itself, stop
 		// early rather than silently copying the whole table off the primary.
@@ -2605,12 +2622,14 @@ func (mgtr *Migrator) initiateThrottler() {
 }
 
 func (mgtr *Migrator) initiateApplier() error {
-	mgtr.applier = NewApplier(mgtr.migrationContext)
-	if err := mgtr.applier.InitDBConnections(); err != nil {
-		return err
-	}
-	if err := mgtr.applier.AcquireMigrationLock(mgtr.migrationContext.GetContext()); err != nil {
-		return err
+	if mgtr.applier == nil {
+		mgtr.applier = NewApplier(mgtr.migrationContext)
+		if err := mgtr.applier.InitDBConnections(); err != nil {
+			return err
+		}
+		if err := mgtr.applier.AcquireMigrationLock(mgtr.migrationContext.GetContext()); err != nil {
+			return err
+		}
 	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {

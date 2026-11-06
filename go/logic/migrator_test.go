@@ -741,6 +741,108 @@ func TestMigratorShouldPrintStatus(t *testing.T) {
 	require.True(t, migrator.shouldPrintStatus(HeuristicPrintStatusRule, 30030, 86400*time.Second))  // test 'else' again
 }
 
+func (suite *MoveTablesCutOverSuite) TestMoveTablesFreshRunLocksBeforeTableInspection() {
+	ctx := context.Background()
+	config, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabaseOther)
+	suite.Require().NoError(err)
+
+	mc := newTestMigrationContext()
+	mc.Checkpoint = true
+	mc.InspectorConnectionConfig = config
+	mc.AssumeMasterHostname = fmt.Sprintf("%s:%d", config.Key.Hostname, config.Key.Port)
+	mc.MoveTables.TableNames = []string{"lock_before_inspection_missing"}
+	mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	mc.MoveTables.ConnectionConfig = config
+	mc.MoveTables.SourcePrimaryConnectionConfig = config
+	mc.MoveTables.AllowOnSourcePrimary = true
+	mc.Hooks = CompositeHooks{}
+	suite.Require().NoError(mc.SetConnectionConfig("innodb"))
+
+	holder := NewApplier(mc)
+	suite.Require().NoError(holder.AcquireMigrationLock(ctx))
+	suite.T().Cleanup(holder.releaseMigrationLock)
+	err = NewMigrator(mc, "test").MoveTables()
+	suite.Require().ErrorContains(err, moveTablesSourceLockName+" held by connection")
+
+	var count int
+	err = suite.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name IN (?, ?)",
+		testMysqlDatabaseOther, mc.MoveTables.TableNames[0], mc.GetCheckpointTableName()).Scan(&count)
+	suite.Require().NoError(err)
+	suite.Require().Zero(count)
+}
+
+func (suite *MoveTablesCutOverSuite) TestMoveTablesResumeReusesPreflightApplier() {
+	ctx := context.Background()
+	config, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabaseOther)
+	suite.Require().NoError(err)
+
+	mc := newTestMigrationContext()
+	mc.Checkpoint, mc.Resume = true, true
+	mc.SkipMetadataLockCheck = true
+	mc.ApplierConnectionConfig = config
+	mc.MoveTables.TableNames = []string{"resume_preflight"}
+	mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	mc.MoveTables.ConnectionConfig = config
+	mc.MoveTables.SourcePrimaryConnectionConfig = config
+	suite.Require().NoError(mc.SetConnectionConfig("innodb"))
+
+	migrator := NewMigrator(mc, "test")
+	applier := NewApplier(mc)
+	migrator.applier = applier
+	suite.T().Cleanup(applier.Teardown)
+	suite.Require().NoError(applier.InitDBConnections())
+	suite.Require().NoError(applier.AcquireMigrationLock(ctx))
+	var lockConnectionID int64
+	suite.Require().NoError(applier.migrationLockConn.QueryRowContext(ctx, "SELECT CONNECTION_ID()").Scan(&lockConnectionID))
+
+	suite.Require().NoError(migrator.initiateApplier())
+	suite.Require().Same(applier, migrator.applier)
+	var holderID int64
+	suite.Require().NoError(suite.db.QueryRowContext(ctx, "SELECT IS_USED_LOCK(?)", moveTablesSourceLockName).Scan(&holderID))
+	suite.Require().Equal(lockConnectionID, holderID)
+}
+
+func (suite *MoveTablesCutOverSuite) TestMoveTablesResumeContinuesAfterCutOverCheckpointMiss() {
+	ctx := context.Background()
+	config, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabaseOther)
+	suite.Require().NoError(err)
+
+	mc := newTestMigrationContext()
+	mc.Checkpoint, mc.Resume = true, true
+	mc.SkipMetadataLockCheck = true
+	mc.InspectorConnectionConfig = config
+	mc.AssumeMasterHostname = fmt.Sprintf("%s:%d", config.Key.Hostname, config.Key.Port)
+	mc.MoveTables.TableNames = []string{"resume_checkpoint_miss"}
+	mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	mc.MoveTables.ConnectionConfig = config
+	mc.MoveTables.AllowOnSourcePrimary = true
+	mc.Hooks = CompositeHooks{}
+	suite.Require().NoError(mc.SetConnectionConfig("innodb"))
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE resume_checkpoint_miss (id INT NOT NULL PRIMARY KEY)")
+	suite.Require().NoError(err)
+	suite.T().Cleanup(func() {
+		_, err := suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS resume_checkpoint_miss")
+		suite.Require().NoError(err)
+	})
+	checkpoint := NewApplier(mc)
+	checkpoint.moveTablesTargetDB = suite.db
+	suite.Require().NoError(checkpoint.CreateCheckpointTable())
+	suite.T().Cleanup(func() { suite.Require().NoError(checkpoint.DropCheckpointTable()) })
+
+	err = NewMigrator(mc, "test").MoveTables()
+	suite.Require().ErrorContains(err, "no checkpoint found, unable to resume")
+	var holderID gosql.NullInt64
+	suite.Require().NoError(suite.db.QueryRowContext(ctx, "SELECT IS_USED_LOCK(?)", moveTablesSourceLockName).Scan(&holderID))
+	suite.Require().False(holderID.Valid)
+}
+
 type MigratorTestSuite struct {
 	suite.Suite
 

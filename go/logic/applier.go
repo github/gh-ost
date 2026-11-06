@@ -35,6 +35,7 @@ import (
 const (
 	GhostChangelogTableComment = "gh-ost changelog"
 	atomicCutOverMagicHint     = "ghost-cut-over-sentry"
+	moveTablesSourceLockName   = "gh-ost-move-tables"
 )
 
 // ErrNoCheckpointFound is returned when an empty checkpoint table is queried.
@@ -274,28 +275,27 @@ func buildMigrationLockName(db, table string) string {
 	return "gh-ost::" + hex.EncodeToString(sum[:])
 }
 
-// AcquireMigrationLock takes a user-level lock on a pinned connection,
-// preventing two gh-ost processes from migrating the same table concurrently
-// on the same MySQL server.
-func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
-	// One advisory lock per run. In move-tables mode it is keyed on the
-	// set-derived run token (not any single table) so two processes moving the
-	// same set of tables collide, while a single-table run keeps its table-keyed
-	// lock name. lockSubject is a human-readable description used in contention
-	// errors; neither branch consults the representative table accessor.
-	var lockTable, lockSubject string
+// AcquireMigrationLock holds a lock on a dedicated session until teardown.
+func (apl *Applier) AcquireMigrationLock(ctx context.Context) (err error) {
+	lockConfig := apl.connectionConfig
+	lockDatabase := apl.migrationContext.GetTargetDatabaseName()
+	var lockName, lockSubject string
 	if apl.migrationContext.IsMoveTablesMode() {
-		lockTable = "movetables." + apl.migrationContext.MoveTablesRunToken()
-		lockSubject = fmt.Sprintf("tables %v", apl.migrationContext.MoveTables.TableNames)
+		lockConfig = apl.migrationContext.MoveTables.SourcePrimaryConnectionConfig
+		lockDatabase = apl.migrationContext.DatabaseName
+		lockName = moveTablesSourceLockName
+		lockSubject = "move-tables source"
 	} else {
-		lockTable = apl.originalTableName()
+		lockName = buildMigrationLockName(lockDatabase, apl.originalTableName())
 		lockSubject = fmt.Sprintf("`%s`.`%s`", apl.migrationContext.DatabaseName, apl.originalTableName())
 	}
-	lockName := buildMigrationLockName(apl.migrationContext.GetTargetDatabaseName(), lockTable)
+	if lockConfig == nil {
+		return fmt.Errorf("%s connection is not configured", lockSubject)
+	}
 
 	// Use a dedicated *sql.DB so the pinned connection does not consume a
 	// slot in apl.db's small pool (mysql.MaxDBPoolConnections).
-	lockURI := apl.connectionConfig.GetDBUri(apl.migrationContext.GetTargetDatabaseName())
+	lockURI := lockConfig.GetDBUri(lockDatabase)
 	lockDB, err := mysql.OpenDB(lockURI)
 	if err != nil {
 		return fmt.Errorf("failed to open migration lock DB: %w", err)
@@ -305,28 +305,33 @@ func (apl *Applier) AcquireMigrationLock(ctx context.Context) error {
 
 	conn, err := lockDB.Conn(ctx)
 	if err != nil {
-		lockDB.Close()
-		return fmt.Errorf("failed to obtain pinned connection for migration lock: %w", err)
+		return fmt.Errorf("failed to obtain pinned connection for migration lock: %w", errors.Join(err, lockDB.Close()))
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, conn.Close(), lockDB.Close())
+		}
+	}()
+	if apl.migrationContext.IsMoveTablesMode() {
+		if _, err := conn.ExecContext(ctx, "set session wait_timeout = 120"); err != nil {
+			return fmt.Errorf("set %s lock wait timeout: %w", lockSubject, err)
+		}
 	}
 
 	var lockResult gosql.NullInt64
 	if err := conn.QueryRowContext(ctx, `select /* gh-ost */ get_lock(?, 0)`, lockName).Scan(&lockResult); err != nil {
-		conn.Close()
-		lockDB.Close()
 		return fmt.Errorf("failed to execute GET_LOCK for migration lock %s: %w", lockName, err)
 	}
 
 	if !lockResult.Valid {
-		conn.Close()
-		lockDB.Close()
 		return fmt.Errorf("GET_LOCK returned NULL while acquiring migration lock %s", lockName)
 	}
 
 	if lockResult.Int64 != 1 {
 		var holderID gosql.NullInt64
-		_ = conn.QueryRowContext(ctx, `select /* gh-ost */ is_used_lock(?)`, lockName).Scan(&holderID)
-		conn.Close()
-		lockDB.Close()
+		if err := conn.QueryRowContext(ctx, `select /* gh-ost */ is_used_lock(?)`, lockName).Scan(&holderID); err != nil {
+			return fmt.Errorf("migration lock %s is held; unable to identify holder: %w", lockName, err)
+		}
 		if holderID.Valid {
 			return fmt.Errorf("another gh-ost process is already migrating %s: migration lock %s held by connection id %d",
 				lockSubject, lockName, holderID.Int64)
@@ -370,8 +375,11 @@ func (apl *Applier) keepMigrationLockAlive(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			_ = base.SendWithContext(ctx, apl.migrationContext.PanicAbort,
-				fmt.Errorf("migration lock %s connection lost: %w", apl.migrationLockName, err))
+			select {
+			case apl.migrationContext.PanicAbort <- fmt.Errorf("migration lock %s connection lost: %w", apl.migrationLockName, err):
+			case <-ctx.Done():
+			case <-apl.migrationLockStop:
+			}
 			return
 		}
 	}
@@ -412,11 +420,11 @@ func (apl *Applier) releaseMigrationLock() {
 	if err := apl.migrationLockConn.Close(); err != nil {
 		apl.migrationContext.Log.Warningf("failed to close migration lock connection: %v", err)
 	}
-	if apl.migrationLockDB != nil {
-		apl.migrationLockDB.Close()
-		apl.migrationLockDB = nil
+	if err := apl.migrationLockDB.Close(); err != nil {
+		apl.migrationContext.Log.Warningf("failed to close migration lock database: %v", err)
 	}
 	apl.migrationLockConn = nil
+	apl.migrationLockDB = nil
 }
 
 func (apl *Applier) prepareQueries() (err error) {
@@ -2818,8 +2826,12 @@ func (apl *Applier) ApplyDMLEventQueries(dmlEvents [](*binlog.BinlogDMLEvent)) e
 func (apl *Applier) Teardown() {
 	apl.migrationContext.Log.Debugf("Tearing down...")
 	apl.releaseMigrationLock()
-	apl.db.Close()
-	apl.singletonDB.Close()
+	if apl.db != nil {
+		apl.db.Close()
+	}
+	if apl.singletonDB != nil {
+		apl.singletonDB.Close()
+	}
 	if apl.moveTablesTargetDB != nil {
 		apl.moveTablesTargetDB.Close()
 	}

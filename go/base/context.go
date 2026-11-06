@@ -1401,8 +1401,8 @@ func (mctx *MigrationContext) OrderedMoveTables() []*MoveTable {
 //   - fixed-length: independent of how many tables are moved (so it never blows
 //     past identifier length limits the way a concatenation of names would).
 //
-// It is used to name run-wide singular artifacts (checkpoint table, applier
-// advisory lock, serve socket) so they never depend on any single migrated
+// It is used to name run-wide singular artifacts (checkpoint table and serve
+// socket) so they never depend on any single migrated
 // table name. Returns "" outside move-tables mode.
 func (mctx *MigrationContext) MoveTablesRunToken() string {
 	if !mctx.IsMoveTablesMode() {

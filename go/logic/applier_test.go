@@ -480,6 +480,7 @@ func (suite *ApplierTestSuite) TestMoveTablesCheckpointCreationFailurePreservesE
 	migrationContext.MoveTables.TableNames = []string{"checkpoint_init_target"}
 	migrationContext.MoveTables.TargetDatabase = testMysqlDatabaseOther
 	migrationContext.MoveTables.ConnectionConfig = connectionConfig
+	migrationContext.MoveTables.SourcePrimaryConnectionConfig = connectionConfig
 	migrationContext.ApplierConnectionConfig = connectionConfig
 	suite.Require().NoError(migrationContext.SetConnectionConfig("innodb"))
 	migrationContext.InitMoveTableContainers()
@@ -827,6 +828,118 @@ func (suite *ApplierTestSuite) TestAcquireMigrationLockFailsWhenHeld() {
 	suite.Require().Error(err)
 	suite.Require().Contains(err.Error(), "already migrating")
 	suite.Require().Nil(applierB.migrationLockConn)
+}
+
+func (suite *ApplierTestSuite) TestMoveTablesLock() {
+	ctx := context.Background()
+	config, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	config.TransactionIsolation = "REPEATABLE-READ"
+	newMove := func(source, target string, tables ...string) *Applier {
+		mc := newTestMigrationContext()
+		mc.DatabaseName = source
+		mc.MoveTables.TargetDatabase = target
+		mc.MoveTables.TableNames = tables
+		mc.MoveTables.SourcePrimaryConnectionConfig = config
+		mc.MoveTables.ConnectionConfig = config
+		return NewApplier(mc)
+	}
+
+	suite.Run("source contention and resume", func() {
+		first := newMove(testMysqlDatabase, testMysqlDatabaseOther, "b")
+		suite.Require().NoError(first.AcquireMigrationLock(ctx))
+		suite.T().Cleanup(first.releaseMigrationLock)
+		for _, other := range []*Applier{
+			newMove(testMysqlDatabase, testMysqlDatabaseOther, "a", "b"),
+			newMove(testMysqlDatabaseOther, testMysqlDatabase, "c"),
+		} {
+			suite.T().Cleanup(other.releaseMigrationLock)
+			err := other.AcquireMigrationLock(ctx)
+			suite.Require().ErrorContains(err, moveTablesSourceLockName+" held by connection")
+		}
+
+		mc := newTestMigrationContext()
+		mc.Checkpoint, mc.Resume = true, true
+		mc.InspectorConnectionConfig, mc.ApplierConnectionConfig = config, config
+		mc.AssumeMasterHostname = fmt.Sprintf("%s:%d", config.Key.Hostname, config.Key.Port)
+		mc.MoveTables.TableNames = []string{"resume_locked"}
+		mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+		mc.MoveTables.ConnectionConfig = config
+		var calls []string
+		mc.Hooks = &recordingHooks{name: "test", calls: &calls}
+		suite.Require().NoError(mc.SetConnectionConfig("innodb"))
+		//nolint:contextcheck // Lock teardown uses an independent timeout after migration cancellation.
+		suite.Require().ErrorContains(NewMigrator(mc, "test").MoveTables(), moveTablesSourceLockName+" held")
+		suite.Require().Equal([]string{"test:OnStartup"}, calls)
+	})
+
+	suite.Run("different sources can share a target", func() {
+		otherContainer, err := testmysql.Run(ctx,
+			testMysqlContainerImage,
+			testmysql.WithDatabase(testMysqlDatabase),
+			testmysql.WithUsername(testMysqlUser),
+			testmysql.WithPassword(testMysqlPass),
+			testmysql.WithConfigFile("my.cnf.test"),
+		)
+		suite.Require().NoError(err)
+		suite.T().Cleanup(func() { suite.Assert().NoError(testcontainers.TerminateContainer(otherContainer)) })
+		otherConfig, err := getTestConnectionConfig(ctx, otherContainer)
+		suite.Require().NoError(err)
+		otherConfig.TransactionIsolation = "REPEATABLE-READ"
+
+		first := newMove(testMysqlDatabase, testMysqlDatabaseOther, "a")
+		second := newMove(testMysqlDatabase, testMysqlDatabaseOther, "a")
+		second.migrationContext.MoveTables.SourcePrimaryConnectionConfig = otherConfig
+		suite.Require().NoError(first.AcquireMigrationLock(ctx))
+		suite.T().Cleanup(first.releaseMigrationLock)
+		suite.Require().NoError(second.AcquireMigrationLock(ctx))
+		suite.T().Cleanup(second.releaseMigrationLock)
+	})
+
+	suite.Run("standard migrations remain allowed", func() {
+		move := newMove(testMysqlDatabase, testMysqlDatabaseOther, testMysqlTableName)
+		suite.Require().NoError(move.AcquireMigrationLock(ctx))
+		suite.T().Cleanup(move.releaseMigrationLock)
+		for _, database := range []string{testMysqlDatabase, testMysqlDatabaseOther} {
+			mc := newTestMigrationContext()
+			mc.DatabaseName, mc.ApplierConnectionConfig = database, config
+			standard := NewApplier(mc)
+			suite.Require().NoError(standard.AcquireMigrationLock(ctx))
+			suite.T().Cleanup(standard.releaseMigrationLock)
+		}
+	})
+}
+
+func (suite *ApplierTestSuite) TestMoveTablesLockKeepaliveReportsLostConnection() {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	config, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	config.TransactionIsolation = "REPEATABLE-READ"
+	mc := newTestMigrationContext()
+	mc.MoveTables.TableNames = []string{"keepalive"}
+	mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	mc.MoveTables.SourcePrimaryConnectionConfig, mc.MoveTables.ConnectionConfig = config, config
+	applier := NewApplier(mc)
+	suite.Require().NoError(applier.AcquireMigrationLock(ctx))
+	defer applier.releaseMigrationLock()
+
+	var id int64
+	suite.Require().NoError(applier.migrationLockConn.QueryRowContext(ctx, "SELECT CONNECTION_ID()").Scan(&id))
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("KILL CONNECTION %d", id))
+	suite.Require().NoError(err)
+	select {
+	case err := <-mc.PanicAbort:
+		suite.Require().ErrorContains(err, "migration lock "+moveTablesSourceLockName+" connection lost")
+	case <-ctx.Done():
+		suite.T().Fatal("keepalive did not report the lost lock connection")
+	}
+}
+
+func TestMoveTablesLockRequiresConnectionConfig(t *testing.T) {
+	mc := newTestMigrationContext()
+	mc.MoveTables.TableNames = []string{"t"}
+	require.ErrorContains(t, NewApplier(mc).AcquireMigrationLock(context.Background()), "move-tables source connection is not configured")
 }
 
 func TestBuildMigrationLockName(t *testing.T) {
