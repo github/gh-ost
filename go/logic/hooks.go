@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 
 	"github.com/github/gh-ost/go/base"
@@ -220,9 +221,32 @@ func NewHooksExecutor(migrationContext *base.MigrationContext) *HooksExecutor {
 func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []string {
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("GH_OST_DATABASE_NAME=%s", he.migrationContext.DatabaseName))
-	env = append(env, fmt.Sprintf("GH_OST_TABLE_NAME=%s", he.migrationContext.OriginalTableName))
-	env = append(env, fmt.Sprintf("GH_OST_GHOST_TABLE_NAME=%s", he.migrationContext.GetGhostTableName()))
-	env = append(env, fmt.Sprintf("GH_OST_OLD_TABLE_NAME=%s", he.migrationContext.GetOldTableName()))
+
+	var tableNameEnv string
+	if he.migrationContext.IsMoveTablesMode() {
+		tableNameEnv = strings.Join(he.migrationContext.MoveTables.TableNames, ",")
+	} else {
+		tableNameEnv = he.migrationContext.OriginalTableName
+	}
+	env = append(env, fmt.Sprintf("GH_OST_TABLE_NAME=%s", tableNameEnv))
+	var ghostTableNameEnv string
+	var oldTableNameEnv string
+	if he.migrationContext.IsMoveTablesMode() {
+		// No ghost or old tables in move-tables mode: the destination keeps each
+		// source table's name, and the rollback handles are the per-table
+		// `_<table>_del` tables produced by the atomic cutover RENAME.
+		ghostTableNameEnv = strings.Join(he.migrationContext.MoveTables.TableNames, ",")
+		delNames := make([]string, 0, len(he.migrationContext.MoveTables.TableNames))
+		for _, tableName := range he.migrationContext.MoveTables.TableNames {
+			delNames = append(delNames, he.migrationContext.MoveTableDelName(tableName))
+		}
+		oldTableNameEnv = strings.Join(delNames, ",")
+	} else {
+		ghostTableNameEnv = he.migrationContext.GetGhostTableName()
+		oldTableNameEnv = he.migrationContext.GetOldTableName()
+	}
+	env = append(env, fmt.Sprintf("GH_OST_GHOST_TABLE_NAME=%s", ghostTableNameEnv))
+	env = append(env, fmt.Sprintf("GH_OST_OLD_TABLE_NAME=%s", oldTableNameEnv))
 	env = append(env, fmt.Sprintf("GH_OST_DDL=%s", he.migrationContext.AlterStatement))
 	env = append(env, fmt.Sprintf("GH_OST_ELAPSED_SECONDS=%f", he.migrationContext.ElapsedTime().Seconds()))
 	env = append(env, fmt.Sprintf("GH_OST_ELAPSED_COPY_SECONDS=%f", he.migrationContext.ElapsedRowCopyTime().Seconds()))
@@ -233,8 +257,19 @@ func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []s
 	env = append(env, fmt.Sprintf("GH_OST_MIGRATED_HOST=%s", he.migrationContext.GetApplierHostname()))
 	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_HOST=%s", he.migrationContext.GetInspectorHostname()))
 	env = append(env, fmt.Sprintf("GH_OST_EXECUTING_HOST=%s", he.migrationContext.Hostname))
+	env = append(env, fmt.Sprintf("GH_OST_TARGET_HOST=%s", he.migrationContext.GetTargetHostname()))
 	env = append(env, fmt.Sprintf("GH_OST_INSPECTED_LAG=%f", he.migrationContext.GetCurrentLagDuration().Seconds()))
-	env = append(env, fmt.Sprintf("GH_OST_HEARTBEAT_LAG=%f", he.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds()))
+	// In move-tables mode there is no changelog heartbeat; writer lag (now - last
+	// applied binlog event timestamp) replaces the heartbeat-derived lag. Re-point
+	// GH_OST_HEARTBEAT_LAG at it so existing hooks keep seeing a meaningful value,
+	// and also expose it explicitly as GH_OST_BINLOG_WRITER_LAG_SECONDS.
+	heartbeatLagSeconds := he.migrationContext.TimeSinceLastHeartbeatOnChangelog().Seconds()
+	binlogWriterLagSeconds := he.migrationContext.GetBinlogWriterLag().Seconds()
+	if he.migrationContext.IsMoveTablesMode() {
+		heartbeatLagSeconds = binlogWriterLagSeconds
+	}
+	env = append(env, fmt.Sprintf("GH_OST_HEARTBEAT_LAG=%f", heartbeatLagSeconds))
+	env = append(env, fmt.Sprintf("GH_OST_BINLOG_WRITER_LAG_SECONDS=%f", binlogWriterLagSeconds))
 	env = append(env, fmt.Sprintf("GH_OST_PROGRESS=%f", he.migrationContext.GetProgressPct()))
 	env = append(env, fmt.Sprintf("GH_OST_ETA_SECONDS=%d", he.migrationContext.GetETASeconds()))
 	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT=%s", he.migrationContext.HooksHintMessage))
@@ -242,7 +277,20 @@ func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []s
 	env = append(env, fmt.Sprintf("GH_OST_HOOKS_HINT_TOKEN=%s", he.migrationContext.HooksHintToken))
 	env = append(env, fmt.Sprintf("GH_OST_DRY_RUN=%t", he.migrationContext.Noop))
 	env = append(env, fmt.Sprintf("GH_OST_REVERT=%t", he.migrationContext.Revert))
+	env = append(env, fmt.Sprintf("GH_OST_MOVE_TABLES=%t", he.migrationContext.IsMoveTablesMode()))
+	if he.migrationContext.IsMoveTablesMode() {
+		// Comma-joined list of all migrated tables (§2.4).
+		env = append(env, fmt.Sprintf("GH_OST_TABLES=%s", strings.Join(he.migrationContext.MoveTables.TableNames, ",")))
+	}
+	env = append(env, fmt.Sprintf("GH_OST_TARGET_DATABASE_NAME=%s", he.migrationContext.GetTargetDatabaseName()))
 
+	var targetTableNameEnv string
+	if he.migrationContext.IsMoveTablesMode() {
+		targetTableNameEnv = strings.Join(he.migrationContext.MoveTables.TableNames, ",")
+	} else {
+		targetTableNameEnv = he.migrationContext.GetGhostTableName()
+	}
+	env = append(env, fmt.Sprintf("GH_OST_TARGET_TABLE_NAME=%s", targetTableNameEnv))
 	env = append(env, extraVariables...)
 	return env
 }
@@ -320,8 +368,11 @@ func (he *HooksExecutor) OnInteractiveCommand(command string) error {
 }
 
 func (he *HooksExecutor) OnSuccess(instantDDL bool) error {
-	v := fmt.Sprintf("GH_OST_INSTANT_DDL=%t", instantDDL)
-	return he.executeHooks(onSuccess, v)
+	v := []string{fmt.Sprintf("GH_OST_INSTANT_DDL=%t", instantDDL)}
+	if he.migrationContext.IsMoveTablesMode() && he.migrationContext.MoveTables.DrainGTID != nil {
+		v = append(v, fmt.Sprintf("GH_OST_DRAIN_GTID=%s", he.migrationContext.MoveTables.DrainGTID.String()))
+	}
+	return he.executeHooks(onSuccess, v...)
 }
 
 func (he *HooksExecutor) OnFailure() error {

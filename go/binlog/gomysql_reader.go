@@ -122,6 +122,7 @@ func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent
 			continue
 		}
 		binlogEntry := NewBinlogEntryAt(currentCoords)
+		binlogEntry.Timestamp = time.Unix(int64(ev.Header.Timestamp), 0)
 		binlogEntry.DmlEvent = NewBinlogDMLEvent(
 			string(rowsEvent.Table.Schema),
 			string(rowsEvent.Table.Table),
