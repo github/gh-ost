@@ -935,6 +935,30 @@ func (mgtr *Migrator) hydrateMoveTablesStateFromTarget() error {
 	return nil
 }
 
+func (mgtr *Migrator) validateMoveTablesResumeSourceTables(renamed bool) error {
+	const query = `select
+		(select table_type from information_schema.tables where table_schema = ? and table_name = ?),
+		(select table_type from information_schema.tables where table_schema = ? and table_name = ?)`
+	database := mgtr.migrationContext.DatabaseName
+	for _, table := range mgtr.migrationContext.MoveTables.TableNames {
+		deletionTable := mgtr.migrationContext.MoveTableDelName(table)
+		var originalType, deletionType gosql.NullString
+		if err := mgtr.sourcePrimaryDB.QueryRowContext(mgtr.migrationContext.GetContext(), query,
+			database, table, database, deletionTable).Scan(&originalType, &deletionType); err != nil {
+			return fmt.Errorf("failed to inspect move-tables source %s.%s: %w", database, table, err)
+		}
+		valid := originalType.Valid && originalType.String == "BASE TABLE" && !deletionType.Valid
+		if renamed {
+			valid = !originalType.Valid && deletionType.Valid && deletionType.String == "BASE TABLE"
+		}
+		if !valid {
+			return fmt.Errorf("cannot resume move-tables: source %s.%s type=%q, deletion table %s.%s type=%q; inspect the source and recover manually",
+				database, table, originalType.String, database, deletionTable, deletionType.String)
+		}
+	}
+	return nil
+}
+
 func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogCoordinates, isCutover bool) error {
 	mgtr.applier.CurrentCoordinatesMutex.Lock()
 	safeCoords := mgtr.applier.CurrentCoordinates
@@ -1066,15 +1090,6 @@ func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) err
 	if chk == nil || !chk.MoveTablesCutOverStarted || chk.MoveTablesCutOverDrainGTID == nil || chk.MoveTablesCutOverDrainGTID.IsEmpty() {
 		return errors.New("checkpoint does not contain move-tables cutover resume state")
 	}
-	// The checkpoint proves the source RENAME already happened in a prior run, so
-	// `__del` exists on the source. Mark it so a failed resume emits the rollback
-	// hint.
-	atomic.StoreInt64(&mgtr.migrationContext.MoveTablesSourceRenamedFlag, 1)
-	if chk.LastTrxCoords != nil && !chk.LastTrxCoords.IsEmpty() {
-		mgtr.applier.CurrentCoordinatesMutex.Lock()
-		mgtr.applier.CurrentCoordinates = chk.LastTrxCoords.Clone()
-		mgtr.applier.CurrentCoordinatesMutex.Unlock()
-	}
 	mgtr.migrationContext.Log.Infof("Resuming move-tables cutover from checkpoint at coords=%+v drain_gtid=%s",
 		chk.LastTrxCoords, chk.MoveTablesCutOverDrainGTID.DisplayString())
 	if err := mgtr.drainMoveTablesCutOver(chk.MoveTablesCutOverDrainGTID); err != nil {
@@ -1093,6 +1108,12 @@ func (mgtr *Migrator) resumeMoveTablesCutOverFromCheckpoint(chk *Checkpoint) err
 }
 
 func (mgtr *Migrator) MoveTables() (err error) {
+	if mgtr.migrationContext.TimestampOldTable {
+		return errors.New("--timestamp-old-table is not supported with --move-tables; existing timestamped runs require manual recovery")
+	}
+	if !mgtr.migrationContext.Checkpoint {
+		return errors.New("move-tables requires checkpointing")
+	}
 	mgtr.migrationContext.Log.Infof("Moving tables %v (run %s) from %s to %s (%s)",
 		mgtr.migrationContext.MoveTables.TableNames,
 		mgtr.migrationContext.MoveTablesRunToken(),
@@ -1111,8 +1132,10 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	go mgtr.listenOnPanicAbort()
 
 	// Run on-startup hook:
-	if err := mgtr.hooksExecutor.OnStartup(); err != nil {
-		return err
+	if !mgtr.migrationContext.Resume {
+		if err := mgtr.hooksExecutor.OnStartup(); err != nil {
+			return err
+		}
 	}
 
 	// After this point, we'll need to teardown anything that's been started
@@ -1156,10 +1179,29 @@ func (mgtr *Migrator) MoveTables() (err error) {
 		}
 		cutoverResumeCheckpoint, err := mgtr.applier.ReadMoveTablesCutOverCheckpoint()
 		if err != nil && !errors.Is(err, ErrNoCheckpointFound) {
+			return fmt.Errorf("failed to inspect move-tables cutover checkpoint; manual assessment is required: %w", err)
+		}
+		if cutoverResumeCheckpoint != nil && cutoverResumeCheckpoint.IsCutover {
+			return errors.New("move-tables drain is already marked complete; inspect the source and target and recover manually")
+		}
+		if cutoverResumeCheckpoint != nil && (cutoverResumeCheckpoint.LastTrxCoords == nil || cutoverResumeCheckpoint.LastTrxCoords.IsEmpty() ||
+			cutoverResumeCheckpoint.MoveTablesCutOverDrainGTID == nil || cutoverResumeCheckpoint.MoveTablesCutOverDrainGTID.IsEmpty()) {
+			return errors.New("move-tables cutover checkpoint has missing coordinates; inspect the source and target and recover manually")
+		}
+		if err := mgtr.validateMoveTablesResumeSourceTables(cutoverResumeCheckpoint != nil); err != nil {
 			return err
 		}
-		if cutoverResumeCheckpoint != nil && cutoverResumeCheckpoint.MoveTablesCutOverStarted && cutoverResumeCheckpoint.MoveTablesCutOverDrainGTID != nil && !cutoverResumeCheckpoint.MoveTablesCutOverDrainGTID.IsEmpty() {
+		if cutoverResumeCheckpoint != nil {
+			atomic.StoreInt64(&mgtr.migrationContext.MoveTablesSourceRenamedFlag, 1)
+		}
+		if err := mgtr.hooksExecutor.OnStartup(); err != nil {
+			return err
+		}
+		if cutoverResumeCheckpoint != nil {
 			mgtr.migrationContext.InitialStreamerCoords = cutoverResumeCheckpoint.LastTrxCoords
+			mgtr.applier.CurrentCoordinatesMutex.Lock()
+			mgtr.applier.CurrentCoordinates = cutoverResumeCheckpoint.LastTrxCoords.Clone()
+			mgtr.applier.CurrentCoordinatesMutex.Unlock()
 			mgtr.migrationContext.Iteration = cutoverResumeCheckpoint.Iteration
 			atomic.StoreInt64(&mgtr.migrationContext.TotalRowsCopied, cutoverResumeCheckpoint.RowsCopied)
 			atomic.StoreInt64(&mgtr.migrationContext.TotalDMLEventsApplied, cutoverResumeCheckpoint.DMLApplied)
@@ -1191,8 +1233,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 					_ = base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.migrationContext.PanicAbort, err)
 				}
 			}()
-			// Do not initiate status ticker in cutover resume path: inspector is not initialized,
-			// and we're only doing drain polling + hooks before exit (no row copy to monitor).
+			// The inspector is not initialized on this path, so no status ticker is started.
 			if err := mgtr.resumeMoveTablesCutOverFromCheckpoint(cutoverResumeCheckpoint); err != nil {
 				return err
 			}
@@ -1425,10 +1466,8 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	// collapses the two operations into one server round trip, so there is no
 	// client-side or pool-scheduling gap between them: database/sql runs both
 	// statements on the same pooled connection, and the server executes them in
-	// order. The captured GTID is therefore the source executed set immediately
-	// after — and causally after — the rename commit, and a client-side crash can
-	// no longer land between the rename and the capture. The source-primary DSN
-	// sets multiStatements=true (see setupMoveTablesSourcePrimary).
+	// order. A failure can still occur after rename commits and before its result
+	// is captured; the source-primary DSN sets multiStatements=true.
 	//
 	// We use the dedicated source-primary handle (NOT mgtr.inspector.db): the
 	// inspector may be a read replica, while the RENAME must run on a writable
@@ -1464,8 +1503,6 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	drainGTIDStr, err := func() (string, error) {
 		rows, err := mgtr.sourcePrimaryDB.QueryContext(cutOverCtx, renameAndCaptureQuery)
 		if err != nil {
-			// The error surfaces from the first statement (RENAME); the table was
-			// NOT renamed, so do not set the rollback flag.
 			return "", err
 		}
 		defer rows.Close()
@@ -1502,7 +1539,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		return gtid, nil
 	}()
 	if err != nil {
-		return fmt.Errorf("source RENAME + drain GTID capture failed: %w", err)
+		return fmt.Errorf("source RENAME + drain GTID capture failed; rename outcome may be unknown, inspect source deletion tables and recover manually: %w", err)
 	}
 	drainGTID, err := mysql.NewGTIDBinlogCoordinates(mysql.FlavorFor(mgtr.migrationContext.InspectorMySQLVersion), drainGTIDStr)
 	if err != nil {
@@ -1981,9 +2018,8 @@ func (mgtr *Migrator) resolveSourcePrimaryConnectionConfig(dbVersion string) (*m
 
 // setupMoveTablesSourcePrimary resolves the source primary connection config,
 // opens its DB handle, and asserts it is writable. It is called from
-// initiateInspector (normal path) and from the cutover-resume path (which skips
-// the inspector); both supply the source MySQL version used for replica-status
-// terminology. Safe to call once per run.
+// initiateInspector (normal path) and from the resume preflight; both supply
+// the source MySQL version used for replica-status terminology.
 func (mgtr *Migrator) setupMoveTablesSourcePrimary(dbVersion string) error {
 	cfg, err := mgtr.resolveSourcePrimaryConnectionConfig(dbVersion)
 	if err != nil {

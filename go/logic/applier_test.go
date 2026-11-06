@@ -870,7 +870,7 @@ func (suite *ApplierTestSuite) TestMoveTablesLock() {
 		suite.Require().NoError(mc.SetConnectionConfig("innodb"))
 		//nolint:contextcheck // Lock teardown uses an independent timeout after migration cancellation.
 		suite.Require().ErrorContains(NewMigrator(mc, "test").MoveTables(), moveTablesSourceLockName+" held")
-		suite.Require().Equal([]string{"test:OnStartup"}, calls)
+		suite.Require().Empty(calls)
 	})
 
 	suite.Run("different sources can share a target", func() {

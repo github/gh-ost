@@ -4,7 +4,7 @@
 # - panic after drain (T4) and prior to on-success (T5), prior to cutover completion
 # - validate RENAME and source writes are not possible
 # - validate contents of source and target are the same
-# - resume and complete the migration
+# - reject resume because the success hook may already have run
 
 database=test
 table_name=gh_ost_test
@@ -117,7 +117,7 @@ echo  "✅ Validated checkpointed state on unexpected exit..."
 echo -e "\n\n\n\n\n"
 
 ######################################################################################################
-### Run #2: Resume and complete the migration
+### Run #2: Resume must require manual recovery
 ######################################################################################################
 
 echo  "⚙️ Resuming migration (run #2)..."
@@ -126,24 +126,28 @@ echo  "⚙️ Resuming migration (run #2)..."
 build_ghost_command
 cmd="$cmd --resume --hooks-path=$tests_path/$test_name/hooks"
 
-# queue up removal of the postpone cutover flag, otherwise gh-ost hangs on the cutover
-(
-    sleep 2;
-    echo "⏩ Sending unpostpone cutover"
-    rm $postpone_cutover_flag_file &> /dev/null;
-) &
-
+echo > "$test_logfile"
 bash -c "$cmd" >>$test_logfile 2>&1
 ghost_result=$?
 
-if [ $ghost_result -ne 0 ]; then
-    echo "ERROR: gh-ost should have succeeded but did not. ($ghost_result)"
+if [ $ghost_result -eq 0 ]; then
+    echo "ERROR: gh-ost should have rejected the completed-drain checkpoint."
     return 1
 fi
 
-# validate on-success hook was was called
-if [ ! -f /tmp/gh-ost-hooks/on-success ]; then
-    echo "ERROR: on-success hook was not called when it should have been."
+if ! grep -Fq "move-tables drain is already marked complete" "$test_logfile"; then
+    echo "ERROR: gh-ost did not report that manual recovery is required."
+    return 1
+fi
+
+if [ -f /tmp/gh-ost-hooks/on-success ]; then
+    echo "ERROR: on-success hook was called during rejected resume."
+    return 1
+fi
+
+if ! mysql-exec source primary "$database" -sNe "SELECT 1 FROM _${table_name}_del LIMIT 1;"; then
+    echo "ERROR: Source rollback table '_${table_name}_del' was not preserved."
+    return 1
 fi
 
 echo -e "\n\n\n\n\n"

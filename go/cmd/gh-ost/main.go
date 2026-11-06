@@ -374,6 +374,9 @@ func main() {
 		if migrationContext.Revert {
 			log.Fatal("--move-tables is mutually exclusive with --revert")
 		}
+		if migrationContext.TimestampOldTable {
+			log.Fatal("--timestamp-old-table is not supported with --move-tables; existing timestamped runs require manual recovery")
+		}
 		if migrationContext.MoveTables.TargetHost == "" {
 			log.Fatal("--target-host must be specified when using --move-tables")
 		}
