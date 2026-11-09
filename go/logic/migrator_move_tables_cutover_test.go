@@ -100,6 +100,18 @@ func (h *onSuccessCheckHooks) OnSuccess(bool) error {
 	return nil
 }
 
+type onValidatedCheckHooks struct {
+	*onSuccessCheckHooks
+	onValidatedCheck func() error
+}
+
+func (h *onValidatedCheckHooks) OnValidated() error {
+	if err := h.record("OnValidated"); err != nil {
+		return err
+	}
+	return h.onValidatedCheck()
+}
+
 // TestMoveTablesCutOver_PostponeGateFiresOnBeginPostponedOnce maps to the
 // postpone-gate decision in #8209-implement-protocol (keep OnBeginPostponed
 // firing logic with the same once-per-cutover semantics as standard cutOver).
@@ -328,6 +340,187 @@ func (s *MoveTablesCutOverSuite) setupCutOverCheckpoint(m *Migrator, mc *base.Mi
 			sql.EscapeName(testMysqlDatabaseOther), sql.EscapeName(mc.GetCheckpointTableName())))
 		s.Require().NoError(err)
 	}
+}
+
+func (s *MoveTablesCutOverSuite) TestMoveTablesListenersBeforeStreaming() {
+	ctx := context.Background()
+	tableNames := []string{testMysqlTableName, "testing_other"}
+	for _, table := range tableNames {
+		_, err := s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s.%s (id INT PRIMARY KEY)",
+			sql.EscapeName(testMysqlDatabase), sql.EscapeName(table)))
+		s.Require().NoError(err)
+		s.T().Cleanup(func() {
+			_, err := s.db.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s.%s",
+				sql.EscapeName(testMysqlDatabase), sql.EscapeName(table)))
+			s.Assert().NoError(err)
+		})
+	}
+
+	connectionConfig, err := getTestConnectionConfig(ctx, s.mysqlContainer)
+	s.Require().NoError(err)
+	const rowsPerTable = base.MaxEventsBatchSize/2 + 1
+	values := make([]string, rowsPerTable)
+	for i := range values {
+		values[i] = fmt.Sprintf("(%d)", i+1)
+	}
+
+	mc := newTestMigrationContext()
+	mc.InspectorConnectionConfig = connectionConfig
+	s.Require().NoError(mc.SetConnectionConfig("innodb"))
+	mc.MoveTables.TableNames = tableNames
+	mc.UseGTIDs = true
+	m := NewMigrator(mc, "test")
+	s.Require().NoError(m.initiateStreaming())
+	s.T().Cleanup(func() {
+		atomic.StoreInt64(&m.finishedMigrating, 1)
+		atomic.StoreInt64(&mc.CutOverCompleteFlag, 1)
+		mc.CancelContext()
+		s.Assert().NoError(m.eventsStreamer.Close())
+		m.eventsStreamer.Teardown()
+	})
+
+	s.Require().Len(m.eventsStreamer.listeners, len(tableNames))
+	for _, table := range tableNames {
+		_, err := s.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s.%s VALUES %s",
+			sql.EscapeName(testMysqlDatabase), sql.EscapeName(table), strings.Join(values, ",")))
+		s.Require().NoError(err)
+	}
+	s.Require().Eventually(func() bool {
+		return len(m.applyEventsQueue) == cap(m.applyEventsQueue)
+	}, 10*time.Second, 10*time.Millisecond, "pending DML should fill the apply queue")
+	seen := make(map[string]int)
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for range len(tableNames) * rowsPerTable {
+		select {
+		case event := <-m.applyEventsQueue:
+			s.Require().NotNil(event.dmlEvent)
+			seen[event.dmlEvent.TableName]++
+		case <-deadline.C:
+			s.FailNow("timed out waiting for pending DML")
+		}
+	}
+	for _, table := range tableNames {
+		s.Require().Equal(rowsPerTable, seen[table], "unexpected DML event count for %s", table)
+	}
+}
+
+func (s *MoveTablesCutOverSuite) TestResumeMoveTablesCutOverWithPendingDML() {
+	ctx := context.Background()
+	config, err := getTestConnectionConfig(ctx, s.mysqlContainer)
+	s.Require().NoError(err)
+	_, err = s.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabaseOther)
+	s.Require().NoError(err)
+
+	tableNames := []string{testMysqlTableName, "testing_other"}
+	for _, table := range tableNames {
+		for _, database := range []string{testMysqlDatabase, testMysqlDatabaseOther} {
+			qualified := fmt.Sprintf("%s.%s", sql.EscapeName(database), sql.EscapeName(table))
+			_, err := s.db.ExecContext(ctx, "CREATE TABLE "+qualified+" (id INT PRIMARY KEY, value INT)")
+			s.Require().NoError(err)
+			s.T().Cleanup(func() {
+				_, err := s.db.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+qualified)
+				s.Assert().NoError(err)
+			})
+			_, err = s.db.ExecContext(ctx, "INSERT INTO "+qualified+" VALUES (1, 0)")
+			s.Require().NoError(err)
+		}
+		deletionTable := fmt.Sprintf("%s.%s", sql.EscapeName(testMysqlDatabase), sql.EscapeName("_"+table+"_del"))
+		s.T().Cleanup(func() {
+			_, err := s.db.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+deletionTable)
+			s.Assert().NoError(err)
+		})
+	}
+
+	var startGTID string
+	s.Require().NoError(s.db.QueryRowContext(ctx, "SELECT @@global.gtid_executed").Scan(&startGTID))
+	startCoords, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, startGTID)
+	s.Require().NoError(err)
+	for _, table := range tableNames {
+		_, err := s.db.ExecContext(ctx, fmt.Sprintf("UPDATE %s.%s SET value = 42 WHERE id = 1",
+			sql.EscapeName(testMysqlDatabase), sql.EscapeName(table)))
+		s.Require().NoError(err)
+	}
+	_, err = s.db.ExecContext(ctx, "RENAME TABLE testing TO _testing_del, testing_other TO _testing_other_del")
+	s.Require().NoError(err)
+	var drainGTID string
+	s.Require().NoError(s.db.QueryRowContext(ctx, "SELECT @@global.gtid_executed").Scan(&drainGTID))
+	drainCoords, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, drainGTID)
+	s.Require().NoError(err)
+
+	mc := newTestMigrationContext()
+	mc.Checkpoint, mc.Resume, mc.UseGTIDs = true, true, true
+	mc.InspectorConnectionConfig = config
+	mc.AssumeMasterHostname = fmt.Sprintf("%s:%d", config.Key.Hostname, config.Key.Port)
+	mc.MoveTables.TableNames = tableNames
+	mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	mc.MoveTables.ConnectionConfig = config
+	mc.CutOverLockTimeoutSeconds = 15
+	mc.ServeSocketFile = filepath.Join(s.T().TempDir(), "gh-ost.sock")
+	s.Require().NoError(mc.SetConnectionConfig("innodb"))
+	mc.InitMoveTableContainers()
+
+	checkpoint := NewApplier(mc)
+	checkpoint.moveTablesTargetDB = s.db
+	s.Require().NoError(checkpoint.CreateCheckpointTable())
+	s.T().Cleanup(func() { s.Assert().NoError(checkpoint.DropCheckpointTable()) })
+	for _, table := range tableNames {
+		s.Require().NoError(checkpoint.WriteMoveTableCheckpoints([]*Checkpoint{{
+			TableName:                  table,
+			LastTrxCoords:              startCoords,
+			MoveTablesCutOverStarted:   true,
+			MoveTablesCutOverDrainGTID: drainCoords,
+		}}))
+	}
+
+	var calls []string
+	hooks := &onValidatedCheckHooks{
+		onSuccessCheckHooks: &onSuccessCheckHooks{recordingHooks: &recordingHooks{name: "fake", calls: &calls}},
+	}
+	mc.Hooks = hooks
+	m := NewMigrator(mc, "test")
+	hooks.onValidatedCheck = func() error {
+		m.applier.CurrentCoordinatesMutex.Lock()
+		seededCoords := m.applier.CurrentCoordinates
+		m.applier.CurrentCoordinatesMutex.Unlock()
+		if seededCoords == nil || seededCoords.String() != startCoords.String() {
+			return fmt.Errorf("resume coordinates not seeded from checkpoint: %v", seededCoords)
+		}
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		for len(m.applyEventsQueue) < len(tableNames) {
+			select {
+			case <-deadline.C:
+				return errors.New("pending DML was not queued before validation completed")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		return nil
+	}
+	hooks.onSuccessCheck = func() error {
+		for _, table := range tableNames {
+			var value int
+			if err := s.db.QueryRowContext(ctx, fmt.Sprintf("SELECT value FROM %s.%s WHERE id = 1",
+				sql.EscapeName(testMysqlDatabaseOther), sql.EscapeName(table))).Scan(&value); err != nil {
+				return err
+			}
+			if value != 42 {
+				return fmt.Errorf("target table %s has value %d, want 42", table, value)
+			}
+		}
+		chk, err := checkpoint.ReadMoveTablesCutOverCheckpoint()
+		if err != nil {
+			return err
+		}
+		if !chk.IsCutover {
+			return errors.New("completed drain checkpoint was not persisted before on-success")
+		}
+		return nil
+	}
+
+	s.Require().NoError(m.MoveTables())
+	s.Require().Len(m.eventsStreamer.listeners, len(tableNames), "each table must have exactly one listener")
+	s.Require().Equal([]string{"fake:OnStartup", "fake:OnValidated", "fake:OnSuccess"}, calls)
 }
 
 func (s *MoveTablesCutOverSuite) TestResumeMoveTablesCutOverFromCheckpointAlreadyDrained() {

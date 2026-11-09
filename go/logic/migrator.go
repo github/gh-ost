@@ -1223,9 +1223,6 @@ func (mgtr *Migrator) MoveTables() (err error) {
 				return err
 			}
 			defer mgtr.server.RemoveSocketFile()
-			if err := mgtr.addDMLEventsListener(); err != nil {
-				return err
-			}
 			mgtr.initiateThrottler()
 			go func() {
 				if err := mgtr.executeWriteFuncs(); err != nil {
@@ -1343,9 +1340,6 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	defer mgtr.server.RemoveSocketFile()
 
 	if err := mgtr.countTableRows(); err != nil {
-		return err
-	}
-	if err := mgtr.addDMLEventsListener(); err != nil {
 		return err
 	}
 	// Read each migrated table's full row-copy range into its per-table container
@@ -2533,10 +2527,9 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, snap migrationProgressSn
 // initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (mgtr *Migrator) initiateStreaming() error {
 	mgtr.eventsStreamer = NewEventsStreamer(mgtr.migrationContext)
-	// On resume or revert the reader starts at a checkpoint, behind changes to
-	// rows that are already in the target table, so the original table's
-	// listener must exist before the first event is read.
-	if mgtr.migrationContext.Resume || mgtr.migrationContext.Revert {
+	// Resume/revert may have pending DML, and move-tables has no changelog
+	// event to wait for, so their listeners must exist before the reader starts.
+	if mgtr.migrationContext.Resume || mgtr.migrationContext.Revert || mgtr.migrationContext.IsMoveTablesMode() {
 		if err := mgtr.addDMLEventsListener(); err != nil {
 			return err
 		}
