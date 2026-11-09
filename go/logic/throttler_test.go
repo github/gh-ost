@@ -159,3 +159,95 @@ func TestRecordThrottleMetricsEmitsOneIntervalMetricOnThrottleExit(t *testing.T)
 	assert.Equal(t, []string{"reason:commanded by user"}, spy.tags[3])
 	assert.Equal(t, []string{"reason:commanded by user"}, spy.tags[4])
 }
+
+// Regression tests for https://github.com/github/gh-ost/issues/1622: a
+// changelog-table (`_ghc`) read that was already in flight when cleanup
+// began must be waited out before the table is dropped, or it can fail with
+// "table doesn't exist".
+
+func TestWaitForPendingChangelogReadsReturnsImmediatelyWhenIdle(t *testing.T) {
+	thlr := newTestThrottler()
+
+	done := make(chan struct{})
+	go func() {
+		thlr.WaitForPendingChangelogReads()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("WaitForPendingChangelogReads blocked with nothing pending")
+	}
+}
+
+func TestWaitForPendingChangelogReadsBlocksUntilInFlightReadCompletes(t *testing.T) {
+	thlr := newTestThrottler()
+	thlr.pendingChangelogReads.Add(1)
+
+	readDone := make(chan struct{})
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		close(readDone)
+		thlr.pendingChangelogReads.Done()
+	}()
+
+	waitReturned := make(chan struct{})
+	go func() {
+		thlr.WaitForPendingChangelogReads()
+		close(waitReturned)
+	}()
+
+	select {
+	case <-waitReturned:
+		t.Fatal("WaitForPendingChangelogReads returned before the in-flight read finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	select {
+	case <-waitReturned:
+	case <-time.After(1 * time.Second):
+		t.Fatal("WaitForPendingChangelogReads did not return after the in-flight read finished")
+	}
+	<-readDone // sanity: the simulated read did actually complete first
+}
+
+func TestCollectReplicationLagStopsWhenCleanupImminent(t *testing.T) {
+	thlr := newTestThrottler()
+	thlr.migrationContext.SetHeartbeatIntervalMilliseconds(5)
+	// Simulate finalCleanup having already flagged that cleanup (and the
+	// `_ghc` drop) is imminent, before the collection loop starts ticking.
+	atomic.StoreInt64(&thlr.migrationContext.CleanupImminentFlag, 1)
+
+	firstCollected := make(chan bool, 1)
+	loopReturned := make(chan struct{})
+	go func() {
+		thlr.collectReplicationLag(firstCollected)
+		close(loopReturned)
+	}()
+
+	select {
+	case <-firstCollected:
+	case <-time.After(1 * time.Second):
+		t.Fatal("collectReplicationLag never signaled its first collection")
+	}
+
+	select {
+	case <-loopReturned:
+	case <-time.After(1 * time.Second):
+		t.Fatal("collectReplicationLag did not stop once CleanupImminentFlag was set")
+	}
+
+	// No reads should have been spawned once CleanupImminentFlag was set, so
+	// waiting for pending reads must return immediately.
+	done := make(chan struct{})
+	go func() {
+		thlr.WaitForPendingChangelogReads()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("WaitForPendingChangelogReads blocked though no reads should have been in flight")
+	}
+}
