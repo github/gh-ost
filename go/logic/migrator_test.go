@@ -1428,6 +1428,168 @@ func (suite *MigratorTestSuite) TestRevert() {
 	suite.Require().Equal(checksum1, checksum2)
 }
 
+// Regression: on --resume the streamer starts reading at the checkpoint before
+// the original table's DML listener exists. Row events read in that gap were
+// never queued, so updates made while gh-ost was stopped never reached rows
+// already in the ghost table, and the cut-over made the stale table live.
+// The gh-ost-on-validated hook runs inside that gap; a slow one makes the race
+// deterministic.
+func (suite *MigratorTestSuite) TestResumeAppliesDMLWrittenWhileStopped() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, s CHAR(32))", getTestTableName()))
+	suite.Require().NoError(err)
+	checkpointTableName := fmt.Sprintf("`%s`.`_%s_ghk`", testMysqlDatabase, testMysqlTableName)
+	defer func() {
+		_, err := suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+checkpointTableName)
+		suite.Require().NoError(err)
+	}()
+
+	const numRows = 100
+	for i := range numRows {
+		_, err = suite.db.ExecContext(ctx,
+			fmt.Sprintf("INSERT INTO %s (id, s) VALUES (%d, MD5('%d'))", getTestTableName(), i, i))
+		suite.Require().NoError(err)
+	}
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	postponeFlagFile := filepath.Join(suite.T().TempDir(), "ghost.postpone.flag")
+	hooksPath := suite.T().TempDir()
+	err = os.WriteFile(filepath.Join(hooksPath, "gh-ost-on-validated"), []byte("#!/bin/sh\nsleep 1\n"), 0o755)
+	suite.Require().NoError(err)
+
+	newMigrationContext := func(resume bool) *base.MigrationContext {
+		migrationContext := newTestMigrationContext()
+		migrationContext.ApplierConnectionConfig = connectionConfig
+		migrationContext.InspectorConnectionConfig = connectionConfig
+		migrationContext.SetConnectionConfig("innodb")
+		migrationContext.AlterStatement = "ADD INDEX idx1 (s)"
+		migrationContext.Checkpoint = true
+		migrationContext.CheckpointIntervalSeconds = 10
+		migrationContext.DropServeSocket = true
+		migrationContext.UseGTIDs = true
+		migrationContext.PostponeCutOverFlagFile = postponeFlagFile
+		migrationContext.HooksPath = hooksPath
+		migrationContext.Resume = resume
+		return migrationContext
+	}
+
+	// First run: copy every row, wait for a checkpoint while the cut-over is
+	// postponed, then abort, leaving the ghost and checkpoint tables behind.
+	firstRun := newMigrationContext(false)
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- NewMigrator(firstRun, "0.0.0").Migrate()
+	}()
+	suite.Require().Eventually(func() bool {
+		var checkpoints int
+		err := suite.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+checkpointTableName).Scan(&checkpoints)
+		return err == nil && checkpoints > 0 && atomic.LoadInt64(&firstRun.IsPostponingCutOver) > 0
+	}, 30*time.Second, 100*time.Millisecond, "first run never wrote a checkpoint")
+	err = base.SendWithContext(ctx, firstRun.PanicAbort, errors.New("stopping the first run"))
+	suite.Require().NoError(err)
+	suite.Require().Error(<-firstDone)
+
+	// While gh-ost is stopped, update rows that are already in the ghost table.
+	for i := 0; i < numRows; i += 3 {
+		_, err = suite.db.ExecContext(ctx,
+			fmt.Sprintf("UPDATE %s SET s = MD5('updated-%d') WHERE id = %d", getTestTableName(), i, i))
+		suite.Require().NoError(err)
+	}
+
+	// Second run: resume from the checkpoint, then cut over.
+	secondRun := newMigrationContext(true)
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- NewMigrator(secondRun, "0.0.0").Migrate()
+	}()
+	suite.Require().Eventually(func() bool {
+		return atomic.LoadInt64(&secondRun.IsPostponingCutOver) > 0
+	}, 30*time.Second, 100*time.Millisecond, "resumed run never postponed the cut-over")
+	suite.Require().NoError(os.Remove(postponeFlagFile))
+	suite.Require().NoError(<-secondDone)
+
+	// The old table has every update, so the migrated table must match it row for row.
+	var staleRows int
+	err = suite.db.QueryRowContext(ctx, fmt.Sprintf(
+		"SELECT COUNT(*) FROM %s AS migrated JOIN %s AS old USING (id) WHERE NOT (migrated.s <=> old.s)",
+		getTestTableName(), getTestOldTableName())).Scan(&staleRows)
+	suite.Require().NoError(err)
+	suite.Require().Zero(staleRows, "migrated table is missing updates made while gh-ost was stopped")
+}
+
+// Regression: --revert starts the streamer at the cut-over checkpoint before
+// the DML listener exists, the same gap as on --resume. Updates made after the
+// cut-over never reached the old table, and the revert made the stale table
+// live again.
+func (suite *MigratorTestSuite) TestRevertAppliesDMLWrittenAfterCutOver() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, s CHAR(32))", getTestTableName()))
+	suite.Require().NoError(err)
+	checkpointTableName := fmt.Sprintf("`%s`.`_%s_ghk`", testMysqlDatabase, testMysqlTableName)
+	defer func() {
+		_, err := suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+checkpointTableName)
+		suite.Require().NoError(err)
+	}()
+
+	const numRows = 100
+	for i := range numRows {
+		_, err = suite.db.ExecContext(ctx,
+			fmt.Sprintf("INSERT INTO %s (id, s) VALUES (%d, MD5('%d'))", getTestTableName(), i, i))
+		suite.Require().NoError(err)
+	}
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	hooksPath := suite.T().TempDir()
+	err = os.WriteFile(filepath.Join(hooksPath, "gh-ost-on-validated"), []byte("#!/bin/sh\nsleep 1\n"), 0o755)
+	suite.Require().NoError(err)
+
+	// Migrate and cut over, leaving the original table behind as the old table.
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.AlterStatement = "ADD INDEX idx1 (s)"
+	migrationContext.Checkpoint = true
+	migrationContext.CheckpointIntervalSeconds = 10
+	migrationContext.DropServeSocket = true
+	migrationContext.InitiallyDropOldTable = true
+	migrationContext.UseGTIDs = true
+	suite.Require().NoError(NewMigrator(migrationContext, "0.0.0").Migrate())
+
+	// After the cut-over, update rows that are already in the old table.
+	for i := 0; i < numRows; i += 3 {
+		_, err = suite.db.ExecContext(ctx,
+			fmt.Sprintf("UPDATE %s SET s = MD5('updated-%d') WHERE id = %d", getTestTableName(), i, i))
+		suite.Require().NoError(err)
+	}
+
+	// Revert, with a gh-ost-on-validated hook that runs inside the gap.
+	revertContext := newTestMigrationContext()
+	revertContext.ApplierConnectionConfig = connectionConfig
+	revertContext.InspectorConnectionConfig = connectionConfig
+	revertContext.SetConnectionConfig("innodb")
+	revertContext.DropServeSocket = true
+	revertContext.UseGTIDs = true
+	revertContext.Revert = true
+	revertContext.OldTableName = migrationContext.GetOldTableName()
+	revertContext.HooksPath = hooksPath
+	suite.Require().NoError(NewMigrator(revertContext, "0.0.0").Revert())
+
+	// The migrated table, now renamed aside, has every update, so the reverted table must match it row for row.
+	var staleRows int
+	err = suite.db.QueryRowContext(ctx, fmt.Sprintf(
+		"SELECT COUNT(*) FROM %s AS reverted JOIN %s AS migrated USING (id) WHERE NOT (reverted.s <=> migrated.s)",
+		getTestTableName(), getTestRevertedTableName())).Scan(&staleRows)
+	suite.Require().NoError(err)
+	suite.Require().Zero(staleRows, "reverted table is missing updates made after the cut-over")
+}
+
 func TestMigrator(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping migrator test suite in short mode")

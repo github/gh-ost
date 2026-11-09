@@ -609,8 +609,10 @@ func (mgtr *Migrator) Migrate() (err error) {
 	if err := mgtr.countTableRows(); err != nil {
 		return err
 	}
-	if err := mgtr.addDMLEventsListener(); err != nil {
-		return err
+	if !mgtr.migrationContext.Resume {
+		if err := mgtr.addDMLEventsListener(); err != nil {
+			return err
+		}
 	}
 	if err := mgtr.applier.ReadMigrationRangeValues(); err != nil {
 		return err
@@ -761,9 +763,6 @@ func (mgtr *Migrator) Revert() error {
 		return err
 	}
 	defer mgtr.server.RemoveSocketFile()
-	if err := mgtr.addDMLEventsListener(); err != nil {
-		return err
-	}
 
 	mgtr.initiateThrottler()
 	go mgtr.initiateStatus()
@@ -1529,6 +1528,14 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, snap migrationProgressSn
 // initiateStreaming begins streaming of binary log events and registers listeners for such events
 func (mgtr *Migrator) initiateStreaming() error {
 	mgtr.eventsStreamer = NewEventsStreamer(mgtr.migrationContext)
+	// On resume or revert the reader starts at a checkpoint, behind changes to
+	// rows that are already in the target table, so the original table's
+	// listener must exist before the first event is read.
+	if mgtr.migrationContext.Resume || mgtr.migrationContext.Revert {
+		if err := mgtr.addDMLEventsListener(); err != nil {
+			return err
+		}
+	}
 	if err := mgtr.eventsStreamer.InitDBConnections(); err != nil {
 		return err
 	}
