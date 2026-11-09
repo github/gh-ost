@@ -957,13 +957,20 @@ func (suite *ApplierTestSuite) TestWriteCheckpoint() {
 		DMLApplied:        200000,
 		IsCutover:         true,
 	}
-	id, err := applier.WriteCheckpoint(chk)
+	id, err := applier.WriteCheckpoint(ctx, chk)
 	suite.Require().NoError(err)
 	suite.Require().Equal(int64(1), id)
+
+	// A canceled write must leave the last durable checkpoint untouched.
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = applier.WriteCheckpoint(canceledCtx, chk)
+	suite.Require().ErrorIs(err, context.Canceled)
 
 	gotChk, err := applier.ReadLastCheckpoint()
 	suite.Require().NoError(err)
 
+	suite.Require().Equal(id, gotChk.Id)
 	suite.Require().Equal(chk.Iteration, gotChk.Iteration)
 	suite.Require().Equal(chk.LastTrxCoords.String(), gotChk.LastTrxCoords.String())
 	suite.Require().Equal(chk.IterationRangeMin.String(), gotChk.IterationRangeMin.String())

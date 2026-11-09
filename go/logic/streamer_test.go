@@ -3,10 +3,12 @@ package logic
 import (
 	"context"
 	gosql "database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
@@ -138,6 +140,49 @@ func (suite *EventsStreamerTestSuite) TestStreamEvents() {
 	suite.Require().NoError(err)
 
 	suite.Require().Len(dmlEvents, 3)
+}
+
+func (suite *EventsStreamerTestSuite) TestStreamEventsStopsOnListenerError() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestTableName()))
+	suite.Require().NoError(err)
+	config, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	migrationContext := newTestMigrationContext()
+	defer migrationContext.CancelContext()
+	migrationContext.ApplierConnectionConfig = config
+	migrationContext.InspectorConnectionConfig = config
+	suite.Require().NoError(migrationContext.SetConnectionConfig("innodb"))
+	streamer := NewEventsStreamer(migrationContext)
+	suite.Require().NoError(streamer.InitDBConnections())
+	defer streamer.Close()
+	defer streamer.Teardown()
+	failure := errors.New("DML enqueue failed")
+	suite.Require().NoError(streamer.AddListener(false, testMysqlDatabase, testMysqlTableName, func(*binlog.BinlogEntry) error {
+		return failure
+	}))
+	streamer.AddTransactionCompleteListener(func(*binlog.BinlogEntry) error {
+		suite.T().Error("marker delivered after failed DML")
+		return nil
+	})
+	done := make(chan error, 1)
+	go func() {
+		//nolint:contextcheck // StreamEvents uses the migration context, canceled by listener failure.
+		err := streamer.StreamEvents(func() bool { return false })
+		_ = base.SendWithContext(ctx, done, err)
+	}()
+	// Multiple rows also exercise cancellation of reader sends after the
+	// dispatcher exits, rather than only cancellation of GetEvent.
+	_, err = suite.db.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s VALUES (1),(2),(3),(4),(5)", getTestTableName()))
+	suite.Require().NoError(err)
+	select {
+	case err := <-done:
+		suite.Require().ErrorIs(err, failure)
+	case <-ctx.Done():
+		suite.T().Fatal("streamer did not stop after listener failure")
+	}
+	suite.Require().ErrorIs(migrationContext.GetAbortError(), failure)
 }
 
 func (suite *EventsStreamerTestSuite) TestStreamEventsAutomaticallyReconnects() {
