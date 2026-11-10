@@ -224,6 +224,9 @@ func (apl *Applier) InitDBConnections() (err error) {
 	if err != nil {
 		return err
 	}
+	if apl.migrationContext.IsMoveTablesMode() && apl.migrationContext.InspectorMySQLVersion != "" && mysql.FlavorFor(version) != mysql.FlavorFor(apl.migrationContext.InspectorMySQLVersion) {
+		return fmt.Errorf("move-tables target flavor %s does not match source read host flavor %s", mysql.FlavorFor(version), mysql.FlavorFor(apl.migrationContext.InspectorMySQLVersion))
+	}
 	if _, err := base.ValidateConnection(apl.singletonDB, apl.connectionConfig, apl.migrationContext, apl.name); err != nil {
 		return err
 	}

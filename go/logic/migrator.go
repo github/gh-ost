@@ -2066,6 +2066,12 @@ func (mgtr *Migrator) setupMoveTablesSourcePrimary(dbVersion string) error {
 	// Assign before the writability check so teardown() reclaims the pool even if
 	// the gate rejects a read_only host.
 	mgtr.sourcePrimaryDB = db
+	var sourceVersion string
+	if err := db.QueryRowContext(mgtr.migrationContext.GetContext(), "select @@global.version").Scan(&sourceVersion); err != nil {
+		return fmt.Errorf("failed to determine move-tables source primary version: %w", err)
+	} else if mysql.FlavorFor(sourceVersion) != mysql.FlavorFor(dbVersion) {
+		return fmt.Errorf("move-tables source primary flavor %s does not match source read host flavor %s", mysql.FlavorFor(sourceVersion), mysql.FlavorFor(dbVersion))
+	}
 	if err := assertConnectionWritable(db, cfg.Key, "source primary"); err != nil {
 		return err
 	}

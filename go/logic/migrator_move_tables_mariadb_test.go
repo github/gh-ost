@@ -123,3 +123,64 @@ func TestMoveTablesMariaDBBaseTables(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, count, "read-host validation must run before creating a checkpoint or target tables")
 }
+
+func TestMoveTablesRejectsMixedFlavors(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	mysqlConfig, mysqlDB := newMoveTablesTestDB(t, testMysqlContainerImage,
+		testmysql.WithConfigFile("my.cnf.test"))
+	mariaConfig, mariaDB := newMoveTablesTestDB(t, "mariadb:10.11.18",
+		testcontainers.WithCmd("--log-bin=mysql-bin", "--binlog-format=ROW", "--server-id=1", "--log-slave-updates=ON"),
+		testcontainers.WithWaitStrategy(wait.ForListeningPort("3306/tcp")))
+
+	configs := map[string]*mysql.ConnectionConfig{"mysql": mysqlConfig, "mariadb": mariaConfig}
+	dbs := map[string]*gosql.DB{"mysql": mysqlDB, "mariadb": mariaDB}
+	for _, db := range dbs {
+		_, err := db.ExecContext(ctx, "CREATE DATABASE "+testMysqlDatabaseOther)
+		require.NoError(t, err)
+	}
+
+	for _, tc := range []struct {
+		name, read, primary, target, want string
+	}{
+		{"mysql_read_mariadb_primary", "mysql", "mariadb", "mysql", "source primary flavor mariadb does not match source read host flavor mysql"},
+		{"mariadb_read_mysql_primary", "mariadb", "mysql", "mariadb", "source primary flavor mysql does not match source read host flavor mariadb"},
+		{"mysql_source_mariadb_target", "mysql", "mysql", "mariadb", "target flavor mariadb does not match source read host flavor mysql"},
+		{"mariadb_source_mysql_target", "mariadb", "mariadb", "mysql", "target flavor mysql does not match source read host flavor mariadb"},
+		{"mysql_matching", "mysql", "mysql", "mysql", ""},
+		{"mariadb_matching", "mariadb", "mariadb", "mariadb", ""},
+	} {
+		for _, resume := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/resume=%t", tc.name, resume), func(t *testing.T) {
+				mc := newTestMigrationContext()
+				mc.Checkpoint, mc.UseGTIDs, mc.Resume = true, true, resume
+				mc.InspectorConnectionConfig = configs[tc.read]
+				primary := configs[tc.primary]
+				mc.AssumeMasterHostname = fmt.Sprintf("%s:%d", primary.Key.Hostname, primary.Key.Port)
+				mc.MoveTables.TableNames = []string{"flavor_test"}
+				mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+				mc.MoveTables.ConnectionConfig = configs[tc.target]
+				mc.MoveTables.AllowOnSourcePrimary = true
+				mc.Hooks = CompositeHooks{}
+				require.NoError(t, mc.SetConnectionConfig("innodb"))
+
+				//nolint:contextcheck // Lock teardown uses an independent timeout after migration cancellation.
+				err := NewMigrator(mc, "test").MoveTables()
+				if tc.want != "" {
+					require.ErrorContains(t, err, tc.want)
+				} else if resume {
+					require.ErrorContains(t, err, "failed to inspect move-tables cutover checkpoint")
+				} else {
+					require.ErrorContains(t, err, "does not exist")
+				}
+				var count int
+				err = dbs[tc.target].QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ?", testMysqlDatabaseOther).Scan(&count)
+				require.NoError(t, err)
+				require.Zero(t, count, "validation must run before creating a checkpoint or target tables")
+			})
+		}
+	}
+}
