@@ -935,6 +935,26 @@ func (mgtr *Migrator) hydrateMoveTablesStateFromTarget() error {
 	return nil
 }
 
+func (mgtr *Migrator) validateMoveTablesBaseTables(db *gosql.DB, server string) error {
+	const query = `select table_type from information_schema.tables where table_schema = ? and table_name = ?`
+	database := mgtr.migrationContext.DatabaseName
+	for _, table := range mgtr.migrationContext.MoveTables.TableNames {
+		var tableType string
+		err := db.QueryRowContext(mgtr.migrationContext.GetContext(), query, database, table).Scan(&tableType)
+		if errors.Is(err, gosql.ErrNoRows) {
+			return fmt.Errorf("move-table %s.%s does not exist on %s", sql.EscapeName(database), sql.EscapeName(table), server)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to inspect move-table %s.%s on %s: %w", sql.EscapeName(database), sql.EscapeName(table), server, err)
+		}
+		if tableType != "BASE TABLE" {
+			return fmt.Errorf("move-table %s.%s on %s has type %q; only BASE TABLE is supported",
+				sql.EscapeName(database), sql.EscapeName(table), server, tableType)
+		}
+	}
+	return nil
+}
+
 func (mgtr *Migrator) validateMoveTablesResumeSourceTables(renamed bool) error {
 	const query = `select
 		(select table_type from information_schema.tables where table_schema = ? and table_name = ?),
@@ -1260,6 +1280,12 @@ func (mgtr *Migrator) MoveTables() (err error) {
 		if err := mgtr.applier.AcquireMigrationLock(mgtr.migrationContext.GetContext()); err != nil {
 			return err
 		}
+	}
+	if err := mgtr.validateMoveTablesBaseTables(mgtr.sourcePrimaryDB, "source primary"); err != nil {
+		return err
+	}
+	if err := mgtr.validateMoveTablesBaseTables(mgtr.inspector.db, "source read host"); err != nil {
+		return err
 	}
 	if err := mgtr.prepareMoveTablesCopyState(); err != nil {
 		return err
