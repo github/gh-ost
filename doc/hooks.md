@@ -51,6 +51,13 @@ The full list of supported hooks is best found in code: [hooks.go](https://githu
 - `gh-ost-on-failure`
 - `gh-ost-on-batch-copy-retry`
 
+For CLI runs, `gh-ost-on-failure` runs when the migration returns an error, even if
+`on-startup` did not run or `on-success` may already have enabled target writes.
+
+> [!IMPORTANT]
+> In move-tables mode, inspect source and target state before recovery; failure
+> hooks must not blindly roll back.
+
 ### Context
 
 `gh-ost` will set environment variables per hook invocation. Hooks are then able to read those variables, indicating schema name, table name, `alter` statement, migrated host name etc. Some variables are available on all hooks, and some are available on relevant hooks.

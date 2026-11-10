@@ -1386,7 +1386,10 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	}
 
 	if err := mgtr.finalCleanup(); err != nil {
-		return nil
+		if mgtr.migrationContext.Noop {
+			return fmt.Errorf("move-tables cleanup failed: %w", err)
+		}
+		return fmt.Errorf("move-tables cutover completed but cleanup failed: %w", err)
 	}
 	mgtr.migrationContext.Log.Infof("Done moving tables %v from %s to %s (%s)",
 		mgtr.migrationContext.MoveTables.TableNames, sql.EscapeName(mgtr.migrationContext.DatabaseName),
