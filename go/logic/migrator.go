@@ -554,6 +554,11 @@ func (mgtr *Migrator) Migrate() (err error) {
 		} else {
 			mgtr.migrationContext.Log.Infof("Attempting to execute alter with ALGORITHM=INSTANT")
 			if err := mgtr.applier.AttemptInstantDDL(); err == nil {
+				// The ghost table was created and altered before the instant attempt,
+				// but on this path it never replaces the original table.
+				if err := mgtr.retryOperation(mgtr.applier.DropGhostTable); err != nil {
+					return err
+				}
 				if err := mgtr.finalCleanup(); err != nil {
 					return nil
 				}
