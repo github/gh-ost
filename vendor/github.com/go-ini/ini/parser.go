@@ -272,11 +272,12 @@ func (p *parser) readValue(in []byte, bufferSize int) (string, error) {
 	if !p.options.IgnoreInlineComment {
 		var i int
 		if p.options.SpaceBeforeInlineComment {
+			// Use whichever comment symbol comes first, so that a value like
+			// "foo ; bar # baz" is cut at " ;" and not at " #".
 			i = strings.Index(line, " #")
-			if i == -1 {
-				i = strings.Index(line, " ;")
+			if j := strings.Index(line, " ;"); j > -1 && (i == -1 || j < i) {
+				i = j
 			}
-
 		} else {
 			i = strings.IndexAny(line, "#;")
 		}

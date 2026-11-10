@@ -216,12 +216,14 @@ func TestReadConfigFile(t *testing.T) {
 	}
 	// passwords with ';' or '#' are not cut as inline comments, see #1752
 	for value, expected := range map[string]string{
-		"foo;bar":           "foo;bar",
-		"foo#bar":           "foo#bar",
-		`"foo;bar"`:         "foo;bar",
-		"'foo#bar'":         "foo#bar",
-		"foo;bar # comment": "foo;bar",
-		"foo#bar ; comment": "foo#bar",
+		"foo;bar":                "foo;bar",
+		"foo#bar":                "foo#bar",
+		`"foo;bar"`:              "foo;bar",
+		"'foo#bar'":              "foo#bar",
+		"foo;bar # comment":      "foo;bar",
+		"foo#bar ; comment":      "foo#bar",
+		"secret ; note # ticket": "secret",
+		"secret # note ; ticket": "secret",
 	} {
 		f, err := os.CreateTemp("", t.Name())
 		if err != nil {
