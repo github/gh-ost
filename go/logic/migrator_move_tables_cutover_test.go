@@ -31,9 +31,9 @@ import (
 // initialized error instead of the earlier error it asserts on.
 // -----------------------------------------------------------------------------
 
-// TestMoveTablesCutOver_NoopShortCircuits maps to the Noop semantics decision
-// in #8209-implement-protocol (Noop returns immediately, no postpone gate, no
-// hooks, no RENAME).
+// TestMoveTablesCutOver_NoopShortCircuits verifies that Noop mode in
+// moveTablesCutOver returns immediately without waiting on the postpone gate,
+// running hooks, or renaming source tables.
 func TestMoveTablesCutOver_NoopShortCircuits(t *testing.T) {
 	var calls []string
 	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
@@ -54,8 +54,8 @@ func TestMoveTablesCutOver_NoopShortCircuits(t *testing.T) {
 	require.Empty(t, calls, "post-state: Noop must not fire any hook")
 }
 
-// TestMoveTablesCutOver_OnBeforeCutOverHookAbortsBeforeRename maps to T0 in
-// coop_cutover.md section 1.3 ("non-zero return code aborts cutover"). The "aborts
+// TestMoveTablesCutOver_OnBeforeCutOverHookAbortsBeforeRename verifies T0 in
+// moveTablesCutOver ("non-zero return code aborts cutover"). The "aborts
 // BEFORE source DDL" assertion is enforced as a proxy: m.sourcePrimaryDB is nil,
 // so if T1 RENAME executed it would fail with the source-primary-not-initialized
 // error rather than the asserted hook error.
@@ -129,11 +129,10 @@ func (h *onValidatedCheckHooks) OnValidated() error {
 	return h.onValidatedCheck()
 }
 
-// TestMoveTablesCutOver_PostponeGateFiresOnBeginPostponedOnce maps to the
-// postpone-gate decision in #8209-implement-protocol (keep OnBeginPostponed
-// firing logic with the same once-per-cutover semantics as standard cutOver).
-// Also exercises Edge Case Test Quality #5 by asserting both pre-state and
-// post-state of IsPostponingCutOver.
+// TestMoveTablesCutOver_PostponeGateFiresOnBeginPostponedOnce verifies that
+// moveTablesCutOver fires OnBeginPostponed with the same once-per-cutover
+// semantics as standard cutOver, and asserts both pre-state and post-state of
+// IsPostponingCutOver.
 func TestMoveTablesCutOver_PostponeGateFiresOnBeginPostponedOnce(t *testing.T) {
 	flagPath := filepath.Join(t.TempDir(), "postpone.flag")
 	require.NoError(t, os.WriteFile(flagPath, nil, 0o644))
@@ -244,13 +243,7 @@ func TestValidateMoveTablesSourceReadHost(t *testing.T) {
 //
 // These live under a dedicated suite (NOT MigratorTestSuite) so the parent
 // function name TestMoveTablesCutOver matches the `-run MoveTablesCutOver`
-// verifier alongside the pure unit tests above. SetupSuite duplicates the
-// testcontainer setup pattern used by MigratorTestSuite intentionally to
-// keep this commit's diff strictly additive (no edits to existing tests or
-// shared helpers, per the commit-3 prompt).
-//
-// Known-environmental flakes when Docker/testcontainers is unavailable mirror
-// the same class as #8206; they are not regressions of #8209.
+// verifier alongside the pure unit tests above.
 // -----------------------------------------------------------------------------
 
 type MoveTablesCutOverSuite struct {
@@ -659,8 +652,6 @@ func (s *MoveTablesCutOverSuite) TestAssertConnectionWritableRejectsReadOnly() {
 
 // TestHappyPath drives the full T0-T6 protocol against the test container.
 // Asserts hook ordering (T0 then T5), T4 flag set, and the source-side rename.
-// Maps to acceptance criterion #8209 "RENAME executes; drain completes;
-// CutOverCompleteFlag set; on-success hook fires".
 func (s *MoveTablesCutOverSuite) TestHappyPath() {
 	ctx := context.Background()
 	_, err := s.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", getTestTableName()))
@@ -680,7 +671,7 @@ func (s *MoveTablesCutOverSuite) TestHappyPath() {
 	s.Require().Equal([]string{"fake:OnBeforeCutOver", "fake:OnSuccess"}, calls,
 		"post-state: T0 hook precedes T5 hook")
 
-	// Source-side post-state (Edge Case Test Quality #5: assert both sides).
+	// Source-side post-state: assert both sides.
 	var renamed string
 	s.Require().NoError(s.db.QueryRow(fmt.Sprintf("SHOW TABLES IN %s LIKE '_%s_del'",
 		testMysqlDatabase, testMysqlTableName)).Scan(&renamed))

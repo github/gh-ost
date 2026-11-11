@@ -460,7 +460,6 @@ func (suite *ApplierTestSuite) TestInitiateApplierMoveTablesMode_NoGhostOrChange
 	err = applier.InitDBConnections()
 	suite.Require().NoError(err)
 
-	// #8206 [Task] [1.2] Skip ghost/changelog tables, heartbeat in gh-ost move-tables mode
 	// In move-tables mode, no ghost or changelog table should exist.
 	// InitDBConnections() should succeed without them.
 	suite.Require().False(applier.tableExists("_testing_gho"), "ghost table should not exist in move-tables mode")
@@ -593,7 +592,7 @@ func (suite *ApplierTestSuite) TestFinalCleanupMoveTablesMode_SkipsDrops() {
 
 // initiateStreaming() requires a binlog-capable MySQL connection to call directly.
 // This test verifies IsMoveTablesMode() and that no changelog table is referenced
-// in move-tables mode (§1.2): no `_ghc` table exists on the source or target
+// in move-tables mode: no `_ghc` table exists on the source or target
 // database. A new streamer always starts with zero listeners; the real proof that
 // no changelog listener is registered comes from the full run not failing on a
 // nonexistent _ghc table.
@@ -629,7 +628,7 @@ func (suite *ApplierTestSuite) TestInitiateStreamingMoveTablesMode_NoChangelogLi
 //
 // A stronger test would instrument InitiateHeartbeat() (e.g., via a callback or
 // channel) to assert the goroutine is never started. That requires test-infrastructure
-// changes to the Applier and is beyond #8206's scope.
+// changes to the Applier.
 func (suite *ApplierTestSuite) TestNoHeartbeatInMoveTablesMode() {
 	migrationContext := newTestMigrationContext()
 	migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
@@ -760,7 +759,6 @@ func (suite *ApplierTestSuite) TestWriteChangelogNoOpInMoveTablesMode() {
 	err = applier.InitDBConnections()
 	suite.Require().NoError(err)
 
-	// #8206 [Task] [1.2] Skip ghost/changelog tables, heartbeat in gh-ost move-tables mode
 	// WriteChangelog should be a no-op in move-tables mode.
 	// No changelog table exists, so if it tried to execute, it would fail.
 	hint, err := applier.WriteChangelog("heartbeat", "2026-06-05T00:00:00Z")
@@ -1047,9 +1045,9 @@ func (suite *ApplierTestSuite) TestAnalyzeGhostTable() {
 	suite.Require().ErrorContains(applier.AnalyzeGhostTable(), "failed; refusing cut-over")
 }
 
-// TestCreateTargetTable_HappyPath exercises #8207 AC #1:
-// "A move table run targeting a clean target schema creates the migrated table
-// with a SHOW CREATE TABLE output equivalent to the source's."
+// TestCreateTargetTable_HappyPath verifies that a move-tables run targeting a
+// clean target schema creates the migrated table with a SHOW CREATE TABLE
+// output equivalent to the source's.
 //
 // It calls CreateTargetTable (not just IsMoveTablesMode()), asserts the table
 // exists on the target database, verifies schema equivalence via SHOW CREATE TABLE,
@@ -1106,8 +1104,8 @@ func (suite *ApplierTestSuite) TestCreateTargetTable_HappyPath() {
 	suite.Require().Equal(1, count, "target table must exist exactly once on the target database")
 }
 
-// TestCreateTargetTable_AbortsIfExists exercises #8207 AC #2:
-// "A move table run aborts before any data is copied if the target table already exists."
+// TestCreateTargetTable_AbortsIfExists verifies that a move-tables run aborts
+// before any data is copied if the target table already exists.
 //
 // It pre-creates the target table, then calls CreateTargetTable and asserts it
 // returns a descriptive error (not just MySQL's raw ERROR 1050).

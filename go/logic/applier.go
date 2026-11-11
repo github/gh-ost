@@ -476,10 +476,11 @@ func (apl *Applier) prepareQueries() (err error) {
 	}
 
 	// Move-tables mode: build one set of query builders per migrated table. DML is
-	// routed to the right set at apply time by source table name (§2.1). There is
-	// no representative/primary table: every table is handled identically through
-	// its own builders, and the checkpoint uses a table-agnostic schema written by
-	// WriteMoveTableCheckpoints (no checkpointInsertQueryBuilder).
+	// routed to the right set at apply time by source table name (see
+	// doc/move-tables-design.md). There is no representative/primary table: every
+	// table is handled identically through its own builders, and the checkpoint
+	// uses a table-agnostic schema written by WriteMoveTableCheckpoints (no
+	// checkpointInsertQueryBuilder).
 	apl.moveTablesBuilders = make(map[string]*moveTableBuilders, len(apl.migrationContext.MoveTables.TableNames))
 	for _, mt := range apl.migrationContext.OrderedMoveTables() {
 		if mt.UniqueKey == nil {
@@ -1226,7 +1227,7 @@ func (apl *Applier) DropGhostTable() error {
 // WriteChangelog writes a value to the changelog table.
 // It returns the hint (or an empty string in move-tables mode), for convenience
 func (apl *Applier) WriteChangelog(hint, value string) (string, error) {
-	// In move-tables mode, there is no changelog table (§1.2). All changelog
+	// In move-tables mode, there is no changelog table. All changelog
 	// writes are no-ops. This is a single chokepoint rather than per-caller
 	// guards to prevent drift when new callers are added.
 	if apl.migrationContext.IsMoveTablesMode() {
@@ -1527,7 +1528,7 @@ func (apl *Applier) ReadMoveTablesCutOverCheckpoint() (*Checkpoint, error) {
 // InitiateHeartbeat creates a heartbeat cycle, writing to the changelog table.
 // Apl is done asynchronously
 func (apl *Applier) InitiateHeartbeat() {
-	// In move-tables mode, there is no heartbeat table (§1.2).
+	// In move-tables mode, there is no heartbeat table.
 	if apl.migrationContext.IsMoveTablesMode() {
 		return
 	}
@@ -2578,7 +2579,7 @@ func (apl *Applier) updateModifiesUniqueKeyColumns(dmlEvent *binlog.BinlogDMLEve
 func (apl *Applier) buildDMLEventQuery(dmlEvent *binlog.BinlogDMLEvent) []*dmlBuildResult {
 	// Resolve the query builders + schema for the table this event targets. In
 	// move-tables mode the set is selected by source table name (one binlog
-	// stream feeds every table; routing happens here, §2.1). In standard mode
+	// stream feeds every table; routing happens here). In standard mode
 	// there is a single set on the applier.
 	deleteBuilder := apl.dmlDeleteQueryBuilder
 	insertBuilder := apl.dmlInsertQueryBuilder

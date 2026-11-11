@@ -31,7 +31,7 @@ var (
 	checkpointTimeout                 = 2 * time.Second
 
 	// moveTablesCutOverDrainPollInterval is the per-iteration sleep in T3's
-	// drain poll. 100ms per move_table_mode.md §1.5.
+	// drain poll.
 	moveTablesCutOverDrainPollInterval = 100 * time.Millisecond
 )
 
@@ -856,10 +856,10 @@ func prepareMoveTableColumnMetadata(inspector *Inspector, databaseName, tableNam
 }
 
 // prepareMoveTablesCopyState initializes per-table runtime state for row copy in
-// move-tables mode (§2.1). Each migrated table is inspected and validated
-// independently into its own container (schema, unique key, row estimate, CREATE
-// statement). There is no representative table: a single-entry --move-tables is
-// simply an array of one, handled by the same per-table loop.
+// move-tables mode (see doc/move-tables-design.md). Each migrated table is inspected
+// and validated independently into its own container (schema, unique key, row
+// estimate, CREATE statement). There is no representative table: a single-entry
+// --move-tables is simply an array of one, handled by the same per-table loop.
 func (mgtr *Migrator) prepareMoveTablesCopyState() error {
 	mgtr.migrationContext.InitMoveTableContainers()
 
@@ -1368,8 +1368,8 @@ func (mgtr *Migrator) MoveTables() (err error) {
 	if err := mgtr.countTableRows(); err != nil {
 		return err
 	}
-	// Read each migrated table's full row-copy range into its per-table container
-	// (§2.3). Ranges are read from the source via the inspector connection.
+	// Read each migrated table's full row-copy range into its per-table container.
+	// Ranges are read from the source via the inspector connection.
 	for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
 		if err := mgtr.applier.ReadMoveTableMigrationRangeValues(mgtr.inspector.db, mt); err != nil {
 			return fmt.Errorf("failed to read migration range for %s.%s: %w",
@@ -1429,7 +1429,7 @@ func (mgtr *Migrator) MoveTables() (err error) {
 
 // moveTablesCutOver orchestrates the cooperative cutover protocol for move-tables
 // mode. It implements the T0-T6 transitions described in
-// docs/learning/design-refs/coop_cutover.md §1.3.
+// doc/move-tables-design.md.
 //
 // NOT the standard cutOver() path: every internal call from cutOver() (throttle,
 // atomicCutOver, waitForEventsUpToLock, heartbeat-lag) was built on a
@@ -1444,11 +1444,11 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 
 	// ----- Postpone gate (precedes T0) -----
 	// Mirrors standard cutOver()'s sleepWhileTrue postpone structure but DROPS the
-	// heartbeat-lag branch: move-tables mode disables _ghc heartbeat writes (#8206),
+	// heartbeat-lag branch: move-tables mode disables _ghc heartbeat writes,
 	// so TimeSinceLastHeartbeatOnChangelog() returns ~58 years (time.Since(zero))
 	// and would deadlock the gate forever. KEEPS the postpone-flag-file +
-	// unpostpone-socket gate because per coop_cutover.md §1.1 P4, operator-removes-
-	// postpone is the trigger for the entire cutover phase.
+	// unpostpone-socket gate because removing the postpone gate is the operator
+	// trigger for the cutover phase.
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone")
 	if err := mgtr.sleepWhileTrue("cut_over_postpone", func() (bool, error) {
 		if mgtr.migrationContext.PostponeCutOverFlagFile == "" {
@@ -1505,7 +1505,7 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 
 	sourceDB := mgtr.migrationContext.DatabaseName
 	// Build a single atomic multi-table RENAME covering every table in
-	// --move-tables order (§2.4): `RENAME TABLE db.t1 TO db._t1_del, db.t2 TO
+	// --move-tables order: `RENAME TABLE db.t1 TO db._t1_del, db.t2 TO
 	// db._t2_del, ...`. MySQL executes this as one event group with one GTID, so
 	// the existing single-drain-GTID mechanism covers the whole move set.
 	renameClauses := make([]string, 0, len(mgtr.migrationContext.MoveTables.TableNames))
@@ -1522,8 +1522,8 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 		len(renameClauses), renameAndCaptureQuery)
 
 	// MySQL exposes @@global.gtid_executed, while MariaDB exposes
-	// @@global.gtid_binlog_pos.
-	// Design: https://github.com/github/gh-ost-tablemove-poc/blob/9dc6df75c4c88ff473906a497836c7518f5614ec/design/coop_cutover.md#32-correctness-verification-for-p4
+	// @@global.gtid_binlog_pos. See doc/move-tables-design.md for the cutover
+	// drain protocol.
 	drainGTIDStr, err := func() (string, error) {
 		rows, err := mgtr.sourcePrimaryDB.QueryContext(cutOverCtx, renameAndCaptureQuery)
 		if err != nil {
@@ -1599,12 +1599,9 @@ func (mgtr *Migrator) moveTablesCutOver() (err error) {
 	mgtr.migrationContext.NewFailPoint("move-tables-panic-before-on-success-hook", base.WithFailPointWait(2*time.Second))
 
 	// ----- T5: on-success hook -----
-	// Hook unlocks user_rw@target via db-user-management and flips the
-	// write_cutover? feature flag. Standard env vars only — GH_OST_DRAIN_GTID +
-	// GH_OST_TARGET_* are #8211 (1.7), not this PR. The pre-protocol placeholder
-	// OnSuccess call that used to live in MoveTables() (after finalCleanup) has
-	// been removed so the hook fires in the order coop_cutover.md §3.2 step 6
-	// requires (T5 between T4 and T6, BEFORE finalCleanup).
+	// Runs after the completed-drain checkpoint marker is persisted (T4) and
+	// before finalCleanup (T6), with GH_OST_DRAIN_GTID set to the drained
+	// source GTID position. See doc/move-tables-design.md.
 	mgtr.migrationContext.MoveTables.DrainGTID = drainGTID
 	if err := mgtr.hooksExecutor.OnSuccess(false); err != nil {
 		return fmt.Errorf("on-success hook failed: %w", err)
@@ -2279,7 +2276,7 @@ func (mgtr *Migrator) printMigrationStatusHint(writers ...io.Writer) {
 	w := io.MultiWriter(writers...)
 	if mgtr.migrationContext.IsMoveTablesMode() {
 		// In move-tables mode there may be several migrated tables; list each
-		// source -> target mapping rather than a single primary table (§2.3).
+		// source -> target mapping rather than a single primary table.
 		// Table names match on source and target; only the database may differ.
 		sourceDatabaseName := mgtr.migrationContext.DatabaseName
 		targetDatabaseName := mgtr.migrationContext.GetTargetDatabaseName()
@@ -2535,7 +2532,7 @@ func (mgtr *Migrator) printStatus(rule PrintStatusRule, snap migrationProgressSn
 	fmt.Fprintln(w, status)
 
 	// In move-tables mode, surface per-table row-copy progress so all migrated
-	// tables are visibly advancing concurrently (§2.3).
+	// tables are visibly advancing concurrently.
 	if mgtr.migrationContext.IsMoveTablesMode() {
 		for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
 			copied := atomic.LoadInt64(&mt.RowsCopied)
@@ -2639,7 +2636,7 @@ func (mgtr *Migrator) initiateStreaming() error {
 // addDMLEventsListener begins listening for binlog events on the migrated
 // table(s), and creates & enqueues a write task per such event. In move-tables
 // mode it registers one listener per migrated table on the shared events
-// streamer (§2.2); all listeners feed the same apply queue, parameterized only
+// streamer; all listeners feed the same apply queue, parameterized only
 // by table name. The streamer already dispatches per (database, table), and the
 // applier routes DML to the right per-table query builders by table name.
 func (mgtr *Migrator) addDMLEventsListener() error {
@@ -2718,7 +2715,7 @@ func (mgtr *Migrator) initiateApplier() error {
 				}
 			}
 			// Create every migrated table on the target from its captured CREATE
-			// statement (§2.1). Containers were populated by prepareMoveTablesCopyState.
+			// statement. Containers were populated by prepareMoveTablesCopyState.
 			for _, mt := range mgtr.migrationContext.OrderedMoveTables() {
 				createTableStatement := mt.CreateTableStatement
 				if createTableStatement == "" {
@@ -2900,7 +2897,7 @@ func (mgtr *Migrator) iterateChunks() error {
 	}
 }
 
-// iterateChunksMoveTables drives the interleaved, multi-table row copy (§2.3).
+// iterateChunksMoveTables drives the interleaved, multi-table row copy.
 // It round-robins over the migrated tables in --move-tables order, enqueuing one
 // chunk-copy task per not-yet-complete table per cycle so all tables make
 // progress concurrently through the single shared apply pipeline. Each task

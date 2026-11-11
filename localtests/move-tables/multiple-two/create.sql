@@ -1,5 +1,5 @@
 -- Two tables with different schemas, primary-key types, and row counts. This
--- exercises the multi-table move-tables path (§2.1-2.4): per-table runtime
+-- exercises the multi-table move-tables path: per-table runtime
 -- state, per-table query builders, interleaved row copy where the tables finish
 -- at different times, and a single atomic multi-table RENAME at cutover.
 

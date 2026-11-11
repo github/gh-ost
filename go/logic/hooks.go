@@ -279,7 +279,7 @@ func (he *HooksExecutor) applyEnvironmentVariables(extraVariables ...string) []s
 	env = append(env, fmt.Sprintf("GH_OST_REVERT=%t", he.migrationContext.Revert))
 	env = append(env, fmt.Sprintf("GH_OST_MOVE_TABLES=%t", he.migrationContext.IsMoveTablesMode()))
 	if he.migrationContext.IsMoveTablesMode() {
-		// Comma-joined list of all migrated tables (§2.4).
+		// Comma-joined list of all migrated tables.
 		env = append(env, fmt.Sprintf("GH_OST_TABLES=%s", strings.Join(he.migrationContext.MoveTables.TableNames, ",")))
 	}
 	env = append(env, fmt.Sprintf("GH_OST_TARGET_DATABASE_NAME=%s", he.migrationContext.GetTargetDatabaseName()))

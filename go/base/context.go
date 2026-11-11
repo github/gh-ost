@@ -633,7 +633,7 @@ func (mctx *MigrationContext) MoveTableDelName(tableName string) string {
 // or a given table name.
 func (mctx *MigrationContext) GetChangelogTableName() string {
 	if mctx.IsMoveTablesMode() {
-		panic("GetChangelogTableName() must not be called in move-tables mode; there is no changelog table (§1.2)")
+		panic("GetChangelogTableName() must not be called in move-tables mode; there is no changelog table")
 	}
 	if mctx.ForceTmpTableName != "" {
 		return getSafeTableName(mctx.ForceTmpTableName, "ghc")
