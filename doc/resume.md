@@ -19,7 +19,7 @@ gh-ost \
 --host=replica1.company.com \
 --database="mydb" \
 --table="mytable" \
---alter="add column mycol varchar(20)"
+--alter="add column mycol varchar(20)" \
 --gtid \
 --checkpoint \
 --checkpoint-seconds=60 \
@@ -30,14 +30,33 @@ In this example `gh-ost` writes a checkpoint to a table `_mytable_ghk` every 60 
 ```shell
 # resume migration
 gh-ost \
---chunk-size=100
+--chunk-size=100 \
 --host=replica1.company.com \
 --database="mydb" \
 --table="mytable" \
---alter="add column mycol varchar(20)"
+--alter="add column mycol varchar(20)" \
 --gtid \
 --resume \
 --execute
 ```
 
 `gh-ost` then reconnects at the binlog coordinates of the last checkpoint and resumes copying rows at the chunk specified by the checkpoint. The data integrity of the ghost table is preserved because `gh-ost` applies row DMLs and copies row in an idempotent way.
+
+## Resuming `--move-tables` runs
+
+[`--move-tables`](move-tables.md) enables `--checkpoint` and `--gtid` automatically in the CLI, storing checkpoints in `_gho_<token>_ghk` in the **target** database.
+
+Before rerunning the original command with `--resume --execute`, confirm:
+
+- The previous `gh-ost` process and all hooks have stopped.
+- Target writes were never enabled.
+- Target tables, the checkpoint table, and required source binlogs remain intact.
+- The moved table set, source database, and target host/database are unchanged.
+
+Preflight validates source tables and target cut-over checkpoints before startup hooks or streaming:
+
+- An interrupted row copy resumes copying.
+- A pre-drain cut-over resumes draining, then runs `gh-ost-on-success`, without the postpone gate or `gh-ost-on-before-cut-over`. Prepare routing first.
+- A completed drain or source/checkpoint mismatch causes resume to fail closed.
+
+See [move-tables recovery](move-tables.md#decide-whether-to-resume) for the decision table and alternatives.

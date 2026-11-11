@@ -16,7 +16,7 @@ Allows the user to make schema changes that include a zero date or zero in date 
 
 ### alter
 
-Mandatory unless using [`--revert`](#revert). The schema change to apply to the migrated table. You can pass just the alter options, for example `--alter="ADD COLUMN created_at timestamp NULL"`, together with [`--database`](#database) and [`--table`](#table). You can also pass a full `ALTER TABLE [database.]table ...` statement; an explicit database or table in `--alter` can be used instead of the corresponding flag.
+Mandatory unless using [`--revert`](#revert) or [`--move-tables`](#move-tables). The schema change to apply to the migrated table. You can pass just the alter options, for example `--alter="ADD COLUMN created_at timestamp NULL"`, together with [`--database`](#database) and [`--table`](#table). You can also pass a full `ALTER TABLE [database.]table ...` statement; an explicit database or table in `--alter` can be used instead of the corresponding flag. Cannot be used with [`--move-tables`](#move-tables).
 
 ### azure
 
@@ -35,6 +35,10 @@ Allows `gh-ost` to choose a unique key that contains nullable columns. This is d
 By default, `gh-ost` would like you to connect to a replica, from where it figures out the master by itself. This wiring is required should your master execute using `binlog_format=STATEMENT`.
 
 If, for some reason, you do not wish `gh-ost` to connect to a replica, you may connect it directly to the master and approve this via `--allow-on-master`.
+
+### allow-on-source-primary
+
+Allows [`--move-tables`](#move-tables) to use the source primary as `--host`, which is refused by default. Prefer a source replica to keep copy load off the primary.
 
 ### allow-setup-metadata-lock-instruments
 
@@ -94,7 +98,10 @@ Example: `gh-ost --check-flag --cut-over-lock-timeout-seconds 1 --nice-ratio 0`
 ### checkpoint
 
 `--checkpoint` enables periodic checkpoints of the gh-ost's state so that gh-ost can resume a migration from the checkpoint with `--resume`. Checkpoints are written to a separate table named `_${original_table_name}_ghk`. It is recommended to use with `--gtid` for checkpoints.
-See also: [`resuming-migrations`](resume.md)
+
+In [`--move-tables`](#move-tables) CLI runs, checkpoints are enabled automatically and written on the target cluster.
+
+See also: [`resuming-migrations`](resume.md) and [`move-tables`](move-tables.md)
 
 ### checkpoint-seconds
 
@@ -124,6 +131,8 @@ Comma delimited status-name=threshold, same format as [`--max-load`](#max-load).
 
 `--critical-load` defines a threshold that, when met, `gh-ost` panics and bails out. The default behavior is to bail out immediately when meeting this threshold.
 
+In [`--move-tables`](#move-tables) mode, these metrics are evaluated on the target primary, as with `--max-load`.
+
 This may sometimes lead to migrations bailing out on a very short spike, that, while in itself is impacting production and is worth investigating, isn't reason enough to kill a 10-hour migration.
 
 ### critical-load-hibernate-seconds
@@ -140,7 +149,7 @@ This is somewhat similar to a Nagios `n`-times test, where `n` in our case is al
 
 ### cut-over
 
-Optional. Default is `atomic`. Accepted values are `atomic`, `default`, and `two-step`; `default` is a legacy alias for `atomic`. `atomic` performs an atomic table swap where pending connections briefly block and either all see the old table or all see the new table. `two-step` uses a non-atomic rename sequence where the original table is renamed away before the ghost table takes its place, leaving a brief interval where the table does not exist. See more discussion in [`cut-over`](cut-over.md)
+Optional. Default is `atomic`. Accepted values are `atomic`, `default`, and `two-step`; `default` is a legacy alias for `atomic`. `atomic` performs an atomic table swap where pending connections briefly block and either all see the old table or all see the new table. `two-step` uses a non-atomic rename sequence where the original table is renamed away before the ghost table takes its place, leaving a brief interval where the table does not exist. Not used in [`--move-tables`](#move-tables) mode. See more discussion in [`cut-over`](cut-over.md).
 
 ### cut-over-exponential-backoff
 
@@ -148,11 +157,12 @@ Wait exponentially longer intervals between failed cut-over attempts. The maximu
 
 ### cut-over-lock-timeout-seconds
 
-Default `3`.  Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout).
+- **Standard OSC:** default `3`. Maximum seconds to hold locks while attempting cut-over; a lock timeout causes a retry.
+- **[`--move-tables`](#move-tables):** default `60`. Maximum seconds to drain the source stream and target applier through the source cut-over GTID after renaming the source tables. This is not a limit on rename lock waits or total application outage. A failed drain leaves the source tables renamed; it does not automatically retry the rename or roll back.
 
 ### database
 
-The database containing the table to migrate. Required unless the database is specified in a full [`--alter`](#alter) statement.
+The database containing the table to migrate (or the source database in [`--move-tables`](#move-tables) mode). Required unless the database is specified in a full [`--alter`](#alter) statement.
 
 ### debug
 
@@ -222,7 +232,7 @@ Add this flag when executing on a 1st generation Google Cloud Platform (GCP).
 
 ### gtid
 
-Add this flag to enable support for [MySQL replication GTIDs](https://dev.mysql.com/doc/refman/5.7/en/replication-gtids-concepts.html) for replication positioning. On MySQL this requires `gtid_mode` and `enforce_gtid_consistency` to be set to `ON`.
+Add this flag to enable support for [MySQL replication GTIDs](https://dev.mysql.com/doc/refman/5.7/en/replication-gtids-concepts.html) for replication positioning. On MySQL this requires `gtid_mode` and `enforce_gtid_consistency` to be set to `ON`. Automatically enabled in [`--move-tables`](#move-tables) CLI runs.
 
 [MariaDB GTIDs](https://mariadb.com/kb/en/gtid/) are also supported: gh-ost detects the server flavor automatically and uses the appropriate GTID dialect. MariaDB has no `gtid_mode`/`enforce_gtid_consistency` settings — GTIDs are always recorded when binary logging is enabled, so no extra configuration is required beyond `--gtid`.
 
@@ -298,15 +308,21 @@ When [`--throttle-control-replicas`](#throttle-control-replicas) is provided, th
 
 When using on master or when `--allow-on-master` is provided, `max-lag-millis` is also considered a threshold for starting the cutover stage of the migration. If the row copy is complete and the heartbeat lag is less than `max-lag-millis` cutover phase of the migration will start. 
 
+In [`--move-tables`](#move-tables) mode, applies only to target replicas listed in [`--throttle-control-replicas`](#throttle-control-replicas); the source replica is not monitored automatically. See [move-tables throttling](throttle.md#move-tables-mode).
+
 See also: [Sub-second replication lag throttling](subsecond-lag.md)
 
 ### max-load
 
-List of metrics and threshold values; topping the threshold of any will cause throttler to kick in. See also: [`throttling`](throttle.md#status-thresholds)
+List of metrics and threshold values; topping the threshold of any will cause throttler to kick in. Evaluated on the target primary in [`--move-tables`](#move-tables) mode. See also: [`throttling`](throttle.md#status-thresholds)
 
 ### migrate-on-replica
 
-Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but otherwise will make no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag.
+Typically `gh-ost` is used to migrate tables on a master. If you wish to only perform the migration in full on a replica, connect `gh-ost` to said replica and pass `--migrate-on-replica`. `gh-ost` will briefly connect to the master but otherwise will make no changes on the master. Migration will be fully executed on the replica, while making sure to maintain a small replication lag. Cannot be used with [`--move-tables`](#move-tables).
+
+### move-tables
+
+Comma-delimited list of one or more tables to move from the source cluster to the target cluster without a schema change, for example `--move-tables="orders,order_items"`. Requires [`--target-host`](#target-host) and [`--postpone-cut-over-flag-file`](#postpone-cut-over-flag-file), and automatically enables [`--checkpoint`](#checkpoint) and [`--gtid`](#gtid) in the CLI. Mutually exclusive with [`--alter`](#alter), [`--table`](#table), [`--test-on-replica`](#test-on-replica), [`--migrate-on-replica`](#migrate-on-replica), [`--revert`](#revert), and [`--timestamp-old-table`](#timestamp-old-table). See [`move-tables`](move-tables.md).
 
 ### mysql-timeout
 
@@ -318,7 +334,9 @@ Makes row-copy operations sleep after each chunk, proportional to the time spent
 
 ### ok-to-drop-table
 
-Allows `gh-ost` to drop the old table at the end of a successful migration. This is disabled by default because dropping a table can be a long locking operation.
+Allows `gh-ost` to drop the old table (and checkpoint table) at the end of a successful migration. This is disabled by default because dropping a table can be a long locking operation.
+
+In [`--move-tables`](#move-tables) mode, drops the `_<table>_del` tables on the source primary and the checkpoint table on the target primary, removing the source rollback handles.
 
 ### old-table
 
@@ -344,7 +362,7 @@ MySQL port to connect to. Preferably this is a replica, not the master. Default 
 
 ### postpone-cut-over-flag-file
 
-Indicate a file name, such that the final [cut-over](cut-over.md) step does not take place as long as the file exists.
+Indicate a file name, such that the final [cut-over](cut-over.md) step does not take place as long as the file exists. Mandatory when using [`--move-tables`](#move-tables).
 When this flag is set, `gh-ost` expects the file to exist on startup, or else tries to create it. `gh-ost` exits with error if the file does not exist and `gh-ost` is unable to create it.
 With this flag set, the migration will cut-over upon deletion of the file or upon `cut-over` [interactive command](interactive-commands.md).
 
@@ -371,11 +389,11 @@ Deprecated. `gh-ost` uses an internal subsecond-resolution lag query instead.
 ### resume
 
 `--resume` attempts to resume a migration that was previously interrupted from the last checkpoint. The first `gh-ost` invocation must run with `--checkpoint` and have successfully written a checkpoint in order for `--resume` to work.
-See also: [`resuming-migrations`](resume.md)
+See also: [`resuming-migrations`](resume.md) and [move-tables recovery](move-tables.md#cleanup-and-recovery)
 
 ### revert
 
-Attempts to revert a completed migration. Must be used with [`--old-table`](#old-table). `--revert` cannot be used together with [`--resume`](#resume), and ignores migration options such as `--alter`, `--attempt-instant-ddl`, `--include-triggers`, and `--discard-foreign-keys`.
+Attempts to revert a completed migration. Must be used with [`--old-table`](#old-table). `--revert` cannot be used together with [`--resume`](#resume) or [`--move-tables`](#move-tables), and ignores migration options such as `--alter`, `--attempt-instant-ddl`, `--include-triggers`, and `--discard-foreign-keys`.
 
 ### runtime-metrics-interval
 
@@ -465,11 +483,31 @@ Allows `gh-ost` to automatically switch the replica's binary log format to `ROW`
 
 ### table
 
-The table name to migrate, without the database name. Required unless the table is specified in a full [`--alter`](#alter) statement. See also [`--database`](#database).
+The table name to migrate, without the database name. Required unless the table is specified in a full [`--alter`](#alter) statement or [`--move-tables`](#move-tables) is used. Cannot be used with [`--move-tables`](#move-tables). See also [`--database`](#database).
+
+### target-database
+
+Target MySQL database name for [`--move-tables`](#move-tables) mode. If not provided, defaults to [`--database`](#database). The database must already exist on the target cluster.
+
+### target-host
+
+Target MySQL primary hostname for [`--move-tables`](#move-tables) mode. Required when `--move-tables` is specified, and must point to a writable primary (`read_only=OFF`).
+
+### target-password
+
+Target MySQL password for [`--move-tables`](#move-tables) mode. If not provided, defaults to the source connection password.
+
+### target-port
+
+Target MySQL port for [`--move-tables`](#move-tables) mode. Defaults to `3306`.
+
+### target-user
+
+Target MySQL username for [`--move-tables`](#move-tables) mode. If not provided, defaults to the source connection user.
 
 ### test-on-replica
 
-Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. See [`testing-on-replica`](testing-on-replica.md)
+Issue the migration on a replica; do not modify data on master. Useful for validating, testing and benchmarking. Cannot be used with [`--move-tables`](#move-tables). See [`testing-on-replica`](testing-on-replica.md)
 
 ### test-on-replica-skip-replica-stop
 
@@ -485,11 +523,11 @@ A flag file that pauses operation while it exists. Prefer a file name specific t
 
 ### throttle-query
 
-A custom query issued every second to decide whether the migration should throttle. The query runs on the migrated server and should return `0` for no throttle and a value greater than `0` to throttle. Keep this query lightweight.
+A custom query issued every second to decide whether the migration should throttle. The query runs on the migrated server (or the target primary in [`--move-tables`](#move-tables) mode) and should return `0` for no throttle and a value greater than `0` to throttle. Keep this query lightweight.
 
 ### throttle-control-replicas
 
-Provide a command delimited list of replicas; `gh-ost` will throttle when any of the given replicas lag beyond [`--max-lag-millis`](#max-lag-millis). The list can be queried and updated dynamically via [interactive commands](interactive-commands.md)
+Provide a command delimited list of replicas; `gh-ost` will throttle when any of the given replicas lag beyond [`--max-lag-millis`](#max-lag-millis). In [`--move-tables`](#move-tables) mode, these replicas are in the target cluster and are checked using the target credentials. The list can be queried and updated dynamically via [interactive commands](interactive-commands.md)
 
 ### throttle-http
 
@@ -505,7 +543,7 @@ Defaults to 1000 (1 second). Configures the HTTP throttler check timeout in mill
 
 ### timestamp-old-table
 
-Makes the _old_ table include a timestamp value. The _old_ table is what the original table is renamed to at the end of a successful migration. For example, if the table is `gh_ost_test`, then the _old_ table would normally be `_gh_ost_test_del`. With `--timestamp-old-table` it would be, for example, `_gh_ost_test_20170221103147_del`.
+Makes the _old_ table include a timestamp value. The _old_ table is what the original table is renamed to at the end of a successful migration. For example, if the table is `gh_ost_test`, then the _old_ table would normally be `_gh_ost_test_del`. With `--timestamp-old-table` it would be, for example, `_gh_ost_test_20170221103147_del`. Not supported with [`--move-tables`](#move-tables).
 
 ### trigger-suffix
 
