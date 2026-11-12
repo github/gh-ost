@@ -8,7 +8,7 @@
 
 To resume, invoke `gh-ost` again with the same arguments with the `--resume` flag.
 
-> [!WARNING]
+> [!NOTE]
 > It is recommended use `--checkpoint` with `--gtid` enabled so that checkpoint binlog coordinates store GTID sets rather than file positions. In that case, `gh-ost` can resume using a different replica than it originally attached to.
 
 ## Example
@@ -41,6 +41,9 @@ gh-ost \
 ```
 
 `gh-ost` then reconnects at the binlog coordinates of the last checkpoint and resumes copying rows at the chunk specified by the checkpoint. The data integrity of the ghost table is preserved because `gh-ost` applies row DMLs and copies row in an idempotent way.
+
+> [!WARNING]
+> A successful resume does not prove data completeness. A checkpoint can be written while a source transaction is only partially applied, so `--resume` may skip the rest of that transaction ([#1781](https://github.com/github/gh-ost/issues/1781)). If the previous run may have stopped mid-transaction, verify the affected rows before cut-over.
 
 ## Resuming `--move-tables` runs
 

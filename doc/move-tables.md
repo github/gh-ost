@@ -178,7 +178,7 @@ Rerun the original command with `--resume --execute`, preserving the table set, 
 
 ### Abandon before the source rename
 
-If the original source names are intact and target writes were never enabled, route any target reads back to the source. Then drop **only** the target tables this attempt created, never pre-existing ones.
+If the original source names are intact and target writes were never enabled, route any target reads back to the source. Then drop **only** the target tables this attempt created, including the `_gho_<token>_ghk` checkpoint table (also after a failed noop), never pre-existing ones. A leftover checkpoint table blocks the next attempt for the same table set.
 
 ### Roll back after the source rename
 

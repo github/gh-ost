@@ -157,8 +157,11 @@ Wait exponentially longer intervals between failed cut-over attempts. The maximu
 
 ### cut-over-lock-timeout-seconds
 
-- **Standard OSC:** default `3`. Maximum seconds to hold locks while attempting cut-over; a lock timeout causes a retry.
-- **[`--move-tables`](#move-tables):** default `60`. Maximum seconds to drain the source stream and target applier through the source cut-over GTID after renaming the source tables. This is not a limit on rename lock waits or total application outage. A failed drain leaves the source tables renamed; it does not automatically retry the rename or roll back.
+- **Standard OSC:** default `3`, range `1`–`10`. Maximum seconds to hold locks while attempting cut-over; a lock timeout causes a retry.
+- **[`--move-tables`](#move-tables):** default `60`, range `1`–`60`. Maximum seconds to drain the source stream and target applier through the source cut-over GTID after renaming the source tables. This is not a limit on rename lock waits or total application outage. A failed drain leaves the source tables renamed; it does not automatically retry the rename or roll back.
+
+> [!WARNING]
+> An out-of-range value logs an error and falls back to `3`, including in `--move-tables` mode.
 
 ### database
 
