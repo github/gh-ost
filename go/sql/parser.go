@@ -150,6 +150,11 @@ func (atp *AlterTableParser) ParseAlterStatement(alterStatement string) (err err
 			break
 		}
 	}
+	// Strip any trailing statement terminator. A trailing semicolon would
+	// otherwise be carried into alterStatementOptions and, when the options are
+	// spliced into a larger statement (e.g. appending ", ALGORITHM=INSTANT"),
+	// break it into two statements under multiStatements=true.
+	atp.alterStatementOptions = strings.TrimRight(atp.alterStatementOptions, "; \t\r\n")
 	for _, alterToken := range atp.tokenizeAlterStatement(atp.alterStatementOptions) {
 		alterToken = atp.sanitizeQuotesFromAlterStatement(alterToken)
 		atp.parseAlterToken(alterToken)
