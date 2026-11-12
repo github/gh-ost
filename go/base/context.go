@@ -383,6 +383,10 @@ type MigrationContext struct {
 	AbortError error
 	abortMutex *sync.Mutex
 
+	// postponeMutex serializes unpostpone requests, cancellations and their
+	// consumption by the cut-over loop with the end of postponement.
+	postponeMutex sync.Mutex
+
 	Metrics metrics.Emitter
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
@@ -521,6 +525,48 @@ func NewMigrationContext() *MigrationContext {
 		abortMutex:                          &sync.Mutex{},
 		Log:                                 NewDefaultLogger(),
 	}
+}
+
+// RequestUnpostpone records an 'unpostpone' request. It returns false, and records
+// nothing, unless cut-over is currently being postponed.
+func (mctx *MigrationContext) RequestUnpostpone() bool {
+	mctx.postponeMutex.Lock()
+	defer mctx.postponeMutex.Unlock()
+	if atomic.LoadInt64(&mctx.IsPostponingCutOver) == 0 {
+		return false
+	}
+	atomic.StoreInt64(&mctx.UserCommandedUnpostponeFlag, 1)
+	return true
+}
+
+// CancelUnpostpone withdraws a pending 'unpostpone' request. It returns false if
+// no request is pending, including when cut-over has already consumed it.
+func (mctx *MigrationContext) CancelUnpostpone() bool {
+	mctx.postponeMutex.Lock()
+	defer mctx.postponeMutex.Unlock()
+	return atomic.CompareAndSwapInt64(&mctx.UserCommandedUnpostponeFlag, 1, 0)
+}
+
+// ConsumeUnpostpone is called by the cut-over loop. If an 'unpostpone' request is
+// pending it consumes it and ends postponement in the same critical section, so a
+// repeated request or a cancellation cannot slip in after cut-over has begun.
+func (mctx *MigrationContext) ConsumeUnpostpone() bool {
+	mctx.postponeMutex.Lock()
+	defer mctx.postponeMutex.Unlock()
+	if !atomic.CompareAndSwapInt64(&mctx.UserCommandedUnpostponeFlag, 1, 0) {
+		return false
+	}
+	atomic.StoreInt64(&mctx.IsPostponingCutOver, 0)
+	return true
+}
+
+// EndPostponingCutOver marks postponement as over and drops any request that
+// arrived after the cut-over loop decided to proceed.
+func (mctx *MigrationContext) EndPostponingCutOver() {
+	mctx.postponeMutex.Lock()
+	defer mctx.postponeMutex.Unlock()
+	atomic.StoreInt64(&mctx.IsPostponingCutOver, 0)
+	atomic.StoreInt64(&mctx.UserCommandedUnpostponeFlag, 0)
 }
 
 func (mctx *MigrationContext) SetConnectionConfig(storageEngine string) error {

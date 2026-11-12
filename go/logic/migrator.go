@@ -1690,6 +1690,51 @@ func (mgtr *Migrator) analyzeGhostTableBeforeCutOver(analyze func() error) error
 	return analyze()
 }
 
+// cutOverHeartbeatLag returns the current changelog heartbeat lag and the limit it
+// must be under before cut-over may begin: the lower of --max-lag-millis and
+// --cut-over-lock-timeout-seconds. tooHigh reports whether the lag exceeds it.
+func (mgtr *Migrator) cutOverHeartbeatLag() (lag, limit time.Duration, tooHigh bool) {
+	lag = mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog()
+	maxLagMillisecondsThrottle := time.Duration(atomic.LoadInt64(&mgtr.migrationContext.MaxLagMillisecondsThrottleThreshold)) * time.Millisecond
+	cutOverLockTimeout := time.Duration(mgtr.migrationContext.CutOverLockTimeoutSeconds) * time.Second
+	limit = min(maxLagMillisecondsThrottle, cutOverLockTimeout)
+	return lag, limit, lag > limit
+}
+
+// shouldPostponeCutOver is polled once per second before cut-over and returns true
+// while cut-over should keep waiting: either the heartbeat lag is too high, or the
+// postpone flag file exists and no 'unpostpone' command is pending.
+//
+// A pending 'unpostpone' is only consumed once the heartbeat lag allows cut-over to
+// start. Until then it stays visible in the status output and can be withdrawn with
+// the 'cancel-unpostpone' command. Requests, cancellations and consumption are
+// serialized with the end of postponement, so a request is either consumed here or
+// cancelled by the user, never both, and none is accepted once cut-over has begun.
+func (mgtr *Migrator) shouldPostponeCutOver() (bool, error) {
+	if lag, limit, tooHigh := mgtr.cutOverHeartbeatLag(); tooHigh {
+		mgtr.migrationContext.Log.Debugf("current HeartbeatLag (%.2fs) is too high, it needs to be less than both --max-lag-millis and --cut-over-lock-timeout-seconds (%.2fs) to continue", lag.Seconds(), limit.Seconds())
+		return true, nil
+	}
+	if mgtr.migrationContext.PostponeCutOverFlagFile == "" {
+		return false, nil
+	}
+	if mgtr.migrationContext.ConsumeUnpostpone() {
+		return false, nil
+	}
+	if base.FileExists(mgtr.migrationContext.PostponeCutOverFlagFile) {
+		// Postpone file defined and exists!
+		if atomic.LoadInt64(&mgtr.migrationContext.IsPostponingCutOver) == 0 {
+			if err := mgtr.hooksExecutor.OnBeginPostponed(); err != nil {
+				return true, err
+			}
+		}
+		atomic.StoreInt64(&mgtr.migrationContext.IsPostponingCutOver, 1)
+		return true, nil
+	}
+	mgtr.migrationContext.EndPostponingCutOver()
+	return false, nil
+}
+
 // cutOver performs the final step of migration, based on migration
 // type (on replica? atomic? safe?)
 func (mgtr *Migrator) cutOver() (err error) {
@@ -1704,39 +1749,10 @@ func (mgtr *Migrator) cutOver() (err error) {
 
 	mgtr.migrationContext.MarkPointOfInterest()
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone")
-	if err := mgtr.sleepWhileTrue(
-		"cut_over_postpone",
-		func() (bool, error) {
-			heartbeatLag := mgtr.migrationContext.TimeSinceLastHeartbeatOnChangelog()
-			maxLagMillisecondsThrottle := time.Duration(atomic.LoadInt64(&mgtr.migrationContext.MaxLagMillisecondsThrottleThreshold)) * time.Millisecond
-			cutOverLockTimeout := time.Duration(mgtr.migrationContext.CutOverLockTimeoutSeconds) * time.Second
-			if heartbeatLag > maxLagMillisecondsThrottle || heartbeatLag > cutOverLockTimeout {
-				mgtr.migrationContext.Log.Debugf("current HeartbeatLag (%.2fs) is too high, it needs to be less than both --max-lag-millis (%.2fs) and --cut-over-lock-timeout-seconds (%.2fs) to continue", heartbeatLag.Seconds(), maxLagMillisecondsThrottle.Seconds(), cutOverLockTimeout.Seconds())
-				return true, nil
-			}
-			if mgtr.migrationContext.PostponeCutOverFlagFile == "" {
-				return false, nil
-			}
-			if atomic.LoadInt64(&mgtr.migrationContext.UserCommandedUnpostponeFlag) > 0 {
-				atomic.StoreInt64(&mgtr.migrationContext.UserCommandedUnpostponeFlag, 0)
-				return false, nil
-			}
-			if base.FileExists(mgtr.migrationContext.PostponeCutOverFlagFile) {
-				// Postpone file defined and exists!
-				if atomic.LoadInt64(&mgtr.migrationContext.IsPostponingCutOver) == 0 {
-					if err := mgtr.hooksExecutor.OnBeginPostponed(); err != nil {
-						return true, err
-					}
-				}
-				atomic.StoreInt64(&mgtr.migrationContext.IsPostponingCutOver, 1)
-				return true, nil
-			}
-			return false, nil
-		},
-	); err != nil {
+	if err := mgtr.sleepWhileTrue("cut_over_postpone", mgtr.shouldPostponeCutOver); err != nil {
 		return err
 	}
-	atomic.StoreInt64(&mgtr.migrationContext.IsPostponingCutOver, 0)
+	mgtr.migrationContext.EndPostponingCutOver()
 	mgtr.migrationContext.MarkPointOfInterest()
 	mgtr.migrationContext.Log.Debugf("checking for cut-over postpone: complete")
 
@@ -2440,6 +2456,13 @@ func (mgtr *Migrator) getMigrationStateAndETA(rowsEstimate int64) (state, eta st
 	} else if atomic.LoadInt64(&mgtr.migrationContext.IsPostponingCutOver) > 0 {
 		eta = "due"
 		state = "postponing cut-over"
+		if atomic.LoadInt64(&mgtr.migrationContext.UserCommandedUnpostponeFlag) > 0 {
+			if lag, limit, tooHigh := mgtr.cutOverHeartbeatLag(); tooHigh {
+				state = fmt.Sprintf("postponing cut-over, unpostpone requested: waiting for heartbeat lag (%.2fs) to drop below %.2fs", lag.Seconds(), limit.Seconds())
+			} else {
+				state = "postponing cut-over, unpostpone requested"
+			}
+		}
 	} else if isThrottled, throttleReason, _ := mgtr.migrationContext.IsThrottled(); isThrottled {
 		state = fmt.Sprintf("throttled, %s", throttleReason)
 	}
