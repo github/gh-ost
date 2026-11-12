@@ -46,29 +46,29 @@ func (c *Conn) handleOKPacket(data []byte) (*mysql.Result, error) {
 		pos += 2
 	}
 
-	if (c.capability&mysql.CLIENT_SESSION_TRACK > 0) &&
-		(c.status&mysql.SERVER_SESSION_STATE_CHANGED > 0) {
-		var err error
-
-		// Example status message:
-		// "Records: 3  Duplicates: 0  Warnings: 0"
-		statusMessageLength := int(data[pos])
-		pos++
+	if c.capability&mysql.CLIENT_SESSION_TRACK > 0 {
+		// info string is always present when CLIENT_SESSION_TRACK is negotiated.
+		// Example: "Records: 3  Duplicates: 0  Warnings: 0"
+		statusMessageLength, _, n := mysql.LengthEncodedInt(data[pos:])
+		pos += n
 		if statusMessageLength > 0 {
-			r.StatusMessage = utils.ByteSliceToString(data[pos : pos+statusMessageLength])
-			pos += statusMessageLength
+			r.StatusMessage = utils.ByteSliceToString(data[pos : pos+int(statusMessageLength)])
+			pos += int(statusMessageLength)
 		}
 
-		sessionTrackingChangeLength := int(data[pos])
-		pos++
-		dataLength := len(data[pos:])
-		if dataLength != sessionTrackingChangeLength {
-			return nil, fmt.Errorf("incorrect data length for session tracking data: expected %d but got %d",
-				sessionTrackingChangeLength, dataLength)
-		}
-		r.SessionTracking, err = decodeSessionTracking(data[pos:])
-		if err != nil {
-			return nil, err
+		if c.status&mysql.SERVER_SESSION_STATE_CHANGED > 0 {
+			sessionTrackingChangeLength, _, n := mysql.LengthEncodedInt(data[pos:])
+			pos += n
+			dataLength := len(data[pos:])
+			if dataLength != int(sessionTrackingChangeLength) {
+				return nil, fmt.Errorf("incorrect data length for session tracking data: expected %d but got %d",
+					sessionTrackingChangeLength, dataLength)
+			}
+			var err error
+			r.SessionTracking, err = decodeSessionTracking(data[pos:])
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -82,26 +82,32 @@ func decodeSessionTracking(data []byte) (s *mysql.SessionTrackingInfo, err error
 	for pos < len(data) {
 		sessionTrackingChangeType := data[pos]
 		pos++ // session tracking type
-		pos++ // length of session tracking data, unused
+		_, _, n := mysql.LengthEncodedInt(data[pos:])
+		pos += n // length of session tracking data, unused
 
 		switch sessionTrackingChangeType {
 		case mysql.SESSION_TRACK_SYSTEM_VARIABLES:
 			if s.Variables == nil {
 				s.Variables = make(map[string]string, 1)
 			}
-			varNameLength := data[pos]
-			pos++
-			varName := utils.ByteSliceToString(data[pos : pos+int(varNameLength)])
-			pos += int(varNameLength)
-			varValueLength := data[pos]
-			pos++
-			s.Variables[varName] = utils.ByteSliceToString(data[pos : pos+int(varValueLength)])
-			pos += int(varValueLength)
+			varName, _, n, err := mysql.LengthEncodedString(data[pos:])
+			if err != nil {
+				return nil, err
+			}
+			pos += n
+			varValue, _, n, err := mysql.LengthEncodedString(data[pos:])
+			if err != nil {
+				return nil, err
+			}
+			pos += n
+			s.Variables[utils.ByteSliceToString(varName)] = utils.ByteSliceToString(varValue)
 		case mysql.SESSION_TRACK_SCHEMA:
-			schemaInfoLength := data[pos]
-			pos++
-			s.Schema = utils.ByteSliceToString(data[pos : pos+int(schemaInfoLength)])
-			pos += int(schemaInfoLength)
+			schema, _, n, err := mysql.LengthEncodedString(data[pos:])
+			if err != nil {
+				return nil, err
+			}
+			pos += n
+			s.Schema = utils.ByteSliceToString(schema)
 		case mysql.SESSION_TRACK_STATE_CHANGE:
 			s.State = string(data[pos])
 			pos++
@@ -111,22 +117,26 @@ func decodeSessionTracking(data []byte) (s *mysql.SessionTrackingInfo, err error
 				return nil, fmt.Errorf("unexpected GTID format %d", gtidFormat)
 			}
 			pos++
-			gtidLength := data[pos]
-			pos++
-			s.GTID = utils.ByteSliceToString(data[pos : pos+int(gtidLength)])
-			pos += int(gtidLength)
-		case mysql.SESSION_TRACK_TRANSACTION_CHARACTERISTICS:
-			characteristicsLength := data[pos]
-			pos++
-			if characteristicsLength > 0 {
-				s.Characteristics = utils.ByteSliceToString(data[pos : pos+int(characteristicsLength)])
-				pos += int(characteristicsLength)
+			gtid, _, n, err := mysql.LengthEncodedString(data[pos:])
+			if err != nil {
+				return nil, err
 			}
+			pos += n
+			s.GTID = utils.ByteSliceToString(gtid)
+		case mysql.SESSION_TRACK_TRANSACTION_CHARACTERISTICS:
+			chars, _, n, err := mysql.LengthEncodedString(data[pos:])
+			if err != nil {
+				return nil, err
+			}
+			pos += n
+			s.Characteristics = utils.ByteSliceToString(chars)
 		case mysql.SESSION_TRACK_TRANSACTION_STATE:
-			transactionStateLength := data[pos]
-			pos++
-			s.TransactionState = utils.ByteSliceToString(data[pos : pos+int(transactionStateLength)])
-			pos += int(transactionStateLength)
+			txState, _, n, err := mysql.LengthEncodedString(data[pos:])
+			if err != nil {
+				return nil, err
+			}
+			pos += n
+			s.TransactionState = utils.ByteSliceToString(txState)
 		default:
 			return nil, fmt.Errorf("got unknown change type %v", sessionTrackingChangeType)
 		}

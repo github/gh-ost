@@ -79,6 +79,37 @@ type BinlogSyncerConfig struct {
 	// FloatWithTrailingZero structure for floats.
 	UseFloatWithTrailingZero bool
 
+	// RenderJSONAsMySQLText, when true, makes the JSONB decoder emit text
+	// that is faithful to each value's original JSONB type tag where the
+	// JSON text grammar can express it. The default decode->json.Marshal
+	// path is lossy for DOUBLE and (less importantly) NEWDECIMAL, which
+	// matters when replaying the output back into a MySQL JSON column.
+	//
+	// Per-tag behaviour:
+	//   - JSONB_DOUBLE 1.0 renders as "1.0" (not "1"), so MySQL re-stores
+	//     it as JSONB_DOUBLE rather than JSONB_INT.
+	//   - JSONB_OPAQUE NEWDECIMAL renders as an unquoted number rather
+	//     than a quoted string. Note that MySQL's JSON text grammar has
+	//     no syntax for a decimal literal: re-inserting the text creates
+	//     a JSON DOUBLE, not the original JSONB_OPAQUE NEWDECIMAL. The
+	//     numeric value is preserved, the opaque type tag is not.
+	//   - JSONB_OPAQUE DATE renders as "YYYY-MM-DD" (not the legacy
+	//     "YYYY-MM-DD 00:00:00.000000").
+	//   - JSONB_OPAQUE values of unrecognised inner types render as
+	//     "base64:typeN:<b64>" (matching mysqld) instead of the raw
+	//     payload bytes.
+	//   - Object key order is preserved from the JSONB stream
+	//     (length-then-bytes) instead of the lexicographic order Go maps
+	//     produce, matching MySQL's own text output.
+	//
+	// Other notes:
+	//   - UseDecimal and UseFloatWithTrailingZero have no effect on JSON
+	//     columns when this is enabled (the renderer always emits
+	//     MySQL-style text).
+	//   - Only applies to JSON columns; non-JSON DECIMAL/DATE/etc. columns
+	//     are unaffected.
+	RenderJSONAsMySQLText bool
+
 	// RecvBufferSize sets the size in bytes of the operating system's receive buffer associated with the connection.
 	RecvBufferSize int
 
@@ -211,6 +242,7 @@ func NewBinlogSyncer(cfg BinlogSyncerConfig) *BinlogSyncer {
 	b.parser.SetTimestampStringLocation(b.cfg.TimestampStringLocation)
 	b.parser.SetUseDecimal(b.cfg.UseDecimal)
 	b.parser.SetUseFloatWithTrailingZero(b.cfg.UseFloatWithTrailingZero)
+	b.parser.SetRenderJSONAsMySQLText(b.cfg.RenderJSONAsMySQLText)
 	b.parser.SetVerifyChecksum(b.cfg.VerifyChecksum)
 	b.parser.SetPayloadDecoderConcurrency(cfg.PayloadDecoderConcurrency)
 	b.parser.SetRowsEventDecodeFunc(b.cfg.RowsEventDecodeFunc)
@@ -393,18 +425,24 @@ func (b *BinlogSyncer) enableSemiSync() error {
 		return nil
 	}
 
-	r, err := b.c.Execute("SHOW VARIABLES LIKE 'rpl_semi_sync_master_enabled';")
+	// MySQL 8.0.26 renamed rpl_semi_sync_master_enabled to
+	// rpl_semi_sync_source_enabled (keeping the old name as an alias) and
+	// 8.4.0 removed the alias, so accept either spelling.
+	r, err := b.c.Execute("SHOW VARIABLES WHERE Variable_name IN ('rpl_semi_sync_master_enabled', 'rpl_semi_sync_source_enabled')")
 	if err != nil {
 		return errors.Trace(err)
 	}
 	s, _ := r.GetString(0, 1)
 	if s != "ON" {
-		b.cfg.Logger.Error("master does not support semi synchronous replication, use no semi-sync")
+		b.cfg.Logger.Error("source does not support semi synchronous replication, use no semi-sync")
 		b.cfg.SemiSyncEnabled = false
 		return nil
 	}
 
-	_, err = b.c.Execute(`SET @rpl_semi_sync_slave = 1;`)
+	// MySQL 8.0.26 also renamed the @rpl_semi_sync_slave session variable
+	// to @rpl_semi_sync_replica. These are user variables, so setting both
+	// is harmless on either server version.
+	_, err = b.c.Execute(`SET @rpl_semi_sync_slave = 1, @rpl_semi_sync_replica = 1;`)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -968,6 +1006,21 @@ func (b *BinlogSyncer) handleEventAndACK(s *BinlogStreamer, e *BinlogEvent, need
 	case *QueryEvent:
 		if !b.cfg.DiscardGTIDSet {
 			event.GSet = b.getCurrentGtidSet()
+		}
+
+	case *TransactionPayloadEvent:
+		// XID/Query decoded from compressed payload need GTID set attached,
+		// same as their uncompressed counterparts above; GTID event precedes
+		// payload uncompressed, so currGset already covers this transaction
+		if !b.cfg.DiscardGTIDSet {
+			for _, inner := range event.Events {
+				switch innerEvent := inner.Event.(type) {
+				case *XIDEvent:
+					innerEvent.GSet = b.getCurrentGtidSet()
+				case *QueryEvent:
+					innerEvent.GSet = b.getCurrentGtidSet()
+				}
+			}
 		}
 	}
 
