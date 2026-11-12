@@ -105,6 +105,20 @@ Notes:
 - `Copy: 31291200/43138418`, `Copy: 31389700/43138432`: this migration executed with `--exact-rowcount`. `gh-ost` continuously heuristically updates the total number of expected row copies as migration proceeds, hence the change from `43138418` to `43138432`
 - `streamer: mysql-bin.006793:179473435` tells us which binary log entry is `gh-ost` processing at this time.
 
+### Move-tables progress
+
+In [`--move-tables`](move-tables.md) mode, `Lag` and `HeartbeatLag` are replaced by `WriterLag`, and each status line is followed by per-table progress. For example:
+
+```text
+Copy: 1500/2000 75.0%; Applied: 42; Backlog: 0/1000; Time: 30s(total), 25s(copy); streamer: source-uuid:1-123; WriterLag: 0.00s, State: migrating; ETA: 8s
+  - `app_db`.`orders`: Copy 1000/1000 100.0%; iteration 1; complete
+  - `app_db`.`order_items`: Copy 500/1000 50.0%; iteration 1; copying
+```
+
+- The top line totals all moved tables; the indented lines show each table.
+- `complete` means that table's initial row copy finished, not that cut-over finished; `gh-ost` continues replaying binlog changes and postpones cut-over once all tables finish copying.
+- `WriterLag` is the idle-adjusted age of the last applied binlog event on the target (reset while no moved-table events arrive), not source- or target-replica catch-up; see [cut-over checks](move-tables.md#cut-over) and [move-tables throttling](throttle.md#move-tables-mode).
+
 ### Status hint
 
 In addition, once every `10` minutes, a friendly reminder is printed, in the following form:

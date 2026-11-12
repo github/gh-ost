@@ -184,18 +184,32 @@ func (thlr *Throttler) collectReplicationLag(firstThrottlingCollected chan<- boo
 	}
 }
 
+// controlReplicaConnectionConfig returns the connection config used to read
+// replication lag from a control replica. In move-tables mode the lag is read
+// from the target cluster's replicas, otherwise from the source (inspector)
+// cluster's replicas.
+func (thlr *Throttler) controlReplicaConnectionConfig(replicaKey mysql.InstanceKey) *mysql.ConnectionConfig {
+	if thlr.migrationContext.IsMoveTablesMode() {
+		return thlr.migrationContext.MoveTables.ConnectionConfig.DuplicateCredentials(replicaKey)
+	}
+	return thlr.migrationContext.InspectorConnectionConfig.DuplicateCredentials(replicaKey)
+}
+
 // collectControlReplicasLag polls all the control replicas to get maximum lag value
 func (thlr *Throttler) collectControlReplicasLag() {
 	if atomic.LoadInt64(&thlr.migrationContext.HibernateUntil) > 0 {
 		return
 	}
 
-	replicationLagQuery := fmt.Sprintf(`
-		select value from %s.%s where hint = 'heartbeat' and id <= 255
-		`,
-		sql.EscapeName(thlr.migrationContext.DatabaseName),
-		sql.EscapeName(thlr.migrationContext.GetChangelogTableName()),
-	)
+	var replicationLagQuery string
+	if !thlr.migrationContext.IsMoveTablesMode() {
+		replicationLagQuery = fmt.Sprintf(`
+			select value from %s.%s where hint = 'heartbeat' and id <= 255
+			`,
+			sql.EscapeName(thlr.migrationContext.DatabaseName),
+			sql.EscapeName(thlr.migrationContext.GetChangelogTableName()),
+		)
+	}
 
 	readReplicaLag := func(connectionConfig *mysql.ConnectionConfig) (lag time.Duration, err error) {
 		dbUri := connectionConfig.GetDBUri("information_schema")
@@ -204,6 +218,14 @@ func (thlr *Throttler) collectControlReplicasLag() {
 		db, _, err := mysql.GetDB(thlr.migrationContext.Uuid, dbUri)
 		if err != nil {
 			return lag, err
+		}
+
+		if thlr.migrationContext.IsMoveTablesMode() {
+			dbVersion, err := mysql.GetDBVersion(thlr.migrationContext.Uuid, dbUri)
+			if err != nil {
+				return lag, err
+			}
+			return mysql.GetReplicationLagFromSlaveStatus(dbVersion, db)
 		}
 
 		if err := db.QueryRow(replicationLagQuery).Scan(&heartbeatValue); err != nil {
@@ -221,7 +243,8 @@ func (thlr *Throttler) collectControlReplicasLag() {
 		}
 		lagResults := make(chan *mysql.ReplicationLagResult, instanceKeyMap.Len())
 		for replicaKey := range *instanceKeyMap {
-			connectionConfig := thlr.migrationContext.InspectorConnectionConfig.DuplicateCredentials(replicaKey)
+			connectionConfig := thlr.controlReplicaConnectionConfig(replicaKey)
+
 			if err := connectionConfig.RegisterTLSConfig(); err != nil {
 				return &mysql.ReplicationLagResult{Err: err}
 			}
@@ -451,7 +474,9 @@ func (thlr *Throttler) collectGeneralThrottleMetrics() error {
 // that may affect throttling. There are several components, all running independently,
 // that collect such metrics.
 func (thlr *Throttler) initiateThrottlerCollection(firstThrottlingCollected chan<- bool) {
-	go thlr.collectReplicationLag(firstThrottlingCollected)
+	if !thlr.migrationContext.IsMoveTablesMode() {
+		go thlr.collectReplicationLag(firstThrottlingCollected)
+	}
 	go thlr.collectControlReplicasLag()
 	go thlr.collectThrottleHTTPStatus(firstThrottlingCollected)
 

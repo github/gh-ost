@@ -2,4 +2,9 @@
 
 # Sample hook file for gh-ost-on-success
 
-echo "$(date) gh-ost-on-success $GH_OST_DATABASE_NAME.$GH_OST_TABLE_NAME" >> /tmp/gh-ost.log
+message="$GH_OST_DATABASE_NAME.$GH_OST_TABLE_NAME"
+if [ "$GH_OST_MOVE_TABLES" = "true" ]; then
+  message="$GH_OST_DATABASE_NAME ($GH_OST_TABLES) -> $GH_OST_TARGET_HOST/$GH_OST_TARGET_DATABASE_NAME (drain_gtid: $GH_OST_DRAIN_GTID)"
+fi
+
+echo "$(date) gh-ost-on-success $message" >> /tmp/gh-ost.log

@@ -54,6 +54,58 @@ func (buf *buffer) String() string {
 	return buf.Buffer.String()
 }
 
+func TestMoveTablesWritableColumns(t *testing.T) {
+	testCases := []struct {
+		name             string
+		columnNames      []string
+		generatedNames   []string
+		expectedWritable []string
+	}{
+		{
+			name:             "generated columns in middle and end",
+			columnNames:      []string{"id", "virtual_value", "persisted_value", "stored_value"},
+			generatedNames:   []string{"virtual_value", "stored_value"},
+			expectedWritable: []string{"id", "persisted_value"},
+		},
+		{
+			name:             "generated names match case insensitively",
+			columnNames:      []string{"ID", "Virtual_Value", "persisted_value", "Stored_Value"},
+			generatedNames:   []string{"virtual_value", "STORED_VALUE"},
+			expectedWritable: []string{"ID", "persisted_value"},
+		},
+		{
+			name:             "no generated columns",
+			columnNames:      []string{"id", "first_value", "second_value"},
+			generatedNames:   nil,
+			expectedWritable: []string{"id", "first_value", "second_value"},
+		},
+		{
+			name:             "all columns generated",
+			columnNames:      []string{"virtual_value", "stored_value"},
+			generatedNames:   []string{"virtual_value", "stored_value"},
+			expectedWritable: []string{},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			columns := sql.NewColumnList(testCase.columnNames)
+			generatedColumns := sql.NewColumnList(testCase.generatedNames)
+			writableColumns := moveTablesWritableColumns(columns, generatedColumns)
+
+			require.Equal(t, testCase.expectedWritable, writableColumns.Names())
+			require.NotSame(t, columns, writableColumns)
+			for ordinal, columnName := range testCase.expectedWritable {
+				require.Equal(t, ordinal, writableColumns.Ordinals[columnName])
+				require.Equal(t, columnName, writableColumns.Columns()[ordinal].Name)
+			}
+
+			mappedWritableColumns := moveTablesWritableColumns(columns, generatedColumns)
+			require.NotSame(t, writableColumns, mappedWritableColumns)
+		})
+	}
+}
+
 func TestMigratorOnChangelogEvent(t *testing.T) {
 	migrationContext := base.NewMigrationContext()
 	migrator := NewMigrator(migrationContext, "1.2.3")
@@ -689,6 +741,230 @@ func TestMigratorShouldPrintStatus(t *testing.T) {
 	require.True(t, migrator.shouldPrintStatus(HeuristicPrintStatusRule, 30030, 86400*time.Second))  // test 'else' again
 }
 
+func TestMoveTablesRejectsTimestampedDeletionNames(t *testing.T) {
+	ctx := base.NewMigrationContext()
+	ctx.TimestampOldTable = true
+	ctx.MoveTables.TableNames = []string{"t"}
+	err := NewMigrator(ctx, "test").MoveTables()
+	require.ErrorContains(t, err, "--timestamp-old-table is not supported")
+}
+
+func (suite *MoveTablesCutOverSuite) TestMoveTablesResumeSourceTables() {
+	ctx := context.Background()
+	mc := newTestMigrationContext()
+	mc.MoveTables.TableNames = []string{"resume_check_a", "resume_check_b"}
+	migrator := NewMigrator(mc, "test")
+	migrator.sourcePrimaryDB = suite.db
+
+	for _, table := range []string{"resume_check_a", "resume_check_b", "_resume_check_a_del", "_resume_check_b_del", "resumeXcheckXmissing"} {
+		table := table
+		suite.T().Cleanup(func() {
+			_, err := suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+sql.EscapeName(table))
+			suite.Assert().NoError(err)
+		})
+	}
+	_, err := suite.db.ExecContext(ctx, "CREATE TABLE resume_check_a (id INT PRIMARY KEY)")
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE resume_check_b (id INT PRIMARY KEY)")
+	suite.Require().NoError(err)
+	suite.Require().NoError(migrator.validateMoveTablesResumeSourceTables(false))
+	suite.Require().ErrorContains(migrator.validateMoveTablesResumeSourceTables(true), "recover manually")
+
+	_, err = suite.db.ExecContext(ctx, "RENAME TABLE resume_check_a TO _resume_check_a_del")
+	suite.Require().NoError(err)
+	suite.Require().ErrorContains(migrator.validateMoveTablesResumeSourceTables(false), "recover manually")
+	suite.Require().ErrorContains(migrator.validateMoveTablesResumeSourceTables(true), "recover manually")
+	_, err = suite.db.ExecContext(ctx, "RENAME TABLE resume_check_b TO _resume_check_b_del")
+	suite.Require().NoError(err)
+	suite.Require().NoError(migrator.validateMoveTablesResumeSourceTables(true))
+	_, err = suite.db.ExecContext(ctx, "RENAME TABLE _resume_check_b_del TO resume_check_b")
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "RENAME TABLE _resume_check_a_del TO resume_check_a")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE _resume_check_a_del (id INT PRIMARY KEY)")
+	suite.Require().NoError(err)
+	suite.Require().ErrorContains(migrator.validateMoveTablesResumeSourceTables(false), "recover manually")
+	suite.Require().ErrorContains(migrator.validateMoveTablesResumeSourceTables(true), "recover manually")
+	_, err = suite.db.ExecContext(ctx, "DROP TABLE _resume_check_a_del")
+	suite.Require().NoError(err)
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE resumeXcheckXmissing (id INT PRIMARY KEY)")
+	suite.Require().NoError(err)
+	mc.MoveTables.TableNames = []string{"resume_check_missing"}
+	suite.Require().ErrorContains(migrator.validateMoveTablesResumeSourceTables(false), "source test.resume_check_missing")
+	mc.CancelContext()
+	suite.Require().ErrorContains(migrator.validateMoveTablesResumeSourceTables(false), "failed to inspect move-tables source")
+}
+
+func (suite *MoveTablesCutOverSuite) TestMoveTablesResumeRejectsUnsafeCutOver() {
+	ctx := context.Background()
+	config, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabaseOther)
+	suite.Require().NoError(err)
+	for _, test := range []struct {
+		name, sourceTable, expectedError                           string
+		missingCheckpointTable, hasCheckpoint, complete, hasCoords bool
+	}{
+		{"missing checkpoint table", "resume_safety", "failed to inspect move-tables cutover checkpoint", true, false, false, false},
+		{"renamed without checkpoint", "_resume_safety_del", "recover manually", false, false, false, false},
+		{"completed drain", "_resume_safety_del", "drain is already marked complete", false, true, true, true},
+		{"missing checkpoint coordinates", "_resume_safety_del", "cutover checkpoint has missing coordinates", false, true, false, false},
+		{"checkpoint with unrenamed source", "resume_safety", "recover manually", false, true, false, true},
+	} {
+		suite.Run(test.name, func() {
+			_, err := suite.db.ExecContext(ctx, "CREATE TABLE "+sql.EscapeName(test.sourceTable)+" (id INT PRIMARY KEY)")
+			suite.Require().NoError(err)
+			suite.T().Cleanup(func() {
+				_, err := suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+sql.EscapeName(test.sourceTable))
+				suite.Assert().NoError(err)
+			})
+
+			var calls []string
+			mc := newTestMigrationContext()
+			mc.Checkpoint, mc.Resume, mc.UseGTIDs = true, true, true
+			mc.InspectorConnectionConfig = config
+			mc.AssumeMasterHostname = fmt.Sprintf("%s:%d", config.Key.Hostname, config.Key.Port)
+			mc.MoveTables.TableNames = []string{"resume_safety"}
+			mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+			mc.MoveTables.ConnectionConfig = config
+			mc.Hooks = &recordingHooks{name: "fake", calls: &calls}
+			suite.Require().NoError(mc.SetConnectionConfig("innodb"))
+
+			checkpoint := NewApplier(mc)
+			checkpoint.moveTablesTargetDB = suite.db
+			if !test.missingCheckpointTable {
+				suite.Require().NoError(checkpoint.CreateCheckpointTable())
+				suite.T().Cleanup(func() { suite.Assert().NoError(checkpoint.DropCheckpointTable()) })
+			}
+			if test.hasCheckpoint {
+				coords := suite.containingDrainGTID()
+				chk := &Checkpoint{
+					TableName:                  "resume_safety",
+					IsCutover:                  test.complete,
+					MoveTablesCutOverStarted:   true,
+					MoveTablesCutOverDrainGTID: coords,
+				}
+				if test.hasCoords {
+					chk.LastTrxCoords = coords
+				}
+				suite.Require().NoError(checkpoint.WriteMoveTableCheckpoints([]*Checkpoint{chk}))
+			}
+
+			//nolint:contextcheck // Lock teardown uses an independent timeout after migration cancellation.
+			err = NewMigrator(mc, "test").MoveTables()
+			suite.Require().ErrorContains(err, test.expectedError)
+			suite.Require().Empty(calls)
+			var count int
+			suite.Require().NoError(suite.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ?", testMysqlDatabase, test.sourceTable).Scan(&count))
+			suite.Require().Equal(1, count)
+		})
+	}
+}
+
+func (suite *MoveTablesCutOverSuite) TestMoveTablesFreshRunLocksBeforeTableInspection() {
+	ctx := context.Background()
+	config, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabaseOther)
+	suite.Require().NoError(err)
+
+	mc := newTestMigrationContext()
+	mc.Checkpoint = true
+	mc.InspectorConnectionConfig = config
+	mc.AssumeMasterHostname = fmt.Sprintf("%s:%d", config.Key.Hostname, config.Key.Port)
+	mc.MoveTables.TableNames = []string{"lock_before_inspection_missing"}
+	mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	mc.MoveTables.ConnectionConfig = config
+	mc.MoveTables.SourcePrimaryConnectionConfig = config
+	mc.MoveTables.AllowOnSourcePrimary = true
+	mc.Hooks = CompositeHooks{}
+	suite.Require().NoError(mc.SetConnectionConfig("innodb"))
+
+	holder := NewApplier(mc)
+	suite.Require().NoError(holder.AcquireMigrationLock(ctx))
+	suite.T().Cleanup(holder.releaseMigrationLock)
+	err = NewMigrator(mc, "test").MoveTables()
+	suite.Require().ErrorContains(err, moveTablesSourceLockName+" held by connection")
+
+	var count int
+	err = suite.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name IN (?, ?)",
+		testMysqlDatabaseOther, mc.MoveTables.TableNames[0], mc.GetCheckpointTableName()).Scan(&count)
+	suite.Require().NoError(err)
+	suite.Require().Zero(count)
+}
+
+func (suite *MoveTablesCutOverSuite) TestMoveTablesResumeReusesPreflightApplier() {
+	ctx := context.Background()
+	config, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabaseOther)
+	suite.Require().NoError(err)
+
+	mc := newTestMigrationContext()
+	mc.Checkpoint, mc.Resume = true, true
+	mc.SkipMetadataLockCheck = true
+	mc.ApplierConnectionConfig = config
+	mc.MoveTables.TableNames = []string{"resume_preflight"}
+	mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	mc.MoveTables.ConnectionConfig = config
+	mc.MoveTables.SourcePrimaryConnectionConfig = config
+	suite.Require().NoError(mc.SetConnectionConfig("innodb"))
+
+	migrator := NewMigrator(mc, "test")
+	applier := NewApplier(mc)
+	migrator.applier = applier
+	suite.T().Cleanup(applier.Teardown)
+	suite.Require().NoError(applier.InitDBConnections())
+	suite.Require().NoError(applier.AcquireMigrationLock(ctx))
+	var lockConnectionID int64
+	suite.Require().NoError(applier.migrationLockConn.QueryRowContext(ctx, "SELECT CONNECTION_ID()").Scan(&lockConnectionID))
+
+	suite.Require().NoError(migrator.initiateApplier())
+	suite.Require().Same(applier, migrator.applier)
+	var holderID int64
+	suite.Require().NoError(suite.db.QueryRowContext(ctx, "SELECT IS_USED_LOCK(?)", moveTablesSourceLockName).Scan(&holderID))
+	suite.Require().Equal(lockConnectionID, holderID)
+}
+
+func (suite *MoveTablesCutOverSuite) TestMoveTablesResumeContinuesAfterCutOverCheckpointMiss() {
+	ctx := context.Background()
+	config, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+	_, err = suite.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+testMysqlDatabaseOther)
+	suite.Require().NoError(err)
+
+	mc := newTestMigrationContext()
+	mc.Checkpoint, mc.Resume = true, true
+	mc.SkipMetadataLockCheck = true
+	mc.InspectorConnectionConfig = config
+	mc.AssumeMasterHostname = fmt.Sprintf("%s:%d", config.Key.Hostname, config.Key.Port)
+	mc.MoveTables.TableNames = []string{"resume_checkpoint_miss"}
+	mc.MoveTables.TargetDatabase = testMysqlDatabaseOther
+	mc.MoveTables.ConnectionConfig = config
+	mc.MoveTables.AllowOnSourcePrimary = true
+	mc.Hooks = CompositeHooks{}
+	suite.Require().NoError(mc.SetConnectionConfig("innodb"))
+
+	_, err = suite.db.ExecContext(ctx, "CREATE TABLE resume_checkpoint_miss (id INT NOT NULL PRIMARY KEY)")
+	suite.Require().NoError(err)
+	suite.T().Cleanup(func() {
+		_, err := suite.db.ExecContext(ctx, "DROP TABLE IF EXISTS resume_checkpoint_miss")
+		suite.Require().NoError(err)
+	})
+	checkpoint := NewApplier(mc)
+	checkpoint.moveTablesTargetDB = suite.db
+	suite.Require().NoError(checkpoint.CreateCheckpointTable())
+	suite.T().Cleanup(func() { suite.Require().NoError(checkpoint.DropCheckpointTable()) })
+
+	err = NewMigrator(mc, "test").MoveTables()
+	suite.Require().ErrorContains(err, "no checkpoint found, unable to resume")
+	var holderID gosql.NullInt64
+	suite.Require().NoError(suite.db.QueryRowContext(ctx, "SELECT IS_USED_LOCK(?)", moveTablesSourceLockName).Scan(&holderID))
+	suite.Require().False(holderID.Valid)
+}
+
 type MigratorTestSuite struct {
 	suite.Suite
 
@@ -783,6 +1059,134 @@ func (suite *MigratorTestSuite) TestMigrateEmpty() {
 	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_del'").Scan(&tableName)
 	suite.Require().NoError(err)
 	suite.Require().Equal("_testing_del", tableName)
+}
+
+func (suite *MoveTablesCutOverSuite) TestMoveTablesStateInitializesColumnMetadata() {
+	ctx := context.Background()
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE %s (
+			id INT PRIMARY KEY,
+			unsigned_value BIGINT UNSIGNED NOT NULL,
+			json_value JSON,
+			virtual_json_value VARCHAR(16) AS (
+				COALESCE(JSON_UNQUOTE(JSON_EXTRACT(json_value, '$.value')), 'direct')
+			) VIRTUAL,
+			binary_value BINARY(4)
+		)`, getTestTableName()))
+	suite.Require().NoError(err)
+
+	newMoveTablesMigrator := func() (*Migrator, *base.MoveTable) {
+		migrationContext := newTestMigrationContext()
+		migrationContext.MoveTables.TableNames = []string{testMysqlTableName}
+		migrationContext.MoveTables.TargetDatabase = testMysqlDatabase
+		migrationContext.InitMoveTableContainers()
+		migrator := NewMigrator(migrationContext, "0.0.0")
+		return migrator, migrationContext.GetMoveTable(testMysqlTableName)
+	}
+	assertHydrated := func(mt *base.MoveTable) {
+		suite.Require().Equal(
+			[]string{"id", "unsigned_value", "json_value", "binary_value"},
+			mt.SharedColumns.Names(),
+		)
+		suite.Require().Equal(sql.JSONColumnType, mt.OriginalTableColumns.GetColumnType("json_value"))
+		suite.Require().Equal(sql.JSONColumnType, mt.SharedColumns.GetColumnType("json_value"))
+		suite.Require().Equal(sql.JSONColumnType, mt.MappedSharedColumns.GetColumnType("json_value"))
+		suite.Require().True(mt.SharedColumns.IsUnsigned("unsigned_value"))
+		suite.Require().True(mt.MappedSharedColumns.IsUnsigned("unsigned_value"))
+		suite.Require().Equal(sql.BinaryColumnType, mt.SharedColumns.GetColumnType("binary_value"))
+		suite.Require().Equal(uint(4), mt.SharedColumns.GetColumn("binary_value").BinaryOctetLength)
+	}
+
+	suite.Run("fresh preparation", func() {
+		migrator, mt := newMoveTablesMigrator()
+		migrator.inspector = &Inspector{db: suite.db, migrationContext: migrator.migrationContext}
+		suite.Require().NoError(migrator.prepareMoveTablesCopyState())
+		assertHydrated(mt)
+	})
+
+	suite.Run("resume hydration", func() {
+		migrator, mt := newMoveTablesMigrator()
+		migrator.applier = NewApplier(migrator.migrationContext)
+		migrator.applier.moveTablesTargetDB = suite.db
+		suite.Require().NoError(migrator.hydrateMoveTablesStateFromTarget())
+		assertHydrated(mt)
+	})
+}
+
+func (suite *MigratorTestSuite) TestMoveTablesNoopDropsTargetTables() {
+	ctx := context.Background()
+	targetTableNames := []string{testMysqlTableName, "test_noop_target"}
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.Noop = true
+	migrationContext.Checkpoint = true
+	migrationContext.MoveTables.TableNames = targetTableNames
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabase
+	migrationContext.InitMoveTableContainers()
+
+	migrator := NewMigrator(migrationContext, "test")
+	migrator.applier = NewApplier(migrationContext)
+	migrator.applier.moveTablesTargetDB = suite.db
+	suite.Require().NoError(migrator.applier.CreateCheckpointTable())
+
+	for _, tableName := range targetTableNames {
+		_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s.%s (id INT PRIMARY KEY)",
+			sql.EscapeName(testMysqlDatabase), sql.EscapeName(tableName)))
+		suite.Require().NoError(err)
+	}
+
+	suite.Require().NoError(migrator.moveTablesFinalCleanup())
+
+	for _, tableName := range targetTableNames {
+		exists, err := migrator.applier.targetTableExists(tableName)
+		suite.Require().NoError(err)
+		suite.Require().False(exists, "noop cleanup must drop target table %s", tableName)
+	}
+	checkpointExists, err := migrator.applier.targetTableExists(migrationContext.GetCheckpointTableName())
+	suite.Require().NoError(err)
+	suite.Require().False(checkpointExists, "fresh noop cleanup must drop its checkpoint table")
+}
+
+func (suite *MigratorTestSuite) TestMoveTablesResumedNoopPreservesTargetTables() {
+	ctx := context.Background()
+	targetTableNames := []string{testMysqlTableName, "test_noop_resume_target"}
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.Noop = true
+	migrationContext.Resume = true
+	migrationContext.Checkpoint = true
+	migrationContext.MoveTables.TableNames = targetTableNames
+	migrationContext.MoveTables.TargetDatabase = testMysqlDatabase
+	migrationContext.InitMoveTableContainers()
+
+	migrator := NewMigrator(migrationContext, "test")
+	migrator.applier = NewApplier(migrationContext)
+	migrator.applier.moveTablesTargetDB = suite.db
+	suite.Require().NoError(migrator.applier.CreateCheckpointTable())
+
+	for _, tableName := range targetTableNames {
+		_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s.%s (id INT PRIMARY KEY)",
+			sql.EscapeName(testMysqlDatabase), sql.EscapeName(tableName)))
+		suite.Require().NoError(err)
+	}
+	defer func() {
+		for _, tableName := range append(targetTableNames, migrationContext.GetCheckpointTableName()) {
+			_, err := suite.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s.%s",
+				sql.EscapeName(testMysqlDatabase), sql.EscapeName(tableName)))
+			suite.Require().NoError(err)
+		}
+	}()
+
+	suite.Require().NoError(migrator.moveTablesFinalCleanup())
+
+	for _, tableName := range targetTableNames {
+		exists, err := migrator.applier.targetTableExists(tableName)
+		suite.Require().NoError(err)
+		suite.Require().True(exists, "resumed noop cleanup must preserve target table %s", tableName)
+	}
+	checkpointExists, err := migrator.applier.targetTableExists(migrationContext.GetCheckpointTableName())
+	suite.Require().NoError(err)
+	suite.Require().True(checkpointExists, "resumed noop cleanup must preserve its checkpoint table")
 }
 
 func (suite *MigratorTestSuite) TestRetryBatchCopyWithHooks() {
@@ -932,7 +1336,7 @@ func (suite *MigratorTestSuite) TestCopierIntPK() {
 	suite.Require().NoError(migrator.initiateApplier())
 	defer migrator.applier.Teardown()
 	suite.Require().NoError(migrator.applier.prepareQueries())
-	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues())
+	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues(nil))
 
 	go migrator.iterateChunks()
 	go func() {
@@ -1004,7 +1408,7 @@ func (suite *MigratorTestSuite) TestCopierCompositePK() {
 	suite.Require().NoError(migrator.initiateApplier())
 	defer migrator.applier.Teardown()
 	suite.Require().NoError(migrator.applier.prepareQueries())
-	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues())
+	suite.Require().NoError(migrator.applier.ReadMigrationRangeValues(nil))
 
 	go migrator.iterateChunks()
 	go func() {
