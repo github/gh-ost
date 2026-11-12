@@ -319,19 +319,26 @@ func TestRecordCutOverMetricsNilSafe(t *testing.T) {
 }
 
 type histogramSpy struct {
-	names  []string
-	values []float64
-	tags   [][]string
+	names       []string
+	values      []float64
+	tags        [][]string
+	countNames  []string
+	countValues []int64
+	countTags   [][]string
 }
 
 func (h *histogramSpy) Gauge(_ string, _ float64, _ ...string) {}
 
-func (h *histogramSpy) Count(_ string, _ int64, _ ...string) {}
+func (h *histogramSpy) Count(name string, value int64, tags ...string) {
+	h.countNames = append(h.countNames, name)
+	h.countValues = append(h.countValues, value)
+	h.countTags = append(h.countTags, append([]string(nil), tags...))
+}
 
 func (h *histogramSpy) Histogram(name string, value float64, tags ...string) {
 	h.names = append(h.names, name)
 	h.values = append(h.values, value)
-	h.tags = append(h.tags, tags)
+	h.tags = append(h.tags, append([]string(nil), tags...))
 }
 
 func TestRecordQueryDuration(t *testing.T) {
@@ -426,4 +433,105 @@ func TestRecordSleepNilSafe(t *testing.T) {
 	RecordSleep(nil, "retry_backoff", time.Second)
 	RecordSleep(&sleepSpy{}, "", time.Second)
 	RecordSleep(&sleepSpy{}, "retry_backoff", -time.Second)
+}
+
+func TestRecordBinlogRowsEventMetrics(t *testing.T) {
+	spy := &histogramSpy{}
+
+	RecordBinlogRowsEventProcessed(spy, "orders")
+	RecordBinlogRowsEventFiltered(spy, "other_table")
+	RecordBinlogRowsEventConsumed(spy, "orders", "delete")
+	RecordBinlogRowsConsumed(spy, "orders", "delete", 1)
+	RecordBinlogRowsInEvent(spy, "orders", 1)
+
+	wantCounts := []struct {
+		name  string
+		value int64
+		tags  []string
+	}{
+		{"binlog_events", 1, []string{"type:processed", "table:orders"}},
+		{"binlog_events", 1, []string{"type:filtered", "table:other_table"}},
+		{"binlog_events", 1, []string{"type:consumed", "table:orders", "binlog_event_type:delete"}},
+		{"binlog_rows", 1, []string{"type:consumed", "table:orders", "binlog_event_type:delete"}},
+	}
+	if len(spy.countNames) != len(wantCounts) {
+		t.Fatalf("got %d counts, want %d", len(spy.countNames), len(wantCounts))
+	}
+	for i, want := range wantCounts {
+		if spy.countNames[i] != want.name || spy.countValues[i] != want.value {
+			t.Fatalf("[%d] got %s=%d, want %s=%d", i, spy.countNames[i], spy.countValues[i], want.name, want.value)
+		}
+		if !slices.Equal(spy.countTags[i], want.tags) {
+			t.Fatalf("[%d] got tags %#v, want %#v", i, spy.countTags[i], want.tags)
+		}
+	}
+	if len(spy.names) != 1 || spy.names[0] != "binlog_rows_in_event" || spy.values[0] != 1 {
+		t.Fatalf("got histogram %#v values %#v", spy.names, spy.values)
+	}
+	if !slices.Equal(spy.tags[0], []string{"table:orders"}) {
+		t.Fatalf("got histogram tags %#v", spy.tags[0])
+	}
+}
+
+func TestRecordBinlogRowsEventMetricsNilSafe(t *testing.T) {
+	spy := &histogramSpy{}
+	RecordBinlogRowsEventProcessed(nil, "orders")
+	RecordBinlogRowsEventProcessed(spy, "")
+	RecordBinlogRowsEventFiltered(nil, "orders")
+	RecordBinlogRowsEventFiltered(spy, "")
+	RecordBinlogRowsEventConsumed(nil, "orders", "insert")
+	RecordBinlogRowsEventConsumed(spy, "", "insert")
+	RecordBinlogRowsEventConsumed(spy, "orders", "")
+	RecordBinlogRowsConsumed(nil, "orders", "insert", 1)
+	RecordBinlogRowsConsumed(spy, "", "insert", 1)
+	RecordBinlogRowsConsumed(spy, "orders", "", 1)
+	RecordBinlogRowsConsumed(spy, "orders", "insert", -1)
+	RecordBinlogRowsConsumed(spy, "orders", "insert", 0)
+	RecordBinlogRowsInEvent(spy, "", 1)
+	RecordBinlogRowsInEvent(spy, "orders", -1)
+	if len(spy.countNames) != 0 || len(spy.names) != 0 {
+		t.Fatalf("unexpected counts %v or histograms %v", spy.countNames, spy.names)
+	}
+}
+
+func TestRecordBinlogTransactionMetrics(t *testing.T) {
+	spy := &histogramSpy{}
+	gaugeSpy := &gaugeSpy{}
+
+	RecordBinlogTransactionSize(spy, 3, 10)
+	RecordGTIDTransactionLengthBytes(spy, 4096)
+	RecordUnfilteredCommitGroupSize(gaugeSpy, 5)
+	RecordBinlogStreamerBlockedOnOutChannel(spy, 25*time.Millisecond)
+
+	if len(spy.names) != 4 {
+		t.Fatalf("got %d histograms, want 4: %#v", len(spy.names), spy.names)
+	}
+	wantHistograms := []struct {
+		name  string
+		value float64
+	}{
+		{"transaction_num_row_events", 3},
+		{"transaction_num_rows", 10},
+		{"gtid_event_transaction_length_bytes", 4096},
+		{"binlog_streamer_blocked_on_out_channel_ms", 25},
+	}
+	for i, want := range wantHistograms {
+		if spy.names[i] != want.name || spy.values[i] != want.value {
+			t.Fatalf("[%d] got %s=%v, want %s=%v", i, spy.names[i], spy.values[i], want.name, want.value)
+		}
+	}
+	if len(gaugeSpy.names) != 1 || gaugeSpy.names[0] != "unfiltered_commit_group_size" || gaugeSpy.values[0] != 5 {
+		t.Fatalf("got gauge %#v values %#v", gaugeSpy.names, gaugeSpy.values)
+	}
+}
+
+func TestRecordBinlogTransactionMetricsNilSafe(t *testing.T) {
+	RecordBinlogTransactionSize(nil, 1, 1)
+	RecordBinlogTransactionSize(&histogramSpy{}, 0, 1)
+	RecordGTIDTransactionLengthBytes(nil, 100)
+	RecordGTIDTransactionLengthBytes(&histogramSpy{}, 0)
+	RecordUnfilteredCommitGroupSize(nil, 1)
+	RecordUnfilteredCommitGroupSize(&gaugeSpy{}, -1)
+	RecordBinlogStreamerBlockedOnOutChannel(nil, time.Second)
+	RecordBinlogStreamerBlockedOnOutChannel(&histogramSpy{}, -time.Second)
 }

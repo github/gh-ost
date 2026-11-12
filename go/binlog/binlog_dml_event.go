@@ -65,3 +65,17 @@ func NewBinlogDMLEvent(databaseName, tableName string, dml EventDML) *BinlogDMLE
 func (bde *BinlogDMLEvent) String() string {
 	return fmt.Sprintf("[%+v on %s:%s]", bde.DML, bde.DatabaseName, bde.TableName)
 }
+
+// EventTypeTag returns a lowercase DML type for metrics tags (insert/update/delete).
+func (dml EventDML) EventTypeTag() string {
+	return strings.ToLower(string(dml))
+}
+
+// RowsInRowsEvent returns the number of logical rows in a binlog rows event.
+// Update events encode two physical rows per logical row (before/after image).
+func RowsInRowsEvent(rowCount int, dml EventDML) int {
+	if dml == UpdateDML {
+		return rowCount / 2
+	}
+	return rowCount
+}
