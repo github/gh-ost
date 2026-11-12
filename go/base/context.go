@@ -503,7 +503,7 @@ func NewMigrationContext() *MigrationContext {
 		ApplierConnectionConfig:             mysql.NewConnectionConfig(),
 		MaxLagMillisecondsThrottleThreshold: 1500,
 		CutOverLockTimeoutSeconds:           3,
-		DMLBatchSize:                        10,
+		DMLBatchSize:                        100,
 		etaNanoseonds:                       ETAUnknown,
 		maxLoad:                             NewLoadMap(),
 		criticalLoad:                        NewLoadMap(),

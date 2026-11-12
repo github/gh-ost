@@ -21,6 +21,11 @@ func init() {
 	log.SetLevel(log.ERROR)
 }
 
+func TestNewMigrationContextDMLBatchSize(t *testing.T) {
+	context := NewMigrationContext()
+	require.Equal(t, int64(100), context.DMLBatchSize)
+}
+
 func TestGetTableNames(t *testing.T) {
 	{
 		context := NewMigrationContext()
