@@ -252,6 +252,34 @@ func TestReadConfigFile(t *testing.T) {
 			t.Fatalf("Expected osc 'max_load' %q, got %q", "10", context.config.Osc.Max_Load)
 		}
 	}
+	// passwords with ';' or '#' are not cut as inline comments, see #1752
+	for value, expected := range map[string]string{
+		"foo;bar":                "foo;bar",
+		"foo#bar":                "foo#bar",
+		`"foo;bar"`:              "foo;bar",
+		"'foo#bar'":              "foo#bar",
+		"foo;bar # comment":      "foo;bar",
+		"foo#bar ; comment":      "foo#bar",
+		"secret ; note # ticket": "secret",
+		"secret # note ; ticket": "secret",
+	} {
+		f, err := os.CreateTemp("", t.Name())
+		if err != nil {
+			t.Fatalf("Failed to create tmp file: %v", err)
+		}
+		defer os.Remove(f.Name())
+
+		f.Write([]byte("[client]\nuser=test\npassword=" + value))
+		context := NewMigrationContext()
+		context.ConfigFile = f.Name()
+		if err := context.ReadConfigFile(); err != nil {
+			t.Fatalf(".ReadConfigFile() failed: %v", err)
+		}
+
+		if context.config.Client.Password != expected {
+			t.Fatalf("Expected client password %q for %q, got %q", expected, value, context.config.Client.Password)
+		}
+	}
 }
 
 func TestApplyCredentialsMoveTablesDerivesConnectionConfig(t *testing.T) {

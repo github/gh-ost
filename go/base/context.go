@@ -1251,7 +1251,9 @@ func (mctx *MigrationContext) ReadConfigFile() error {
 	if mctx.ConfigFile == "" {
 		return nil
 	}
-	cfg, err := ini.Load(mctx.ConfigFile)
+	// only treat '#' or ';' as an inline comment when preceded by a space,
+	// so values like passwords can contain these characters
+	cfg, err := ini.LoadSources(ini.LoadOptions{SpaceBeforeInlineComment: true}, mctx.ConfigFile)
 	if err != nil {
 		return err
 	}
