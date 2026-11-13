@@ -339,12 +339,9 @@ type MigrationContext struct {
 	pointOfInterestTimeMutex      *sync.Mutex
 	lastHeartbeatOnChangelogTime  time.Time
 	lastHeartbeatOnChangelogMutex *sync.Mutex
-	// lastAppliedBinlogEventTime is the binlog-header timestamp of the last event
-	// applied to the target in move-tables mode. lastBinlogEventStreamedTime is the
-	// wall-clock time the streamer last delivered an event for the moved table.
-	// Together they drive the move-tables writer-lag metric (see GetBinlogWriterLag).
+	// lastAppliedBinlogEventTime is the timestamp of the last applied DML event
+	// or ordered source-position probe in move-tables mode.
 	lastAppliedBinlogEventTime             time.Time
-	lastBinlogEventStreamedTime            time.Time
 	binlogWriterLagMutex                   *sync.Mutex
 	CurrentLag                             int64
 	currentProgress                        uint64
@@ -908,36 +905,13 @@ func (mctx *MigrationContext) GetLastHeartbeatOnChangelogTime() time.Time {
 	return mctx.lastHeartbeatOnChangelogTime
 }
 
-// UpdateLastAppliedBinlogEventTime records the binlog-header timestamp of the
-// last event successfully applied to the target. Used by move-tables mode to
-// derive writer lag.
+// UpdateLastAppliedBinlogEventTime records the timestamp of the last event or
+// source-position probe successfully processed by the writer in move-tables mode.
 func (mctx *MigrationContext) UpdateLastAppliedBinlogEventTime(t time.Time) {
 	mctx.binlogWriterLagMutex.Lock()
 	defer mctx.binlogWriterLagMutex.Unlock()
 
 	mctx.lastAppliedBinlogEventTime = t
-}
-
-// MarkBinlogEventStreamed records that the streamer just delivered an event for
-// the moved table. Used to distinguish "falling behind" from "source is idle".
-func (mctx *MigrationContext) MarkBinlogEventStreamed() {
-	mctx.binlogWriterLagMutex.Lock()
-	defer mctx.binlogWriterLagMutex.Unlock()
-
-	mctx.lastBinlogEventStreamedTime = time.Now()
-}
-
-// BumpBinlogWriterLagIfIdle treats prolonged streamer silence as "caught up":
-// if no event has been streamed for the moved table within idleThreshold, the
-// last-applied timestamp is advanced to now so writer lag does not climb forever
-// while the source is quiet.
-func (mctx *MigrationContext) BumpBinlogWriterLagIfIdle(idleThreshold time.Duration) {
-	mctx.binlogWriterLagMutex.Lock()
-	defer mctx.binlogWriterLagMutex.Unlock()
-
-	if mctx.lastBinlogEventStreamedTime.IsZero() || time.Since(mctx.lastBinlogEventStreamedTime) >= idleThreshold {
-		mctx.lastAppliedBinlogEventTime = time.Now()
-	}
 }
 
 // GetBinlogWriterLag returns now - last applied event timestamp, the move-tables

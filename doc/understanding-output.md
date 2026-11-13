@@ -5,6 +5,16 @@ You can control output levels:
 - `--verbose`: common use. Useful output, not tons of it
 - `--debug`: everything. Tons of output.
 
+In move-tables mode, `WriterLag` replaces `Lag` and `HeartbeatLag`. It measures
+the age of the source-binlog timestamp of the last applied DML batch. To keep
+lag low when the source is idle, gh-ost also probes the source's current binlog
+position at `--heartbeat-interval-millis` intervals (100ms by default, capped
+at 1000ms). Once the reader has processed that position, a timestamped marker
+passes through the same queues as DML and updates lag only after preceding
+writes finish. The marker uses the time before the source query, so query and
+queueing delays count toward lag. Streamer silence alone never resets lag.
+Until the first DML batch or catch-up marker is processed, `WriterLag` is zero.
+
 Initial output lines may look like this:
 ```
 2016-05-19 17:57:04 INFO starting gh-ost 0.7.14

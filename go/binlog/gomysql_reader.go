@@ -6,7 +6,9 @@
 package binlog
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/github/gh-ost/go/base"
@@ -49,6 +51,8 @@ type GoMySQLReader struct {
 	// LastTrxCoords are the coordinates of the last transaction completely read.
 	// If using the file coordinates it is binlog position of the transaction's XID event.
 	LastTrxCoords mysql.BinlogCoordinates
+	// ReadSourceCoordinates enables ordered catch-up probes in move-tables mode.
+	ReadSourceCoordinates func() (mysql.BinlogCoordinates, error)
 }
 
 func NewGoMySQLReader(migrationContext *base.MigrationContext, rowsEventFilters ...RowsEventFilterFunc) *GoMySQLReader {
@@ -155,10 +159,31 @@ func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent
 
 // StreamEvents
 func (gmr *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChannel chan<- *BinlogEntry) error {
+	processedCoordinates := gmr.GetCurrentBinlogCoordinates()
+	interval := time.Duration(gmr.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond
+	lastProbe := time.Now()
+	inTransaction := false
 	for !canStopStreaming() {
-		ev, err := gmr.binlogStreamer.GetEvent(context.Background())
-		if err != nil {
+		ctx := context.Background()
+		cancel := func() {}
+		if gmr.ReadSourceCoordinates != nil {
+			ctx, cancel = context.WithTimeout(gmr.migrationContext.GetContext(), interval)
+		}
+		ev, err := gmr.binlogStreamer.GetEvent(ctx)
+		cancel()
+		if err != nil && !(gmr.ReadSourceCoordinates != nil && errors.Is(err, context.DeadlineExceeded) && gmr.migrationContext.GetContext().Err() == nil) {
 			return err
+		}
+		if gmr.ReadSourceCoordinates != nil && time.Since(lastProbe) >= interval {
+			// processedCoordinates excludes the event just fetched. The marker must
+			// follow every row it claims to cover, including a complete GTID transaction.
+			if err := gmr.sendStreamProgress(processedCoordinates, entriesChannel); err != nil {
+				return err
+			}
+			lastProbe = time.Now()
+		}
+		if err != nil {
+			continue
 		}
 
 		// Update binlog coords if using file-based coords.
@@ -214,25 +239,72 @@ func (gmr *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChan
 			coords.LogFile = string(event.NextLogName)
 			gmr.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", coords.LogFile, int64(ev.Header.LogPos), event.NextLogName)
 			gmr.currentCoordinatesMutex.Unlock()
+			processedCoordinates = &mysql.FileBinlogCoordinates{
+				LogFile: string(event.NextLogName),
+				LogPos:  int64(event.Position),
+			}
 		case *replication.XIDEvent:
+			inTransaction = false
 			if gmr.migrationContext.UseGTIDs {
 				// event.GSet is the full executed GTID set maintained by the
 				// syncer (MysqlGTIDSet or MariadbGTIDSet depending on flavor).
 				if event.GSet != nil {
 					gmr.LastTrxCoords = &mysql.GTIDBinlogCoordinates{GTIDSet: event.GSet}
+					if gmr.ReadSourceCoordinates != nil {
+						processedCoordinates = gmr.LastTrxCoords.Clone()
+					}
 				}
 			} else {
 				gmr.LastTrxCoords = gmr.currentCoordinates.Clone()
+			}
+		case *replication.QueryEvent:
+			if gmr.ReadSourceCoordinates == nil || !gmr.migrationContext.UseGTIDs {
+				break
+			}
+			switch strings.ToUpper(strings.TrimSpace(string(event.Query))) {
+			case "BEGIN":
+				inTransaction = true
+			case "COMMIT", "ROLLBACK":
+				inTransaction = false
+			}
+			// Standalone DDL has no XID event. BEGIN's GSet, however, already
+			// includes the transaction whose row events have not arrived yet.
+			if !inTransaction && event.GSet != nil {
+				processedCoordinates = (&mysql.GTIDBinlogCoordinates{GTIDSet: event.GSet}).Clone()
 			}
 		case *replication.RowsEvent:
 			if err := gmr.handleRowsEvent(ev, event, entriesChannel); err != nil {
 				return err
 			}
 		}
+		if gmr.ReadSourceCoordinates == nil {
+			continue
+		}
+		// Startup's synthetic rotate/format events can have a zero log position.
+		if !gmr.migrationContext.UseGTIDs && ev.Header.LogPos > 0 && ev.Header.EventType != replication.ROTATE_EVENT {
+			processedCoordinates = gmr.GetCurrentBinlogCoordinates()
+		}
 	}
 	gmr.migrationContext.Log.Debugf("done streaming events")
 
 	return nil
+}
+
+func (gmr *GoMySQLReader) sendStreamProgress(processed mysql.BinlogCoordinates, entriesChannel chan<- *BinlogEntry) error {
+	probeTime := time.Now()
+	source, err := gmr.ReadSourceCoordinates()
+	if err != nil {
+		return err
+	}
+	// Equality works for file positions and both GTID flavors, without assuming
+	// that a partially received transaction or an empty apply queue means caught up.
+	if !processed.Equals(source) {
+		return nil
+	}
+	return base.SendWithContext(gmr.migrationContext.GetContext(), entriesChannel, &BinlogEntry{
+		Coordinates: processed.Clone(),
+		Timestamp:   probeTime,
+	})
 }
 
 func (gmr *GoMySQLReader) Close() error {

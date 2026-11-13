@@ -16,8 +16,8 @@ import (
 type BinlogEntry struct {
 	Coordinates mysql.BinlogCoordinates
 	// Timestamp is the wall-clock time recorded in the binlog event header of the
-	// event that produced this entry. It is used in move-tables mode to measure
-	// writer lag (now - last applied event timestamp).
+	// event that produced this entry. For a source-position probe (DmlEvent == nil)
+	// it is the local time before querying the source, not the time of delivery.
 	Timestamp time.Time
 	DmlEvent  *BinlogDMLEvent
 }
