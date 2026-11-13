@@ -1189,6 +1189,55 @@ func (suite *MigratorTestSuite) TestMoveTablesResumedNoopPreservesTargetTables()
 	suite.Require().True(checkpointExists, "resumed noop cleanup must preserve its checkpoint table")
 }
 
+func (suite *MigratorTestSuite) TestMigrateInstantDDLDropsGhostTable() {
+	ctx := context.Background()
+
+	_, err := suite.db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY, name VARCHAR(64))", getTestTableName()))
+	suite.Require().NoError(err)
+
+	connectionConfig, err := getTestConnectionConfig(ctx, suite.mysqlContainer)
+	suite.Require().NoError(err)
+
+	migrationContext := newTestMigrationContext()
+	migrationContext.ApplierConnectionConfig = connectionConfig
+	migrationContext.InspectorConnectionConfig = connectionConfig
+	migrationContext.SetConnectionConfig("innodb")
+	migrationContext.InitiallyDropOldTable = true
+	migrationContext.AttemptInstantDDL = true
+	migrationContext.AlterStatementOptions = "ADD COLUMN foobar varchar(255)"
+
+	migrator := NewMigrator(migrationContext, "0.0.0")
+
+	// On the instant path nothing receives from ghostTableMigrated, so the
+	// changelog streamer blocks in finalCleanup (separate from the ghost table
+	// drop under test). Drain the channel the way the regular path would.
+	drained := make(chan struct{})
+	defer close(drained)
+	go func() {
+		select {
+		case <-migrator.ghostTableMigrated:
+		case <-drained:
+		}
+	}()
+
+	err = migrator.Migrate()
+	suite.Require().NoError(err)
+
+	// Verify the new column was added instantly
+	var tableName, createTableSQL string
+	err = suite.db.QueryRow("SHOW CREATE TABLE "+getTestTableName()).Scan(&tableName, &createTableSQL)
+	suite.Require().NoError(err)
+	suite.Require().Contains(createTableSQL, "`foobar` varchar(255)")
+
+	// Verify the ghost table created before the instant attempt was dropped
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_gho'").Scan(&tableName)
+	suite.Require().Equal(gosql.ErrNoRows, err)
+
+	// Verify the changelog table was cleaned up
+	err = suite.db.QueryRow("SHOW TABLES IN test LIKE '_testing_ghc'").Scan(&tableName)
+	suite.Require().Equal(gosql.ErrNoRows, err)
+}
+
 func (suite *MigratorTestSuite) TestRetryBatchCopyWithHooks() {
 	ctx := context.Background()
 
