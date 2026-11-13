@@ -7,13 +7,55 @@ import (
 	"testing"
 	"time"
 
+	"github.com/github/gh-ost/go/base"
 	"github.com/github/gh-ost/go/binlog"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
 
 	"golang.org/x/sync/errgroup"
 )
+
+func TestWriterLagProgressWaitsForWriter(t *testing.T) {
+	mc := base.NewMigrationContext()
+	defer mc.CancelContext()
+	mc.DatabaseName = "test"
+	mc.MoveTables.TableNames = []string{"t"}
+	mc.SetHeartbeatIntervalMilliseconds(100)
+	mc.UpdateLastAppliedBinlogEventTime(time.Now().Add(-3300 * time.Second))
+	m := NewMigrator(mc, "test")
+	m.eventsStreamer = NewEventsStreamer(mc)
+	require.NoError(t, m.addDMLEventsListener())
+
+	dml := &binlog.BinlogEntry{DmlEvent: binlog.NewBinlogDMLEvent("test", "t", binlog.InsertDML)}
+	require.NoError(t, m.eventsStreamer.dispatchEntry(dml))
+	require.Same(t, dml.DmlEvent, (<-m.applyEventsQueue).dmlEvent)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	var slowWrite tableWriteFunc = func() error {
+		close(started)
+		<-release
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- m.onApplyEventStruct(newApplyEventStructByFunc(&slowWrite)) }()
+	<-started
+	probeTime := time.Now().Add(-5 * time.Second)
+	require.NoError(t, m.eventsStreamer.dispatchEntry(&binlog.BinlogEntry{Timestamp: probeTime}))
+	require.GreaterOrEqual(t, mc.GetBinlogWriterLag(), 3300*time.Second, "enqueueing a marker cannot reset lag")
+
+	// Leave the writer blocked longer than the old idle threshold.
+	time.Sleep(2 * time.Duration(mc.HeartbeatIntervalMilliseconds) * time.Millisecond)
+	require.GreaterOrEqual(t, mc.GetBinlogWriterLag(), 3300*time.Second)
+	release <- struct{}{}
+	require.NoError(t, <-done)
+	require.GreaterOrEqual(t, mc.GetBinlogWriterLag(), 3300*time.Second, "prior work alone cannot reset lag")
+	require.NoError(t, m.onApplyEventStruct(<-m.applyEventsQueue))
+	require.InDelta(t, time.Since(probeTime).Seconds(), mc.GetBinlogWriterLag().Seconds(), 0.1)
+}
 
 type EventsStreamerTestSuite struct {
 	suite.Suite

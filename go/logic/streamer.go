@@ -43,6 +43,7 @@ type EventsStreamer struct {
 	listenersMutex           *sync.Mutex
 	eventsChannel            chan *binlog.BinlogEntry
 	binlogReader             *binlog.GoMySQLReader
+	onStreamProgress         func(time.Time) error
 	name                     string
 }
 
@@ -148,6 +149,9 @@ func (es *EventsStreamer) InitDBConnections() (err error) {
 // initBinlogReader creates and connects the reader: we hook up to a MySQL server as a replica
 func (es *EventsStreamer) initBinlogReader(binlogCoordinates mysql.BinlogCoordinates) error {
 	goMySQLReader := binlog.NewGoMySQLReader(es.migrationContext, es.shouldDecodeRowsEvent)
+	if es.migrationContext.IsMoveTablesMode() {
+		goMySQLReader.ReadSourceCoordinates = es.readBinlogCoordinates
+	}
 	if err := goMySQLReader.ConnectBinlogStreamer(binlogCoordinates); err != nil {
 		return err
 	}
@@ -161,6 +165,16 @@ func (es *EventsStreamer) GetCurrentBinlogCoordinates() mysql.BinlogCoordinates 
 
 // readCurrentBinlogCoordinates reads master status from hooked server
 func (es *EventsStreamer) readCurrentBinlogCoordinates() error {
+	coords, err := es.readBinlogCoordinates()
+	if err != nil {
+		return err
+	}
+	es.initialBinlogCoordinates = coords
+	es.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", coords)
+	return nil
+}
+
+func (es *EventsStreamer) readBinlogCoordinates() (mysql.BinlogCoordinates, error) {
 	// MariaDB exposes no GTID column in SHOW MASTER STATUS; its current binlog
 	// GTID position lives in @@global.gtid_binlog_pos.
 	if es.migrationContext.UseGTIDs && mysql.IsMariaDB(es.dbVersion) {
@@ -168,17 +182,23 @@ func (es *EventsStreamer) readCurrentBinlogCoordinates() error {
 	}
 	binaryLogStatusTerm := mysql.ReplicaTermFor(es.dbVersion, "master status")
 	query := fmt.Sprintf("show /* gh-ost readCurrentBinlogCoordinates */ %s", binaryLogStatusTerm)
+	rows, err := es.db.QueryContext(es.migrationContext.GetContext(), query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	foundMasterStatus := false
-	err := sqlutils.QueryRowsMap(es.db, query, func(m sqlutils.RowMap) error {
+	var coordinates mysql.BinlogCoordinates
+	err = sqlutils.ScanRowsToMaps(rows, func(m sqlutils.RowMap) error {
 		if es.migrationContext.UseGTIDs {
 			execGtidSet := m.GetString("Executed_Gtid_Set")
 			coords, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, execGtidSet)
 			if err != nil {
 				return err
 			}
-			es.initialBinlogCoordinates = coords
+			coordinates = coords
 		} else {
-			es.initialBinlogCoordinates = &mysql.FileBinlogCoordinates{
+			coordinates = &mysql.FileBinlogCoordinates{
 				LogFile: m.GetString("File"),
 				LogPos:  m.GetInt64("Position"),
 			}
@@ -187,29 +207,35 @@ func (es *EventsStreamer) readCurrentBinlogCoordinates() error {
 		return nil
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !foundMasterStatus {
-		return fmt.Errorf("got no results from SHOW %s. Bailing out", strings.ToUpper(binaryLogStatusTerm))
+		return nil, fmt.Errorf("got no results from SHOW %s. Bailing out", strings.ToUpper(binaryLogStatusTerm))
 	}
-	es.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", es.initialBinlogCoordinates)
-	return nil
+	return coordinates, nil
 }
 
 // readCurrentMariaDBGTIDCoordinates reads the current binlog GTID position from
 // a MariaDB server, which is exposed via @@global.gtid_binlog_pos rather than a
 // column in SHOW MASTER STATUS.
-func (es *EventsStreamer) readCurrentMariaDBGTIDCoordinates() error {
+func (es *EventsStreamer) readCurrentMariaDBGTIDCoordinates() (mysql.BinlogCoordinates, error) {
 	var gtidBinlogPos string
-	if err := es.db.QueryRow(`select @@global.gtid_binlog_pos`).Scan(&gtidBinlogPos); err != nil {
-		return err
+	if err := es.db.QueryRowContext(es.migrationContext.GetContext(), `select @@global.gtid_binlog_pos`).Scan(&gtidBinlogPos); err != nil {
+		return nil, err
 	}
 	coords, err := mysql.NewGTIDBinlogCoordinates(mysql.MariaDBFlavor, gtidBinlogPos)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	es.initialBinlogCoordinates = coords
-	es.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", es.initialBinlogCoordinates)
+	return coords, nil
+}
+
+func (es *EventsStreamer) dispatchEntry(entry *binlog.BinlogEntry) error {
+	if entry.DmlEvent != nil {
+		es.notifyListeners(entry)
+	} else if es.onStreamProgress != nil {
+		return es.onStreamProgress(entry.Timestamp)
+	}
 	return nil
 }
 
@@ -218,8 +244,9 @@ func (es *EventsStreamer) readCurrentMariaDBGTIDCoordinates() error {
 func (es *EventsStreamer) StreamEvents(canStopStreaming func() bool) error {
 	go func() {
 		for binlogEntry := range es.eventsChannel {
-			if binlogEntry.DmlEvent != nil {
-				es.notifyListeners(binlogEntry)
+			if err := es.dispatchEntry(binlogEntry); err != nil {
+				_ = base.SendWithContext(es.migrationContext.GetContext(), es.migrationContext.PanicAbort, err)
+				return
 			}
 		}
 	}()

@@ -2572,23 +2572,6 @@ func (mgtr *Migrator) initiateStreaming() error {
 		}
 	}()
 
-	// In move-tables mode there is no changelog heartbeat. Writer lag is derived
-	// from binlog-header timestamps of applied events; when the streamer has been
-	// silent for the heartbeat interval, treat that silence as "caught up" and bump
-	// the last-applied timestamp to now so lag does not climb forever while idle.
-	if mgtr.migrationContext.IsMoveTablesMode() {
-		go func() {
-			interval := time.Duration(mgtr.migrationContext.HeartbeatIntervalMilliseconds) * time.Millisecond
-			ticker := time.NewTicker(interval)
-			defer ticker.Stop()
-			for range ticker.C {
-				if atomic.LoadInt64(&mgtr.finishedMigrating) > 0 {
-					return
-				}
-				mgtr.migrationContext.BumpBinlogWriterLagIfIdle(interval)
-			}
-		}()
-	}
 	return nil
 }
 
@@ -2600,17 +2583,21 @@ func (mgtr *Migrator) initiateStreaming() error {
 // applier routes DML to the right per-table query builders by table name.
 func (mgtr *Migrator) addDMLEventsListener() error {
 	enqueue := func(dmlEntry *binlog.BinlogEntry) error {
-		// Record that the streamer just delivered an event for a moved table, so
-		// the idle-bump rule can tell "falling behind" from "source is quiet".
-		if mgtr.migrationContext.IsMoveTablesMode() {
-			mgtr.migrationContext.MarkBinlogEventStreamed()
-		}
 		// Use helper to prevent deadlock if buffer fills and executeWriteFuncs exits.
 		// This is critical because this callback blocks the event streamer.
 		return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, newApplyEventStructByDML(dmlEntry))
 	}
 
 	if mgtr.migrationContext.IsMoveTablesMode() {
+		mgtr.eventsStreamer.onStreamProgress = func(probeTime time.Time) error {
+			// This barrier shares the DML queue, so it cannot hide queued or
+			// in-flight writes, even when the streamer is blocked by backpressure.
+			var applyProgress tableWriteFunc = func() error {
+				mgtr.migrationContext.UpdateLastAppliedBinlogEventTime(probeTime)
+				return nil
+			}
+			return base.SendWithContext(mgtr.migrationContext.GetContext(), mgtr.applyEventsQueue, newApplyEventStructByFunc(&applyProgress))
+		}
 		for _, tableName := range mgtr.migrationContext.MoveTables.TableNames {
 			if err := mgtr.eventsStreamer.AddListener(
 				false,

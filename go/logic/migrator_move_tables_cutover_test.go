@@ -388,14 +388,21 @@ func (s *MoveTablesCutOverSuite) TestMoveTablesListenersBeforeStreaming() {
 	s.Require().Eventually(func() bool {
 		return len(m.applyEventsQueue) == cap(m.applyEventsQueue)
 	}, 10*time.Second, 10*time.Millisecond, "pending DML should fill the apply queue")
+	mc.UpdateLastAppliedBinlogEventTime(time.Now().Add(-3300 * time.Second))
+	time.Sleep(2 * time.Duration(mc.HeartbeatIntervalMilliseconds) * time.Millisecond)
+	s.Require().GreaterOrEqual(mc.GetBinlogWriterLag(), 3300*time.Second, "backpressure must not look like an idle source")
 	seen := make(map[string]int)
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
-	for range len(tableNames) * rowsPerTable {
+	for received := 0; received < len(tableNames)*rowsPerTable; {
 		select {
 		case event := <-m.applyEventsQueue:
-			s.Require().NotNil(event.dmlEvent)
+			if event.dmlEvent == nil {
+				s.Require().NotNil(event.writeFunc, "non-DML entries should be catch-up markers")
+				continue
+			}
 			seen[event.dmlEvent.TableName]++
+			received++
 		case <-deadline.C:
 			s.FailNow("timed out waiting for pending DML")
 		}
