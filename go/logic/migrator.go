@@ -115,7 +115,9 @@ type Migrator struct {
 	applyEventsQueue    chan *applyEventStruct
 	applyEventsInFlight int64
 
-	finishedMigrating int64
+	// Serializes move-table checkpoint snapshots and writes without blocking apply.
+	moveTablesCheckpointLock chan struct{}
+	finishedMigrating        int64
 }
 
 func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
@@ -137,9 +139,10 @@ func NewMigrator(context *base.MigrationContext, appVersion string) *Migrator {
 		// and OOM when MaxRetries() is extremely large.
 		allEventsUpToLockProcessed: make(chan *lockProcessedStruct, 1),
 
-		copyRowsQueue:     make(chan tableWriteFunc),
-		applyEventsQueue:  make(chan *applyEventStruct, base.MaxEventsBatchSize),
-		finishedMigrating: 0,
+		copyRowsQueue:            make(chan tableWriteFunc),
+		applyEventsQueue:         make(chan *applyEventStruct, base.MaxEventsBatchSize),
+		moveTablesCheckpointLock: make(chan struct{}, 1),
+		finishedMigrating:        0,
 	}
 	return migrator
 }
@@ -491,6 +494,14 @@ func (mgtr *Migrator) checkAbort() error {
 	return nil
 }
 
+func (mgtr *Migrator) waitForGhostTableMigrated() error {
+	select {
+	case <-mgtr.ghostTableMigrated:
+	case <-mgtr.migrationContext.GetContext().Done():
+	}
+	return mgtr.checkAbort()
+}
+
 // Migrate executes the complete migration logic. This is *the* major gh-ost function.
 func (mgtr *Migrator) Migrate() (err error) {
 	mgtr.migrationContext.Log.Infof("Migrating %s.%s", sql.EscapeName(mgtr.migrationContext.DatabaseName), sql.EscapeName(mgtr.migrationContext.OriginalTableName))
@@ -572,7 +583,9 @@ func (mgtr *Migrator) Migrate() (err error) {
 	initialLag, _ := mgtr.inspector.getReplicationLag()
 	if !mgtr.migrationContext.Resume {
 		mgtr.migrationContext.Log.Infof("Waiting for ghost table to be migrated. Current lag is %+v", initialLag)
-		<-mgtr.ghostTableMigrated
+		if err := mgtr.waitForGhostTableMigrated(); err != nil {
+			return err
+		}
 		mgtr.migrationContext.Log.Debugf("ghost table migrated")
 	}
 	// Yay! We now know the Ghost and Changelog tables are good to examine!
@@ -981,22 +994,15 @@ func (mgtr *Migrator) validateMoveTablesResumeSourceTables(renamed bool) error {
 }
 
 func (mgtr *Migrator) persistMoveTablesCutOverCheckpoint(drainGTID mysql.BinlogCoordinates, isCutover bool) error {
-	mgtr.applier.CurrentCoordinatesMutex.Lock()
-	safeCoords := mgtr.applier.CurrentCoordinates
-	mgtr.applier.CurrentCoordinatesMutex.Unlock()
+	// Serialize client writes with periodic snapshots. A canceled SQL statement
+	// may still commit on the server, so recovery reads select cutover rows.
+	mgtr.moveTablesCheckpointLock <- struct{}{}
+	defer func() { <-mgtr.moveTablesCheckpointLock }()
 
+	safeCoords := mgtr.appliedTransactionCoordinates()
 	if safeCoords == nil || safeCoords.IsEmpty() {
-		// This quiet-source fallback does not prove a completed transaction boundary;
-		// it remains subject to the shared checkpoint issue #1781.
-		if mgtr.eventsStreamer != nil && len(mgtr.applyEventsQueue) == 0 && len(mgtr.eventsStreamer.eventsChannel) == 0 {
-			safeCoords = mgtr.eventsStreamer.GetCurrentBinlogCoordinates()
-		}
-		if safeCoords == nil || safeCoords.IsEmpty() {
-			return errors.New("current coordinates are empty, cannot checkpoint move-tables cutover")
-		}
+		return errors.New("no applied transaction boundary, cannot checkpoint move-tables cutover")
 	}
-	safeCoords = safeCoords.Clone()
-
 	rows := mgtr.buildMoveTableCheckpointRows(safeCoords, isCutover, true, drainGTID)
 	return mgtr.applier.WriteMoveTableCheckpoints(rows)
 }
@@ -1048,7 +1054,13 @@ func (mgtr *Migrator) drainMoveTablesCutOver(drainGTID mysql.BinlogCoordinates) 
 		if err := mgtr.checkAbort(); err != nil {
 			return err
 		}
-		// Primary signal: applier's coordinate (advances when relevant apply work runs).
+		// A completed boundary proves that all prior DML committed, even if
+		// unrelated transactions continue to fill the queues after the rename.
+		if moveTablesDrainCoordinateReached(mgtr.appliedTransactionCoordinates(), drainGTID) {
+			mgtr.migrationContext.Log.Infof("T3: drain complete at applied transaction boundary")
+			return nil
+		}
+		// Legacy fallback for a non-DML tail without a completion marker.
 		mgtr.applier.CurrentCoordinatesMutex.Lock()
 		applierCoords := mgtr.applier.CurrentCoordinates
 		mgtr.applier.CurrentCoordinatesMutex.Unlock()
@@ -3214,23 +3226,38 @@ func (mgtr *Migrator) moveTablesCheckpointSummary(coords mysql.BinlogCoordinates
 	}
 }
 
+func (mgtr *Migrator) appliedTransactionCoordinates() mysql.BinlogCoordinates {
+	mgtr.applier.CurrentCoordinatesMutex.Lock()
+	defer mgtr.applier.CurrentCoordinatesMutex.Unlock()
+	if mgtr.applier.AppliedTransactionCoordinates == nil {
+		return nil
+	}
+	return mgtr.applier.AppliedTransactionCoordinates.Clone()
+}
+
 // checkpointMoveTables persists the last applied transaction boundary. Unlike
 // standard mode, there is no source heartbeat to advance the reader on a quiet
 // source, so a safe older boundary is preferable to waiting for reader progress.
 func (mgtr *Migrator) checkpointMoveTables(ctx context.Context) (*Checkpoint, error) {
+	select {
+	case mgtr.moveTablesCheckpointLock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-mgtr.moveTablesCheckpointLock }()
 	if err := mgtr.checkAbort(); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	mgtr.applier.CurrentCoordinatesMutex.Lock()
-	defer mgtr.applier.CurrentCoordinatesMutex.Unlock()
-	applied := mgtr.applier.AppliedTransactionCoordinates
-	if applied == nil {
+	if atomic.LoadInt64(&mgtr.migrationContext.InCutOverCriticalSectionFlag) > 0 || atomic.LoadInt64(&mgtr.migrationContext.MoveTablesSourceRenamedFlag) > 0 {
+		return nil, errors.New("move-tables cutover started, not checkpointing")
+	}
+	coords := mgtr.appliedTransactionCoordinates()
+	if coords == nil || coords.IsEmpty() {
 		return nil, errors.New("no applied transaction boundary, not checkpointing")
 	}
-	coords := applied.Clone()
 	rows := mgtr.buildMoveTableCheckpointRows(coords, false, false, nil)
 	if err := mgtr.applier.writeMoveTableCheckpoints(ctx, rows); err != nil {
 		return nil, err

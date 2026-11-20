@@ -330,7 +330,8 @@ func (s *MoveTablesCutOverSuite) buildMigrator(fakeHooks base.Hooks, initialCoor
 	m.applier = NewApplier(mc)
 	if initialCoords != nil {
 		m.applier.CurrentCoordinatesMutex.Lock()
-		m.applier.CurrentCoordinates = initialCoords
+		m.applier.CurrentCoordinates = initialCoords.Clone()
+		m.applier.AppliedTransactionCoordinates = initialCoords.Clone()
 		m.applier.CurrentCoordinatesMutex.Unlock()
 	}
 	return m, mc
@@ -799,6 +800,8 @@ func (s *MoveTablesCutOverSuite) TestDrainWaitsForQueuedDML() {
 	fakeHooks := &recordingHooks{name: "fake", calls: &calls}
 	m, mc := s.buildMigrator(fakeHooks, s.containingDrainGTID())
 	mc.CutOverLockTimeoutSeconds = 1
+	// Row-level progress alone is not an applied transaction boundary.
+	m.applier.AppliedTransactionCoordinates = nil
 	m.applyEventsQueue <- newApplyEventStructByDML(&binlog.BinlogEntry{
 		DmlEvent: &binlog.BinlogDMLEvent{
 			DatabaseName: testMysqlDatabase,
@@ -866,6 +869,7 @@ func (s *MoveTablesCutOverSuite) TestDrainWaitsForInFlightApplyEvent() {
 	mc.CutOverLockTimeoutSeconds = 1
 	m.applier.CurrentCoordinatesMutex.Lock()
 	m.applier.CurrentCoordinates = drainGTID
+	m.applier.AppliedTransactionCoordinates = nil
 	m.applier.CurrentCoordinatesMutex.Unlock()
 
 	started := make(chan struct{})

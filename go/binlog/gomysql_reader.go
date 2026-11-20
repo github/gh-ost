@@ -37,6 +37,9 @@ func newRowsEventDecodeFunc(rowsEventFilter RowsEventFilterFunc) func(*replicati
 	}
 }
 
+// Limit markers for unrelated transactions so busy sources cannot starve row copy.
+const filteredTransactionMarkerInterval = time.Second
+
 type GoMySQLReader struct {
 	migrationContext        *base.MigrationContext
 	connectionConfig        *mysql.ConnectionConfig
@@ -49,7 +52,8 @@ type GoMySQLReader struct {
 	// For file coordinates, this is the end position of the transaction's XID event.
 	LastTrxCoords mysql.BinlogCoordinates
 
-	transactionHasRows bool
+	transactionHasRows        bool
+	lastTransactionMarkerTime time.Time
 }
 
 func NewGoMySQLReader(migrationContext *base.MigrationContext, rowsEventFilters ...RowsEventFilterFunc) *GoMySQLReader {
@@ -167,7 +171,10 @@ func (gmr *GoMySQLReader) completeTransaction(event *replication.XIDEvent, entri
 		// already updated by the preceding GTID event.
 		coords = gmr.GetCurrentBinlogCoordinates()
 	}
-	if gmr.transactionHasRows {
+	// Relevant transactions always need a marker. Sample filtered-only commits
+	// periodically too, so their progress cannot leave checkpoints on old binlogs.
+	// Every emitted marker follows preceding DML through the same FIFO.
+	if gmr.transactionHasRows || time.Since(gmr.lastTransactionMarkerTime) >= filteredTransactionMarkerInterval {
 		marker := &BinlogEntry{
 			Coordinates:         coords.Clone(),
 			TransactionComplete: true,
@@ -175,9 +182,11 @@ func (gmr *GoMySQLReader) completeTransaction(event *replication.XIDEvent, entri
 		if err := base.SendWithContext(gmr.migrationContext.GetContext(), entriesChannel, marker); err != nil {
 			return err
 		}
-		gmr.transactionHasRows = false
+		gmr.lastTransactionMarkerTime = time.Now()
 	}
-	// Reconnect only after all rows and their completion marker were delivered.
+	gmr.transactionHasRows = false
+	// Filtered-only transactions contain no delivered rows, so reconnect may
+	// safely advance even when their checkpoint marker was coalesced.
 	gmr.LastTrxCoords = coords
 	return nil
 }

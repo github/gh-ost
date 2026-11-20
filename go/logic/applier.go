@@ -36,6 +36,8 @@ const (
 	GhostChangelogTableComment = "gh-ost changelog"
 	atomicCutOverMagicHint     = "ghost-cut-over-sentry"
 	moveTablesSourceLockName   = "gh-ost-move-tables"
+
+	moveTablesCutOverCheckpointTimeout = 10 * time.Second
 )
 
 // ErrNoCheckpointFound is returned when an empty checkpoint table is queried.
@@ -1314,8 +1316,15 @@ var moveTablesCheckpointColumns = []string{
 // markers, drain GTID); each row carries its own table name, iteration,
 // rows-copied, and serialized iteration range. The latest row therefore always
 // reflects the freshest run-wide state.
+//
+// This entry point is used for cutover recovery markers, which must survive
+// migration cancellation (the source tables may already have been renamed).
+// Bound the write independently; periodic checkpoints instead pass their caller's
+// cancellable context to writeMoveTableCheckpoints.
 func (apl *Applier) WriteMoveTableCheckpoints(rows []*Checkpoint) error {
-	return apl.writeMoveTableCheckpoints(apl.migrationContext.GetContext(), rows)
+	ctx, cancel := context.WithTimeout(context.Background(), moveTablesCutOverCheckpointTimeout)
+	defer cancel()
+	return apl.writeMoveTableCheckpoints(ctx, rows)
 }
 
 func (apl *Applier) writeMoveTableCheckpoints(ctx context.Context, rows []*Checkpoint) error {
@@ -1327,19 +1336,23 @@ func (apl *Applier) writeMoveTableCheckpoints(ctx context.Context, rows []*Check
 		escaped[i] = sql.EscapeName(c)
 	}
 	placeholders := "(" + strings.TrimSuffix(strings.Repeat("?, ", len(moveTablesCheckpointColumns)), ", ") + ")"
+	// One statement avoids spending the periodic checkpoint deadline on a prefix
+	// of the tables on every attempt. With InnoDB it also persists an atomic
+	// snapshot rather than mixing rows from different calls.
 	query := fmt.Sprintf("insert /* gh-ost */ into %s.%s (%s) values %s",
 		sql.EscapeName(apl.checkpointDatabaseName()),
 		sql.EscapeName(apl.migrationContext.GetCheckpointTableName()),
 		strings.Join(escaped, ", "),
-		placeholders,
+		strings.TrimSuffix(strings.Repeat(placeholders+", ", len(rows)), ", "),
 	)
+	args := make([]interface{}, 0, len(rows)*len(moveTablesCheckpointColumns))
 	now := time.Now().Unix()
 	for _, chk := range rows {
 		coordStr := ""
 		if chk.LastTrxCoords != nil {
 			coordStr = chk.LastTrxCoords.String()
 		}
-		args := sqlutils.Args(
+		args = append(args,
 			now,
 			chk.TableName,
 			coordStr,
@@ -1352,11 +1365,9 @@ func (apl *Applier) writeMoveTableCheckpoints(ctx context.Context, rows []*Check
 			serializeRangeValues(chk.IterationRangeMin),
 			serializeRangeValues(chk.IterationRangeMax),
 		)
-		if _, err := apl.checkpointDB().ExecContext(ctx, query, args...); err != nil {
-			return err
-		}
 	}
-	return nil
+	_, err := apl.checkpointDB().ExecContext(ctx, query, args...)
+	return err
 }
 
 // ReadMoveTableCheckpoints returns the latest checkpoint row per migrated table,

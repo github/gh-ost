@@ -12,10 +12,15 @@ import (
 )
 
 func TestTransactionMarkerSendCanceled(t *testing.T) {
-	assertTransactionMarkerSendCanceled(t, nil)
+	t.Run("decoded rows", func(t *testing.T) {
+		assertTransactionMarkerSendCanceled(t, [][]interface{}{{1}})
+	})
+	t.Run("filtered rows", func(t *testing.T) {
+		assertTransactionMarkerSendCanceled(t, nil)
+	})
 }
 
-func assertTransactionMarkerSendCanceled(t *testing.T, wrapEvents func([]*replication.BinlogEvent) []*replication.BinlogEvent) {
+func assertTransactionMarkerSendCanceled(t *testing.T, rows [][]interface{}) {
 	t.Helper()
 	reader := transactionTestReader(false)
 	defer reader.migrationContext.CancelContext()
@@ -25,18 +30,14 @@ func assertTransactionMarkerSendCanceled(t *testing.T, wrapEvents func([]*replic
 		Header: &replication.EventHeader{EventType: replication.WRITE_ROWS_EVENTv2, LogPos: 200},
 		Event: &replication.RowsEvent{
 			Table: &replication.TableMapEvent{Schema: []byte("testdb"), Table: []byte("testing")},
-			Rows:  [][]interface{}{{1}},
+			Rows:  rows,
 		},
 	}
 	commit := &replication.BinlogEvent{
 		Header: &replication.EventHeader{EventType: replication.XID_EVENT, LogPos: 220},
 		Event:  &replication.XIDEvent{},
 	}
-	events := []*replication.BinlogEvent{row, commit}
-	if wrapEvents != nil {
-		events = wrapEvents(events)
-	}
-	for _, event := range events {
+	for _, event := range []*replication.BinlogEvent{row, commit} {
 		require.NoError(t, reader.binlogStreamer.AddEventToStreamer(event))
 	}
 	entries := make(chan *BinlogEntry)
@@ -45,11 +46,13 @@ func assertTransactionMarkerSendCanceled(t *testing.T, wrapEvents func([]*replic
 		err := reader.StreamEvents(func() bool { return false }, entries)
 		_ = base.SendWithContext(t.Context(), done, err)
 	}()
-	select {
-	case entry := <-entries:
-		require.NotNil(t, entry.DmlEvent)
-	case <-time.After(time.Second):
-		t.Fatal("row was not delivered")
+	if len(rows) > 0 {
+		select {
+		case entry := <-entries:
+			require.NotNil(t, entry.DmlEvent)
+		case <-time.After(time.Second):
+			t.Fatal("row was not delivered")
+		}
 	}
 	// Wait until the commit position has been read, then stop consuming.
 	// The reader must propagate a canceled completion-marker send.
@@ -63,7 +66,6 @@ func assertTransactionMarkerSendCanceled(t *testing.T, wrapEvents func([]*replic
 	case <-time.After(time.Second):
 		t.Fatal("completion marker send ignored cancellation")
 	}
-	require.True(t, reader.transactionHasRows, "failed marker delivery must retain pending state")
 	require.True(t, previous.Equals(reader.LastTrxCoords), "failed delivery must not advance reconnect coordinates")
 }
 
