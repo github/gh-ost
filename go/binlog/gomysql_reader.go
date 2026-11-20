@@ -15,8 +15,6 @@ import (
 
 	"time"
 
-	"context"
-
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 )
@@ -39,6 +37,9 @@ func newRowsEventDecodeFunc(rowsEventFilter RowsEventFilterFunc) func(*replicati
 	}
 }
 
+// Limit markers for unrelated transactions so busy sources cannot starve row copy.
+const filteredTransactionMarkerInterval = time.Second
+
 type GoMySQLReader struct {
 	migrationContext        *base.MigrationContext
 	connectionConfig        *mysql.ConnectionConfig
@@ -47,8 +48,12 @@ type GoMySQLReader struct {
 	currentCoordinates      mysql.BinlogCoordinates
 	currentCoordinatesMutex *sync.Mutex
 	// LastTrxCoords are the coordinates of the last transaction completely read.
-	// If using the file coordinates it is binlog position of the transaction's XID event.
+	// They are for streamer reconnects, not durable applier checkpoints.
+	// For file coordinates, this is the end position of the transaction's XID event.
 	LastTrxCoords mysql.BinlogCoordinates
+
+	transactionHasRows        bool
+	lastTransactionMarkerTime time.Time
 }
 
 func NewGoMySQLReader(migrationContext *base.MigrationContext, rowsEventFilters ...RowsEventFilterFunc) *GoMySQLReader {
@@ -148,15 +153,48 @@ func (gmr *GoMySQLReader) handleRowsEvent(ev *replication.BinlogEvent, rowsEvent
 		// decides whether action is taken synchronously (meaning we wait before
 		// next iteration) or asynchronously (we keep pushing more events)
 		// In reality, reads will be synchronous
-		entriesChannel <- binlogEntry
+		if err := base.SendWithContext(gmr.migrationContext.GetContext(), entriesChannel, binlogEntry); err != nil {
+			return err
+		}
+		gmr.transactionHasRows = true
 	}
+	return nil
+}
+
+func (gmr *GoMySQLReader) completeTransaction(event *replication.XIDEvent, entriesChannel chan<- *BinlogEntry) error {
+	var coords mysql.BinlogCoordinates
+	if gmr.migrationContext.UseGTIDs && event.GSet != nil {
+		coords = (&mysql.GTIDBinlogCoordinates{GTIDSet: event.GSet}).Clone()
+	} else {
+		// File positions use the current event's coordinates. For GTID
+		// events parsed without the syncer, fall back to the coordinates
+		// already updated by the preceding GTID event.
+		coords = gmr.GetCurrentBinlogCoordinates()
+	}
+	// Relevant transactions always need a marker. Sample filtered-only commits
+	// periodically too, so their progress cannot leave checkpoints on old binlogs.
+	// Every emitted marker follows preceding DML through the same FIFO.
+	if gmr.transactionHasRows || time.Since(gmr.lastTransactionMarkerTime) >= filteredTransactionMarkerInterval {
+		marker := &BinlogEntry{
+			Coordinates:         coords.Clone(),
+			TransactionComplete: true,
+		}
+		if err := base.SendWithContext(gmr.migrationContext.GetContext(), entriesChannel, marker); err != nil {
+			return err
+		}
+		gmr.lastTransactionMarkerTime = time.Now()
+	}
+	gmr.transactionHasRows = false
+	// Filtered-only transactions contain no delivered rows, so reconnect may
+	// safely advance even when their checkpoint marker was coalesced.
+	gmr.LastTrxCoords = coords
 	return nil
 }
 
 // StreamEvents
 func (gmr *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChannel chan<- *BinlogEntry) error {
 	for !canStopStreaming() {
-		ev, err := gmr.binlogStreamer.GetEvent(context.Background())
+		ev, err := gmr.binlogStreamer.GetEvent(gmr.migrationContext.GetContext())
 		if err != nil {
 			return err
 		}
@@ -215,14 +253,8 @@ func (gmr *GoMySQLReader) StreamEvents(canStopStreaming func() bool, entriesChan
 			gmr.migrationContext.Log.Infof("rotate to next log from %s:%d to %s", coords.LogFile, int64(ev.Header.LogPos), event.NextLogName)
 			gmr.currentCoordinatesMutex.Unlock()
 		case *replication.XIDEvent:
-			if gmr.migrationContext.UseGTIDs {
-				// event.GSet is the full executed GTID set maintained by the
-				// syncer (MysqlGTIDSet or MariadbGTIDSet depending on flavor).
-				if event.GSet != nil {
-					gmr.LastTrxCoords = &mysql.GTIDBinlogCoordinates{GTIDSet: event.GSet}
-				}
-			} else {
-				gmr.LastTrxCoords = gmr.currentCoordinates.Clone()
+			if err := gmr.completeTransaction(event, entriesChannel); err != nil {
+				return err
 			}
 		case *replication.RowsEvent:
 			if err := gmr.handleRowsEvent(ev, event, entriesChannel); err != nil {

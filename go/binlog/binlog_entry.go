@@ -18,8 +18,9 @@ type BinlogEntry struct {
 	// Timestamp is the wall-clock time recorded in the binlog event header of the
 	// event that produced this entry. It is used in move-tables mode to measure
 	// writer lag (now - last applied event timestamp).
-	Timestamp time.Time
-	DmlEvent  *BinlogDMLEvent
+	Timestamp           time.Time
+	DmlEvent            *BinlogDMLEvent
+	TransactionComplete bool
 }
 
 // NewBinlogEntryAt creates an empty, ready to go BinlogEntry object
