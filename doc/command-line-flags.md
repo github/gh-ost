@@ -429,6 +429,8 @@ Skips port validation for MySQL connections.
 
 By default `gh-ost` enforces STRICT_ALL_TABLES sql_mode as a safety measure. In some cases this changes the behaviour of other modes (namely ERROR_FOR_DIVISION_BY_ZERO, NO_ZERO_DATE, and NO_ZERO_IN_DATE) which may lead to errors during migration. Use `--skip-strict-mode` to explicitly tell `gh-ost` not to enforce this. **Danger** This may have some unexpected disastrous side effects.
 
+Note that the row copy uses `INSERT IGNORE`, so data conversion errors during row copy are reported as warnings rather than failing the migration. Use `--panic-on-warnings` to abort on such warnings. See [Changing a column to a stricter data type](column-type-changes.md).
+
 ### skip-renamed-columns
 
 See [`approve-renamed-columns`](#approve-renamed-columns)
