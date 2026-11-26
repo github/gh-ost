@@ -25,6 +25,7 @@ For standard OSC, the recommended way of running `gh-ost` is by connecting it to
 Otherwise you may specify your own list of replica servers you wish it to observe.
 
 - `--throttle-control-replicas`: list of replicas you explicitly wish `gh-ost` to check for replication lag.
+
   Example: `--throttle-control-replicas=myhost1.com:3306,myhost2.com,myhost3.com:3307`
 
   Note that these must be replicas within the migrated table's replication chain. `gh-ost` does not verify that the hosts in the list are part of it, so unrelated hosts will report healthy lag while your real replicas go unmonitored.
@@ -32,7 +33,6 @@ Otherwise you may specify your own list of replica servers you wish it to observ
 - `--max-lag-millis`: maximum allowed lag; any controlled replica lagging more than this value will cause throttling to kick in. When all control replicas have smaller lag than indicated, operation resumes.
 
 Note that you may dynamically change both `--max-lag-millis` and the `throttle-control-replicas` list via [interactive commands](interactive-commands.md)
-
 
 #### Status thresholds
 
