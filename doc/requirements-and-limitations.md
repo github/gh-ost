@@ -39,6 +39,8 @@ The `SUPER` privilege is required for `STOP SLAVE`, `START SLAVE` operations. Th
   - by default, `gh-ost` will not run if the only `UNIQUE KEY` includes nullable columns.
     - You may override this via `--allow-nullable-unique-key` but make sure there are no actual `NULL` values in those columns. Existing NULL values can't guarantee data integrity on the migrated table.
 
+- When the ALTER changes a column to a stricter data type (for example VARCHAR to BIGINT), values that don't fit the new type are silently converted or truncated instead of failing the migration, because the row copy uses INSERT IGNORE. Use --panic-on-warnings to abort on such values, and check your data before migrating. [Read more](column-type-changes.md)
+   
 - It is not allowed to migrate a table where another table exists with same name and different upper/lower case.
   - For example, you may not migrate `MyTable` if another table called `MYtable` exists in the same schema.
 
