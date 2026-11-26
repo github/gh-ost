@@ -4,3 +4,7 @@
 /.vendor/
 .idea/
 *.tmp
+
+tools/
+*__failpoint_binding__.go
+*.go__failpoint_stash__

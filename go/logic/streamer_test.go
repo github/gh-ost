@@ -42,7 +42,7 @@ func (suite *EventsStreamerTestSuite) SetupSuite() {
 	suite.db = db
 }
 
-func (suite *EventsStreamerTestSuite) TeardownSuite() {
+func (suite *EventsStreamerTestSuite) TearDownSuite() {
 	suite.Assert().NoError(suite.db.Close())
 	suite.Assert().NoError(testcontainers.TerminateContainer(suite.mysqlContainer))
 }

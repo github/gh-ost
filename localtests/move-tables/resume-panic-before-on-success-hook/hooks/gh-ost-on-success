@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# touch file to mark completion of on-success hook
+touch /tmp/gh-ost-hooks/on-success

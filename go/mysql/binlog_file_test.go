@@ -48,12 +48,12 @@ func TestBinlogCoordinates(t *testing.T) {
 48e2bc1d-d66d-11e8-bf56-a0369f9437b8:1,
 492e2980-4518-11e9-92c6-e4434b3eca94:1-4926754399`)
 
-	c5 := GTIDBinlogCoordinates{GTIDSet: gtidSet1.(*gomysql.MysqlGTIDSet)}
-	c6 := GTIDBinlogCoordinates{GTIDSet: gtidSet1.(*gomysql.MysqlGTIDSet)}
-	c7 := GTIDBinlogCoordinates{GTIDSet: gtidSet2.(*gomysql.MysqlGTIDSet)}
-	c8 := GTIDBinlogCoordinates{GTIDSet: gtidSet3.(*gomysql.MysqlGTIDSet)}
-	c9 := GTIDBinlogCoordinates{GTIDSet: gtidSetBig1.(*gomysql.MysqlGTIDSet)}
-	c10 := GTIDBinlogCoordinates{GTIDSet: gtidSetBig2.(*gomysql.MysqlGTIDSet)}
+	c5 := GTIDBinlogCoordinates{GTIDSet: gtidSet1}
+	c6 := GTIDBinlogCoordinates{GTIDSet: gtidSet1}
+	c7 := GTIDBinlogCoordinates{GTIDSet: gtidSet2}
+	c8 := GTIDBinlogCoordinates{GTIDSet: gtidSet3}
+	c9 := GTIDBinlogCoordinates{GTIDSet: gtidSetBig1}
+	c10 := GTIDBinlogCoordinates{GTIDSet: gtidSetBig2}
 
 	require.True(t, c5.Equals(&c6))
 	require.True(t, c1.Equals(&c2))
@@ -74,6 +74,32 @@ func TestBinlogCoordinates(t *testing.T) {
 	require.True(t, c7.SmallerThanOrEquals(&c8))
 	require.True(t, c9.SmallerThanOrEquals(&c9))
 	require.True(t, c9.SmallerThanOrEquals(&c10))
+}
+
+func TestMariaDBGTIDBinlogCoordinates(t *testing.T) {
+	// MariaDB GTID sets use domain-server-sequence format.
+	c1, err := NewGTIDBinlogCoordinates(MariaDBFlavor, "0-1-100")
+	require.NoError(t, err)
+	c2, err := NewGTIDBinlogCoordinates(MariaDBFlavor, "0-1-100")
+	require.NoError(t, err)
+	c3, err := NewGTIDBinlogCoordinates(MariaDBFlavor, "0-1-150")
+	require.NoError(t, err)
+
+	require.True(t, c1.Equals(c2))
+	require.False(t, c1.Equals(c3))
+	require.True(t, c1.SmallerThan(c3))
+	require.False(t, c3.SmallerThan(c1))
+	require.True(t, c1.SmallerThanOrEquals(c3))
+
+	clone := c1.Clone()
+	require.True(t, c1.Equals(clone))
+	require.False(t, c1.IsEmpty())
+}
+
+func TestFlavorFor(t *testing.T) {
+	require.Equal(t, MariaDBFlavor, FlavorFor("10.6.18-MariaDB-log"))
+	require.Equal(t, MySQLFlavor, FlavorFor("8.0.36"))
+	require.Equal(t, MySQLFlavor, FlavorFor("8.4.0"))
 }
 
 func TestBinlogCoordinatesAsKey(t *testing.T) {

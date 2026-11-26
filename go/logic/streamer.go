@@ -16,7 +16,6 @@ import (
 	"github.com/github/gh-ost/go/binlog"
 	"github.com/github/gh-ost/go/mysql"
 
-	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/openark/golib/sqlutils"
 )
 
@@ -162,17 +161,22 @@ func (es *EventsStreamer) GetCurrentBinlogCoordinates() mysql.BinlogCoordinates 
 
 // readCurrentBinlogCoordinates reads master status from hooked server
 func (es *EventsStreamer) readCurrentBinlogCoordinates() error {
+	// MariaDB exposes no GTID column in SHOW MASTER STATUS; its current binlog
+	// GTID position lives in @@global.gtid_binlog_pos.
+	if es.migrationContext.UseGTIDs && mysql.IsMariaDB(es.dbVersion) {
+		return es.readCurrentMariaDBGTIDCoordinates()
+	}
 	binaryLogStatusTerm := mysql.ReplicaTermFor(es.dbVersion, "master status")
 	query := fmt.Sprintf("show /* gh-ost readCurrentBinlogCoordinates */ %s", binaryLogStatusTerm)
 	foundMasterStatus := false
 	err := sqlutils.QueryRowsMap(es.db, query, func(m sqlutils.RowMap) error {
 		if es.migrationContext.UseGTIDs {
 			execGtidSet := m.GetString("Executed_Gtid_Set")
-			gtidSet, err := gomysql.ParseMysqlGTIDSet(execGtidSet)
+			coords, err := mysql.NewGTIDBinlogCoordinates(mysql.MySQLFlavor, execGtidSet)
 			if err != nil {
 				return err
 			}
-			es.initialBinlogCoordinates = &mysql.GTIDBinlogCoordinates{GTIDSet: gtidSet.(*gomysql.MysqlGTIDSet)}
+			es.initialBinlogCoordinates = coords
 		} else {
 			es.initialBinlogCoordinates = &mysql.FileBinlogCoordinates{
 				LogFile: m.GetString("File"),
@@ -188,6 +192,23 @@ func (es *EventsStreamer) readCurrentBinlogCoordinates() error {
 	if !foundMasterStatus {
 		return fmt.Errorf("got no results from SHOW %s. Bailing out", strings.ToUpper(binaryLogStatusTerm))
 	}
+	es.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", es.initialBinlogCoordinates)
+	return nil
+}
+
+// readCurrentMariaDBGTIDCoordinates reads the current binlog GTID position from
+// a MariaDB server, which is exposed via @@global.gtid_binlog_pos rather than a
+// column in SHOW MASTER STATUS.
+func (es *EventsStreamer) readCurrentMariaDBGTIDCoordinates() error {
+	var gtidBinlogPos string
+	if err := es.db.QueryRow(`select @@global.gtid_binlog_pos`).Scan(&gtidBinlogPos); err != nil {
+		return err
+	}
+	coords, err := mysql.NewGTIDBinlogCoordinates(mysql.MariaDBFlavor, gtidBinlogPos)
+	if err != nil {
+		return err
+	}
+	es.initialBinlogCoordinates = coords
 	es.migrationContext.Log.Debugf("Streamer binlog coordinates: %+v", es.initialBinlogCoordinates)
 	return nil
 }
