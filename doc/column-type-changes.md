@@ -48,13 +48,13 @@ Some values are converted without any error or warning even by a plain
 		Warning: Data truncated for column 'job_id' at row 2 (1265); ...]
   With clean data, the same migration completed normally.
 
-- **Check your data before migrating,** because some conversions produce
-  no warning at all. For example, before converting a `VARCHAR` column to
+- **Check your data before migrating,** because some conversions produce no warning at all (and `NULL` rows silently become `0` if the target column is `NOT NULL`). For example, before converting a `VARCHAR` column to
   `BIGINT`:
 
 ```sql
 SELECT COUNT(*) FROM your_table
-WHERE your_column NOT REGEXP '^[0-9]{1,18}\$';
+WHERE your_column is null
+	or your column NOT REGEXP '^[0-9]{1,18}\$';
 ```
 
 If this returns anything other than 0, review the rows first.
